@@ -37,4 +37,6 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - added FreeImage_RescaleRawBits()
 
 Bugs or limitations identified:
+- saving WEBP files is extremely slow at 16000 x 16000 px
+- creating GIFs and multi-paged TIFFs causes crashes under certain circumstances (easy to reproduce)
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;
