@@ -420,36 +420,39 @@ static FIBITMAP* LogLuminance(FIBITMAP *Y) {
 
 	try {
 		// get the luminance channel
-		FIBITMAP *H = FreeImage_Clone(Y);
+		// (assign to the outer H : re-declaring it here would shadow it, and the
+		//  catch block below would then always see a NULL pointer and leak the clone)
+		H = FreeImage_Clone(Y);
 		if(!H) throw(1);
 
 		const unsigned width  = FreeImage_GetWidth(H);
 		const unsigned height = FreeImage_GetHeight(H);
 		const unsigned pitch  = FreeImage_GetPitch(H);
 
-		// find max & min luminance values
-		float maxLum = -1e20F, minLum = 1e20F;
+		// find max & min luminance values, ignoring non finite samples and the
+		// brightest outliers : a single hot pixel would otherwise flatten the
+		// whole normalisation range, and a single NaN would win the 'min' test
+		float maxLum = 0, minLum = 0;
+		if(!LuminanceRange(H, &maxLum, &minLum)) throw(1);
 
+		// normalize to range 0..100 and take the logarithm.
+		// A perfectly flat image has no gradient for the operator to work on,
+		// but handing the caller nothing at all is worse than handing it that
+		// flat image back, so map every sample to the bottom of the range.
+		const float scale = (maxLum > minLum) ? (100.F / (maxLum - minLum)) : 0;
 		BYTE *bits = (BYTE*)FreeImage_GetBits(H);
-		for(unsigned y = 0; y < height; y++) {
-			const float *pixel = (float*)bits;
-			for(unsigned x = 0; x < width; x++) {
-				const float value = pixel[x];
-				maxLum = (maxLum < value) ? value : maxLum;	// max Luminance in the scene
-				minLum = (minLum < value) ? minLum : value;	// min Luminance in the scene
-			}
-			// next line
-			bits += pitch;
-		}
-		if(maxLum == minLum) throw(1);
-
-		// normalize to range 0..100 and take the logarithm
-		const float scale = 100.F / (maxLum - minLum);
-		bits = (BYTE*)FreeImage_GetBits(H);
 		for(unsigned y = 0; y < height; y++) {
 			float *pixel = (float*)bits;
 			for(unsigned x = 0; x < width; x++) {
-				const float value = (pixel[x] - minLum) * scale;
+				// samples beyond the percentile maximum, and non finite ones,
+				// are pinned to the ends of the normalised range
+				float sample = pixel[x];
+				if(!IsFiniteValue(sample)) {
+					sample = minLum;
+				}
+				float value = (sample - minLum) * scale;
+				if(value < 0)      value = 0;
+				if(value > 100.0F) value = 100.0F;
 				pixel[x] = log(value + EPSILON);
 			}
 			// next line
@@ -508,7 +511,9 @@ static FIBITMAP* tmoFattal02(FIBITMAP *Y, float alpha, float beta) {
 
 	try {
 		// get the normalized luminance
-		FIBITMAP *H = LogLuminance(Y);
+		// (assign to the outer H : re-declaring it here would shadow it, and the
+		//  catch block below would then always see a NULL pointer and leak it)
+		H = LogLuminance(Y);
 		if(!H) throw(1);
 		
 		// get the number of levels for the pyramid
@@ -626,6 +631,10 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 		src = FreeImage_ConvertToRGBF(dib);
 		if(!src) throw(1);
 
+		// tone mapping models the response to light, and negative radiance is
+		// not light; see ClampNegativeRGBF()
+		ClampNegativeRGBF(src);
+
 		// get the luminance channel
 		Yin = ConvertRGBFToY(src);
 		if(!Yin) throw(1);
@@ -635,6 +644,9 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 		if(!Yout) throw(1);
 
 		// clip low and high values and normalize to [0..1]
+		// the percentile variant below now works (findMaxMinPercentile used to
+		// mis-report every percentile), but it darkens well formed images, so
+		// the plain min/max normalisation is kept as the default
 		//NormalizeY(Yout, 0.001F, 0.995F);
 		NormalizeY(Yout, 0, 1);
 
@@ -656,7 +668,10 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 			float *color = (float*)bits;
 			for(unsigned x = 0; x < width; x++) {
 				for(unsigned c = 0; c < 3; c++) {
-					*color = (Lin[x] > 0) ? pow(*color/Lin[x], s) * Lout[x] : 0;
+					// pow() of a negative base with a fractional exponent is NaN,
+					// and negative radiance does occur in real HDR sources
+					const float ratio = (Lin[x] > 0) ? (*color / Lin[x]) : 0;
+					*color = (ratio > 0) ? (float)(pow(ratio, s) * Lout[x]) : 0;
 					color++;
 				}
 			}

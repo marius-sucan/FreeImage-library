@@ -94,6 +94,11 @@ void testWrappedBuffer(const char *lpszPathName, int flags);
 
 void testCreateView(const char *lpszPathName, int flags);
 
+// Tone mapping & floating point conversion test suite
+// ==========================================================
+
+void testToneMapping();
+
 #endif // TEST_FREEIMAGE_API_H
 
 

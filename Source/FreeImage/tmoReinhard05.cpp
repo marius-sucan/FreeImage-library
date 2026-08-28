@@ -34,6 +34,31 @@
 // ----------------------------------------------------------
 
 /**
+Apply the Reinhard sigmoid to a single colour sample.
+
+Negative radiance is treated as black. It is not light, and letting it through
+breaks the operator twice over: pow() of a negative base with a fractional
+exponent is a NaN, and a negative sample makes the sigmoid diverge instead of
+mapping into [0..1] - a near zero denominator is enough to send a sample to
+several thousand, which then wrecks the normalisation of the whole picture.
+Wide gamut and scene referred HDR sources do contain such samples.
+
+@param color Input colour sample
+@param f Overall intensity, already exponentiated
+@param I_a Interpolated pixel light adaptation
+@param m Contrast
+@return Returns the tone mapped sample, always within [0..1]
+*/
+static inline float
+ToneMapReinhardSample(float color, float f, float I_a, float m) {
+	const float value = (color > 0) ? color : 0;
+	const float adapt = (I_a > 0) ? (float)pow(f * I_a, m) : 0;
+	const float denom = value + adapt;
+
+	return (denom > 0) ? (value / denom) : 0;
+}
+
+/**
 Tone mapping operator
 @param dib Input / Output RGBF image
 @param Y Input luminance image version of dib
@@ -95,9 +120,6 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 	}
 	m = (m > 0) ? m : (float)(0.3 + 0.7 * pow(k, 1.4F));
 
-	float max_color = -1e6F;
-	float min_color = +1e6F;
-
 	// tone map image
 
 	bits  = (BYTE*)FreeImage_GetBits(dib);
@@ -113,10 +135,7 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 			for(x = 0; x < width; x++) {
 				I_a = Y[x];	// luminance(x, y)
 				for (i = 0; i < 3; i++) {
-					*color /= ( *color + pow(f * I_a, m) );
-					
-					max_color = (*color > max_color) ? *color : max_color;
-					min_color = (*color < min_color) ? *color : min_color;
+					*color = ToneMapReinhardSample(*color, f, I_a, m);
 
 					color++;
 				}
@@ -164,10 +183,7 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 					I_l = c * *color + (1-c) * L;
 					I_g = c * Cav[i] + (1-c) * Lav;
 					I_a = a * I_l + (1-a) * I_g;
-					*color /= ( *color + pow(f * I_a, m) );
-					
-					max_color = (*color > max_color) ? *color : max_color;
-					min_color = (*color < min_color) ? *color : min_color;
+					*color = ToneMapReinhardSample(*color, f, I_a, m);
 
 					color++;
 				}
@@ -179,15 +195,28 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 	}
 
 	// normalize intensities
+	//
+	// Rescaling by the *absolute* range of the tone mapped values makes the
+	// result hostage to a single pixel: a specular highlight saturates its own
+	// sample to nearly 1 and pushes everything else into the bottom of the
+	// output range. Use a percentile range instead, and clip to it.
 
-	if(max_color != min_color) {
+	float max_color = 0, min_color = 0;
+
+	if(RGBFRobustRange(dib, &max_color, &min_color) && (max_color != min_color)) {
 		bits = (BYTE*)FreeImage_GetBits(dib);
 		const float range = max_color - min_color;
 		for(y = 0; y < height; y++) {
 			float *color = (float*)bits;
 			for(x = 0; x < width; x++) {
 				for(i = 0; i < 3; i++) {
-					*color = (*color - min_color) / range;
+					float value = (*color - min_color) / range;
+					// samples beyond the percentile range, and non finite ones,
+					// are pinned to the ends of the output range
+					if(!IsFiniteValue(value)) value = 0;
+					if(value < 0) value = 0;
+					if(value > 1) value = 1;
+					*color = value;
 					color++;
 				}
 			}
@@ -222,6 +251,10 @@ FreeImage_TmoReinhard05Ex(FIBITMAP *src, double intensity, double contrast, doub
 
 	dib = FreeImage_ConvertToRGBF(src);
 	if(!dib) return NULL;
+
+	// tone mapping models the response to light, and negative radiance is not
+	// light; see ClampNegativeRGBF()
+	ClampNegativeRGBF(dib);
 
 	// get the Luminance channel
 	Y = ConvertRGBFToY(dib);

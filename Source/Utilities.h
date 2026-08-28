@@ -181,8 +181,24 @@ template <class T> void INPLACESWAP(T& a, T& b) {
 }
 
 /// Clamp function
+/// Beware: a NaN compares false against both bounds, so it is returned unchanged.
+/// Use IsFiniteValue() below when NaN must not survive.
 template <class T> T CLAMP(const T &value, const T &min_value, const T &max_value) {
 	return ((value < min_value) ? min_value : (value > max_value) ? max_value : value);
+}
+
+/// Finiteness test. Integral types are always finite; the floating point
+/// overloads reject NaN and +/-INF. NaN compares false against every bound,
+/// so the range test rejects it as well.
+template <class T> inline bool IsFiniteValue(const T &value) {
+	(void)value;
+	return true;
+}
+inline bool IsFiniteValue(const float &value) {
+	return (value >= -FLT_MAX) && (value <= FLT_MAX);
+}
+inline bool IsFiniteValue(const double &value) {
+	return (value >= -DBL_MAX) && (value <= DBL_MAX);
 }
 
 /** This procedure computes minimum min and maximum max

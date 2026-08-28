@@ -90,6 +90,22 @@ ToneMappingDrago03(FIBITMAP *dib, const float maxLum, const float avgLum, float 
 	divider = log10(Lmax+1);
 	biasP = log(biasParam)/LOG05;
 
+	if(!(Lmax > 0) || !(divider > 0)) {
+		// a uniformly black scene: Lmax is zero, so the division by
+		// log10(Lmax + 1) = log10(1) = 0 below would turn every pixel into an
+		// infinity or a NaN. Black in, black out.
+		BYTE *zbits = (BYTE*)FreeImage_GetBits(dib);
+		for(y = 0; y < height; y++) {
+			FIRGBF *zpixel = (FIRGBF*)zbits;
+			for(x = 0; x < width; x++) {
+				zpixel[x].red = 0;
+			}
+			// next line
+			zbits += pitch;
+		}
+		return TRUE;
+	}
+
 #if !defined(DRAGO03_FAST)
 
 	/**
@@ -256,7 +272,7 @@ Apply the Adaptive Logarithmic Mapping operator to a HDR image and convert to 24
 */
 FIBITMAP* DLL_CALLCONV 
 FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
-	float maxLum, minLum, avgLum;
+	float maxLum = 0, minLum = 0, avgLum = 0;
 
 	if(!FreeImage_HasPixels(src)) return NULL;
 
@@ -266,6 +282,10 @@ FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
 	dib = FreeImage_ConvertToRGBF(src);
 	if(!dib) return NULL;
 
+	// negative radiance would reach pow() in the bias function below, and
+	// pow() of a negative base with a fractional exponent is a NaN
+	ClampNegativeRGBF(dib);
+
 	// default algorithm parameters
 	const float biasParam = 0.85F;
 	const float expoParam = (float)pow(2.0, exposure); //default exposure is 1, 2^0
@@ -273,7 +293,11 @@ FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
 	// convert to Yxy
 	ConvertInPlaceRGBFToYxy(dib);
 	// get the luminance
-	LuminanceFromYxy(dib, &maxLum, &minLum, &avgLum);
+	if(!LuminanceFromYxy(dib, &maxLum, &minLum, &avgLum)) {
+		// nothing usable in the image: the statistics would be undefined
+		FreeImage_Unload(dib);
+		return NULL;
+	}
 	// perform the tone mapping
 	ToneMappingDrago03(dib, maxLum, avgLum, biasParam, expoParam);
 	// convert back to RGBF

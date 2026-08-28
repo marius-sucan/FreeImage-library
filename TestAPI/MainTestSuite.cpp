@@ -108,6 +108,9 @@ int main(int argc, char *argv[]) {
 	// test views
 	testCreateView("exif.jpg", 0);
 
+	// test floating point conversions and tone mapping robustness
+	testToneMapping();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif

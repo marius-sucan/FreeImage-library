@@ -205,7 +205,7 @@ FreeImage_ConvertToRGBAF(FIBITMAP *dib) {
 
 				for(unsigned x = 0; x < width; x++) {
 					// convert by copying greyscale channel to each R, G, B channels
-					// assume float values are in [0..1]
+					// (allowing values to range outside of [0..1])
 					const float value = src_pixel[x];
 					dst_pixel[x].red   = value;
 					dst_pixel[x].green = value;

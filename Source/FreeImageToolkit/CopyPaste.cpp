@@ -557,7 +557,16 @@ FreeImage_Copy(FIBITMAP *src, int left, int top, int right, int bottom) {
 
 	// copy the palette
 
-	memcpy(FreeImage_GetPalette(dst), FreeImage_GetPalette(src), FreeImage_GetColorsUsed(src) * sizeof(RGBQUAD));
+	// memcpy() may not be passed a NULL pointer, not even with a length of 0,
+	// and FreeImage_GetPalette() returns NULL for every non palettised image
+	{
+		RGBQUAD *dst_pal = FreeImage_GetPalette(dst);
+		RGBQUAD *src_pal = FreeImage_GetPalette(src);
+		const unsigned pal_size = FreeImage_GetColorsUsed(src);
+		if(dst_pal && src_pal && pal_size) {
+			memcpy(dst_pal, src_pal, pal_size * sizeof(RGBQUAD));
+		}
+	}
 
 	// copy the bits
 	if (bpp == 1) {
@@ -848,7 +857,15 @@ FreeImage_CreateView(FIBITMAP *dib, unsigned left, unsigned top, unsigned right,
 	}
 
 	// palette
-	memcpy(FreeImage_GetPalette(dst), FreeImage_GetPalette(dib), FreeImage_GetColorsUsed(dib) * sizeof(RGBQUAD));
+	// see above : NULL is not a valid memcpy() argument, even for a length of 0
+	{
+		RGBQUAD *dst_pal = FreeImage_GetPalette(dst);
+		RGBQUAD *src_pal = FreeImage_GetPalette(dib);
+		const unsigned pal_size = FreeImage_GetColorsUsed(dib);
+		if(dst_pal && src_pal && pal_size) {
+			memcpy(dst_pal, src_pal, pal_size * sizeof(RGBQUAD));
+		}
+	}
 
 	// transparency table
 	FreeImage_SetTransparencyTable(dst, FreeImage_GetTransparencyTable(dib), FreeImage_GetTransparencyCount(dib));
