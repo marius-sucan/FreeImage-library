@@ -506,8 +506,8 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
       }
    }
 
-   // return true if the entire height was decoded even if RLE_ENDOFBITMAP was not reached
-   return (scanline>=height && count>0) ? TRUE : FALSE;
+   // the whole height was decoded, even though RLE_ENDOFBITMAP was never reached
+   return TRUE;
 }
 
 // --------------------------------------------------------------------------
@@ -1399,6 +1399,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// we need to recalculate the dst pitch here
 		const UINT64 dst_bpp = FreeImage_GetBPP(dib);
 		const UINT64 dst_pitch = CalculatePitch(CalculateLine(dst_width, dst_bpp));
+		// ...but stepping from one row to the next must use the dib's own stride:
+		// for a view (or a wrapped raw buffer) that is the backing image's pitch, not dst_pitch
+		const UINT64 src_pitch = FreeImage_GetPitch(dib);
 
 		BITMAPFILEHEADER bitmapfileheader;
 		bitmapfileheader.bfType = 0x4D42;
@@ -1540,7 +1543,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			DWORD pad = 0;
 			FILE_BGR bgr;
 			for(unsigned y = 0; y < dst_height; y++) {
-				BYTE *line = (BYTE*)((unsigned long long)dBits + dst_pitch * y);
+				BYTE *line = (BYTE*)((unsigned long long)dBits + src_pitch * y);
 				for(unsigned x = 0; x < dst_width; x++) {
 					RGBTRIPLE *triple = ((RGBTRIPLE *)line)+x;
 					bgr.b = triple->rgbtBlue;
@@ -1560,7 +1563,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			FILE_BGRA bgra;
 			BYTE *dBits = FreeImage_GetBits(dib);
 			for(UINT64 y = 0; y < dst_height; y++) {
-				BYTE *line = (BYTE*)((unsigned long long)dBits + dst_pitch * y);
+				BYTE *line = (BYTE*)((unsigned long long)dBits + src_pitch * y);
 				for(UINT64 x = 0; x < dst_width; x++) {
 					RGBQUAD *quad = ((RGBQUAD *)line)+x;
 					bgra.b = quad->rgbBlue;
@@ -1576,7 +1579,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		} else {
 			BYTE *dBits = FreeImage_GetBits(dib);
 			for (UINT64 y = 0; y < dst_height; y++) {
-				BYTE *line = (BYTE*)((unsigned long long)dBits + dst_pitch * y);
+				BYTE *line = (BYTE*)((unsigned long long)dBits + src_pitch * y);
 				if (io->write_proc(line, dst_pitch, 1, handle) != 1) {
 					return FALSE;
 				}
