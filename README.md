@@ -35,8 +35,9 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - multi-threaded image resizer and rotation using OpenMP pragma;
 - updated the OpenEXR library to version 3.1.3, from version 2.2.0;
 - added FreeImage_RescaleRawBits()
+- fixed the GIF plugin: multi-page saves now enlarge the logical screen to fit every frame (frames wider than the first one produced invalid files), fixed a stack buffer overflow in the LZW encoder (StringTable::CompressEnd) and a heap buffer overflow when loading such files with GIF_PLAYBACK; these bugs crashed QPV when creating animated GIFs
 
 Bugs or limitations identified:
 - saving WEBP files is extremely slow at 16000 x 16000 px
-- creating GIFs and multi-paged TIFFs causes crashes under certain circumstances (easy to reproduce)
+- creating multi-paged TIFFs causes crashes under certain circumstances (easy to reproduce)
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

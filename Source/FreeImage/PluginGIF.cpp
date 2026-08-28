@@ -57,8 +57,16 @@ struct GIFinfo {
 	std::vector<size_t> comment_extension_offsets;
 	std::vector<size_t> graphic_control_extension_offsets;
 	std::vector<size_t> image_descriptor_offsets;
+	//only really used when writing
+	long lsd_offset;			// stream offset of the header written by Open(); the Logical Screen Descriptor follows it
+	BOOL lsd_written;			// TRUE once page 0 has written the Logical Screen Descriptor
+	unsigned logical_width;		// logical screen size written by page 0 (host byte order)
+	unsigned logical_height;
+	unsigned max_right;			// largest (left + width) and (top + height) of the frames written so far
+	unsigned max_bottom;
 
-	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0)
+	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
+		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0)
 	{
 	}
 };
@@ -251,6 +259,14 @@ int StringTable::CompressEnd(BYTE *buf)
 {
 	int len = 0;
 
+	//flush the whole bytes that may still be pending from a flush that ran out of output buffer
+	while( m_partialSize >= 8 ) {
+		*buf++ = (BYTE)m_partial;
+		m_partial >>= 8;
+		m_partialSize -= 8;
+		len++;
+	}
+
 	//output code for remaining prefix
 	m_partial |= m_prefix << m_partialSize;
 	m_partialSize += m_codeSize;
@@ -271,8 +287,10 @@ int StringTable::CompressEnd(BYTE *buf)
 		len++;
 	}
 
-	//most this can be is 4 bytes.  7 bits in m_partial to start + 12 for the
-	//last code + 12 for the end code = 31 bits total.
+	//most this can be is 6 bytes: up to 23 bits may be pending when a flush ran out of
+	//output buffer and a clear code was added (2 bytes), then 7 bits + 12 for the last
+	//code (2 bytes), then 3 bits + 12 for the end code (2 bytes). The caller must
+	//provide at least 6 bytes.
 	return len;
 }
 
@@ -319,6 +337,12 @@ bool StringTable::Compress(BYTE *buf, int *len)
 					m_partial |= m_clearCode << m_partialSize;
 					m_partialSize += m_codeSize;
 					ClearCompressorTable();
+					//flush what fits in the output buffer so that pending bits don't pile up
+					while( m_partialSize >= 8 && bufpos - buf < *len ) {
+						*bufpos++ = (BYTE)m_partial;
+						m_partial >>= 8;
+						m_partialSize -= 8;
+					}
 				}
 
 				// Only keep the 8 lowest bits (prevent problems with "negative chars")
@@ -623,6 +647,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		}
 	} else {
 		//Header
+		info->lsd_offset = io->tell_proc(handle);	// -1 when the stream cannot tell its position
 		io->write_proc((void *)"GIF89a", 6, 1, handle);
 	}
 
@@ -640,6 +665,31 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		//Trailer
 		BYTE b = GIF_BLOCK_TRAILER;
 		io->write_proc(&b, 1, 1, handle);
+
+		//Logical Screen Descriptor fix-up: page 0 wrote the logical screen size before the other
+		//pages were known. If a page extends beyond it, enlarge it now, otherwise the file is
+		//invalid and decoders (including our own GIF_PLAYBACK mode) may misbehave on it.
+		if( info->lsd_written && (info->max_right > info->logical_width || info->max_bottom > info->logical_height) ) {
+			bool patched = false;
+			if( info->lsd_offset >= 0 ) {
+				const long end_offset = io->tell_proc(handle);
+				if( end_offset >= 0 && io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET) == 0 ) {
+					WORD logicalwidth = (WORD)MIN(MAX(info->logical_width, info->max_right), 0xFFFFu);
+					WORD logicalheight = (WORD)MIN(MAX(info->logical_height, info->max_bottom), 0xFFFFu);
+#ifdef FREEIMAGE_BIGENDIAN
+					SwapShort(&logicalwidth);
+					SwapShort(&logicalheight);
+#endif
+					io->write_proc(&logicalwidth, 2, 1, handle);
+					io->write_proc(&logicalheight, 2, 1, handle);
+					io->seek_proc(handle, end_offset, SEEK_SET);
+					patched = true;
+				}
+			}
+			if( !patched ) {
+				FreeImage_OutputMessageProc(s_format_id, "Warning: some frames extend beyond the %ux%u logical screen and the stream cannot be repositioned to enlarge the Logical Screen Descriptor", info->logical_width, info->logical_height);
+			}
+		}
 	}
 
 	delete info;
@@ -722,11 +772,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			std::vector<PageInfo> pageinfo;
 			int start = page, end = page;
 			while( start >= 0 ) {
-				//Graphic Control Extension
-				io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[start] + 1), SEEK_SET);
-				io->read_proc(&packed, 1, 1, handle);
-				have_transparent = (packed & GIF_PACKED_GCE_HAVETRANS) ? true : false;
-				disposal_method = (packed & GIF_PACKED_GCE_DISPOSAL) >> 2;
+				//Graphic Control Extension (may be absent, see the single frame path below)
+				if( info->graphic_control_extension_offsets[start] != 0 ) {
+					io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[start] + 1), SEEK_SET);
+					io->read_proc(&packed, 1, 1, handle);
+					have_transparent = (packed & GIF_PACKED_GCE_HAVETRANS) ? true : false;
+					disposal_method = (packed & GIF_PACKED_GCE_DISPOSAL) >> 2;
+				} else {
+					have_transparent = false;
+					disposal_method = GIF_DISPOSAL_LEAVE;
+				}
 				//Image Descriptor
 				io->seek_proc(handle, (long)(info->image_descriptor_offsets[start]), SEEK_SET);
 				io->read_proc(&left, 2, 1, handle);
@@ -765,19 +820,22 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			delay_time = 0;
 			for( page = start; page <= end; page++ ) {
 				PageInfo &info = pageinfo[end - page];
+				//clip the frame to the logical screen: a malformed GIF may declare frames extending beyond it
+				//(rows below the screen are handled by the scanidx test in the loops below)
+				const int draw_width = (info.left < logicalwidth) ? MIN((int)info.width, (int)logicalwidth - (int)info.left) : 0;
 				//things we can skip having to decode
 				if( page != end ) {
 					if( info.disposal_method == GIF_DISPOSAL_PREVIOUS ) {
 						continue;
 					}
 					if( info.disposal_method == GIF_DISPOSAL_BACKGROUND ) {
-						for( y = 0; y < info.height; y++ ) {
+						for( y = 0; y < info.height && draw_width > 0; y++ ) {
 							const int scanidx = logicalheight - (y + info.top) - 1;
 							if ( scanidx < 0 ) {
 								break;  // If data is corrupt, don't calculate in invalid scanline
 							}
 							scanline = (RGBQUAD *)FreeImage_GetScanLine(dib, scanidx) + info.left;
-							for( x = 0; x < info.width; x++ ) {
+							for( x = 0; x < draw_width; x++ ) {
 								*scanline++ = background;
 							}
 						}
@@ -802,14 +860,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						}
 					}
 					//copy page data into logical buffer, with full alpha opaqueness
-					for( y = 0; y < info.height; y++ ) {
+					for( y = 0; y < info.height && draw_width > 0; y++ ) {
 						const int scanidx = logicalheight - (y + info.top) - 1;
 						if ( scanidx < 0 ) {
 							break;  // If data is corrupt, don't calculate in invalid scanline
 						}
 						scanline = (RGBQUAD *)FreeImage_GetScanLine(dib, scanidx) + info.left;
 						BYTE *pageline = FreeImage_GetScanLine(pagedib, info.height - y - 1);
-						for( x = 0; x < info.width; x++ ) {
+						for( x = 0; x < draw_width; x++ ) {
 							if( !have_transparent || *pageline != transparent_color ) {
 								*scanline = pal[*pageline];
 								scanline->rgbReserved = 255;
@@ -1076,7 +1134,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	if( data == NULL ) {
 		return FALSE;
 	}
-	//GIFinfo *info = (GIFinfo *)data;
+	GIFinfo *info = (GIFinfo *)data;
 
 	if( page == -1 ) {
 		page = 0;
@@ -1115,6 +1173,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			disposal_method = *(BYTE *)FreeImage_GetTagValue(tag);
 		}
 
+		//frame extent in host byte order, see Close(): the logical screen is enlarged if a frame exceeds it
+		const unsigned frame_right = (unsigned)left + (unsigned)width;
+		const unsigned frame_bottom = (unsigned)top + (unsigned)height;
+
 		RGBQUAD *pal = FreeImage_GetPalette(dib);
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapShort(&left);
@@ -1138,6 +1200,17 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 #ifdef FREEIMAGE_BIGENDIAN
 				SwapShort(&logicalheight);
 #endif
+			}
+			{
+				//remember the logical screen size (host byte order) so that Close() can enlarge it if needed
+				WORD lw = logicalwidth, lh = logicalheight;
+#ifdef FREEIMAGE_BIGENDIAN
+				SwapShort(&lw);
+				SwapShort(&lh);
+#endif
+				info->logical_width = lw;
+				info->logical_height = lh;
+				info->lsd_written = TRUE;
 			}
 			RGBQUAD *globalpalette = NULL;
 			int globalpalette_size = 0;
@@ -1344,7 +1417,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 		}
 		size = (int)(bufptr - buf);
-		BYTE last[4];
+		BYTE last[8]; //CompressEnd() writes at most 6 bytes
 		w = (WORD)stringtable->CompressEnd(last);
 		if( size + w >= sizeof(buf) ) {
 			//one last full size sub-block
@@ -1368,6 +1441,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		//Block Terminator
 		b = 0;
 		io->write_proc(&b, 1, 1, handle);
+
+		//remember the frame extent so that Close() can enlarge the logical screen if needed
+		info->max_right = MAX(info->max_right, frame_right);
+		info->max_bottom = MAX(info->max_bottom, frame_bottom);
 
 		delete stringtable;
 
