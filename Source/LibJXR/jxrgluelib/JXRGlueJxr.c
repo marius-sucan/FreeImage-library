@@ -830,7 +830,7 @@ ERR PKImageEncode_EncodeContent_Encode(
 		Bool f420 = ( pIE->WMP.wmiI.cfColorFormat == YUV_420 || 
 					  (pIE->WMP.wmiSCP.bYUVData && pIE->WMP.wmiSCP.cfColorFormat==YUV_420) );
         CWMImageBufferInfo wmiBI = { 0 };
-        wmiBI.pv = (unsigned long long)pbPixels + (unsigned long long)cbStride * i / (f420 ? 2 : 1);
+        wmiBI.pv = pbPixels + (size_t)cbStride * i / (f420 ? 2 : 1);
         wmiBI.cLine = min(16, cLine - i);
         wmiBI.cbStride = cbStride;
         FailIf(ICERR_OK != ImageStrEncEncode(pIE->WMP.ctxSC, &wmiBI), WMP_errFail);
@@ -954,7 +954,7 @@ ERR PKImageEncode_EncodeAlpha_Encode(
     for (i = 0; i < cLine; i += 16)
     {
         CWMImageBufferInfo wmiBI = { 0 };
-        wmiBI.pv = (unsigned long long)pbPixels + (unsigned long long)cbStride * i;
+        wmiBI.pv = pbPixels + (size_t)cbStride * i;
         wmiBI.cLine = min(16, cLine - i);
         wmiBI.cbStride = cbStride;
         FailIf(ICERR_OK != ImageStrEncEncode(pIE->WMP.ctxSC_Alpha, &wmiBI), WMP_errFail);
