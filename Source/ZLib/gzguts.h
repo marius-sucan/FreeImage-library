@@ -37,6 +37,14 @@
 
 #if defined(__TURBOC__) || defined(_MSC_VER) || defined(_WIN32)
 #  include <io.h>
+#else
+/* FreeImage: this vendored zlib never runs its own ./configure, so HAVE_UNISTD_H
+   is never set, zconf.h therefore never defines Z_HAVE_UNISTD_H, and <unistd.h>
+   was never pulled in.  gzlib.c, gzread.c and gzwrite.c then called lseek, read,
+   write and close with no prototype in scope, which GCC >= 14 and Clang >= 16
+   reject outright.  Windows gets those four from <io.h> above, so only the
+   POSIX-like targets (Linux, macOS, Solaris, Cygwin) need this include. */
+#  include <unistd.h>
 #endif
 
 #if defined(_WIN32)
