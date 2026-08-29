@@ -32,7 +32,8 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - fixed FreeImage_Copy() to not crash with very large images [over 5000 mgpx];
 - fixed FreeImage_Rescale() to work with very large images [over 5000 mgpx]; it no longer screws up the colors;
 - fixed FreeImage_Rotate() to work with very large images [over 5000 mgpx];
-- multi-threaded image resizer and rotation using OpenMP pragma;
+- multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too (they never passed -fopenmp, so on Linux/macOS/MinGW the pragmas were dead and the code ran single-threaded - only the MSVC Release builds were actually parallel). Build with `make OPENMP=0` for a single-threaded library; see README.linux;
+- fixed a data race in the 1-bit 90/180/270 rotation: eight consecutive source rows pack their bits into the same destination byte, so the parallel `|=` dropped updates and corrupted the output. This was live in the MSVC Release builds;
 - updated the OpenEXR library to version 3.1.3, from version 2.2.0;
 - added FreeImage_RescaleRawBits()
 - fixed the GIF plugin: multi-page saves now enlarge the logical screen to fit every frame (frames wider than the first one produced invalid files), fixed a stack buffer overflow in the LZW encoder (StringTable::CompressEnd) and a heap buffer overflow when loading such files with GIF_PLAYBACK; these bugs crashed QPV when creating animated GIFs

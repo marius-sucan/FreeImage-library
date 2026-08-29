@@ -345,7 +345,8 @@ Rotate90(FIBITMAP *src) {
 				BYTE *bsrc  = FreeImage_GetBits(src); 
 				BYTE *bdest = FreeImage_GetBits(dst);
 				BYTE *dbitsmax = bdest + dst_height * dst_pitch - 1;
-				#pragma omp parallel for schedule(dynamic) default(none)
+				// Not parallelised: eight consecutive source rows y pack their bits into
+				// the same destination byte (column y/8), so a threaded |= drops updates.
 				for(INT64 y = 0; y < src_height; y++) {
 					// figure out the column we are going to be copying to
 					const div_t div_r = div((int)y, 8);
@@ -384,7 +385,7 @@ Rotate90(FIBITMAP *src) {
 				// for all image blocks of RBLOCK*RBLOCK pixels
 				
 				// x-segment
-				#pragma omp parallel for schedule(dynamic) default(none)
+				#pragma omp parallel for schedule(dynamic) default(shared)
 				for(INT64 xs = 0; xs < dst_width; xs += RBLOCK) {
 					// y-segment
 					for(INT64 ys = 0; ys < dst_height; ys += RBLOCK) {
@@ -417,7 +418,7 @@ Rotate90(FIBITMAP *src) {
 
 			// calculate the number of bytes per pixel
 			const INT64 bytespp = FreeImage_GetLine(src) / FreeImage_GetWidth(src);
-			#pragma omp parallel for schedule(dynamic) default(none)
+			#pragma omp parallel for schedule(dynamic) default(shared)
 			for(INT64 y = 0; y < dst_height; y++) {
 				BYTE *src_bits = bsrc + (src_width - 1 - y) * bytespp;
 				BYTE *dst_bits = bdest + (y * dst_pitch);
@@ -456,7 +457,7 @@ Rotate180(FIBITMAP *src) {
 	switch(image_type) {
 		case FIT_BITMAP:
 			if(bpp == 1) {
-				#pragma omp parallel for schedule(dynamic) default(none)
+				#pragma omp parallel for schedule(dynamic) default(shared)
 				for(INT64 y = 0; y < src_height; y++) {
 					BYTE *src_bits = FreeImage_GetScanLine(src, y);
 					BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_height - y - 1);
@@ -480,7 +481,7 @@ Rotate180(FIBITMAP *src) {
 		{
 			 // Calculate the number of bytes per pixel
 			const INT64 bytespp = FreeImage_GetLine(src) / FreeImage_GetWidth(src);
-			#pragma omp parallel for schedule(dynamic) default(none)
+			#pragma omp parallel for schedule(dynamic) default(shared)
 			for(INT64 y = 0; y < src_height; y++) {
 				BYTE *src_bits = FreeImage_GetScanLine(src, y);
 				BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_height - y - 1) + (dst_width - 1) * bytespp;
@@ -534,7 +535,8 @@ Rotate270(FIBITMAP *src) {
 				BYTE *bdest = FreeImage_GetBits(dst);
 				BYTE *dbitsmax = bdest + dst_height * dst_pitch - 1;
 				INT64 dlineup = 8 * dst_pitch - dst_width;
-				#pragma omp parallel for schedule(dynamic) default(none)
+				// Not parallelised: eight consecutive source rows y pack their bits into
+				// the same destination byte (column (y+dlineup)/8), so a threaded |= drops updates.
 				for(INT64 y = 0; y < src_height; y++) {
 					// figure out the column we are going to be copying to
 					const div_t div_r = div((int)(y + dlineup), 8);
@@ -573,7 +575,7 @@ Rotate270(FIBITMAP *src) {
 				// for all image blocks of RBLOCK*RBLOCK pixels
 
 				// x-segment
-				#pragma omp parallel for schedule(dynamic) default(none)
+				#pragma omp parallel for schedule(dynamic) default(shared)
 				for(INT64 xs = 0; xs < dst_width; xs += RBLOCK) {
 					// y-segment
 					for(INT64 ys = 0; ys < dst_height; ys += RBLOCK) {
@@ -606,7 +608,7 @@ Rotate270(FIBITMAP *src) {
 
 			// calculate the number of bytes per pixel
 			const INT64 bytespp = FreeImage_GetLine(src) / FreeImage_GetWidth(src);
-			#pragma omp parallel for schedule(dynamic) default(none)
+			#pragma omp parallel for schedule(dynamic) default(shared)
 			for(INT64 y = 0; y < dst_height; y++) {
 				BYTE *src_bits = bsrc + (src_height - 1) * src_pitch + y * bytespp;
 				BYTE *dst_bits = bdest + (y * dst_pitch);

@@ -8,12 +8,16 @@ CC = gcc
 CXX = g++
 AR = ar
 
+# OpenMP: parallel resize & rotate (FreeImageToolkit) and RAW demosaic (LibRaw).
+# Pass OPENMP=0 to build single-threaded.
+include Makefile.openmp
+
 INSTALLDIR = /usr
 
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-COMPILERFLAGS = -O3 -DNO_LCMS
+COMPILERFLAGS = -O3 -DNO_LCMS $(OPENMP_CFLAGS)
 LIBRARIES = -lstdc++
 
 MODULES = $(SRCS:.c=.o)
@@ -60,7 +64,7 @@ $(SHAREDLIB): $(MODULES)
 	    -Wl,--enable-auto-import \
 	    -Wl,--enable-auto-image-base \
 	    -Wl,--whole-archive $(STATICLIB) \
-	    -Wl,--no-whole-archive $(LIBRARIES)
+	    -Wl,--no-whole-archive $(LIBRARIES) $(OPENMP_LDFLAGS)
 
 
 install:

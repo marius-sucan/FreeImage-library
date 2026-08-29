@@ -3,6 +3,12 @@
 
 include Makefile.srcs
 
+# OpenMP: parallel resize & rotate (FreeImageToolkit) and RAW demosaic (LibRaw).
+# Off by default - the iOS toolchain ships no OpenMP runtime. If yours does,
+# build with "make -f Makefile.iphone OPENMP=1".
+OPENMP ?= 0
+include Makefile.openmp
+
 CFLAGS =  -g -O2 -Wall -Wmissing-prototypes -std=c99 -ffast-math -fno-strict-aliasing
 CXXFLAGS =  -g -O2 -Wall -fno-strict-aliasing
 
@@ -26,6 +32,8 @@ EXTRA_CFLAGS_SIM += -arch $(ARCH_SIM) -pipe -mdynamic-no-pic -fvisibility=hidden
 EXTRA_LDFLAGS_SIM += -arch $(ARCH_SIM) -isysroot $(SDKROOT_SIM) -Wl,-dead_strip
 EXTRA_CFLAGS_SIM += -D__IPHONE_OS_VERSION_MIN_REQUIRED=20000 -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 EXTRA_LDFLAGS_SIM += -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
+EXTRA_CFLAGS_SIM += $(OPENMP_CFLAGS)
+EXTRA_LDFLAGS_SIM += $(OPENMP_LDFLAGS)
 
 # Xcode complains about the -mdynamic-no-pic with an Apple Mach-O Linker Warning, so removed
 #EXTRA_CFLAGS_PHONE += -arch $(ARCH_PHONE) -pipe -mdynamic-no-pic -fvisibility=hidden $(INCLUDE) -isysroot $(SDKROOT_PHONE)
@@ -33,6 +41,8 @@ EXTRA_CFLAGS_PHONE += -arch $(ARCH_PHONE) -pipe -fvisibility=hidden $(INCLUDE) -
 EXTRA_LDFLAGS_PHONE += -arch $(ARCH_PHONE) -isysroot $(SDKROOT_PHONE) -Wl,-dead_strip
 EXTRA_CFLAGS_PHONE += -miphoneos-version-min=$(IPHONEOS_DEPLOYMENT_TARGET)
 EXTRA_LDFLAGS_PHONE += -miphoneos-version-min=$(IPHONEOS_DEPLOYMENT_TARGET)
+EXTRA_CFLAGS_PHONE += $(OPENMP_CFLAGS)
+EXTRA_LDFLAGS_PHONE += $(OPENMP_LDFLAGS)
 
 AR_SIM = $(PLATFORM_SIM_DEVELOPER_BIN_DIR)/ar
 AR_PHONE = $(PLATFORM_PHONE_DEVELOPER_BIN_DIR)/ar

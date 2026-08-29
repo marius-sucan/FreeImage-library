@@ -9,12 +9,17 @@ CC = gcc
 CPP = g++
 AR = ar
 
+# OpenMP: parallel resize & rotate (FreeImageToolkit) and RAW demosaic (LibRaw).
+# Pass OPENMP=0 to build single-threaded; with Sun Studio instead of gcc use
+# "make OPENMP_CFLAGS=-xopenmp OPENMP_LDFLAGS=-xopenmp".
+include Makefile.openmp
+
 INSTALLDIR = /usr/local
 
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-COMPILERFLAGS = -O3
+COMPILERFLAGS = -O3 $(OPENMP_CFLAGS)
 LIBRARIES = -lstdc++
 
 MODULES = $(SRCS:.c=.o)
@@ -54,7 +59,7 @@ $(STATICLIB): $(MODULES)
 	$(AR) r $@ $(MODULES)
 
 $(SHAREDLIB): $(MODULES)
-	$(CC) -s -G -Wl,-soname=$(LIBNAME) -o $@ $(MODULES) $(LIBRARIES)
+	$(CC) -s -G -Wl,-soname=$(LIBNAME) -o $@ $(MODULES) $(LIBRARIES) $(OPENMP_LDFLAGS)
 
 install:
 	install -m 644 -o root -g root Source/FreeImage.h $(INSTALLDIR)/include

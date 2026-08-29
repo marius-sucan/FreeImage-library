@@ -8,10 +8,14 @@
 #
 # Scratch files go to $JXR_TEST_TMP, or the current directory.
 
+# The library is built with OpenMP, so libfreeimage.a carries undefined
+# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+include ../../Makefile.openmp
+
 TESTS   = regress edge narrowio meta bigfile
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
-LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread
+LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
 # Makefile.srcs omits this one, so libfreeimage.a is missing TIFFHashSet*
 HASHSET = tif_hash_set.o
@@ -49,10 +53,10 @@ clean: clean-bin
 # the library, so the installed one is untouched.
 narrowio-step: narrowio.c $(HASHSET)
 	cp ../../Dist/libfreeimage.a libfreeimage-narrowstep.a
-	g++ -c -std=c++0x -O1 -g -w -fPIC -fexceptions -D__ANSI__ -DFI_JXR_SEEK_STEP_MAX=4096 \
+	g++ -c -std=c++0x -O1 -g -w -fPIC -fexceptions -D__ANSI__ -DFI_JXR_SEEK_STEP_MAX=4096 $(OPENMP_CFLAGS) \
 	    $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's#-I#-I../../#g') \
 	    ../../Source/FreeImage/PluginJXR.cpp -o PluginJXR.o
 	ar r libfreeimage-narrowstep.a PluginJXR.o
 	gcc $(CFLAGS) $(INC) narrowio.c $(HASHSET) -o narrowio-step \
-	    libfreeimage-narrowstep.a -lstdc++ -lm -lpthread
+	    libfreeimage-narrowstep.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	./narrowio-step 4096
