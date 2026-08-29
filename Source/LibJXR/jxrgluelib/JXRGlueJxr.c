@@ -1,15 +1,15 @@
 
 //*@@@+++@@@@******************************************************************
 //
-// Copyright © Microsoft Corp.
+// Copyright ï¿½ Microsoft Corp.
 // All rights reserved.
 // 
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 // 
-// • Redistributions of source code must retain the above copyright notice,
+// ï¿½ Redistributions of source code must retain the above copyright notice,
 //   this list of conditions and the following disclaimer.
-// • Redistributions in binary form must reproduce the above copyright notice,
+// ï¿½ Redistributions in binary form must reproduce the above copyright notice,
 //   this list of conditions and the following disclaimer in the documentation
 //   and/or other materials provided with the distribution.
 // 
@@ -27,6 +27,7 @@
 //
 //*@@@---@@@@******************************************************************
 #include <limits.h>
+#include <wchar.h>	// wcslen: implicitly declared it returns int, which C23 compilers reject
 #include <JXRGlue.h>
 
 
@@ -275,6 +276,16 @@ Cleanup:
 //================================================================
 // PKImageEncode_WMP
 //================================================================
+/**
+ * The container addresses the image and alpha planes with 32-bit IFD values
+ * (@see WmpDE.uValueOrOffset), so nothing in a JPEG XR file can sit beyond 4 GB.
+ * The encoder checks stream positions against this while it still holds them as a
+ * 64-bit size_t - by the time they reach WriteContainerPost() they have been
+ * narrowed to Long, which is itself only 32 bits wide on LLP64 platforms, and a
+ * wrapped offset there would be written out as a silently malformed file.
+ */
+#define JXR_MAX_CONTAINER_OFFSET ((size_t)0xFFFFFFFFU)
+
 ERR WriteContainerPre(
     PKImageEncode* pIE)
 {
@@ -724,7 +735,9 @@ ERR WriteContainerPost(
         offPos = pDEMisc->uOffAlphaOffset;
         Call(WriteWmpDE(pWS, &offPos, &deAlphaOffset, NULL, NULL));
 
-        deAlphaByteCount.uValueOrOffset = pIE->WMP.nCbAlpha + pIE->WMP.nOffAlpha;
+        // note this field carries the alpha plane's END offset, not its length; sum it
+        // as U32 so the arithmetic stays defined where Long is 32-bit and signed
+        deAlphaByteCount.uValueOrOffset = (U32)pIE->WMP.nCbAlpha + (U32)pIE->WMP.nOffAlpha;
         offPos = pDEMisc->uOffAlphaByteCount;
         Call(WriteWmpDE(pWS, &offPos, &deAlphaByteCount, NULL, NULL));
     }
@@ -852,7 +865,7 @@ Cleanup:
 }
 
 ERR PKImageEncode_EncodeContent(
-    PKImageEncode* pIE, 
+    PKImageEncode* pIE,
     PKPixelInfo PI,
     U32 cLine,
     U8* pbPixels,
@@ -862,6 +875,7 @@ ERR PKImageEncode_EncodeContent(
     size_t offPos = 0;
 
     Call(pIE->pStream->GetPos(pIE->pStream, &offPos));
+    FailIf(offPos > JXR_MAX_CONTAINER_OFFSET, WMP_errBufferOverflow);
     pIE->WMP.nOffImage = (Long)offPos;
 
     Call(PKImageEncode_EncodeContent_Init(pIE, PI, cLine, pbPixels, cbStride));
@@ -869,6 +883,7 @@ ERR PKImageEncode_EncodeContent(
     Call(PKImageEncode_EncodeContent_Term(pIE));
 
     Call(pIE->pStream->GetPos(pIE->pStream, &offPos));
+    FailIf(offPos > JXR_MAX_CONTAINER_OFFSET, WMP_errBufferOverflow);
     pIE->WMP.nCbImage = (Long)offPos - pIE->WMP.nOffImage;
 
 Cleanup:
@@ -993,6 +1008,7 @@ ERR PKImageEncode_EncodeAlpha(
         Call(pIE->pStream->Write(pIE->pStream, &zero, 1));
         offPos++;
     }
+    FailIf(offPos > JXR_MAX_CONTAINER_OFFSET, WMP_errBufferOverflow);
     pIE->WMP.nOffAlpha = (Long)offPos;
 
     Call(PKImageEncode_EncodeAlpha_Init(pIE, PI, cLine, pbPixels, cbStride));
@@ -1000,6 +1016,7 @@ ERR PKImageEncode_EncodeAlpha(
     Call(PKImageEncode_EncodeAlpha_Term(pIE));
 
     Call(pIE->pStream->GetPos(pIE->pStream, &offPos));
+    FailIf(offPos > JXR_MAX_CONTAINER_OFFSET, WMP_errBufferOverflow);
     pIE->WMP.nCbAlpha = (Long)offPos - pIE->WMP.nOffAlpha;
 
 Cleanup:
