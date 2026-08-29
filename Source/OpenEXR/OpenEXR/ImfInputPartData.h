@@ -8,6 +8,7 @@
 
 #include "ImfForward.h"
 
+#include <cstdint>
 #include <vector>
 
 #include "ImfHeader.h"

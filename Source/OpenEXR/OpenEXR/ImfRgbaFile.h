@@ -28,6 +28,7 @@
 #include <ImathBox.h>
 #include <half.h>
 #include "ImfThreading.h"
+#include <cstdint>
 #include <string>
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER

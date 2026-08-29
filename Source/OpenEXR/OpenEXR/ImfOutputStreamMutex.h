@@ -11,6 +11,7 @@
 #include "IlmThreadConfig.h"
 
 #if ILMTHREAD_THREADING_ENABLED
+#include <cstdint>
 #include <mutex>
 #endif
 

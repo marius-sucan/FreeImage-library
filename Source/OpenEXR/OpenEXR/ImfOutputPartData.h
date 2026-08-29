@@ -9,6 +9,7 @@
 #include "ImfForward.h"
 
 #include "ImfHeader.h"
+#include <cstdint>
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER
 

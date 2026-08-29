@@ -17,6 +17,7 @@
 #include "ImfTileDescription.h"
 #include <ImathBox.h>
 
+#include <cstdint>
 #include <stdio.h>
 #include <vector>
 

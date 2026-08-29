@@ -18,6 +18,7 @@
 
 #include "ImfIO.h"
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 

@@ -17,6 +17,7 @@
 #include "ImfThreading.h"
 #include "ImfGenericInputFile.h"
 #include "ImfDeepScanLineOutputFile.h"
+#include <cstdint>
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER
 
