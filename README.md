@@ -36,6 +36,8 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - fixed a data race in the 1-bit 90/180/270 rotation: eight consecutive source rows pack their bits into the same destination byte, so the parallel `|=` dropped updates and corrupted the output. This was live in the MSVC Release builds;
 - fixed the bundled ZLib failing to compile on GCC 14+ / Clang 16+: gzguts.h pulled in <io.h> on Windows but nothing on POSIX, so gzlib.c/gzread.c/gzwrite.c called lseek/read/write/close with no prototype (also a silent 64-bit offset truncation on older compilers that merely warned). Cygwin was affected too;
 - fixed the bundled OpenEXR not compiling on GCC 13+: 11 headers name uint64_t/int64_t in their own declarations without including <cstdint>, which stopped working when libstdc++ dropped transitive includes (4 of 107 translation units failed; the rest only survived on include order);
+- fixed the bundled LibJXR not compiling on GCC 14+: strcodec.c defines the non-Windows _byteswap_ulong fallback but declared it in no header, so segdec.c called it with no prototype. Declared it in strcodec.h under the same guard as the definition;
+- with the above and the ZLib fix, a plain "make" now builds the library on modern GCC/Clang with no extra flags;
 - updated the OpenEXR library to version 3.1.3, from version 2.2.0;
 - added FreeImage_RescaleRawBits()
 - fixed the GIF plugin: multi-page saves now enlarge the logical screen to fit every frame (frames wider than the first one produced invalid files), fixed a stack buffer overflow in the LZW encoder (StringTable::CompressEnd) and a heap buffer overflow when loading such files with GIF_PLAYBACK; these bugs crashed QPV when creating animated GIFs

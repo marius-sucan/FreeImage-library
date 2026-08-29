@@ -662,6 +662,28 @@ void flushToByte(BitIOInfo* pIO);
 #endif // ARMOPT_BITIO
 
 /*************************************************************************
+    _byteswap_ulong
+
+    Every translation unit that uses the LOAD16 macros below supplies its own
+    LOAD16, and each of those calls _byteswap_ulong: strcodec.c through
+    load4BE, segdec.c through its own static _load4.  On Desktop x86 and WinCE
+    ARM that name is a compiler intrinsic declared by <stdlib.h>, but on every
+    other platform strcodec.c defines the fallback itself and declared it
+    nowhere, so segdec.c called it with no prototype in scope -- an error on
+    GCC >= 14 and Clang >= 16.  The guard below mirrors the one around that
+    definition in strcodec.c verbatim.  The big-endian branch is deliberately
+    left out: there _byteswap_ulong is a function-like macro, which would
+    mangle a prototype, and _load4 never calls it anyway.
+*************************************************************************/
+#if (defined(WIN32) && !defined(UNDER_CE) && (!defined(__MINGW32__) || defined(__MINGW64_TOOLCHAIN__))) || (defined(UNDER_CE) && defined(_ARM_))
+// intrinsic, declared by <stdlib.h>
+#else
+#ifndef _BIG__ENDIAN_
+U32 _byteswap_ulong(U32 bits);
+#endif // _BIG__ENDIAN_
+#endif
+
+/*************************************************************************
     Bitio defines
 *************************************************************************/
 #define PEEKBIT16(pIO, cBits) \
