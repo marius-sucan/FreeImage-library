@@ -1,0 +1,11 @@
+# built by this directory's Makefile
+regress
+edge
+narrowio
+meta
+bigfile
+narrowio-step
+*.o
+libfreeimage-narrowstep.a
+# scratch images written by the tests
+fi_jxr_*.jxr
