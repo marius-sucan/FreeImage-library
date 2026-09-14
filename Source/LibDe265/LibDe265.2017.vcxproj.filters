@@ -1,0 +1,272 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="libde265\alloc_pool.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\bitstream.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\cabac.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\contextmodel.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\de265.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\deblock.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\decctx.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\dpb.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\fallback-dct.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\fallback-deblk.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\fallback-intrapred.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\fallback-motion.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\fallback.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\image-io.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\image.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\intrapred.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\md5.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\motion.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\nal-parser.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\nal.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\pps.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\quality.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\refpic.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\sao.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\scan.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\sei.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\slice.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\sps.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\threads.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\transform.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\util.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\visualize.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\vps.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\vui.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\x86\sse-dct.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\x86\sse-deblk.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\x86\sse-intrapred.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\x86\sse-motion.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libde265\x86\sse.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="extra\win32cond.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="extra\win32cond.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\acceleration.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\alloc_pool.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\bitstream.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\cabac.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\contextmodel.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\de265-version.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\de265.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\deblock.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\decctx.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\dpb.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\fallback-dct.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\fallback-deblk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\fallback-intrapred.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\fallback-motion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\fallback.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\image-io.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\image.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\intrapred.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\md5.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\motion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\nal-parser.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\nal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\pps.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\quality.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\refpic.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\sao.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\scan.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\sei.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\slice.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\sps.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\threads.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\transform.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\util.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\visualize.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\vps.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\vui.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\sse-dct.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\sse-deblk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\sse-intrapred.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\sse-motion.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\sse.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\transform-avx2.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\transform-avx512.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="libde265\x86\transform-dct-tables.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

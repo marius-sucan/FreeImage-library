@@ -1,0 +1,443 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectName>LibHEIF</ProjectName>
+    <ProjectGuid>{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}</ProjectGuid>
+    <RootNamespace>LibHEIF</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>12.0.21005.1</_ProjectFileVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <CompileAs>CompileAsCpp</CompileAs>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="libheif\api\libheif\heif.h" />
+    <ClInclude Include="libheif\api\libheif\heif_aux_images.h" />
+    <ClInclude Include="libheif\api\libheif\heif_brands.h" />
+    <ClInclude Include="libheif\api\libheif\heif_color.h" />
+    <ClInclude Include="libheif\api\libheif\heif_components.h" />
+    <ClInclude Include="libheif\api\libheif\heif_context.h" />
+    <ClInclude Include="libheif\api\libheif\heif_cxx.h" />
+    <ClInclude Include="libheif\api\libheif\heif_decoding.h" />
+    <ClInclude Include="libheif\api\libheif\heif_emscripten.h" />
+    <ClInclude Include="libheif\api\libheif\heif_encoding.h" />
+    <ClInclude Include="libheif\api\libheif\heif_entity_groups.h" />
+    <ClInclude Include="libheif\api\libheif\heif_error.h" />
+    <ClInclude Include="libheif\api\libheif\heif_experimental.h" />
+    <ClInclude Include="libheif\api\libheif\heif_export.h" />
+    <ClInclude Include="libheif\api\libheif\heif_image.h" />
+    <ClInclude Include="libheif\api\libheif\heif_image_handle.h" />
+    <ClInclude Include="libheif\api\libheif\heif_items.h" />
+    <ClInclude Include="libheif\api\libheif\heif_library.h" />
+    <ClInclude Include="libheif\api\libheif\heif_metadata.h" />
+    <ClInclude Include="libheif\api\libheif\heif_omaf.h" />
+    <ClInclude Include="libheif\api\libheif\heif_plugin.h" />
+    <ClInclude Include="libheif\api\libheif\heif_properties.h" />
+    <ClInclude Include="libheif\api\libheif\heif_regions.h" />
+    <ClInclude Include="libheif\api\libheif\heif_security.h" />
+    <ClInclude Include="libheif\api\libheif\heif_sequences.h" />
+    <ClInclude Include="libheif\api\libheif\heif_tai_timestamps.h" />
+    <ClInclude Include="libheif\api\libheif\heif_text.h" />
+    <ClInclude Include="libheif\api\libheif\heif_tiling.h" />
+    <ClInclude Include="libheif\api\libheif\heif_uncompressed.h" />
+    <ClInclude Include="libheif\api\libheif\heif_version.h" />
+    <ClInclude Include="libheif\api_structs.h" />
+    <ClInclude Include="libheif\bitstream.h" />
+    <ClInclude Include="libheif\box.h" />
+    <ClInclude Include="libheif\brands.h" />
+    <ClInclude Include="libheif\codecs\avc_boxes.h" />
+    <ClInclude Include="libheif\codecs\avc_dec.h" />
+    <ClInclude Include="libheif\codecs\avc_enc.h" />
+    <ClInclude Include="libheif\codecs\avif_boxes.h" />
+    <ClInclude Include="libheif\codecs\avif_dec.h" />
+    <ClInclude Include="libheif\codecs\avif_enc.h" />
+    <ClInclude Include="libheif\codecs\decoder.h" />
+    <ClInclude Include="libheif\codecs\encoder.h" />
+    <ClInclude Include="libheif\codecs\hevc_boxes.h" />
+    <ClInclude Include="libheif\codecs\hevc_dec.h" />
+    <ClInclude Include="libheif\codecs\hevc_enc.h" />
+    <ClInclude Include="libheif\codecs\jpeg2000_boxes.h" />
+    <ClInclude Include="libheif\codecs\jpeg2000_dec.h" />
+    <ClInclude Include="libheif\codecs\jpeg2000_enc.h" />
+    <ClInclude Include="libheif\codecs\jpeg_boxes.h" />
+    <ClInclude Include="libheif\codecs\jpeg_dec.h" />
+    <ClInclude Include="libheif\codecs\jpeg_enc.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_boxes.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_codec.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_dec.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_block_component_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_block_pixel_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_bytealign_component_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_component_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_legacybase.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_mixed_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_pixel_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_decoder_row_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_enc.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_encoder.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_encoder_component_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_encoder_rgb_block_pixel_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_encoder_rgb_bytealign_pixel_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_encoder_rgb_pixel_interleave.h" />
+    <ClInclude Include="libheif\codecs\uncompressed\unc_types.h" />
+    <ClInclude Include="libheif\codecs\vvc_boxes.h" />
+    <ClInclude Include="libheif\codecs\vvc_dec.h" />
+    <ClInclude Include="libheif\codecs\vvc_enc.h" />
+    <ClInclude Include="libheif\color-conversion\alpha.h" />
+    <ClInclude Include="libheif\color-conversion\bayer_bilinear.h" />
+    <ClInclude Include="libheif\color-conversion\chroma_sampling.h" />
+    <ClInclude Include="libheif\color-conversion\colorconversion.h" />
+    <ClInclude Include="libheif\color-conversion\hdr_sdr.h" />
+    <ClInclude Include="libheif\color-conversion\monochrome.h" />
+    <ClInclude Include="libheif\color-conversion\rgb2rgb.h" />
+    <ClInclude Include="libheif\color-conversion\rgb2yuv.h" />
+    <ClInclude Include="libheif\color-conversion\rgb2yuv_sharp.h" />
+    <ClInclude Include="libheif\color-conversion\yuv2rgb.h" />
+    <ClInclude Include="libheif\common_utils.h" />
+    <ClInclude Include="libheif\compression.h" />
+    <ClInclude Include="libheif\context.h" />
+    <ClInclude Include="libheif\error.h" />
+    <ClInclude Include="libheif\file.h" />
+    <ClInclude Include="libheif\file_layout.h" />
+    <ClInclude Include="libheif\id_creator.h" />
+    <ClInclude Include="libheif\image-items\avc.h" />
+    <ClInclude Include="libheif\image-items\avif.h" />
+    <ClInclude Include="libheif\image-items\grid.h" />
+    <ClInclude Include="libheif\image-items\hevc.h" />
+    <ClInclude Include="libheif\image-items\iden.h" />
+    <ClInclude Include="libheif\image-items\image_item.h" />
+    <ClInclude Include="libheif\image-items\jpeg.h" />
+    <ClInclude Include="libheif\image-items\jpeg2000.h" />
+    <ClInclude Include="libheif\image-items\mask_image.h" />
+    <ClInclude Include="libheif\image-items\overlay.h" />
+    <ClInclude Include="libheif\image-items\tiled.h" />
+    <ClInclude Include="libheif\image-items\unc_image.h" />
+    <ClInclude Include="libheif\image-items\vvc.h" />
+    <ClInclude Include="libheif\image\image_description.h" />
+    <ClInclude Include="libheif\image\pixelimage.h" />
+    <ClInclude Include="libheif\init.h" />
+    <ClInclude Include="libheif\logging.h" />
+    <ClInclude Include="libheif\mdat_data.h" />
+    <ClInclude Include="libheif\mini.h" />
+    <ClInclude Include="libheif\nclx.h" />
+    <ClInclude Include="libheif\omaf_boxes.h" />
+    <ClInclude Include="libheif\plugin_registry.h" />
+    <ClInclude Include="libheif\plugins\decoder_aom.h" />
+    <ClInclude Include="libheif\plugins\decoder_dav1d.h" />
+    <ClInclude Include="libheif\plugins\decoder_ffmpeg.h" />
+    <ClInclude Include="libheif\plugins\decoder_jpeg.h" />
+    <ClInclude Include="libheif\plugins\decoder_libde265.h" />
+    <ClInclude Include="libheif\plugins\decoder_openh264.h" />
+    <ClInclude Include="libheif\plugins\decoder_openjpeg.h" />
+    <ClInclude Include="libheif\plugins\decoder_uncompressed.h" />
+    <ClInclude Include="libheif\plugins\decoder_vvdec.h" />
+    <ClInclude Include="libheif\plugins\decoder_webcodecs.h" />
+    <ClInclude Include="libheif\plugins\encoder_aom.h" />
+    <ClInclude Include="libheif\plugins\encoder_input_check.h" />
+    <ClInclude Include="libheif\plugins\encoder_jpeg.h" />
+    <ClInclude Include="libheif\plugins\encoder_kvazaar.h" />
+    <ClInclude Include="libheif\plugins\encoder_mask.h" />
+    <ClInclude Include="libheif\plugins\encoder_openjpeg.h" />
+    <ClInclude Include="libheif\plugins\encoder_openjph.h" />
+    <ClInclude Include="libheif\plugins\encoder_rav1e.h" />
+    <ClInclude Include="libheif\plugins\encoder_svt.h" />
+    <ClInclude Include="libheif\plugins\encoder_uncompressed.h" />
+    <ClInclude Include="libheif\plugins\encoder_uvg266.h" />
+    <ClInclude Include="libheif\plugins\encoder_vvenc.h" />
+    <ClInclude Include="libheif\plugins\encoder_x264.h" />
+    <ClInclude Include="libheif\plugins\encoder_x265.h" />
+    <ClInclude Include="libheif\plugins\nalu_utils.h" />
+    <ClInclude Include="libheif\plugins_unix.h" />
+    <ClInclude Include="libheif\plugins_windows.h" />
+    <ClInclude Include="libheif\region.h" />
+    <ClInclude Include="libheif\security_limits.h" />
+    <ClInclude Include="libheif\sequences\chunk.h" />
+    <ClInclude Include="libheif\sequences\seq_boxes.h" />
+    <ClInclude Include="libheif\sequences\track.h" />
+    <ClInclude Include="libheif\sequences\track_metadata.h" />
+    <ClInclude Include="libheif\sequences\track_visual.h" />
+    <ClInclude Include="libheif\text.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="libheif\api\libheif\heif.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_aux_images.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_brands.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_color.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_components.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_context.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_decoding.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_encoding.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_entity_groups.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_image.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_image_handle.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_items.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_library.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_metadata.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_omaf.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_plugin.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_properties.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_regions.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_security.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_sequences.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_tai_timestamps.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_text.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_tiling.cc" />
+    <ClCompile Include="libheif\api\libheif\heif_uncompressed.cc" />
+    <ClCompile Include="libheif\bitstream.cc" />
+    <ClCompile Include="libheif\box.cc" />
+    <ClCompile Include="libheif\brands.cc" />
+    <ClCompile Include="libheif\codecs\avc_boxes.cc" />
+    <ClCompile Include="libheif\codecs\avc_dec.cc" />
+    <ClCompile Include="libheif\codecs\avc_enc.cc" />
+    <ClCompile Include="libheif\codecs\avif_boxes.cc" />
+    <ClCompile Include="libheif\codecs\avif_dec.cc" />
+    <ClCompile Include="libheif\codecs\avif_enc.cc" />
+    <ClCompile Include="libheif\codecs\decoder.cc" />
+    <ClCompile Include="libheif\codecs\encoder.cc" />
+    <ClCompile Include="libheif\codecs\hevc_boxes.cc" />
+    <ClCompile Include="libheif\codecs\hevc_dec.cc" />
+    <ClCompile Include="libheif\codecs\hevc_enc.cc" />
+    <ClCompile Include="libheif\codecs\jpeg2000_boxes.cc" />
+    <ClCompile Include="libheif\codecs\jpeg2000_dec.cc" />
+    <ClCompile Include="libheif\codecs\jpeg2000_enc.cc" />
+    <ClCompile Include="libheif\codecs\jpeg_boxes.cc" />
+    <ClCompile Include="libheif\codecs\jpeg_dec.cc" />
+    <ClCompile Include="libheif\codecs\jpeg_enc.cc" />
+    <ClCompile Include="libheif\codecs\vvc_boxes.cc" />
+    <ClCompile Include="libheif\codecs\vvc_dec.cc" />
+    <ClCompile Include="libheif\codecs\vvc_enc.cc" />
+    <ClCompile Include="libheif\color-conversion\alpha.cc" />
+    <ClCompile Include="libheif\color-conversion\bayer_bilinear.cc" />
+    <ClCompile Include="libheif\color-conversion\chroma_sampling.cc" />
+    <ClCompile Include="libheif\color-conversion\colorconversion.cc" />
+    <ClCompile Include="libheif\color-conversion\hdr_sdr.cc" />
+    <ClCompile Include="libheif\color-conversion\monochrome.cc" />
+    <ClCompile Include="libheif\color-conversion\rgb2rgb.cc" />
+    <ClCompile Include="libheif\color-conversion\rgb2yuv.cc" />
+    <ClCompile Include="libheif\color-conversion\rgb2yuv_sharp.cc" />
+    <ClCompile Include="libheif\color-conversion\yuv2rgb.cc" />
+    <ClCompile Include="libheif\common_utils.cc" />
+    <ClCompile Include="libheif\compression.cc" />
+    <ClCompile Include="libheif\compression_brotli.cc" />
+    <ClCompile Include="libheif\compression_zlib.cc" />
+    <ClCompile Include="libheif\context.cc" />
+    <ClCompile Include="libheif\error.cc" />
+    <ClCompile Include="libheif\file.cc" />
+    <ClCompile Include="libheif\file_layout.cc" />
+    <ClCompile Include="libheif\id_creator.cc" />
+    <ClCompile Include="libheif\image-items\avc.cc" />
+    <ClCompile Include="libheif\image-items\avif.cc" />
+    <ClCompile Include="libheif\image-items\grid.cc" />
+    <ClCompile Include="libheif\image-items\hevc.cc" />
+    <ClCompile Include="libheif\image-items\iden.cc" />
+    <ClCompile Include="libheif\image-items\image_item.cc" />
+    <ClCompile Include="libheif\image-items\jpeg.cc" />
+    <ClCompile Include="libheif\image-items\jpeg2000.cc" />
+    <ClCompile Include="libheif\image-items\mask_image.cc" />
+    <ClCompile Include="libheif\image-items\overlay.cc" />
+    <ClCompile Include="libheif\image-items\tiled.cc" />
+    <ClCompile Include="libheif\image-items\vvc.cc" />
+    <ClCompile Include="libheif\image\image_description.cc" />
+    <ClCompile Include="libheif\image\pixelimage.cc" />
+    <ClCompile Include="libheif\init.cc" />
+    <ClCompile Include="libheif\logging.cc" />
+    <ClCompile Include="libheif\mini.cc" />
+    <ClCompile Include="libheif\nclx.cc" />
+    <ClCompile Include="libheif\omaf_boxes.cc" />
+    <ClCompile Include="libheif\plugin_registry.cc" />
+    <ClCompile Include="libheif\plugins\decoder_libde265.cc" />
+    <ClCompile Include="libheif\plugins\encoder_mask.cc" />
+    <ClCompile Include="libheif\plugins\nalu_utils.cc" />
+    <ClCompile Include="libheif\region.cc" />
+    <ClCompile Include="libheif\security_limits.cc" />
+    <ClCompile Include="libheif\sequences\chunk.cc" />
+    <ClCompile Include="libheif\sequences\seq_boxes.cc" />
+    <ClCompile Include="libheif\sequences\track.cc" />
+    <ClCompile Include="libheif\sequences\track_metadata.cc" />
+    <ClCompile Include="libheif\sequences\track_visual.cc" />
+    <ClCompile Include="libheif\text.cc" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
