@@ -4,8 +4,9 @@
  * Loads every file of the corpus in data/ (libheif's test images and fuzzing
  * corpus, pillow-heif's synthetic images, and four files derived from one of
  * libheif's, see data/README.md) and checks what the plugin is responsible for:
- * format detection (an AVIF is left to the AVIF plugin, a HEIF with a codec
- * FreeImage does not have is claimed and then refused with a message), the
+ * format detection (an AVIF is left to the AVIF plugin; HEVC, JPEG and uncompressed
+ * payloads decode, while a HEIF whose codec FreeImage cannot decode - AVC, VVC or
+ * JPEG 2000 - is claimed and then refused with a message), the
  * bitmap type picked for each pixel format (8-bit to 24/32-bit, 10/12-bit to
  * FIT_RGB16/FIT_RGBA16, monochrome to 8-bit or FIT_UINT16), the geometry after
  * the clap/irot/imir transforms and the direction of the transforms, the
@@ -64,10 +65,15 @@ static const Expected EXPECTED[] = {
     {"hevc32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x845e97485c2b2315ULL},
     {"hevc32-mini.heif",                FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
     {"avif32.heif",                     FIF_AVIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
+    /* The same 32x32 image in five codecs. HEVC and JPEG decode (JPEG through the
+     * bundled LibJPEG), and the zlib-compressed uncompressed 'unci' image through
+     * the bundled ZLib; all three agree to a few levels. AVC needs an H.264 decoder
+     * (OpenH264) and JPEG 2000 a newer OpenJPEG than the bundled 2.0.0 (which
+     * mis-decodes it), so both are detected as HEIF and refused with a message. */
     {"avc32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
-    {"jpeg32.heif",                     FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
+    {"jpeg32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xdf80f91a274d4f7eULL},
     {"j2k32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
-    {"unci32.heif",                     FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
+    {"unci32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xb0cc9d934f8f9eaeULL},
     /* pillow-heif's synthetic images */
     {"RGB_8__128x128.heif",             FIF_HEIF, 1,  128,  128, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x963f9a51718c4545ULL},
     {"RGB_10__128x128.heif",            FIF_HEIF, 1,  128,  128, FIT_RGB16,  48,   0,  0, 0,   0,   0, 0x9bff5679bfa622a0ULL},

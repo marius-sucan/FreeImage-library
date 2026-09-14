@@ -83,7 +83,27 @@ LIBHEIF_CXXFLAGS_PRE = -ISource/LibHEIF/libheif -ISource/LibHEIF/libheif/api -IS
 # HAVE_LIBDE265: the libde265 decoder is compiled in (no dynamic plugin loading)
 # ENABLE_MULTITHREADING_SUPPORT / ENABLE_PARALLEL_TILE_DECODING: libheif's defaults
 # LIBHEIF_STATIC_BUILD / LIBDE265_STATIC_BUILD: see above; libheif includes de265.h
-LIBHEIF_CXXFLAGS_POST = -std=c++20 -DLIBHEIF_STATIC_BUILD -DLIBDE265_STATIC_BUILD -DHAVE_LIBDE265=1 -DENABLE_MULTITHREADING_SUPPORT=1 -DENABLE_PARALLEL_TILE_DECODING=1
+#
+# The other decoders are wired to libraries FreeImage already bundles, so a HEIF
+# file whose payload is not HEVC still opens:
+#   HAVE_JPEG_DECODER=1     -> libheif/plugins/decoder_jpeg.cc  -> Source/LibJPEG
+#                              (also decodes the JPEG 'thmb' thumbnails Sony HIF
+#                              files carry, and JPEG-in-HEIF payloads)
+#   WITH_UNCOMPRESSED_CODEC=1 -> libheif/codecs/uncompressed/*.cc and image-items/
+#                              unc_image.cc plus the unci decoder/encoder plugins
+#                              (ISO/IEC 23001-17 uncompressed)
+#   HAVE_ZLIB=1             -> libheif/compression_zlib.cc -> Source/ZLib, for the
+#                              zlib/deflate-compressed variant of an 'unci' item
+# The bundled -ISource/LibJPEG and -ISource/ZLib are already on the global include
+# path; the MSVC project adds them itself.
+#
+# JPEG 2000 is deliberately NOT enabled: the bundled Source/LibOpenJPEG is 2.0.0
+# (2013) and mis-decodes J2K-in-HEIF (verified - the j2k test image loses detail
+# and colour against its lossless 'unci' reference, while JPEG and HEVC of the same
+# image are exact).  Enabling it cleanly needs a newer OpenJPEG, which is shared
+# with FreeImage's own J2K/JP2 plugins.  So no AVC (H.264), VVC or JPEG 2000 decoder
+# is enabled, and those payloads are reported and skipped.
+LIBHEIF_CXXFLAGS_POST = -std=c++20 -DLIBHEIF_STATIC_BUILD -DLIBDE265_STATIC_BUILD -DHAVE_LIBDE265=1 -DENABLE_MULTITHREADING_SUPPORT=1 -DENABLE_PARALLEL_TILE_DECODING=1 -DHAVE_JPEG_DECODER=1 -DWITH_UNCOMPRESSED_CODEC=1 -DHAVE_ZLIB=1
 
 ./Source/LibHEIF/%: HEIF_CXXFLAGS_PRE = $(LIBHEIF_CXXFLAGS_PRE)
 ./Source/LibHEIF/%: HEIF_CXXFLAGS_POST = $(LIBHEIF_CXXFLAGS_POST)

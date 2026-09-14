@@ -227,6 +227,9 @@
     <ClCompile Include="libheif\image-items\image_item.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="libheif\image-items\unc_image.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="libheif\image-items\jpeg.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -276,6 +279,69 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="libheif\plugins\nalu_utils.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\plugins\decoder_jpeg.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\plugins\decoder_uncompressed.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\plugins\encoder_uncompressed.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_boxes.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_codec.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_dec.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_block_component_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_block_pixel_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_bytealign_component_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_component_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_legacybase.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_mixed_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_pixel_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_decoder_row_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_enc.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_encoder.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_encoder_component_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_encoder_rgb_block_pixel_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_encoder_rgb_bytealign_pixel_interleave.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="libheif\codecs\uncompressed\unc_encoder_rgb_pixel_interleave.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="libheif\region.cc">

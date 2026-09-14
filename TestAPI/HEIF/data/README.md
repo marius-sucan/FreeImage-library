@@ -37,7 +37,8 @@ Three sources, all redistributable with their notices:
 | `hevc32.heif` | HEVC item behind a generic 'mif1' brand list |
 | `hevc32-mini.heif` | the compact 'mini' box layout (brand 'mif3') |
 | `avif32.heif` | an AV1 payload: the AVIF plugin's file, not this one's |
-| `avc32.heif`, `jpeg32.heif`, `j2k32.heif`, `unci32.heif` | HEIF with AVC, JPEG, JPEG 2000 and uncompressed payloads: detected as HEIF, refused with a message |
+| `jpeg32.heif`, `unci32.heif` | JPEG and (zlib-compressed) uncompressed payloads: decoded through the bundled LibJPEG and ZLib |
+| `avc32.heif`, `j2k32.heif` | AVC and JPEG 2000 payloads: detected as HEIF, refused with a message (no H.264 decoder is bundled; the bundled OpenJPEG 2.0.0 mis-decodes J2K) |
 | `L_*`, `LA_8`, `RGB_*`, `RGBA_*` | monochrome, monochrome + alpha, RGB and RGBA at 8, 10 and 12 bits |
 | `L_xmp.heif` | XMP on a monochrome image |
 | `zPug_3.heic` | three top-level images (three pages), each with a thumbnail |

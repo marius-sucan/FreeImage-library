@@ -49,11 +49,15 @@
 //   returns FALSE.
 // - HDR content (PQ or HLG transfer characteristics) is returned as encoded, without
 //   tone mapping; the CICP color description is not exposed.
-// - Only HEVC payloads are decoded. HEIF files carrying AV1 (AVIF) belong to the AVIF
-//   plugin and are not claimed by FreeImage_GetFileType(); files carrying JPEG,
-//   JPEG 2000, AVC, VVC or uncompressed payloads are recognised as HEIF but fail to
-//   load with an explicit message. HEIF image sequences (the 'hevc'/'msf1' tracks),
-//   depth maps, gain maps and auxiliary images other than alpha are not surfaced.
+// - HEVC payloads are decoded by libde265; JPEG and ISO/IEC 23001-17 uncompressed
+//   payloads by libheif's own decoder plugins, wired to the LibJPEG and ZLib that
+//   FreeImage already bundles. HEIF files carrying AV1 (AVIF) belong to the AVIF
+//   plugin and are not claimed by FreeImage_GetFileType(). A file whose payload is
+//   AVC (H.264), VVC (H.266) or JPEG 2000 is recognised as HEIF but fails to load
+//   with an explicit message: no AVC or VVC decoder is bundled, and the bundled
+//   OpenJPEG 2.0.0 mis-decodes J2K-in-HEIF, so JPEG 2000 is left unclaimed. HEIF
+//   image sequences (the 'hevc'/'msf1' tracks), depth maps, gain maps and auxiliary
+//   images other than alpha are not surfaced.
 //
 // The whole file is streamed through FreeImageIO on demand (libheif's heif_reader
 // interface), so a header-only load (FIF_LOAD_NOPIXELS) reads the metadata boxes
