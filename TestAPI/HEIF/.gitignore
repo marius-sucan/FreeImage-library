@@ -1,0 +1,14 @@
+# built by this directory's Makefile
+decode
+narrowio
+decode-asan
+narrowio-asan
+narrowio-step
+asan-obj/
+step-obj/
+libfreeimage-asan.a
+libfreeimage-narrowstep.a
+# scratch images written by the tests
+fi_heif_*
+# run logs
+*.log
