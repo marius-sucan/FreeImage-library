@@ -1,10 +1,16 @@
 # Test images
 
-All files come from libavif's test corpus (`tests/data/` of
+All files but one come from libavif's test corpus (`tests/data/` of
 https://github.com/AOMediaCodec/libavif at v1.4.2), where each of them is listed
 with "License: same as libavif", i.e. the BSD 2-Clause license in
 `Source/LibAVIF/LICENSE`. libavif's `tests/data/README.md` describes their
-provenance in detail; in short:
+provenance in detail. `draw_points_idat_two_ipma.avif` is derived from
+`draw_points_idat.avif` with `splitipma.py` (same license): its single `ipma`
+box is split into two boxes with the same version and flags, one per item, which
+is what link-u's cavif encoder writes and what upstream libavif refuses as
+"Multiple Box[ipma] with a given pair of values of version and flags"; the
+bundled libavif is patched to accept it, and the file must decode to exactly the
+pixels of its source. In short:
 
 | file | what it exercises |
 |---|---|
@@ -22,4 +28,5 @@ provenance in detail; in short:
 | `seine_hdr_rec2020.avif` | 10-bit HDR (PQ, Rec. 2020) still |
 | `color_grid_alpha_nogrid.avif` | grid color item with a non-grid alpha item |
 | `draw_points_idat.avif` | image data stored in an `idat` box |
+| `draw_points_idat_two_ipma.avif` | the same file with its `ipma` box split in two (same version and flags), see above |
 | `circle_custom_properties.avif` | unknown item properties, which must be ignored |

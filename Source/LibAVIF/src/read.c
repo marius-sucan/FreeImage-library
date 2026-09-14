@@ -3220,21 +3220,33 @@ static avifResult avifParseItemPropertiesBox(avifMeta * meta, uint64_t rawOffset
         if (!memcmp(ipmaHeader.type, "ipma", 4)) {
             uint32_t versionAndFlags;
             AVIF_CHECKRES(avifParseItemPropertyAssociation(meta, avifROStreamCurrent(&s), ipmaHeader.size, diag, &versionAndFlags));
+            avifBool versionAndFlagsAlreadySeen = AVIF_FALSE;
             for (uint32_t i = 0; i < versionAndFlagsSeenCount; ++i) {
                 if (versionAndFlagsSeen[i] == versionAndFlags) {
                     // BMFF (ISO/IEC 14496-12:2022) 8.11.14.1 - There shall be at most one
                     // ItemPropertyAssociationBox with a given pair of values of version and
                     // flags.
-                    avifDiagnosticsPrintf(diag, "Multiple Box[ipma] with a given pair of values of version and flags. See BMFF (ISO/IEC 14496-12:2022) 8.11.14.1");
-                    return AVIF_RESULT_BMFF_PARSE_FAILED;
+                    //
+                    // FreeImage: upstream refuses the whole file here ("Multiple Box[ipma] with a
+                    // given pair of values of version and flags"), even with strict checks off.
+                    // Encoders exist that write one ipma box per item with the same version and
+                    // flags (link-u's cavif, whose output is the widely copied avif-sample-images
+                    // set), and such files open everywhere else. The associations stay
+                    // unambiguous because avifParseItemPropertyAssociation() above still refuses
+                    // an item that appears in more than one box, so the extra box is taken as a
+                    // continuation of the first and the pair is simply not recorded again.
+                    versionAndFlagsAlreadySeen = AVIF_TRUE;
+                    break;
                 }
             }
-            if (versionAndFlagsSeenCount == MAX_IPMA_VERSION_AND_FLAGS_SEEN) {
-                avifDiagnosticsPrintf(diag, "Exceeded possible count of unique ipma version and flags tuples");
-                return AVIF_RESULT_BMFF_PARSE_FAILED;
+            if (!versionAndFlagsAlreadySeen) {
+                if (versionAndFlagsSeenCount == MAX_IPMA_VERSION_AND_FLAGS_SEEN) {
+                    avifDiagnosticsPrintf(diag, "Exceeded possible count of unique ipma version and flags tuples");
+                    return AVIF_RESULT_BMFF_PARSE_FAILED;
+                }
+                versionAndFlagsSeen[versionAndFlagsSeenCount] = versionAndFlags;
+                ++versionAndFlagsSeenCount;
             }
-            versionAndFlagsSeen[versionAndFlagsSeenCount] = versionAndFlags;
-            ++versionAndFlagsSeenCount;
         } else {
             // These must all be type ipma
             avifDiagnosticsPrintf(diag, "Box[iprp] contains a box that isn't type 'ipma'");

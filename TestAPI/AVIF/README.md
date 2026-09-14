@@ -6,7 +6,7 @@ on failure.
 
 | test | what it covers |
 |---|---|
-| `decode` | Loads the 15 files in `data/` (libavif's own corpus, see `data/README.md`) and checks everything the plugin decides: detection, the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`), the `clap`/`irot`/`imir` transforms, ICC/Exif/XMP, the `FrameTime`/`Loop` tags and page count of image sequences, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. One file is expected to be refused. |
+| `decode` | Loads the 16 files in `data/` (libavif's own corpus plus one derived from it, see `data/README.md`) and checks everything the plugin decides: detection, the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`), the `clap`/`irot`/`imir` transforms, ICC/Exif/XMP, the `FrameTime`/`Loop` tags and page count of image sequences, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. One file is expected to be refused. |
 | `narrowio` | Streams a file through a `FreeImageIO` whose absolute seeks and tells refuse anything past a cap, and loads an AVIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
 
 ## Running
