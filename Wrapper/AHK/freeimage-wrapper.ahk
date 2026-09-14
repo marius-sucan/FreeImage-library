@@ -721,13 +721,14 @@ FreeImage_OpenMultiBitmap(ImgPath, imgFormat, create_new:=0, read_only:=1, keep_
 ; to save a newly created multi-page image, use FreeImage_CloseMultiBitmap()
 
 /*
-imgFormat parameter takes integer values from 0 to 37
+imgFormat parameter takes integer values from 0 to 38
 relevant I/O image format identifiers.
    FIF_ICO      = 1,
    FIF_TIFF     = 18,
    FIF_GIF      = 25,
    FIF_WEBP     = 35,
    FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps)
+   FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first)
 */
 
    Return DllCall(getFIMfunc("OpenMultiBitmap"), "int", imgFormat, "AStr", ImgPath, "int", create_new, "int", read_only, "int", keep_cache, "int", flags, "uptr")

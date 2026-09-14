@@ -33,6 +33,13 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibAVIF", "Source\LibAVIF\L
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibDav1d", "Source\LibDav1d\LibDav1d.2017.vcxproj", "{04DE9318-5A87-4180-99CD-AEE139C03FB9}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibHEIF", "Source\LibHEIF\LibHEIF.2017.vcxproj", "{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}"
+	ProjectSection(ProjectDependencies) = postProject
+		{0B03DDFB-47B3-4510-8494-DE8D4BF4188F} = {0B03DDFB-47B3-4510-8494-DE8D4BF4188F}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibDe265", "Source\LibDe265\LibDe265.2017.vcxproj", "{0B03DDFB-47B3-4510-8494-DE8D4BF4188F}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -93,6 +100,14 @@ Global
 		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Debug|x64.Build.0 = Debug|x64
 		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Release|x64.ActiveCfg = Release|x64
 		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Release|x64.Build.0 = Release|x64
+		{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}.Debug|x64.ActiveCfg = Debug|x64
+		{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}.Debug|x64.Build.0 = Debug|x64
+		{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}.Release|x64.ActiveCfg = Release|x64
+		{CBE63EB8-10CA-4326-85DE-2E9CA64B0605}.Release|x64.Build.0 = Release|x64
+		{0B03DDFB-47B3-4510-8494-DE8D4BF4188F}.Debug|x64.ActiveCfg = Debug|x64
+		{0B03DDFB-47B3-4510-8494-DE8D4BF4188F}.Debug|x64.Build.0 = Debug|x64
+		{0B03DDFB-47B3-4510-8494-DE8D4BF4188F}.Release|x64.ActiveCfg = Release|x64
+		{0B03DDFB-47B3-4510-8494-DE8D4BF4188F}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -551,6 +551,7 @@ Public Enum FREE_IMAGE_FORMAT
    FIF_WEBP = 35
    FIF_JXR = 36
    FIF_AVIF = 37
+   FIF_HEIF = 38
 End Enum
 
 ' Image load options
@@ -12086,6 +12087,7 @@ Const FIF_RAW = 1
 Const FIF_WEBP = 1
 Const FIF_JXR = 1
 Const FIF_AVIF = 1
+Const FIF_HEIF = 1
 
 ' Enum FREE_IMAGE_LOAD_OPTIONS
 Const FREE_IMAGE_LOAD_OPTIONS = 1

@@ -7,6 +7,9 @@ include Makefile.srcs
 # Pass OPENMP=0 to build single-threaded.
 include Makefile.openmp
 
+# libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
+include Makefile.heif
+
 # General configuration variables:
 DESTDIR ?= /
 INCDIR ?= $(DESTDIR)/usr/include
@@ -21,6 +24,7 @@ LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)
+MODULES := $(MODULES:.cc=.o)
 
 # C flags
 CFLAGS ?= -std=c99 -O3 -fPIC -fexceptions -fvisibility=hidden
@@ -78,6 +82,9 @@ FreeImage: $(STATICLIB) $(SHAREDLIB)
 
 .cpp.o:
 	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+.cc.o:
+	$(CXX) $(HEIF_CXXFLAGS_PRE) $(CXXFLAGS) $(HEIF_CXXFLAGS_POST) -c $< -o $@
 
 $(STATICLIB): $(MODULES)
 	$(AR) r $@ $(MODULES)

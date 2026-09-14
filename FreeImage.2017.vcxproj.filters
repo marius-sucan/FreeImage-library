@@ -65,6 +65,9 @@
     <ClCompile Include="Source\FreeImage\PluginAVIF.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>
+    <ClCompile Include="Source\FreeImage\PluginHEIF.cpp">
+      <Filter>Source Files\Plugins</Filter>
+    </ClCompile>
     <ClCompile Include="Source\FreeImage\PluginBMP.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>

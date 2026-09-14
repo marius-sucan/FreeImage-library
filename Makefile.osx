@@ -24,6 +24,9 @@ OPENMP_DETECT = 1
 OPENMP_CC = $(CC_X86_64)
 include Makefile.openmp
 
+# libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
+include Makefile.heif
+
 COMPILERFLAGS = -Os -fexceptions -fvisibility=hidden -DNO_LCMS -D__ANSI__ -DAVIF_CODEC_DAV1D=1 $(OPENMP_CFLAGS)
 COMPILERFLAGS_I386 = -arch i386
 COMPILERFLAGS_X86_64 = -arch x86_64
@@ -51,6 +54,8 @@ MODULES_I386 = $(SRCS:.c=.o-i386)
 MODULES_X86_64 = $(SRCS:.c=.o-x86_64)
 MODULES_I386 := $(MODULES_I386:.cpp=.o-i386)
 MODULES_X86_64 := $(MODULES_X86_64:.cpp=.o-x86_64)
+MODULES_I386 := $(MODULES_I386:.cc=.o-i386)
+MODULES_X86_64 := $(MODULES_X86_64:.cc=.o-x86_64)
 
 PREFIX = /usr/local
 INSTALLDIR = $(PREFIX)/lib
@@ -113,6 +118,12 @@ $(SHAREDLIB)-x86_64: $(MODULES_X86_64)
 
 .cpp.o-x86_64:
 	$(CPP_X86_64) $(CPPFLAGS_X86_64) -c $< -o $@
+
+.cc.o-i386:
+	$(CPP_I386) $(HEIF_CXXFLAGS_PRE) $(CPPFLAGS_I386) $(HEIF_CXXFLAGS_POST) -c $< -o $@
+
+.cc.o-x86_64:
+	$(CPP_X86_64) $(HEIF_CXXFLAGS_PRE) $(CPPFLAGS_X86_64) $(HEIF_CXXFLAGS_POST) -c $< -o $@
 
 install:
 	install -d -m 755 -o root -g wheel $(INCDIR) $(INSTALLDIR)

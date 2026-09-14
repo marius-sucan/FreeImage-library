@@ -14,6 +14,9 @@ AR = ar
 # "make OPENMP_CFLAGS=-xopenmp OPENMP_LDFLAGS=-xopenmp".
 include Makefile.openmp
 
+# libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
+include Makefile.heif
+
 INSTALLDIR = /usr/local
 
 # Converts cr/lf to just lf
@@ -24,6 +27,7 @@ LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)
+MODULES := $(MODULES:.cc=.o)
 CFLAGS = $(COMPILERFLAGS) $(INCLUDE)
 CPPFLAGS = $(COMPILERFLAGS)  -Wno-ctor-dtor-privacy $(INCLUDE)
 
@@ -54,6 +58,9 @@ FreeImage: $(STATICLIB) $(SHAREDLIB)
 
 .cpp.o:
 	$(CPP) $(CPPFLAGS) -c $< -o $@
+
+.cc.o:
+	$(CPP) $(HEIF_CXXFLAGS_PRE) $(CPPFLAGS) $(HEIF_CXXFLAGS_POST) -c $< -o $@
 
 $(STATICLIB): $(MODULES)
 	$(AR) r $@ $(MODULES)

@@ -112,7 +112,7 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -166,7 +166,7 @@ copy Source\FreeImage.h Dist\x32
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -217,7 +217,7 @@ copy Source\FreeImage.h Dist\x64
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -264,7 +264,7 @@ copy Source\FreeImage.h Dist\x32
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -316,6 +316,7 @@ copy Source\FreeImage.h Dist\x64
     <ClCompile Include="Source\FreeImage\MNGHelper.cpp" />
     <ClCompile Include="Source\FreeImage\Plugin.cpp" />
     <ClCompile Include="Source\FreeImage\PluginAVIF.cpp" />
+    <ClCompile Include="Source\FreeImage\PluginHEIF.cpp" />
     <ClCompile Include="Source\FreeImage\PluginBMP.cpp" />
     <ClCompile Include="Source\FreeImage\PluginCUT.cpp" />
     <ClCompile Include="Source\FreeImage\PluginDDS.cpp" />
@@ -423,6 +424,14 @@ copy Source\FreeImage.h Dist\x64
     </ProjectReference>
     <ProjectReference Include="Source\LibDav1d\LibDav1d.2017.vcxproj">
       <Project>{04de9318-5a87-4180-99cd-aee139c03fb9}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="Source\LibDe265\LibDe265.2017.vcxproj">
+      <Project>{0b03ddfb-47b3-4510-8494-de8d4bf4188f}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="Source\LibHEIF\LibHEIF.2017.vcxproj">
+      <Project>{cbe63eb8-10ca-4326-85de-2e9ca64b0605}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
     <ProjectReference Include="Source\LibJPEG\LibJPEG.2017.vcxproj">

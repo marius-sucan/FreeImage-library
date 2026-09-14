@@ -17,6 +17,16 @@ Decoding still uses every core through dav1d's threads, so a program linking the
 -lpthread (and -lm) besides -fopenmp; the shared library already pulls both in. The plugin is
 read-only: no AV1 encoder is bundled.
 
+HEIC/HEIF support comes from the bundled libheif (Source/LibHEIF) and libde265 (Source/LibDe265).
+Both are C++ (libheif needs C++20, libde265 C++17) and their sources are named *.cc, so every
+makefile has a .cc rule and includes Makefile.heif, which adds the per-library flags: the C++
+standard, the include directories (their generic header names must not be resolved through the
+global include list), the defines that replace libde265's config.h, and -msse4.1 / -mavx2 /
+-mavx512f on libde265's x86 kernels (they are C++ intrinsics with a runtime CPU check, not
+assembly; on a non-x86 host the x86 directory is dropped from the build). libde265's worker
+threads and libheif's parallel tile decoding use std::thread, hence -lpthread as above. The plugin
+is read-only: no HEVC encoder is bundled.
+
 The FreeImage makefile makes use of the gcc "-fvisibility=hidden" in order to avoid incompatibilities between 
 internal third party libraries and the OS libraries. You may have to remove this option if you're running an 
 old version of gcc. See also http://gcc.gnu.org/wiki/Visibility

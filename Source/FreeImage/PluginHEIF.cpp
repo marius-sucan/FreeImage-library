@@ -1,0 +1,1209 @@
+// ==========================================================
+// HEIF Loader
+//
+// High Efficiency Image File Format (HEIF / HEIC) decoder, built on libheif
+// (Source/LibHEIF) with libde265 (Source/LibDe265) as the HEVC decoder.
+//
+// This file is part of FreeImage 3
+//
+// COVERED CODE IS PROVIDED UNDER THIS LICENSE ON AN "AS IS" BASIS, WITHOUT WARRANTY
+// OF ANY KIND, EITHER EXPRESSED OR IMPLIED, INCLUDING, WITHOUT LIMITATION, WARRANTIES
+// THAT THE COVERED CODE IS FREE OF DEFECTS, MERCHANTABLE, FIT FOR A PARTICULAR PURPOSE
+// OR NON-INFRINGING. THE ENTIRE RISK AS TO THE QUALITY AND PERFORMANCE OF THE COVERED
+// CODE IS WITH YOU. SHOULD ANY COVERED CODE PROVE DEFECTIVE IN ANY RESPECT, YOU (NOT
+// THE INITIAL DEVELOPER OR ANY OTHER CONTRIBUTOR) ASSUME THE COST OF ANY NECESSARY
+// SERVICING, REPAIR OR CORRECTION. THIS DISCLAIMER OF WARRANTY CONSTITUTES AN ESSENTIAL
+// PART OF THIS LICENSE. NO USE OF ANY COVERED CODE IS AUTHORIZED HEREUNDER EXCEPT UNDER
+// THIS DISCLAIMER.
+//
+// Use at your own risk!
+// ==========================================================
+//
+// What this plugin does
+// ---------------------
+// - Loads HEIC images: HEIF files whose images are HEVC-coded, which is what the
+//   iPhone and most other phone cameras, Canon, Sony (.hif) and Samsung write.
+//   Grid images (a phone photo is a mosaic of 512 x 512 tiles), identity-derived
+//   and overlay images are composed by libheif, and the transformative properties
+//   are applied by libheif in the order the HEIF/MIAF standards require: clean
+//   aperture ('clap'), then rotation ('irot'), then mirroring ('imir'). What comes
+//   back is the image as it is meant to be displayed. The advisory Exif orientation
+//   tag is passed through untouched in the Exif metadata, like every other plugin
+//   does.
+// - A file with several top-level images opens as a multi-page bitmap, one page per
+//   image with the primary image first, so page 0 is what FreeImage_Load returns.
+// - 8-bit content becomes a 24-bit or (with alpha) 32-bit FIT_BITMAP; 10- and 12-bit
+//   content becomes FIT_RGB16 / FIT_RGBA16, scaled to the full 16-bit range;
+//   monochrome content without alpha becomes 8-bit greyscale or FIT_UINT16.
+//   Premultiplied alpha is undone, so the pixels always carry straight alpha.
+// - ICC profiles, Exif (raw and parsed) and XMP are attached to the bitmap. The
+//   file's thumbnail image ('thmb'), when it has one, is attached as the bitmap's
+//   thumbnail (FreeImage_GetThumbnail), as the JPEG plugin does with the Exif
+//   thumbnail.
+// - Decoding uses every core: libheif decodes the tiles of a grid image in parallel
+//   and libde265 runs worker threads within a picture.
+//
+// What it does not do
+// -------------------
+// - It cannot save: no HEVC encoder is bundled. FreeImage_FIFSupportsWriting(FIF_HEIF)
+//   returns FALSE.
+// - HDR content (PQ or HLG transfer characteristics) is returned as encoded, without
+//   tone mapping; the CICP color description is not exposed.
+// - Only HEVC payloads are decoded. HEIF files carrying AV1 (AVIF) belong to the AVIF
+//   plugin and are not claimed by FreeImage_GetFileType(); files carrying JPEG,
+//   JPEG 2000, AVC, VVC or uncompressed payloads are recognised as HEIF but fail to
+//   load with an explicit message. HEIF image sequences (the 'hevc'/'msf1' tracks),
+//   depth maps, gain maps and auxiliary images other than alpha are not surfaced.
+//
+// The whole file is streamed through FreeImageIO on demand (libheif's heif_reader
+// interface), so a header-only load (FIF_LOAD_NOPIXELS) reads the metadata boxes
+// but not the compressed image data.
+// ==========================================================
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
+#include <limits.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "FreeImage.h"
+#include "Utilities.h"
+
+#include "../Metadata/FreeImageTag.h"
+
+// libheif is linked in statically: its Windows headers must not declare its API dllimport
+#ifndef LIBHEIF_STATIC_BUILD
+#define LIBHEIF_STATIC_BUILD
+#endif
+#include <libheif/heif.h>
+
+// ==========================================================
+// Plugin Interface
+// ==========================================================
+
+static int s_format_id;
+
+// ----------------------------------------------------------
+//   Threads
+// ----------------------------------------------------------
+
+/** No point in more decoder threads than this for a single image */
+#define FI_HEIF_MAX_THREADS 64
+
+/**
+Number of logical processors, for libheif's parallel tile decoding and
+libde265's worker threads.
+@return Returns a value between 1 and FI_HEIF_MAX_THREADS
+*/
+static int
+GetProcessorCount() {
+	int count = 1;
+#ifdef _WIN32
+	SYSTEM_INFO info;
+	GetSystemInfo(&info);
+	count = (int)info.dwNumberOfProcessors;
+#elif defined(_SC_NPROCESSORS_ONLN)
+	const long n = sysconf(_SC_NPROCESSORS_ONLN);
+	if(n > 0) {
+		count = (int)n;
+	}
+#endif
+	if(count < 1) {
+		count = 1;
+	}
+	if(count > FI_HEIF_MAX_THREADS) {
+		count = FI_HEIF_MAX_THREADS;
+	}
+	return count;
+}
+
+// ----------------------------------------------------------
+//   heif_reader over FreeImageIO
+// ----------------------------------------------------------
+
+/**
+The largest offset a single absolute seek_proc call can express: seek_proc takes
+a 'long', which is 32-bit on Win64. Overridable so the stepped path below can be
+exercised where 'long' is 64-bit (see TestAPI/HEIF).
+*/
+#ifndef FI_HEIF_SEEK_STEP_MAX
+#define FI_HEIF_SEEK_STEP_MAX LONG_MAX
+#endif
+
+/** read_proc takes an 'unsigned' size: read at most this much per call */
+#define FI_HEIF_READ_CHUNK 0x40000000u
+
+typedef struct tagHEIFStream {
+	FreeImageIO *io;		//! FreeImage I/O functions
+	fi_handle handle;		//! FreeImage I/O handle
+	long base;				//! stream position of the first HEIF byte
+	uint64_t position;		//! current position, relative to 'base' (kept here: tell_proc cannot express it everywhere)
+	BOOL size_known;		//! TRUE when 'size' is meaningful
+	uint64_t size;			//! bytes from 'base' to the end of the stream (see size_known)
+} HEIFStream;
+
+/**
+Move the stream to 'base + offset'. Offsets that do not fit in a 'long' are
+reached by rewinding to the base and walking forward in steps that do.
+*/
+static BOOL
+HEIF_SeekTo(HEIFStream *s, uint64_t offset) {
+	const long span = (s->base <= FI_HEIF_SEEK_STEP_MAX) ? (FI_HEIF_SEEK_STEP_MAX - s->base) : 0;
+	if(offset <= (uint64_t)span) {
+		return (s->io->seek_proc(s->handle, s->base + (long)offset, SEEK_SET) == 0) ? TRUE : FALSE;
+	}
+	if(s->io->seek_proc(s->handle, s->base, SEEK_SET) != 0) {
+		return FALSE;
+	}
+	uint64_t remaining = offset;
+	while(remaining > 0) {
+		const long step = (remaining > (uint64_t)FI_HEIF_SEEK_STEP_MAX) ? (long)FI_HEIF_SEEK_STEP_MAX : (long)remaining;
+		if(s->io->seek_proc(s->handle, step, SEEK_CUR) != 0) {
+			return FALSE;
+		}
+		remaining -= (uint64_t)step;
+	}
+	return TRUE;
+}
+
+/**
+Is there a byte at 'offset'? The stream position is undefined afterwards.
+*/
+static BOOL
+HEIF_Probe(HEIFStream *s, uint64_t offset) {
+	BYTE b;
+	return (HEIF_SeekTo(s, offset) && (s->io->read_proc(&b, 1, 1, s->handle) == 1)) ? TRUE : FALSE;
+}
+
+/**
+The stream length when tell_proc cannot report it: a 'long' is 32-bit on Win64,
+so past 2 GB the end is out of its reach. libheif needs an exact answer from
+wait_for_file_size() (it bisects the length with it), so walk forward in the
+largest expressible steps until a read fails, then bisect the last step.
+@return Returns FALSE when the stream misbehaves (reads keep succeeding after 64 steps)
+*/
+static BOOL
+HEIF_MeasureStream(HEIFStream *s) {
+	const uint64_t step = (uint64_t)FI_HEIF_SEEK_STEP_MAX;
+	uint64_t lo = 0;	// a byte exists at 'lo' (or the stream is empty)
+	uint64_t hi;		// no byte exists at 'hi'
+
+	if(!HEIF_Probe(s, 0)) {
+		s->size = 0;
+		s->size_known = TRUE;
+		return TRUE;
+	}
+	for(int steps = 1; ; steps++) {
+		if(steps > 64) {
+			return FALSE;
+		}
+		const uint64_t next = lo + step;
+		if(!HEIF_Probe(s, next)) {
+			hi = next;
+			break;
+		}
+		lo = next;
+	}
+	while(hi - lo > 1) {
+		const uint64_t mid = lo + (hi - lo) / 2;
+		if(HEIF_Probe(s, mid)) {
+			lo = mid;
+		} else {
+			hi = mid;
+		}
+	}
+	s->size = hi;
+	s->size_known = TRUE;
+	return TRUE;
+}
+
+/**
+libheif callback: the current position, relative to the first HEIF byte. Kept by
+the seek and read callbacks rather than asked of tell_proc, whose 'long' cannot
+express positions past 2 GB on Win64 (and libheif does ask for it while parsing).
+*/
+static int64_t
+HEIF_GetPosition(void *userdata) {
+	HEIFStream *s = (HEIFStream*)userdata;
+	return (s->position <= (uint64_t)INT64_MAX) ? (int64_t)s->position : INT64_MAX;
+}
+
+/** libheif callback: read exactly 'size' bytes; 0 on success (heif_reader contract) */
+static int
+HEIF_Read(void *data, size_t size, void *userdata) {
+	HEIFStream *s = (HEIFStream*)userdata;
+	BYTE *dst = (BYTE*)data;
+	size_t total = 0;
+	while(total < size) {
+		const size_t left = size - total;
+		const unsigned chunk = (left > (size_t)FI_HEIF_READ_CHUNK) ? FI_HEIF_READ_CHUNK : (unsigned)left;
+		const unsigned got = s->io->read_proc(dst + total, 1, chunk, s->handle);
+		if(got == 0) {
+			break;
+		}
+		total += got;
+	}
+	s->position += total;
+	return (total == size) ? 0 : -1;
+}
+
+/** libheif callback: absolute seek; 0 on success (heif_reader contract) */
+static int
+HEIF_Seek(int64_t position, void *userdata) {
+	HEIFStream *s = (HEIFStream*)userdata;
+	if(position < 0) {
+		return -1;
+	}
+	if(!HEIF_SeekTo(s, (uint64_t)position)) {
+		return -1;
+	}
+	s->position = (uint64_t)position;
+	return 0;
+}
+
+/**
+libheif callback: is the stream at least 'target_size' bytes long? libheif also
+uses this to find the exact stream length by bisection, so the answer must be
+exact whenever the length is known.
+*/
+static heif_reader_grow_status
+HEIF_WaitForFileSize(int64_t target_size, void *userdata) {
+	HEIFStream *s = (HEIFStream*)userdata;
+	if(target_size < 0) {
+		return heif_reader_grow_status_size_beyond_eof;
+	}
+	if(!s->size_known) {
+		// the length could not be measured either (see HEIF_MeasureStream): be optimistic,
+		// a read past the end fails on its own
+		return heif_reader_grow_status_size_reached;
+	}
+	return ((uint64_t)target_size <= s->size) ? heif_reader_grow_status_size_reached : heif_reader_grow_status_size_beyond_eof;
+}
+
+/** version 1 of the reader interface: no range requests, libheif reads what it needs */
+static const heif_reader s_reader = {
+	1,						// reader_api_version
+	HEIF_GetPosition,
+	HEIF_Read,
+	HEIF_Seek,
+	HEIF_WaitForFileSize,
+	NULL,					// request_range
+	NULL,					// preload_range_hint
+	NULL,					// release_file_range
+	NULL					// release_error_msg
+};
+
+// ----------------------------------------------------------
+//   Decoder context (the 'data' of Open/Load/Close)
+// ----------------------------------------------------------
+
+typedef struct tagHEIFContext {
+	HEIFStream stream;
+	heif_context *ctx;		//! the parsed container
+	int threads;			//! logical processors
+	int page_count;			//! number of top-level images
+	heif_item_id *pages;	//! their item IDs, the primary image first
+} HEIFContext;
+
+/** What the decoded image is turned into */
+typedef struct tagHEIFOutput {
+	FREE_IMAGE_TYPE type;
+	unsigned bpp;
+	BOOL grey;				//! a single greyscale plane (heif_channel_Y)
+	BOOL has_alpha;
+	heif_colorspace colorspace;	//! what libheif is asked to produce
+	heif_chroma chroma;
+} HEIFOutput;
+
+static void
+ReportError(const char *what, const heif_error &error) {
+	FreeImage_OutputMessageProc(s_format_id, "%s: %s", what, error.message ? error.message : "unknown error");
+}
+
+/**
+Pick the FreeImage type for an image from what its handle declares (this is all
+a header-only load has). Greyscale is only used for monochrome content without
+alpha; everything else goes through RGB(A).
+*/
+static void
+ChooseOutput(const heif_image_handle *handle, BOOL allow_grey, HEIFOutput *out) {
+	const BOOL has_alpha = heif_image_handle_has_alpha_channel(handle) ? TRUE : FALSE;
+	int bits = heif_image_handle_get_luma_bits_per_pixel(handle);
+	if(bits <= 0) {
+		// unknown before decoding: assume 8, the decoded image tells the truth
+		bits = 8;
+	}
+	const BOOL deep = (bits > 8) ? TRUE : FALSE;
+
+	heif_colorspace colorspace = heif_colorspace_undefined;
+	heif_chroma chroma = heif_chroma_undefined;
+	heif_image_handle_get_preferred_decoding_colorspace(handle, &colorspace, &chroma);
+	const BOOL grey = (allow_grey && (colorspace == heif_colorspace_monochrome) && !has_alpha) ? TRUE : FALSE;
+
+	out->grey = grey;
+	out->has_alpha = has_alpha;
+	if(grey) {
+		out->type = deep ? FIT_UINT16 : FIT_BITMAP;
+		out->bpp = deep ? 16 : 8;
+		out->colorspace = heif_colorspace_monochrome;
+		out->chroma = heif_chroma_monochrome;
+	} else if(deep) {
+		// FIRGB16 / FIRGBA16 are red, green, blue in memory whatever FREEIMAGE_COLORORDER says;
+		// ask for 16-bit samples in the host's byte order
+		out->type = has_alpha ? FIT_RGBA16 : FIT_RGB16;
+		out->bpp = has_alpha ? 64 : 48;
+		out->colorspace = heif_colorspace_RGB;
+#ifdef FREEIMAGE_BIGENDIAN
+		out->chroma = has_alpha ? heif_chroma_interleaved_RRGGBBAA_BE : heif_chroma_interleaved_RRGGBB_BE;
+#else
+		out->chroma = has_alpha ? heif_chroma_interleaved_RRGGBBAA_LE : heif_chroma_interleaved_RRGGBB_LE;
+#endif
+	} else {
+		out->type = FIT_BITMAP;
+		out->bpp = has_alpha ? 32 : 24;
+		out->colorspace = heif_colorspace_RGB;
+		out->chroma = has_alpha ? heif_chroma_interleaved_RGBA : heif_chroma_interleaved_RGB;
+	}
+}
+
+static FIBITMAP *
+AllocateOutput(BOOL header_only, const HEIFOutput *out, int width, int height) {
+	FIBITMAP *dib = NULL;
+
+	if((width <= 0) || (height <= 0)) {
+		FreeImage_OutputMessageProc(s_format_id, "Unsupported image size: %d x %d", width, height);
+		return NULL;
+	}
+	if((out->type == FIT_BITMAP) && (out->bpp >= 24)) {
+		dib = FreeImage_AllocateHeaderT(header_only, FIT_BITMAP, width, height, (int)out->bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	} else {
+		dib = FreeImage_AllocateHeaderT(header_only, out->type, width, height, (int)out->bpp, 0, 0, 0);
+	}
+	if(!dib) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_DIB_MEMORY);
+		return NULL;
+	}
+	if((out->type == FIT_BITMAP) && (out->bpp == 8)) {
+		// greyscale ramp
+		RGBQUAD *pal = FreeImage_GetPalette(dib);
+		for(int i = 0; i < 256; i++) {
+			pal[i].rgbRed = pal[i].rgbGreen = pal[i].rgbBlue = (BYTE)i;
+			pal[i].rgbReserved = 0;
+		}
+	}
+	return dib;
+}
+
+/**
+The decoding options every decode uses.
+@param handle The image about to be decoded (its tiling decides the threading)
+@return Returns the options, or NULL on memory failure
+*/
+static heif_decoding_options *
+CreateDecodingOptions(const HEIFContext *ctx, const heif_image_handle *handle) {
+	heif_decoding_options *options = heif_decoding_options_alloc();
+	if(!options) {
+		return NULL;
+	}
+	// libheif applies clap, irot and imir
+	options->ignore_transformations = 0;
+	// keep 10- and 12-bit content
+	options->convert_hdr_to_8bit = 0;
+	// lenient: files from encoders that bend the rules decode with warnings, not errors
+	options->strict_decoding = 0;
+	// Threads. A tiled image (a phone photo is a grid of 512 x 512 tiles) is decoded by libheif
+	// one tile per thread (heif_context_set_max_decoding_threads), so each libde265 instance
+	// stays single-threaded; a single picture gets libde265's worker threads instead, which
+	// libheif would otherwise limit to one. Measured on an 8-core machine with a 1280 x 854
+	// single picture: 81 ms with one thread, 40 ms with four or more.
+	heif_image_tiling tiling;
+	uint64_t tiles = 1;
+	if(heif_image_handle_get_image_tiling(handle, 1, &tiling).code == heif_error_Ok) {
+		tiles = (uint64_t)tiling.num_columns * tiling.num_rows;
+	}
+	options->num_codec_threads = (tiles > 1) ? 1 : ctx->threads;
+	// keep the file's colour description: no re-tagging of the output as sRGB and
+	// no attempt at a conversion, HDR content stays as encoded
+	options->output_image_nclx_profile_passthrough = 1;
+	// known encoder quirks, e.g. Sony HIF files whose 'colr' box contradicts the bitstream
+	options->autocorrect_broken_input = 1;
+	return options;
+}
+
+// ----------------------------------------------------------
+//   Pixel copies (libheif rows are top-down, FreeImage rows bottom-up)
+// ----------------------------------------------------------
+
+/**
+Undo the premultiplication of one 8-bit RGBA pixel row (FreeImage keeps straight alpha).
+*/
+static void
+UnpremultiplyRow8(BYTE *row, int width) {
+	for(int x = 0; x < width; x++, row += 4) {
+		const unsigned a = row[FI_RGBA_ALPHA];
+		if((a > 0) && (a < 255)) {
+			for(int c = 0; c < 3; c++) {
+				const unsigned v = ((unsigned)row[c] * 255u + a / 2) / a;
+				row[c] = (v > 255) ? 255 : (BYTE)v;
+			}
+		}
+	}
+}
+
+static void
+UnpremultiplyRow16(WORD *row, int width) {
+	for(int x = 0; x < width; x++, row += 4) {
+		const uint64_t a = row[3];
+		if((a > 0) && (a < 65535)) {
+			for(int c = 0; c < 3; c++) {
+				const uint64_t v = ((uint64_t)row[c] * 65535u + a / 2) / a;
+				row[c] = (v > 65535) ? 65535 : (WORD)v;
+			}
+		}
+	}
+}
+
+/**
+A lookup table scaling 'bits'-bit samples to the full 16-bit range.
+@return Returns the table (1 << bits entries), or NULL
+*/
+static WORD *
+CreateScaleTable(int bits) {
+	if((bits < 1) || (bits > 16)) {
+		return NULL;
+	}
+	const unsigned entries = 1u << bits;
+	const unsigned max = entries - 1;
+	WORD *table = (WORD*)malloc(entries * sizeof(WORD));
+	if(!table) {
+		return NULL;
+	}
+	for(unsigned v = 0; v < entries; v++) {
+		table[v] = (WORD)((v * 65535u + max / 2) / max);
+	}
+	return table;
+}
+
+/**
+Copy an interleaved 8-bit RGB / RGBA image into a 24- / 32-bit bitmap.
+*/
+static BOOL
+CopyInterleaved8(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL premultiplied) {
+	size_t stride = 0;
+	const BYTE *plane = heif_image_get_plane_readonly2(image, heif_channel_interleaved, &stride);
+	if(!plane) {
+		return FALSE;
+	}
+	const int width = (int)FreeImage_GetWidth(dib);
+	const int height = (int)FreeImage_GetHeight(dib);
+	const int samples = has_alpha ? 4 : 3;
+	const unsigned bytespp = FreeImage_GetBPP(dib) / 8;
+	if(stride < (size_t)width * samples) {
+		return FALSE;
+	}
+	for(int y = 0; y < height; y++) {
+		const BYTE *src = plane + (size_t)y * stride;
+		BYTE *dst = FreeImage_GetScanLine(dib, height - 1 - y);
+		for(int x = 0; x < width; x++) {
+			dst[FI_RGBA_RED] = src[0];
+			dst[FI_RGBA_GREEN] = src[1];
+			dst[FI_RGBA_BLUE] = src[2];
+			if(has_alpha) {
+				dst[FI_RGBA_ALPHA] = src[3];
+			}
+			src += samples;
+			dst += bytespp;
+		}
+		if(has_alpha && premultiplied) {
+			UnpremultiplyRow8(FreeImage_GetScanLine(dib, height - 1 - y), width);
+		}
+	}
+	return TRUE;
+}
+
+/**
+Copy an interleaved 16-bit RGB / RGBA image (host byte order) into a FIT_RGB16 /
+FIT_RGBA16 bitmap, scaling its 'bits'-bit samples to the full 16-bit range.
+*/
+static BOOL
+CopyInterleaved16(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL premultiplied, int bits) {
+	size_t stride = 0;
+	const BYTE *plane = heif_image_get_plane_readonly2(image, heif_channel_interleaved, &stride);
+	if(!plane) {
+		return FALSE;
+	}
+	const int width = (int)FreeImage_GetWidth(dib);
+	const int height = (int)FreeImage_GetHeight(dib);
+	const int samples = has_alpha ? 4 : 3;
+	if(stride < (size_t)width * samples * 2) {
+		return FALSE;
+	}
+	WORD *table = CreateScaleTable(bits);
+	if(!table) {
+		return FALSE;
+	}
+	const unsigned mask = (1u << bits) - 1;
+	for(int y = 0; y < height; y++) {
+		const WORD *src = (const WORD*)(plane + (size_t)y * stride);
+		WORD *dst = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
+		const int n = width * samples;
+		for(int i = 0; i < n; i++) {
+			dst[i] = table[src[i] & mask];
+		}
+		if(has_alpha && premultiplied) {
+			UnpremultiplyRow16(dst, width);
+		}
+	}
+	free(table);
+	return TRUE;
+}
+
+/**
+Copy a single greyscale plane into an 8-bit or a FIT_UINT16 bitmap.
+@param storage_bits 8 or 16: how the samples are stored
+@param bits how many of those bits carry the value
+*/
+static BOOL
+CopyGrey(const heif_image *image, FIBITMAP *dib, int storage_bits, int bits) {
+	size_t stride = 0;
+	const BYTE *plane = heif_image_get_plane_readonly2(image, heif_channel_Y, &stride);
+	if(!plane) {
+		return FALSE;
+	}
+	const int width = (int)FreeImage_GetWidth(dib);
+	const int height = (int)FreeImage_GetHeight(dib);
+	if(storage_bits == 8) {
+		if(stride < (size_t)width) {
+			return FALSE;
+		}
+		for(int y = 0; y < height; y++) {
+			memcpy(FreeImage_GetScanLine(dib, height - 1 - y), plane + (size_t)y * stride, (size_t)width);
+		}
+		return TRUE;
+	}
+	if(stride < (size_t)width * 2) {
+		return FALSE;
+	}
+	WORD *table = CreateScaleTable(bits);
+	if(!table) {
+		return FALSE;
+	}
+	const unsigned mask = (1u << bits) - 1;
+	for(int y = 0; y < height; y++) {
+		const WORD *src = (const WORD*)(plane + (size_t)y * stride);
+		WORD *dst = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
+		for(int x = 0; x < width; x++) {
+			dst[x] = table[src[x] & mask];
+		}
+	}
+	free(table);
+	return TRUE;
+}
+
+// ----------------------------------------------------------
+//   Metadata
+// ----------------------------------------------------------
+
+/**
+Offset of the TIFF header inside an Exif payload. ISO/IEC 23008-12 A.2.1 stores a
+4-byte offset to it, but writers get that wrong often enough (a zero offset in front
+of JPEG's "Exif\0\0" prefix is common) that the header is searched for as well.
+@return Returns the offset, or 'size' when there is no TIFF header
+*/
+static size_t
+FindTiffHeader(const BYTE *data, size_t size) {
+	static const BYTE lsb_first[4] = { 0x49, 0x49, 0x2A, 0x00 };	// "II*\0"
+	static const BYTE msb_first[4] = { 0x4D, 0x4D, 0x00, 0x2A };	// "MM\0*"
+	for(size_t i = 0; i + 4 <= size; i++) {
+		if((memcmp(data + i, lsb_first, 4) == 0) || (memcmp(data + i, msb_first, 4) == 0)) {
+			return i;
+		}
+	}
+	return size;
+}
+
+/**
+The Exif block of an image: the raw block (with the "Exif\0\0" prefix the JPEG and
+WebP writers expect) and the decoded tags (FIMD_EXIF_MAIN, FIMD_EXIF_EXIF, ...).
+*/
+static void
+AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
+	heif_item_id id;
+	if(heif_image_handle_get_list_of_metadata_block_IDs(handle, "Exif", &id, 1) != 1) {
+		return;
+	}
+	const size_t size = heif_image_handle_get_metadata_size(handle, id);
+	// 4 bytes of offset, then at least a TIFF header
+	if((size <= 8) || (size > (size_t)UINT_MAX)) {
+		return;
+	}
+	BYTE *data = (BYTE*)malloc(size);
+	if(!data) {
+		return;
+	}
+	const heif_error error = heif_image_handle_get_metadata(handle, id, data);
+	if(error.code == heif_error_Ok) {
+		// ISO/IEC 23008-12 A.2.1: exif_tiff_header_offset, big-endian, counted from the end of the field
+		const uint32_t offset = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | (uint32_t)data[3];
+		size_t start = 4;
+		if(offset < size - 4) {
+			start += offset;
+		}
+		const size_t tiff = start + FindTiffHeader(data + start, size - start);
+		if(tiff < size) {
+			const unsigned length = (unsigned)(size - tiff);
+			psd_read_exif_profile_raw(dib, data + tiff, length);
+			psd_read_exif_profile(dib, data + tiff, length);
+		}
+	} else {
+		ReportError("Ignoring the Exif metadata", error);
+	}
+	free(data);
+}
+
+/**
+The XMP packet of an image: a 'mime' item of content type application/rdf+xml.
+*/
+static void
+AttachXMP(FIBITMAP *dib, const heif_image_handle *handle) {
+	const int count = heif_image_handle_get_number_of_metadata_blocks(handle, "mime");
+	if(count <= 0) {
+		return;
+	}
+	heif_item_id *ids = (heif_item_id*)calloc((size_t)count, sizeof(heif_item_id));
+	if(!ids) {
+		return;
+	}
+	const int n = heif_image_handle_get_list_of_metadata_block_IDs(handle, "mime", ids, count);
+	for(int i = 0; i < n; i++) {
+		const char *content_type = heif_image_handle_get_metadata_content_type(handle, ids[i]);
+		if(!content_type || (strcmp(content_type, "application/rdf+xml") != 0)) {
+			continue;
+		}
+		const size_t size = heif_image_handle_get_metadata_size(handle, ids[i]);
+		if((size == 0) || (size > (size_t)UINT_MAX)) {
+			continue;
+		}
+		BYTE *data = (BYTE*)malloc(size);
+		if(!data) {
+			break;
+		}
+		if(heif_image_handle_get_metadata(handle, ids[i], data).code == heif_error_Ok) {
+			FITAG *tag = FreeImage_CreateTag();
+			if(tag) {
+				FreeImage_SetTagKey(tag, g_TagLib_XMPFieldName);
+				FreeImage_SetTagLength(tag, (DWORD)size);
+				FreeImage_SetTagCount(tag, (DWORD)size);
+				FreeImage_SetTagType(tag, FIDT_ASCII);
+				FreeImage_SetTagValue(tag, data);
+				FreeImage_SetMetadata(FIMD_XMP, dib, FreeImage_GetTagKey(tag), tag);
+				FreeImage_DeleteTag(tag);
+			}
+		}
+		free(data);
+		break;
+	}
+	free(ids);
+}
+
+/**
+The ICC profile of an image ('rICC' or 'prof' colour profile box).
+*/
+static void
+AttachICCProfile(FIBITMAP *dib, const heif_image_handle *handle) {
+	const heif_color_profile_type type = heif_image_handle_get_color_profile_type(handle);
+	if((type != heif_color_profile_type_rICC) && (type != heif_color_profile_type_prof)) {
+		return;
+	}
+	const size_t size = heif_image_handle_get_raw_color_profile_size(handle);
+	if((size == 0) || (size > (size_t)LONG_MAX)) {
+		return;
+	}
+	BYTE *profile = (BYTE*)malloc(size);
+	if(!profile) {
+		return;
+	}
+	if(heif_image_handle_get_raw_color_profile(handle, profile).code == heif_error_Ok) {
+		FreeImage_CreateICCProfile(dib, profile, (long)size);
+	}
+	free(profile);
+}
+
+/**
+Attach the ICC profile, the Exif block and the XMP packet. All three come from
+the container, so this also serves header-only loads.
+*/
+static void
+AttachMetadata(FIBITMAP *dib, const heif_image_handle *handle) {
+	AttachICCProfile(dib, handle);
+	AttachExif(dib, handle);
+	AttachXMP(dib, handle);
+}
+
+/**
+Decode one thumbnail item as 8-bit RGB and attach it with FreeImage_SetThumbnail.
+@return Returns TRUE on success; 'error' holds the reason otherwise
+*/
+static BOOL
+DecodeThumbnail(const HEIFContext *ctx, FIBITMAP *dib, heif_image_handle *thumb_handle, heif_error *error) {
+	BOOL bResult = FALSE;
+	heif_decoding_options *options = CreateDecodingOptions(ctx, thumb_handle);
+	if(!options) {
+		return FALSE;
+	}
+	// a thumbnail is a preview: 8-bit, no alpha, whatever the image, and too small for worker threads
+	options->convert_hdr_to_8bit = 1;
+	options->num_codec_threads = 1;
+	heif_image *image = NULL;
+	*error = heif_decode_image(thumb_handle, &image, heif_colorspace_RGB, heif_chroma_interleaved_RGB, options);
+	if((error->code == heif_error_Ok) && image) {
+		const int width = heif_image_get_width(image, heif_channel_interleaved);
+		const int height = heif_image_get_height(image, heif_channel_interleaved);
+		if((width > 0) && (height > 0)) {
+			FIBITMAP *thumb = FreeImage_Allocate(width, height, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+			if(thumb) {
+				if(CopyInterleaved8(image, thumb, FALSE, FALSE)) {
+					bResult = FreeImage_SetThumbnail(dib, thumb);
+				}
+				FreeImage_Unload(thumb);
+			}
+		}
+	}
+	if(image) {
+		heif_image_release(image);
+	}
+	heif_decoding_options_free(options);
+	return bResult;
+}
+
+/**
+The file's thumbnail of an image ('thmb' reference), decoded as 8-bit RGB and
+attached with FreeImage_SetThumbnail. Some cameras attach several thumbnails,
+not all of which decode: the first one that does is taken. A failure costs the
+thumbnail, not the image.
+*/
+static void
+AttachThumbnail(const HEIFContext *ctx, FIBITMAP *dib, const heif_image_handle *handle) {
+	heif_item_id ids[8];
+	const int count = heif_image_handle_get_list_of_thumbnail_IDs(handle, ids, 8);
+	if(count <= 0) {
+		return;
+	}
+	heif_error error = heif_error_success;
+	for(int i = 0; i < count; i++) {
+		heif_image_handle *thumb_handle = NULL;
+		error = heif_image_handle_get_thumbnail(handle, ids[i], &thumb_handle);
+		if((error.code != heif_error_Ok) || !thumb_handle) {
+			continue;
+		}
+		const BOOL ok = DecodeThumbnail(ctx, dib, thumb_handle, &error);
+		heif_image_handle_release(thumb_handle);
+		if(ok) {
+			return;
+		}
+	}
+	if(error.code != heif_error_Ok) {
+		ReportError("Ignoring the thumbnail", error);
+	}
+}
+
+// ==========================================================
+// Plugin Implementation
+// ==========================================================
+
+static const char * DLL_CALLCONV
+Format() {
+	return "HEIF";
+}
+
+static const char * DLL_CALLCONV
+Description() {
+	return "High Efficiency Image File Format";
+}
+
+static const char * DLL_CALLCONV
+Extension() {
+	return "heic,heif,hif";
+}
+
+static const char * DLL_CALLCONV
+RegExpr() {
+	return NULL;
+}
+
+static const char * DLL_CALLCONV
+MimeType() {
+	return "image/heic";
+}
+
+static BOOL
+IsBrand(const BYTE *b, const char *brand) {
+	return (memcmp(b, brand, 4) == 0) ? TRUE : FALSE;
+}
+
+static BOOL DLL_CALLCONV
+Validate(FreeImageIO *io, fi_handle handle) {
+	// A HEIF file opens with a FileTypeBox ('ftyp') whose brands name the format:
+	// fetch the box by its declared size and look at the major and compatible brands.
+	BYTE buffer[4096];
+
+	if(io->read_proc(buffer, 1, 8, handle) != 8) {
+		return FALSE;
+	}
+	if(memcmp(buffer + 4, "ftyp", 4) != 0) {
+		return FALSE;
+	}
+	const unsigned box_size = ((unsigned)buffer[0] << 24) | ((unsigned)buffer[1] << 16) | ((unsigned)buffer[2] << 8) | (unsigned)buffer[3];
+	// 16 = box header + major brand + minor version; anything beyond the buffer is not an image's ftyp
+	if((box_size < 16) || (box_size > sizeof(buffer))) {
+		return FALSE;
+	}
+	if(io->read_proc(buffer + 8, 1, box_size - 8, handle) != box_size - 8) {
+		return FALSE;
+	}
+
+	BOOL hevc = FALSE;		// an HEVC brand: what this plugin decodes
+	BOOL av1 = FALSE;		// an AV1 brand: the AVIF plugin's
+	BOOL heif = FALSE;		// a structural brand only: a HEIF file of some codec
+	for(unsigned offset = 8; offset + 4 <= box_size; offset += 4) {
+		if(offset == 12) {
+			// the minor version
+			continue;
+		}
+		const BYTE *b = buffer + offset;
+		if(IsBrand(b, "heic") || IsBrand(b, "heix") || IsBrand(b, "hevc") || IsBrand(b, "hevx") ||
+		   IsBrand(b, "heim") || IsBrand(b, "heis") || IsBrand(b, "hevm") || IsBrand(b, "hevs")) {
+			hevc = TRUE;
+		} else if(IsBrand(b, "avif") || IsBrand(b, "avis")) {
+			av1 = TRUE;
+		} else if(IsBrand(b, "mif1") || IsBrand(b, "mif2") || IsBrand(b, "mif3") || IsBrand(b, "msf1") || IsBrand(b, "miaf")) {
+			heif = TRUE;
+		}
+	}
+	if(hevc) {
+		return TRUE;
+	}
+	if(av1) {
+		return FALSE;
+	}
+	// a HEIF file that names no codec: claim it, an unsupported payload is reported when loading
+	return heif;
+}
+
+static BOOL DLL_CALLCONV
+SupportsExportDepth(int depth) {
+	return FALSE;
+}
+
+static BOOL DLL_CALLCONV
+SupportsExportType(FREE_IMAGE_TYPE type) {
+	return FALSE;
+}
+
+static BOOL DLL_CALLCONV
+SupportsICCProfiles() {
+	return TRUE;
+}
+
+static BOOL DLL_CALLCONV
+SupportsNoPixels() {
+	return TRUE;
+}
+
+// ----------------------------------------------------------
+
+static void DLL_CALLCONV
+Close(FreeImageIO *io, fi_handle handle, void *data) {
+	HEIFContext *ctx = (HEIFContext*)data;
+	if(ctx) {
+		if(ctx->ctx) {
+			heif_context_free(ctx->ctx);
+		}
+		free(ctx->pages);
+		free(ctx);
+	}
+}
+
+/**
+Parse the container. Everything but the HEVC payloads is read here: the image
+items, their sizes, depths and properties, the metadata items, the thumbnails.
+*/
+static void * DLL_CALLCONV
+Open(FreeImageIO *io, fi_handle handle, BOOL read) {
+	if(!read) {
+		// this plugin cannot write
+		return NULL;
+	}
+
+	HEIFContext *ctx = (HEIFContext*)calloc(1, sizeof(HEIFContext));
+	if(!ctx) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		return NULL;
+	}
+
+	// --- the stream ---
+
+	HEIFStream *s = &ctx->stream;
+	s->io = io;
+	s->handle = handle;
+	s->base = io->tell_proc(handle);
+	if(s->base < 0) {
+		s->base = 0;
+	}
+	// the stream length: from tell_proc when it can express it (it cannot beyond 2 GB where
+	// 'long' is 32-bit), by probing otherwise
+	if(io->seek_proc(handle, 0, SEEK_END) == 0) {
+		const long end = io->tell_proc(handle);
+		if(end >= s->base) {
+			s->size = (uint64_t)(end - s->base);
+			s->size_known = TRUE;
+		}
+	}
+	if(!s->size_known) {
+		HEIF_MeasureStream(s);
+	}
+	io->seek_proc(handle, s->base, SEEK_SET);
+	s->position = 0;
+
+	// --- the container ---
+
+	ctx->threads = GetProcessorCount();
+	ctx->ctx = heif_context_alloc();
+	if(!ctx->ctx) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		Close(io, handle, ctx);
+		return NULL;
+	}
+	// FreeImage's own allocation is the limit, not libheif's 32768 x 32768 / 4 GB defaults:
+	// gigapixel images are in scope. The limits on item, box and tile counts stay.
+	heif_security_limits *limits = heif_context_get_security_limits(ctx->ctx);
+	if(limits) {
+		limits->max_image_size_pixels = 0;
+		limits->max_memory_block_size = 0;
+		limits->max_total_memory = 0;
+	}
+	// tiles of a grid image are decoded in parallel
+	heif_context_set_max_decoding_threads(ctx->ctx, ctx->threads);
+
+	heif_error error = heif_context_read_from_reader(ctx->ctx, &s_reader, s, NULL);
+	if(error.code != heif_error_Ok) {
+		ReportError("Cannot parse the file", error);
+		Close(io, handle, ctx);
+		return NULL;
+	}
+
+	// --- the pages: the primary image ('pitm'), then the other top-level images ---
+
+	// The primary image is what libheif's own tools show, so it is page 0 even in a
+	// broken file that lists it as the thumbnail of another image (it is then not a
+	// top-level image, and the top-level image gets page 1).
+	heif_item_id primary = 0;
+	const BOOL has_primary = (heif_context_get_primary_image_ID(ctx->ctx, &primary).code == heif_error_Ok) ? TRUE : FALSE;
+	const int count = heif_context_get_number_of_top_level_images(ctx->ctx);
+	if((count <= 0) && !has_primary) {
+		FreeImage_OutputMessageProc(s_format_id, "The file contains no image (HEIF image sequences are not supported)");
+		Close(io, handle, ctx);
+		return NULL;
+	}
+	ctx->pages = (heif_item_id*)calloc((size_t)(count > 0 ? count : 0) + 1, sizeof(heif_item_id));
+	if(!ctx->pages) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		Close(io, handle, ctx);
+		return NULL;
+	}
+	int n = 0;
+	if(has_primary) {
+		ctx->pages[n++] = primary;
+	}
+	if(count > 0) {
+		heif_item_id *top = ctx->pages + n;
+		const int got = heif_context_get_list_of_top_level_image_IDs(ctx->ctx, top, count);
+		for(int i = 0; i < got; i++) {
+			if(!has_primary || (top[i] != primary)) {
+				ctx->pages[n++] = top[i];
+			}
+		}
+	}
+	ctx->page_count = n;
+	if(ctx->page_count <= 0) {
+		FreeImage_OutputMessageProc(s_format_id, "The file contains no image");
+		Close(io, handle, ctx);
+		return NULL;
+	}
+
+	return ctx;
+}
+
+static int DLL_CALLCONV
+PageCount(FreeImageIO *io, fi_handle handle, void *data) {
+	HEIFContext *ctx = (HEIFContext*)data;
+	if(!ctx || !ctx->ctx) {
+		return 0;
+	}
+	return (ctx->page_count > 0) ? ctx->page_count : 1;
+}
+
+/**
+Header-only load: the bitmap as the handle describes it (its size is the size
+after the transforms), without decoding.
+*/
+static FIBITMAP *
+LoadHeader(const HEIFContext *ctx, const heif_image_handle *handle) {
+	HEIFOutput out;
+	ChooseOutput(handle, TRUE, &out);
+
+	FIBITMAP *dib = AllocateOutput(TRUE, &out, heif_image_handle_get_width(handle), heif_image_handle_get_height(handle));
+	if(dib) {
+		AttachMetadata(dib, handle);
+		AttachThumbnail(ctx, dib, handle);
+	}
+	return dib;
+}
+
+/**
+Decode the image into a new bitmap.
+*/
+static FIBITMAP *
+LoadPixels(const HEIFContext *ctx, const heif_image_handle *handle) {
+	HEIFOutput out;
+	heif_image *image = NULL;
+	FIBITMAP *dib = NULL;
+
+	heif_decoding_options *options = CreateDecodingOptions(ctx, handle);
+	if(!options) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		return NULL;
+	}
+
+	// first choice: greyscale for monochrome content; if libheif has no direct path for it, go through colour
+	BOOL allow_grey = TRUE;
+	for(;;) {
+		ChooseOutput(handle, allow_grey, &out);
+		const heif_error error = heif_decode_image(handle, &image, out.colorspace, out.chroma, options);
+		if((error.code == heif_error_Ok) && image) {
+			break;
+		}
+		if(image) {
+			heif_image_release(image);
+			image = NULL;
+		}
+		if(out.grey && (error.code == heif_error_Unsupported_feature)) {
+			allow_grey = FALSE;
+			continue;
+		}
+		ReportError("Cannot decode the image", error);
+		heif_decoding_options_free(options);
+		return NULL;
+	}
+	heif_decoding_options_free(options);
+
+	// decoding warnings are worth a message but not a failure
+	heif_error warnings[4];
+	const int n = heif_image_get_decoding_warnings(image, 0, warnings, 4);
+	for(int i = 0; i < n; i++) {
+		ReportError("Warning", warnings[i]);
+	}
+
+	// the decoded image is the authority on its size and depth, not the handle
+	const heif_channel channel = out.grey ? heif_channel_Y : heif_channel_interleaved;
+	const int width = heif_image_get_width(image, channel);
+	const int height = heif_image_get_height(image, channel);
+	const int storage = heif_image_get_bits_per_pixel(image, channel);		// bits stored per pixel
+	int bits = heif_image_get_bits_per_pixel_range(image, channel);			// bits carrying the value, per sample
+	const int samples = out.grey ? 1 : (out.has_alpha ? 4 : 3);
+	const BOOL deep = (storage > samples * 8) ? TRUE : FALSE;
+	if((bits <= 0) || (bits > 16)) {
+		bits = deep ? 16 : 8;
+	}
+	if(!deep) {
+		bits = 8;
+	}
+	if(deep != ((out.type == FIT_BITMAP) ? FALSE : TRUE)) {
+		// the handle guessed the depth wrong: follow the pixels
+		out.type = out.grey ? (deep ? FIT_UINT16 : FIT_BITMAP) : (deep ? (out.has_alpha ? FIT_RGBA16 : FIT_RGB16) : FIT_BITMAP);
+		out.bpp = out.grey ? (deep ? 16 : 8) : (deep ? (out.has_alpha ? 64 : 48) : (out.has_alpha ? 32 : 24));
+	}
+	const BOOL premultiplied = (out.has_alpha && (heif_image_handle_is_premultiplied_alpha(handle) || heif_image_is_premultiplied_alpha(image))) ? TRUE : FALSE;
+
+	dib = AllocateOutput(FALSE, &out, width, height);
+	if(dib) {
+		BOOL ok;
+		if(out.grey) {
+			ok = CopyGrey(image, dib, deep ? 16 : 8, bits);
+		} else if(deep) {
+			ok = CopyInterleaved16(image, dib, out.has_alpha, premultiplied, bits);
+		} else {
+			ok = CopyInterleaved8(image, dib, out.has_alpha, premultiplied);
+		}
+		if(!ok) {
+			FreeImage_OutputMessageProc(s_format_id, "Cannot read the decoded image (%d x %d, %d bits per pixel)", width, height, storage);
+			FreeImage_Unload(dib);
+			dib = NULL;
+		}
+	}
+	heif_image_release(image);
+
+	if(dib) {
+		AttachMetadata(dib, handle);
+		AttachThumbnail(ctx, dib, handle);
+	}
+	return dib;
+}
+
+static FIBITMAP * DLL_CALLCONV
+Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+	HEIFContext *ctx = (HEIFContext*)data;
+	if(!ctx || !ctx->ctx) {
+		return NULL;
+	}
+	if(page < 0) {
+		page = 0;
+	}
+	if(page >= ctx->page_count) {
+		FreeImage_OutputMessageProc(s_format_id, "Page %d does not exist: the file has %d image(s)", page, ctx->page_count);
+		return NULL;
+	}
+
+	heif_image_handle *image_handle = NULL;
+	const heif_error error = heif_context_get_image_handle(ctx->ctx, ctx->pages[page], &image_handle);
+	if((error.code != heif_error_Ok) || !image_handle) {
+		ReportError("Cannot access the image", error);
+		return NULL;
+	}
+
+	const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
+	FIBITMAP *dib = header_only ? LoadHeader(ctx, image_handle) : LoadPixels(ctx, image_handle);
+
+	heif_image_handle_release(image_handle);
+	return dib;
+}
+
+// ==========================================================
+//	 Init
+// ==========================================================
+
+void DLL_CALLCONV
+InitHEIF(Plugin *plugin, int format_id) {
+	s_format_id = format_id;
+
+	plugin->format_proc = Format;
+	plugin->description_proc = Description;
+	plugin->extension_proc = Extension;
+	plugin->regexpr_proc = RegExpr;
+	plugin->open_proc = Open;
+	plugin->close_proc = Close;
+	plugin->pagecount_proc = PageCount;
+	plugin->pagecapability_proc = NULL;
+	plugin->load_proc = Load;
+	plugin->save_proc = NULL;
+	plugin->validate_proc = Validate;
+	plugin->mime_proc = MimeType;
+	plugin->supports_export_bpp_proc = SupportsExportDepth;
+	plugin->supports_export_type_proc = SupportsExportType;
+	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
+	plugin->supports_no_pixels_proc = SupportsNoPixels;
+}

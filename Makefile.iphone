@@ -9,6 +9,9 @@ include Makefile.srcs
 OPENMP ?= 0
 include Makefile.openmp
 
+# libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
+include Makefile.heif
+
 CFLAGS =  -g -O2 -Wall -Wmissing-prototypes -std=c99 -ffast-math -fno-strict-aliasing -DAVIF_CODEC_DAV1D=1
 CXXFLAGS =  -g -O2 -Wall -fno-strict-aliasing
 
@@ -70,8 +73,12 @@ HEADER = Source/FreeImage.h
 .SUFFIXES: .o-i686 .o-arm
 MODULES_ARM = $(SRCS:.c=.o-arm)
 MODULES_ARM := $(MODULES_ARM:.cpp=.o-arm)
+MODULES_ARM := $(MODULES_ARM:.cc=.o-arm)
+# libde265's x86 kernels are not for the phone
+MODULES_ARM := $(filter-out ./Source/LibDe265/libde265/x86/%,$(MODULES_ARM))
 MODULES_i686 = $(SRCS:.c=.o-i686)
 MODULES_i686 := $(MODULES_i686:.cpp=.o-i686)
+MODULES_i686 := $(MODULES_i686:.cc=.o-i686)
 
 default: all
 
@@ -93,6 +100,9 @@ $(STATICLIB_SIM): $(MODULES_i686)
 .cpp.o-i686:
 	$(CXX_SIM) $(CXXFLAGS_SIM) -c $< -o $@
 
+.cc.o-i686:
+	$(CXX_SIM) $(HEIF_CXXFLAGS_PRE) $(CXXFLAGS_SIM) $(HEIF_CXXFLAGS_POST) -c $< -o $@
+
 $(STATICLIB_PHONE): $(MODULES_ARM)
 	$(LIBTOOL_PHONE) -arch_only $(ARCH_PHONE) -o $@ $(MODULES_ARM)
 
@@ -101,6 +111,9 @@ $(STATICLIB_PHONE): $(MODULES_ARM)
 
 .cpp.o-arm:
 	$(CXX_PHONE) $(CXXFLAGS_PHONE) -c $< -o $@
+
+.cc.o-arm:
+	$(CXX_PHONE) $(HEIF_CXXFLAGS_PRE) $(CXXFLAGS_PHONE) $(HEIF_CXXFLAGS_POST) -c $< -o $@
 
 clean:
 	rm -f core Dist/*.* u2dtmp* $(MODULES_i686) $(MODULES_ARM) $(STATICLIB_SIM) $(STATICLIB_PHONE)
