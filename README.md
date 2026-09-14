@@ -38,6 +38,9 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - updated the OpenEXR library to version 3.1.3, from version 2.2.0;
 - added FreeImage_RescaleRawBits()
+- added AVIF loading (FIF_AVIF) with the bundled libavif 1.4.2 and dav1d 1.5.4: 8/10/12-bit, alpha, image sequences as multi-page bitmaps, ICC/Exif/XMP, the clap/irot/imir transforms applied. Read-only: no AV1 encoder is bundled. HEIC is a different codec (HEVC) and is not covered;
+- two small patches to the bundled libavif: its decoder refused any image size limit above 16384 x 16384 pixels as "not implemented" (read.c), which would have capped AVIF at 268 mgpx, and a lone static_assert in io.c is spelled _Static_assert for the -std=c99 makefiles;
+- fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
 
 Bugs or limitations identified:
 - saving WEBP files is extremely slow at 16000 x 16000 px;

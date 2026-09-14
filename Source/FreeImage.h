@@ -419,7 +419,8 @@ FI_ENUM(FREE_IMAGE_FORMAT) {
 	FIF_PICT	= 33,
 	FIF_RAW		= 34,
 	FIF_WEBP	= 35,
-	FIF_JXR		= 36
+	FIF_JXR		= 36,
+	FIF_AVIF	= 37
 };
 
 /** Image type used in FreeImage.
@@ -763,6 +764,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define JXR_DEFAULT			0		//! save with quality 80 and no chroma subsampling (4:4:4)
 #define JXR_LOSSLESS		0x0064	//! save lossless
 #define JXR_PROGRESSIVE		0x2000	//! save as a progressive-JXR (use | to combine with other save flags)
+#define AVIF_DEFAULT		0		//! loading: decode the image, apply its clap/irot/imir transforms, keep ICC, Exif and XMP (this plugin cannot save)
 
 // Background filling options ---------------------------------------------------------
 // Constants used in FreeImage_FillBackground and FreeImage_EnlargeCanvas

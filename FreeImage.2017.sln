@@ -29,6 +29,10 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibWebP", "Source\LibWebP\L
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibJXR", "Source\LibJXR\LibJXR.2017.vcxproj", "{244455E0-5F25-4451-9540-F317883E52A8}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibAVIF", "Source\LibAVIF\LibAVIF.2017.vcxproj", "{B0A0D2DD-97D7-4BD9-AD3B-F393F2CE937E}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LibDav1d", "Source\LibDav1d\LibDav1d.2017.vcxproj", "{04DE9318-5A87-4180-99CD-AEE139C03FB9}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -81,6 +85,14 @@ Global
 		{244455E0-5F25-4451-9540-F317883E52A8}.Debug|x64.Build.0 = Debug|x64
 		{244455E0-5F25-4451-9540-F317883E52A8}.Release|x64.ActiveCfg = Release|x64
 		{244455E0-5F25-4451-9540-F317883E52A8}.Release|x64.Build.0 = Release|x64
+		{B0A0D2DD-97D7-4BD9-AD3B-F393F2CE937E}.Debug|x64.ActiveCfg = Debug|x64
+		{B0A0D2DD-97D7-4BD9-AD3B-F393F2CE937E}.Debug|x64.Build.0 = Debug|x64
+		{B0A0D2DD-97D7-4BD9-AD3B-F393F2CE937E}.Release|x64.ActiveCfg = Release|x64
+		{B0A0D2DD-97D7-4BD9-AD3B-F393F2CE937E}.Release|x64.Build.0 = Release|x64
+		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Debug|x64.ActiveCfg = Debug|x64
+		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Debug|x64.Build.0 = Debug|x64
+		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Release|x64.ActiveCfg = Release|x64
+		{04DE9318-5A87-4180-99CD-AEE139C03FB9}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

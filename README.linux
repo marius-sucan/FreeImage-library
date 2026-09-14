@@ -6,10 +6,16 @@ This version of the library has been tested under the following OS:
 - SuSE Linux Enterprise 8 and SuSE 9.0.
 - Debian 4
 
-You *do not* need to have any other third party library (libjpeg, libpng, libtiff, libmng and zlib) 
-installed on your /usr/lib directory in order to compile and use the library. 
-FreeImage uses its own versions of these libraries. This way, you can be sure that FreeImage will 
+You *do not* need to have any other third party library (libjpeg, libpng, libtiff, libmng and zlib)
+installed on your /usr/lib directory in order to compile and use the library.
+FreeImage uses its own versions of these libraries. This way, you can be sure that FreeImage will
 always use the latest version of each third party library.
+
+AVIF support comes from the bundled libavif (Source/LibAVIF) and dav1d (Source/LibDav1d). dav1d is
+built from its portable C code: its SIMD is NASM/GAS assembly, which these makefiles have no rule for.
+Decoding still uses every core through dav1d's threads, so a program linking the static library needs
+-lpthread (and -lm) besides -fopenmp; the shared library already pulls both in. The plugin is
+read-only: no AV1 encoder is bundled.
 
 The FreeImage makefile makes use of the gcc "-fvisibility=hidden" in order to avoid incompatibilities between 
 internal third party libraries and the OS libraries. You may have to remove this option if you're running an 

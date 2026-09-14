@@ -119,6 +119,9 @@
     <ClCompile Include="..\FreeImage\Plugin.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>
+    <ClCompile Include="..\FreeImage\PluginAVIF.cpp">
+      <Filter>Source Files\Plugins</Filter>
+    </ClCompile>
     <ClCompile Include="..\FreeImage\PluginBMP.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>

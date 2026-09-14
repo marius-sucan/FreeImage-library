@@ -273,6 +273,7 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <ClCompile Include="..\FreeImage\J2KHelper.cpp" />
     <ClCompile Include="..\FreeImage\MNGHelper.cpp" />
     <ClCompile Include="..\FreeImage\Plugin.cpp" />
+    <ClCompile Include="..\FreeImage\PluginAVIF.cpp" />
     <ClCompile Include="..\FreeImage\PluginBMP.cpp" />
     <ClCompile Include="..\FreeImage\PluginCUT.cpp" />
     <ClCompile Include="..\FreeImage\PluginDDS.cpp" />
@@ -348,6 +349,14 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <Text Include="..\..\Whatsnew.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\LibAVIF\LibAVIF.2017.vcxproj">
+      <Project>{b0a0d2dd-97d7-4bd9-ad3b-f393f2ce937e}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\LibDav1d\LibDav1d.2017.vcxproj">
+      <Project>{04de9318-5a87-4180-99cd-aee139c03fb9}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <ProjectReference Include="..\LibJPEG\LibJPEG.2017.vcxproj">
       <Project>{5e1d4e5f-e10c-4ba3-b663-f33014fd21d9}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>

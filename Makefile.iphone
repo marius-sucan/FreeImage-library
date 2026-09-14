@@ -9,7 +9,7 @@ include Makefile.srcs
 OPENMP ?= 0
 include Makefile.openmp
 
-CFLAGS =  -g -O2 -Wall -Wmissing-prototypes -std=c99 -ffast-math -fno-strict-aliasing
+CFLAGS =  -g -O2 -Wall -Wmissing-prototypes -std=c99 -ffast-math -fno-strict-aliasing -DAVIF_CODEC_DAV1D=1
 CXXFLAGS =  -g -O2 -Wall -fno-strict-aliasing
 
 GCC_VERSION = 4.2

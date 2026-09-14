@@ -15,7 +15,9 @@ INSTALLDIR ?= $(DESTDIR)/usr/lib
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-LIBRARIES = -lstdc++
+# -lpthread for dav1d's decoder threads (inside libc since glibc 2.34, separate before that),
+# -lm for libavif and dav1d
+LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)
@@ -28,6 +30,8 @@ CFLAGS += -DOPJ_STATIC
 CFLAGS += -DNO_LCMS
 # LibJXR
 CFLAGS += -DDISABLE_PERF_MEASUREMENT -D__ANSI__
+# libavif: use the bundled dav1d as its AV1 decoder (Source/LibAVIF, Source/LibDav1d)
+CFLAGS += -DAVIF_CODEC_DAV1D=1
 # OpenMP
 CFLAGS += $(OPENMP_CFLAGS)
 CFLAGS += $(INCLUDE)

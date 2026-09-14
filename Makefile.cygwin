@@ -17,8 +17,8 @@ INSTALLDIR = /usr
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-COMPILERFLAGS = -O3 -DNO_LCMS $(OPENMP_CFLAGS)
-LIBRARIES = -lstdc++
+COMPILERFLAGS = -O3 -DNO_LCMS -DAVIF_CODEC_DAV1D=1 $(OPENMP_CFLAGS)
+LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)

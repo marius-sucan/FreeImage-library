@@ -51,7 +51,7 @@ include Makefile.openmp
 LIBRARIES = -lws2_32
 
 # Define some additional symboles needed for WIN32 based builds.
-WIN32_CFLAGS = -DWINVER=0x0500 $(LIB_TYPE_FLAGS) -DOPJ_STATIC
+WIN32_CFLAGS = -DWINVER=0x0500 $(LIB_TYPE_FLAGS) -DOPJ_STATIC -DAVIF_CODEC_DAV1D=1
 WIN32_CXXFLAGS = $(WIN32_CFLAGS) -DLIBRAW_NODLL
 
 # Workaround for LibRawLite, which does not include C++ header

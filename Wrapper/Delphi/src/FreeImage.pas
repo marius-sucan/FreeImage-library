@@ -308,6 +308,7 @@ const
   FIF_RAW     = FREE_IMAGE_FORMAT(34);
   FIF_WEBP    = FREE_IMAGE_FORMAT(35);
   FIF_JXR     = FREE_IMAGE_FORMAT(36);
+  FIF_AVIF    = FREE_IMAGE_FORMAT(37);
 
   // Image type used in FreeImage.
   FIT_UNKNOWN = FREE_IMAGE_TYPE(0);  // unknown type
