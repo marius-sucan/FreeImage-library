@@ -798,6 +798,7 @@ DLL_API const char *DLL_CALLCONV FreeImage_GetVersion(void);
 DLL_API const char *DLL_CALLCONV FreeImage_GetCopyrightMessage(void);
 
 // Message output functions -------------------------------------------------
+// Quick Picto Viewer: with or without a handler set, every message is also sent to the debugger output (DebugView) as "qpv: fim: [FORMAT] message"
 
 typedef void (*FreeImage_OutputMessageFunction)(FREE_IMAGE_FORMAT fif, const char *msg);
 typedef void (DLL_CALLCONV *FreeImage_OutputMessageFunctionStdCall)(FREE_IMAGE_FORMAT fif, const char *msg); 

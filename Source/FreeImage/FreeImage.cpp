@@ -117,11 +117,35 @@ FreeImage_SetOutputMessageStdCall(FreeImage_OutputMessageFunctionStdCall omf) {
 	freeimage_outputmessagestdcall_proc = omf;
 }
 
+// ----------------------------------------------------------
+// Quick Picto Viewer: every message is also mirrored to the debugger output (Sysinternals
+// DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message", whether or not
+// the application registered a handler, so the DLL can be watched without any glue code.
+// The formatter below is the original one, made bounds-safe because it now runs for every
+// message: no append can run past the 512-byte buffer, and a NULL %s prints as "(null)".
+// ----------------------------------------------------------
+
+/**
+Append text to message, which holds *length characters and can hold capacity bytes.
+The copy stops at the end of the text or one byte before the end of the buffer, and the
+buffer is always left terminated.
+*/
+static void
+FreeImage_AppendMessage(char *message, int *length, int capacity, const char *text) {
+	if (text == NULL) {
+		text = "(null)";
+	}
+	while ((*text != '\0') && (*length < capacity - 1)) {
+		message[(*length)++] = *text++;
+	}
+	message[*length] = '\0';
+}
+
 void DLL_CALLCONV
 FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 	const int MSG_SIZE = 512; // 512 bytes should be more than enough for a short message
 
-	if ((fmt != NULL) && ((freeimage_outputmessage_proc != NULL) || (freeimage_outputmessagestdcall_proc != NULL))) {
+	if (fmt != NULL) {
 		char message[MSG_SIZE];
 		memset(message, 0, MSG_SIZE);
 
@@ -135,13 +159,16 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 		int str_length = (int)( (strlen(fmt) > MSG_SIZE) ? MSG_SIZE : strlen(fmt) );
 
 		// parse the format string and put the result in 'message'
+		// (only %s, %d, %i, %u, %o, %x and %% are understood)
 
-		for (int i = 0, j = 0; i < str_length; ++i) {
+		int j = 0;
+
+		for (int i = 0; i < str_length; ++i) {
 			if (fmt[i] == '%') {
 				if (i + 1 < str_length) {
-					switch(tolower(fmt[i + 1])) {
+					switch(tolower((unsigned char)fmt[i + 1])) {
 						case '%' :
-							message[j++] = '%';
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, "%");
 							break;
 
 						case 'o' : // octal numbers
@@ -150,9 +177,7 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 
 							_itoa(va_arg(arg, int), tmp, 8);
 
-							strcat(message, tmp);
-
-							j += (int)strlen(tmp);
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, tmp);
 
 							++i;
 
@@ -166,9 +191,20 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 
 							_itoa(va_arg(arg, int), tmp, 10);
 
-							strcat(message, tmp);
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, tmp);
 
-							j += (int)strlen(tmp);
+							++i;
+
+							break;
+						}
+
+						case 'u' : // unsigned decimal numbers
+						{
+							char tmp[16];
+
+							sprintf(tmp, "%u", va_arg(arg, unsigned int));
+
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, tmp);
 
 							++i;
 
@@ -181,9 +217,7 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 
 							_itoa(va_arg(arg, int), tmp, 16);
 
-							strcat(message, tmp);
-
-							j += (int)strlen(tmp);
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, tmp);
 
 							++i;
 
@@ -192,21 +226,17 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 
 						case 's' : // strings
 						{
-							char *tmp = va_arg(arg, char*);
-
-							strcat(message, tmp);
-
-							j += (int)strlen(tmp);
+							FreeImage_AppendMessage(message, &j, MSG_SIZE, va_arg(arg, char*));
 
 							++i;
 
 							break;
 						}
 					};
-				} else {
+				} else if (j < MSG_SIZE - 1) {
 					message[j++] = fmt[i];
 				}
-			} else {
+			} else if (j < MSG_SIZE - 1) {
 				message[j++] = fmt[i];
 			};
 		}
@@ -215,12 +245,33 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 
 		va_end(arg);
 
+#ifdef _WIN32
+		// mirror the message to the debugger, tagged so that DebugView can filter on it
+
+		{
+			char line[MSG_SIZE + 64];
+			int length = 0;
+			const char *format = (fif >= 0) ? FreeImage_GetFormatFromFIF((FREE_IMAGE_FORMAT)fif) : NULL;
+
+			FreeImage_AppendMessage(line, &length, (int)sizeof(line), "qpv: fim: ");
+			if (format != NULL) {
+				FreeImage_AppendMessage(line, &length, (int)sizeof(line), "[");
+				FreeImage_AppendMessage(line, &length, (int)sizeof(line), format);
+				FreeImage_AppendMessage(line, &length, (int)sizeof(line), "] ");
+			}
+			FreeImage_AppendMessage(line, &length, (int)sizeof(line), message);
+			FreeImage_AppendMessage(line, &length, (int)sizeof(line), "\n");
+
+			OutputDebugStringA(line);
+		}
+#endif
+
 		// output the message to the user program
 
 		if (freeimage_outputmessage_proc != NULL)
 			freeimage_outputmessage_proc((FREE_IMAGE_FORMAT)fif, message);
 
 		if (freeimage_outputmessagestdcall_proc != NULL)
-			freeimage_outputmessagestdcall_proc((FREE_IMAGE_FORMAT)fif, message); 
+			freeimage_outputmessagestdcall_proc((FREE_IMAGE_FORMAT)fif, message);
 	}
 }

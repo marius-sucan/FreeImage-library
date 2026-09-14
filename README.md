@@ -41,6 +41,7 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 - added AVIF loading (FIF_AVIF) with the bundled libavif 1.4.2 and dav1d 1.5.4: 8/10/12-bit, alpha, image sequences as multi-page bitmaps, ICC/Exif/XMP, the clap/irot/imir transforms applied. Read-only: no AV1 encoder is bundled. HEIC is a different codec (HEVC) and is not covered;
 - two small patches to the bundled libavif: its decoder refused any image size limit above 16384 x 16384 pixels as "not implemented" (read.c), which would have capped AVIF at 268 mgpx, and a lone static_assert in io.c is spelled _Static_assert for the -std=c99 makefiles;
 - the LibAVIF MSVC project gives the bundled libyuv objects a libyuv_ prefix: its scale.c and libavif's src/scale.c both compiled to scale.obj, one overwrote the other, and FreeImage.dll failed to link with avifImageScale / avifImageScaleWithLimit unresolved;
+- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message", whether or not a handler was registered with FreeImage_SetOutputMessage(); the message formatter is now bounds-checked (no append can overrun its 512-byte buffer, a NULL %s prints as "(null)") and understands %u;
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
 
 Bugs or limitations identified:
