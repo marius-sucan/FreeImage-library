@@ -1,0 +1,577 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{aace6a4b-a553-4dda-bb32-36f6974b23ee}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\src\win32">
+      <UniqueIdentifier>{50faf1a8-072c-47a4-bc9c-e0a2713768c1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\bitdepth">
+      <UniqueIdentifier>{784b756d-489e-4e7c-8419-1cc61d6ad374}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include">
+      <UniqueIdentifier>{782dafba-7713-4f99-901a-d8727846b768}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\common">
+      <UniqueIdentifier>{bc5dfbb5-ea76-4570-b63c-d478a18f8e08}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\compat">
+      <UniqueIdentifier>{88923e0a-6a7c-4a1a-ac77-c105f77b8a14}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\compat\gcc">
+      <UniqueIdentifier>{55288c11-7ddf-4544-8d24-32931ebd04ff}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\compat\msvc">
+      <UniqueIdentifier>{b32aada8-b10e-421a-a24b-cff4ccd1ce21}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\dav1d">
+      <UniqueIdentifier>{c32f084d-2176-40e1-b6d1-78065263ca9e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src">
+      <UniqueIdentifier>{a5ad49dd-54d3-4ae9-b144-1ea1e30219e8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src\arm">
+      <UniqueIdentifier>{be218443-a947-48c7-91b4-683b149c29c7}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src\loongarch">
+      <UniqueIdentifier>{9d7abc6f-6f08-459b-9209-ec2f5d72b5ba}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src\ppc">
+      <UniqueIdentifier>{0dd1eaca-38bf-4d0a-901e-6a9bd2284b68}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src\riscv">
+      <UniqueIdentifier>{69d1903e-1e67-47af-ab4a-141ff5f500bc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\src\x86">
+      <UniqueIdentifier>{ef50ceb0-55a1-4411-a812-1dae6facbe07}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\cdf.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\cpu.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ctx.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\data.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decode.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\dequant_tables.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\getbits.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\intra_edge.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\itx_1d.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\lf_mask.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\lib.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\log.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mem.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\msac.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obu.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\pal.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\picture.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\qm.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ref.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\refmvs.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scan.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\tables.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\thread_task.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\warpmv.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\wedge.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\win32\thread.c">
+      <Filter>Source Files\src\win32</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\cdef_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\cdef_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\cdef_apply_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\cdef_apply_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\fg_apply_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\fg_apply_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\filmgrain_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\filmgrain_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\ipred_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\ipred_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\ipred_prepare_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\ipred_prepare_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\itx_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\itx_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\lf_apply_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\lf_apply_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\loopfilter_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\loopfilter_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\looprestoration_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\looprestoration_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\lr_apply_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\lr_apply_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\mc_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\mc_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\recon_16bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+    <ClCompile Include="bitdepth\recon_8bpc.c">
+      <Filter>Source Files\bitdepth</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="config.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="include\vcs_version.h">
+      <Filter>Header Files\include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\attributes.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\bitdepth.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\dump.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\frame.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\intops.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\common\validate.h">
+      <Filter>Header Files\include\common</Filter>
+    </ClInclude>
+    <ClInclude Include="include\compat\gcc\stdatomic.h">
+      <Filter>Header Files\include\compat\gcc</Filter>
+    </ClInclude>
+    <ClInclude Include="include\compat\msvc\stdatomic.h">
+      <Filter>Header Files\include\compat\msvc</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\common.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\data.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\dav1d.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\headers.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\picture.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="include\dav1d\version.h">
+      <Filter>Header Files\include\dav1d</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cdef.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cdef_apply.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cdf.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\cpu.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ctx.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\data.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\decode.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\dequant_tables.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\env.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\fg_apply.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\filmgrain.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\getbits.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\internal.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\intra_edge.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ipred.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ipred_prepare.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\itx.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\itx_1d.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\levels.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\lf_apply.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\lf_mask.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\log.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loopfilter.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\looprestoration.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\lr_apply.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mc.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\mem.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\msac.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\obu.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\pal.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\picture.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\qm.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\recon.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ref.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\refmvs.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\scan.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\tables.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\thread.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\thread_data.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\thread_task.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\warpmv.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\wedge.h">
+      <Filter>Header Files\src</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\arm-arch.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\asm-offsets.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\cdef.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\cpu.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\filmgrain.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\ipred.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\itx.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\loopfilter.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\looprestoration.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\mc.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\msac.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\arm\refmvs.h">
+      <Filter>Header Files\src\arm</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\cdef.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\cpu.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\ipred.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\itx.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\loopfilter.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\looprestoration.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\mc.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\msac.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\loongarch\refmvs.h">
+      <Filter>Header Files\src\loongarch</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\cdef.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\cpu.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\dav1d_types.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\itx.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\loopfilter.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\looprestoration.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\mc.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\ppc\utils.h">
+      <Filter>Header Files\src\ppc</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\asm-offsets.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\cdef.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\cpu.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\filmgrain.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\ipred.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\itx.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\mc.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\riscv\pal.h">
+      <Filter>Header Files\src\riscv</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\cdef.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\cpu.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\filmgrain.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\ipred.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\itx.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\loopfilter.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\looprestoration.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\mc.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\msac.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\pal.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+    <ClInclude Include="src\x86\refmvs.h">
+      <Filter>Header Files\src\x86</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="src\cdef_apply_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\cdef_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\fg_apply_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\filmgrain_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\ipred_prepare_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\ipred_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\itx_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\lf_apply_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\loopfilter_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\looprestoration_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\lr_apply_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\mc_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+    <None Include="src\recon_tmpl.c">
+      <Filter>Source Files\src</Filter>
+    </None>
+  </ItemGroup>
+</Project>

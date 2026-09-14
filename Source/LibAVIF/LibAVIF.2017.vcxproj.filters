@@ -1,0 +1,158 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
+    </Filter>
+    <Filter Include="Source Files\src">
+      <UniqueIdentifier>{0497f1d3-ee99-4438-9452-0c2e9d5a0a9a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\third_party">
+      <UniqueIdentifier>{85ba3621-38f7-470e-a787-9c4846cfa52f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\third_party\libyuv">
+      <UniqueIdentifier>{c6284e45-c837-413a-a84d-c833253a53d8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\third_party\libyuv\source">
+      <UniqueIdentifier>{cd8927d7-8885-4b0c-b66e-3e2139787fe3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include">
+      <UniqueIdentifier>{cdd534cf-c352-4552-b0b2-448007c92660}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\include\avif">
+      <UniqueIdentifier>{8d55fa41-9dcb-442b-8c3e-c05e29d316ab}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\third_party">
+      <UniqueIdentifier>{fca69c66-88ef-4131-9dd5-878ef6a3e851}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\third_party\libyuv">
+      <UniqueIdentifier>{ce080ebd-daa3-48be-9ce8-d25a3092fa2f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\third_party\libyuv\include">
+      <UniqueIdentifier>{fedf7310-49e8-4026-9964-145d66542152}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files\third_party\libyuv\include\libyuv">
+      <UniqueIdentifier>{aee03e10-c629-4972-ba3b-9cea9f317393}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\alpha.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\avif.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\codec_dav1d.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\colr.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\colrconvert.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\diag.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\exif.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\gainmap.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\io.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\mem.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\obu.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\properties.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\rawdata.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\read.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\reformat.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\reformat_libsharpyuv.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\reformat_libyuv.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\sampletransform.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\scale.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\stream.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="src\write.c">
+      <Filter>Source Files\src</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\libyuv\source\planar_functions.c">
+      <Filter>Source Files\third_party\libyuv\source</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\libyuv\source\row_common.c">
+      <Filter>Source Files\third_party\libyuv\source</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\libyuv\source\scale.c">
+      <Filter>Source Files\third_party\libyuv\source</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\libyuv\source\scale_any.c">
+      <Filter>Source Files\third_party\libyuv\source</Filter>
+    </ClCompile>
+    <ClCompile Include="third_party\libyuv\source\scale_common.c">
+      <Filter>Source Files\third_party\libyuv\source</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\avif\avif.h">
+      <Filter>Header Files\include\avif</Filter>
+    </ClInclude>
+    <ClInclude Include="include\avif\avif_cxx.h">
+      <Filter>Header Files\include\avif</Filter>
+    </ClInclude>
+    <ClInclude Include="include\avif\internal.h">
+      <Filter>Header Files\include\avif</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv.h">
+      <Filter>Header Files\third_party\libyuv\include</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\basic_types.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\planar_functions.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\row.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\scale.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\scale_row.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="third_party\libyuv\include\libyuv\version.h">
+      <Filter>Header Files\third_party\libyuv\include\libyuv</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

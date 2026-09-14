@@ -1,0 +1,372 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectName>LibDav1d</ProjectName>
+    <ProjectGuid>{04DE9318-5A87-4180-99CD-AEE139C03FB9}</ProjectGuid>
+    <RootNamespace>LibDav1d</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.17763.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v141</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v141</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v141</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v141</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>12.0.21005.1</_ProjectFileVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>.;./include;./include/compat/msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <CompileAs>Default</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>.;./include;./include/compat/msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <CompileAs>Default</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>.;./include;./include/compat/msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>.;./include;./include/compat/msvc;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="config.h" />
+    <ClInclude Include="include\vcs_version.h" />
+    <ClInclude Include="include\common\attributes.h" />
+    <ClInclude Include="include\common\bitdepth.h" />
+    <ClInclude Include="include\common\dump.h" />
+    <ClInclude Include="include\common\frame.h" />
+    <ClInclude Include="include\common\intops.h" />
+    <ClInclude Include="include\common\validate.h" />
+    <ClInclude Include="include\compat\gcc\stdatomic.h" />
+    <ClInclude Include="include\compat\msvc\stdatomic.h" />
+    <ClInclude Include="include\dav1d\common.h" />
+    <ClInclude Include="include\dav1d\data.h" />
+    <ClInclude Include="include\dav1d\dav1d.h" />
+    <ClInclude Include="include\dav1d\headers.h" />
+    <ClInclude Include="include\dav1d\picture.h" />
+    <ClInclude Include="include\dav1d\version.h" />
+    <ClInclude Include="src\cdef.h" />
+    <ClInclude Include="src\cdef_apply.h" />
+    <ClInclude Include="src\cdf.h" />
+    <ClInclude Include="src\cpu.h" />
+    <ClInclude Include="src\ctx.h" />
+    <ClInclude Include="src\data.h" />
+    <ClInclude Include="src\decode.h" />
+    <ClInclude Include="src\dequant_tables.h" />
+    <ClInclude Include="src\env.h" />
+    <ClInclude Include="src\fg_apply.h" />
+    <ClInclude Include="src\filmgrain.h" />
+    <ClInclude Include="src\getbits.h" />
+    <ClInclude Include="src\internal.h" />
+    <ClInclude Include="src\intra_edge.h" />
+    <ClInclude Include="src\ipred.h" />
+    <ClInclude Include="src\ipred_prepare.h" />
+    <ClInclude Include="src\itx.h" />
+    <ClInclude Include="src\itx_1d.h" />
+    <ClInclude Include="src\levels.h" />
+    <ClInclude Include="src\lf_apply.h" />
+    <ClInclude Include="src\lf_mask.h" />
+    <ClInclude Include="src\log.h" />
+    <ClInclude Include="src\loopfilter.h" />
+    <ClInclude Include="src\looprestoration.h" />
+    <ClInclude Include="src\lr_apply.h" />
+    <ClInclude Include="src\mc.h" />
+    <ClInclude Include="src\mem.h" />
+    <ClInclude Include="src\msac.h" />
+    <ClInclude Include="src\obu.h" />
+    <ClInclude Include="src\pal.h" />
+    <ClInclude Include="src\picture.h" />
+    <ClInclude Include="src\qm.h" />
+    <ClInclude Include="src\recon.h" />
+    <ClInclude Include="src\ref.h" />
+    <ClInclude Include="src\refmvs.h" />
+    <ClInclude Include="src\scan.h" />
+    <ClInclude Include="src\tables.h" />
+    <ClInclude Include="src\thread.h" />
+    <ClInclude Include="src\thread_data.h" />
+    <ClInclude Include="src\thread_task.h" />
+    <ClInclude Include="src\warpmv.h" />
+    <ClInclude Include="src\wedge.h" />
+    <ClInclude Include="src\arm\arm-arch.h" />
+    <ClInclude Include="src\arm\asm-offsets.h" />
+    <ClInclude Include="src\arm\cdef.h" />
+    <ClInclude Include="src\arm\cpu.h" />
+    <ClInclude Include="src\arm\filmgrain.h" />
+    <ClInclude Include="src\arm\ipred.h" />
+    <ClInclude Include="src\arm\itx.h" />
+    <ClInclude Include="src\arm\loopfilter.h" />
+    <ClInclude Include="src\arm\looprestoration.h" />
+    <ClInclude Include="src\arm\mc.h" />
+    <ClInclude Include="src\arm\msac.h" />
+    <ClInclude Include="src\arm\refmvs.h" />
+    <ClInclude Include="src\loongarch\cdef.h" />
+    <ClInclude Include="src\loongarch\cpu.h" />
+    <ClInclude Include="src\loongarch\ipred.h" />
+    <ClInclude Include="src\loongarch\itx.h" />
+    <ClInclude Include="src\loongarch\loopfilter.h" />
+    <ClInclude Include="src\loongarch\looprestoration.h" />
+    <ClInclude Include="src\loongarch\mc.h" />
+    <ClInclude Include="src\loongarch\msac.h" />
+    <ClInclude Include="src\loongarch\refmvs.h" />
+    <ClInclude Include="src\ppc\cdef.h" />
+    <ClInclude Include="src\ppc\cpu.h" />
+    <ClInclude Include="src\ppc\dav1d_types.h" />
+    <ClInclude Include="src\ppc\itx.h" />
+    <ClInclude Include="src\ppc\loopfilter.h" />
+    <ClInclude Include="src\ppc\looprestoration.h" />
+    <ClInclude Include="src\ppc\mc.h" />
+    <ClInclude Include="src\ppc\utils.h" />
+    <ClInclude Include="src\riscv\asm-offsets.h" />
+    <ClInclude Include="src\riscv\cdef.h" />
+    <ClInclude Include="src\riscv\cpu.h" />
+    <ClInclude Include="src\riscv\filmgrain.h" />
+    <ClInclude Include="src\riscv\ipred.h" />
+    <ClInclude Include="src\riscv\itx.h" />
+    <ClInclude Include="src\riscv\mc.h" />
+    <ClInclude Include="src\riscv\pal.h" />
+    <ClInclude Include="src\x86\cdef.h" />
+    <ClInclude Include="src\x86\cpu.h" />
+    <ClInclude Include="src\x86\filmgrain.h" />
+    <ClInclude Include="src\x86\ipred.h" />
+    <ClInclude Include="src\x86\itx.h" />
+    <ClInclude Include="src\x86\loopfilter.h" />
+    <ClInclude Include="src\x86\looprestoration.h" />
+    <ClInclude Include="src\x86\mc.h" />
+    <ClInclude Include="src\x86\msac.h" />
+    <ClInclude Include="src\x86\pal.h" />
+    <ClInclude Include="src\x86\refmvs.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\cdf.c" />
+    <ClCompile Include="src\cpu.c" />
+    <ClCompile Include="src\ctx.c" />
+    <ClCompile Include="src\data.c" />
+    <ClCompile Include="src\decode.c" />
+    <ClCompile Include="src\dequant_tables.c" />
+    <ClCompile Include="src\getbits.c" />
+    <ClCompile Include="src\intra_edge.c" />
+    <ClCompile Include="src\itx_1d.c" />
+    <ClCompile Include="src\lf_mask.c" />
+    <ClCompile Include="src\lib.c" />
+    <ClCompile Include="src\log.c" />
+    <ClCompile Include="src\mem.c" />
+    <ClCompile Include="src\msac.c" />
+    <ClCompile Include="src\obu.c" />
+    <ClCompile Include="src\pal.c" />
+    <ClCompile Include="src\picture.c" />
+    <ClCompile Include="src\qm.c" />
+    <ClCompile Include="src\ref.c" />
+    <ClCompile Include="src\refmvs.c" />
+    <ClCompile Include="src\scan.c" />
+    <ClCompile Include="src\tables.c" />
+    <ClCompile Include="src\thread_task.c" />
+    <ClCompile Include="src\warpmv.c" />
+    <ClCompile Include="src\wedge.c" />
+    <ClCompile Include="src\win32\thread.c" />
+    <ClCompile Include="bitdepth\cdef_16bpc.c" />
+    <ClCompile Include="bitdepth\cdef_8bpc.c" />
+    <ClCompile Include="bitdepth\cdef_apply_16bpc.c" />
+    <ClCompile Include="bitdepth\cdef_apply_8bpc.c" />
+    <ClCompile Include="bitdepth\fg_apply_16bpc.c" />
+    <ClCompile Include="bitdepth\fg_apply_8bpc.c" />
+    <ClCompile Include="bitdepth\filmgrain_16bpc.c" />
+    <ClCompile Include="bitdepth\filmgrain_8bpc.c" />
+    <ClCompile Include="bitdepth\ipred_16bpc.c" />
+    <ClCompile Include="bitdepth\ipred_8bpc.c" />
+    <ClCompile Include="bitdepth\ipred_prepare_16bpc.c" />
+    <ClCompile Include="bitdepth\ipred_prepare_8bpc.c" />
+    <ClCompile Include="bitdepth\itx_16bpc.c" />
+    <ClCompile Include="bitdepth\itx_8bpc.c" />
+    <ClCompile Include="bitdepth\lf_apply_16bpc.c" />
+    <ClCompile Include="bitdepth\lf_apply_8bpc.c" />
+    <ClCompile Include="bitdepth\loopfilter_16bpc.c" />
+    <ClCompile Include="bitdepth\loopfilter_8bpc.c" />
+    <ClCompile Include="bitdepth\looprestoration_16bpc.c" />
+    <ClCompile Include="bitdepth\looprestoration_8bpc.c" />
+    <ClCompile Include="bitdepth\lr_apply_16bpc.c" />
+    <ClCompile Include="bitdepth\lr_apply_8bpc.c" />
+    <ClCompile Include="bitdepth\mc_16bpc.c" />
+    <ClCompile Include="bitdepth\mc_8bpc.c" />
+    <ClCompile Include="bitdepth\recon_16bpc.c" />
+    <ClCompile Include="bitdepth\recon_8bpc.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="src\cdef_apply_tmpl.c" />
+    <None Include="src\cdef_tmpl.c" />
+    <None Include="src\fg_apply_tmpl.c" />
+    <None Include="src\filmgrain_tmpl.c" />
+    <None Include="src\ipred_prepare_tmpl.c" />
+    <None Include="src\ipred_tmpl.c" />
+    <None Include="src\itx_tmpl.c" />
+    <None Include="src\lf_apply_tmpl.c" />
+    <None Include="src\loopfilter_tmpl.c" />
+    <None Include="src\looprestoration_tmpl.c" />
+    <None Include="src\lr_apply_tmpl.c" />
+    <None Include="src\mc_tmpl.c" />
+    <None Include="src\recon_tmpl.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
