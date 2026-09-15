@@ -127,13 +127,31 @@ public:
 	int eof() { 
         return (_io->tell_proc(_handle) >= _eof);
     }
-
-	void * make_jas_stream() {
-		return NULL;
-	}
 };
 
 // ----------------------------------------------------------
+
+/**
+LibRaw reports a damaged file by calling the data-error callback installed on
+the LibRaw object, and the one it installs by default writes the message to
+stderr.  FreeImage delivers every message through the function registered with
+FreeImage_SetOutputMessage, so route LibRaw's there instead: a library has no
+business writing to the standard error of the program that links it.
+@param data Unused callback context
+@param file Name of the file being read, or NULL for a stream
+@param offset Offset the error was found at, or -1 for an unexpected EOF
+*/
+static void
+libraw_data_error_handler(void *data, const char *file, const INT64 offset) {
+	if (offset < 0) {
+		FreeImage_OutputMessageProc(s_format_id, "LibRaw : unexpected end of file");
+	} else {
+		// FreeImage_OutputMessageProc understands %d, but its %d is an int
+		char position[32];
+		sprintf(position, "%lld", (long long)offset);
+		FreeImage_OutputMessageProc(s_format_id, "LibRaw : data corrupted at offset %s", position);
+	}
+}
 
 /**
 Convert a processed raw data array to a FIBITMAP
@@ -638,6 +656,9 @@ Validate(FreeImageIO *io, fi_handle handle) {
 		if(RawProcessor) {
 			BOOL bSuccess = TRUE;
 
+			// send LibRaw's data errors to FreeImage_SetOutputMessage, not to stderr
+			RawProcessor->set_dataerror_handler(libraw_data_error_handler, NULL);
+
 			// wrap the input datastream
 			LibRaw_freeimage_datastream datastream(io, handle);
 
@@ -692,6 +713,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(!RawProcessor) {
 			throw FI_MSG_ERROR_MEMORY;
 		}
+
+		// send LibRaw's data errors to FreeImage_SetOutputMessage, not to stderr
+		RawProcessor->set_dataerror_handler(libraw_data_error_handler, NULL);
 
 		// wrap the input datastream
 		LibRaw_freeimage_datastream datastream(io, handle);
