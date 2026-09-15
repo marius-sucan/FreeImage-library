@@ -107,8 +107,19 @@ public:
 		return _fsize;
 	}
 
+	/**
+	One byte as a value from 0 to 255, or -1 at the end of the stream: that is
+	the contract LibRaw's own datastreams keep, and it matters everywhere -
+	var_defines.h makes getc() and fgetc() macros for this method, so the whole
+	of the dcraw-derived decoding reads through it.
+	The byte has to be read into a one-byte object.  Reading it into an int put
+	it at whichever end of the int the platform's byte order chose, so on a
+	big-endian machine every byte came back shifted left by 24.  And that object
+	has to be unsigned, or 0xFF would come back as -1 and be taken for the end
+	of the stream.
+	*/
     int get_char() { 
-		int c = 0;
+		unsigned char c = 0;
 		if (!_io->read_proc(&c, 1, 1, _handle)) {
 			return -1;
 		}
