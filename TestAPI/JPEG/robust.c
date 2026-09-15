@@ -3,7 +3,8 @@
  *
  * Feeds damaged JPEG data to the plugin and to the lossless transforms. Every
  * input here may load or be refused; none of them may crash, read out of
- * bounds or leak. Run it under AddressSanitizer - "make asan-run" in this
+ * bounds or leak. A plain run only catches the crashes - the other two are
+ * the sanitizer's to find, so run it under AddressSanitizer: "make asan-run" in this
  * directory rebuilds Source/LibJPEG, PluginJPEG.cpp and JPEGTransform.cpp with
  * the sanitizer into a private copy of the library - which is the point of the
  * test: a JPEG decoder is reachable from untrusted input in every program that

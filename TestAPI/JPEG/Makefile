@@ -16,15 +16,19 @@
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust
+# oracle is a comparison tool, not a test: it asserts nothing, so "run" leaves
+# it alone. See its header for how it is used across an upgrade.
+TOOLS   = oracle
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
 default: all
 all: $(TESTS)
+tools: $(TOOLS)
 
 # the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
-$(TESTS): %: %.c ../../Dist/libfreeimage.a
+$(TESTS) $(TOOLS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
 run: all
@@ -75,9 +79,9 @@ asan-run: libfreeimage-asan.a
 	  ASAN_OPTIONS=allocator_may_return_null=1 ./$$t-asan || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) $(addsuffix -asan,$(TESTS))
+	rm -f $(TESTS) $(TOOLS) $(addsuffix -asan,$(TESTS))
 
 clean: clean-bin
 	rm -rf asan-obj libfreeimage-asan.a fi_jpeg_rt_*.jpg fi_jpeg_xf_*.jpg
 
-.PHONY: default all run asan asan-lib asan-run clean clean-bin
+.PHONY: default all tools run asan asan-lib asan-run clean clean-bin

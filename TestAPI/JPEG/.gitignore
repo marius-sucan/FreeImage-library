@@ -2,6 +2,7 @@
 decode
 regress
 robust
+oracle
 *.o
 *-asan
 libfreeimage-asan.a
