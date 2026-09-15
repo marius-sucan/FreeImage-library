@@ -45,8 +45,29 @@
     <Filter Include="Header Files\mux">
       <UniqueIdentifier>{d494e420-63fe-4350-80fa-44e7c4786e1a}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Header Files\sharpyuv">
+      <UniqueIdentifier>{8cb8ffdf-3915-53ea-925d-e15d73aa22b8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\sharpyuv">
+      <UniqueIdentifier>{37b08fea-805a-554c-984f-bb8304267ae5}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="sharpyuv\sharpyuv.h">
+      <Filter>Header Files\sharpyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="sharpyuv\sharpyuv_cpu.h">
+      <Filter>Header Files\sharpyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="sharpyuv\sharpyuv_csp.h">
+      <Filter>Header Files\sharpyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="sharpyuv\sharpyuv_dsp.h">
+      <Filter>Header Files\sharpyuv</Filter>
+    </ClInclude>
+    <ClInclude Include="sharpyuv\sharpyuv_gamma.h">
+      <Filter>Header Files\sharpyuv</Filter>
+    </ClInclude>
     <ClInclude Include="src\dec\alphai_dec.h">
       <Filter>Header Files\dec</Filter>
     </ClInclude>
@@ -65,13 +86,13 @@
     <ClInclude Include="src\dec\webpi_dec.h">
       <Filter>Header Files\dec</Filter>
     </ClInclude>
+    <ClInclude Include="src\dsp\cpu.h">
+      <Filter>Header Files\dsp</Filter>
+    </ClInclude>
     <ClInclude Include="src\enc\backward_references_enc.h">
       <Filter>Header Files\enc</Filter>
     </ClInclude>
     <ClInclude Include="src\enc\cost_enc.h">
-      <Filter>Header Files\enc</Filter>
-    </ClInclude>
-    <ClInclude Include="src\enc\delta_palettization_enc.h">
       <Filter>Header Files\enc</Filter>
     </ClInclude>
     <ClInclude Include="src\enc\histogram_enc.h">
@@ -111,6 +132,9 @@
       <Filter>Header Files\utils</Filter>
     </ClInclude>
     <ClInclude Include="src\utils\huffman_utils.h">
+      <Filter>Header Files\utils</Filter>
+    </ClInclude>
+    <ClInclude Include="src\utils\palette.h">
       <Filter>Header Files\utils</Filter>
     </ClInclude>
     <ClInclude Include="src\utils\quant_levels_dec_utils.h">
@@ -184,6 +208,27 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="sharpyuv\sharpyuv.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_cpu.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_csp.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_dsp.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_gamma.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_neon.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
+    <ClCompile Include="sharpyuv\sharpyuv_sse2.c">
+      <Filter>Source Files\sharpyuv</Filter>
+    </ClCompile>
     <ClCompile Include="src\dec\alpha_dec.c">
       <Filter>Source Files\dec</Filter>
     </ClCompile>
@@ -220,6 +265,12 @@
     <ClCompile Include="src\demux\demux.c">
       <Filter>Source Files\demux</Filter>
     </ClCompile>
+    <ClCompile Include="src\dsp\lossless_avx2.c">
+      <Filter>Source Files\dsp</Filter>
+    </ClCompile>
+    <ClCompile Include="src\dsp\lossless_enc_avx2.c">
+      <Filter>Source Files\dsp</Filter>
+    </ClCompile>
     <ClCompile Include="src\mux\anim_encode.c">
       <Filter>Source Files\mux</Filter>
     </ClCompile>
@@ -248,6 +299,9 @@
       <Filter>Source Files\utils</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\huffman_utils.c">
+      <Filter>Source Files\utils</Filter>
+    </ClCompile>
+    <ClCompile Include="src\utils\palette.c">
       <Filter>Source Files\utils</Filter>
     </ClCompile>
     <ClCompile Include="src\utils\quant_levels_dec_utils.c">
@@ -323,9 +377,6 @@
       <Filter>Source Files\dsp</Filter>
     </ClCompile>
     <ClCompile Include="src\dsp\enc.c">
-      <Filter>Source Files\dsp</Filter>
-    </ClCompile>
-    <ClCompile Include="src\dsp\enc_avx2.c">
       <Filter>Source Files\dsp</Filter>
     </ClCompile>
     <ClCompile Include="src\dsp\enc_mips_dsp_r2.c">
