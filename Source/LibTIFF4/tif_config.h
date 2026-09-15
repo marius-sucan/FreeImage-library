@@ -26,11 +26,17 @@
 /* Unsigned 64-bit type */
 #define TIFF_UINT64_T uint64_t
 
-/* Unsigned size type formatter */
-#define TIFF_SIZE_FORMAT "%u"
+/* These two are used as "%" TIFF_SIZE_FORMAT, so they must hold a bare
+   conversion specifier: spelling them "%u" / "%d" produced "%%u" / "%%d",
+   which printed a literal "%u" / "%d" and dropped the argument. */
 
-/* Signed size type formatter */
-#define TIFF_SSIZE_FORMAT "%d"
+#include <inttypes.h>
+
+/* Unsigned size type formatter (for size_t) */
+#define TIFF_SIZE_FORMAT "zu"
+
+/* Signed size type formatter (for tmsize_t, which tiffconf.h pins to int64_t) */
+#define TIFF_SSIZE_FORMAT PRId64
 
 /* check for 32-bit or 64-bit CPU */
 #include <stdint.h>
