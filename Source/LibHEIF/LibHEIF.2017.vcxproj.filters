@@ -284,6 +284,9 @@
     <ClCompile Include="libheif\plugins\decoder_jpeg.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="libheif\plugins\decoder_openjpeg.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="libheif\plugins\decoder_uncompressed.cc">
       <Filter>Source Files</Filter>
     </ClCompile>

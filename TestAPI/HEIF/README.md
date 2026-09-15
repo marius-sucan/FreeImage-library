@@ -6,7 +6,7 @@ on failure.
 
 | test | what it covers |
 |---|---|
-| `decode` | Loads the 32 files in `data/` (libheif's test images and fuzzing corpus, pillow-heif's synthetic images and four files derived from one of libheif's, see `data/README.md`) and checks everything the plugin decides: detection (an AVIF is left to the AVIF plugin, a HEIF carrying a codec FreeImage does not have is claimed and refused with a message), the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`, monochrome to 8-bit or `FIT_UINT16`), the geometry after the `clap`/`irot`/`imir` transforms and their direction, ICC/Exif/XMP, the `thmb` thumbnail, the page count of multi-image files, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. |
+| `decode` | Loads the 33 files in `data/` (libheif's test images and fuzzing corpus, pillow-heif's synthetic images and five files derived from two of libheif's, see `data/README.md`) and checks everything the plugin decides: detection (an AVIF is left to the AVIF plugin, a HEIF carrying a codec FreeImage does not have is claimed and refused with a message), the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`, monochrome to 8-bit or `FIT_UINT16`), the geometry after the `clap`/`irot`/`imir` transforms and their direction, ICC/Exif/XMP, the `thmb` thumbnail, the page count of multi-image files, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. |
 | `narrowio` | Streams a file through a `FreeImageIO` whose absolute seeks and tells refuse anything past a cap, and loads a HEIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
 
 ## Running
@@ -43,8 +43,8 @@ absolute seek is refused, because the plugin never attempts one past the bound.
   the three transform checks reporting `exact` and `--- 0 failure(s) ---`. The
   `[HEIF] Cannot parse the file: ... Cannot read full meta box` lines are the
   truncated-stream check working. `avif32.heif` is reported as `detected as
-  AVIF, not HEIF -> ok`; `avc32.heif`, `jpeg32.heif`, `j2k32.heif` and
-  `unci32.heif` as `refused -> ok`, each after a message naming the codec that
-  is not built in.
+  AVIF, not HEIF -> ok`, and `avc32.heif` as `refused -> ok` after a message
+  naming the codec that is not built in - the only one left, now that JPEG,
+  uncompressed and JPEG 2000 payloads all decode.
 - `narrowio` - `pixels -> exact` twice.
 - `asan-run` - the same output, and no AddressSanitizer report.

@@ -94,16 +94,30 @@ LIBHEIF_CXXFLAGS_PRE = -ISource/LibHEIF/libheif -ISource/LibHEIF/libheif/api -IS
 #                              (ISO/IEC 23001-17 uncompressed)
 #   HAVE_ZLIB=1             -> libheif/compression_zlib.cc -> Source/ZLib, for the
 #                              zlib/deflate-compressed variant of an 'unci' item
-# The bundled -ISource/LibJPEG and -ISource/ZLib are already on the global include
-# path; the MSVC project adds them itself.
+#   HAVE_OPENJPEG_DECODER=1 -> libheif/plugins/decoder_openjpeg.cc -> Source/LibOpenJPEG
+#                              (JPEG 2000 and, through the same codestream decoder,
+#                              HTJ2K; the jpeg2000_* codec and box sources were always
+#                              compiled, only the decoder plugin was missing)
+# The bundled -ISource/LibJPEG, -ISource/ZLib and -ISource/LibOpenJPEG are already on
+# the global include path; the MSVC project adds them itself.
 #
-# JPEG 2000 is deliberately NOT enabled: the bundled Source/LibOpenJPEG is 2.0.0
-# (2013) and mis-decodes J2K-in-HEIF (verified - the j2k test image loses detail
-# and colour against its lossless 'unci' reference, while JPEG and HEVC of the same
-# image are exact).  Enabling it cleanly needs a newer OpenJPEG, which is shared
-# with FreeImage's own J2K/JP2 plugins.  So no AVC (H.264), VVC or JPEG 2000 decoder
-# is enabled, and those payloads are reported and skipped.
-LIBHEIF_CXXFLAGS_POST = -std=c++20 -DLIBHEIF_STATIC_BUILD -DLIBDE265_STATIC_BUILD -DHAVE_LIBDE265=1 -DENABLE_MULTITHREADING_SUPPORT=1 -DENABLE_PARALLEL_TILE_DECODING=1 -DHAVE_JPEG_DECODER=1 -DWITH_UNCOMPRESSED_CODEC=1 -DHAVE_ZLIB=1
+# OPJ_STATIC has to be defined for these .cc files as well, not just for the C ones:
+# without it openjpeg.h declares the API __declspec(dllimport) and __stdcall on
+# Windows, which neither links nor calls correctly against the static LibOpenJPEG,
+# and on GCC it marks the declarations visibility("default") while the definitions
+# are hidden.  FreeImage.2017.vcxproj already defines it for J2KHelper.cpp.
+#
+# JPEG 2000 was disabled here until 2026-09-15, on the grounds that the bundled
+# Source/LibOpenJPEG (a 2014 snapshot labelled 2.0.0) mis-decoded J2K-in-HEIF.  That
+# was a misreading of the only sample there is: libheif ships exactly one J2K file,
+# fuzzing/data/corpus/j2k32.heif, and its tile-part carries 32 bytes of packet data
+# for a 32x32 RGB image, so every decoder turns it into a near-flat gradient.  It was
+# compared against unci32.heif, the lossless version of the same picture, and the
+# codec was blamed for the difference.  TestAPI/HEIF/data/j2k32-lossless.heif exists
+# to keep that mistake from being made twice.  No AVC (H.264) or VVC decoder is
+# enabled - neither OpenH264 nor vvdec is bundled - and those payloads are still
+# reported and skipped.
+LIBHEIF_CXXFLAGS_POST = -std=c++20 -DLIBHEIF_STATIC_BUILD -DLIBDE265_STATIC_BUILD -DHAVE_LIBDE265=1 -DENABLE_MULTITHREADING_SUPPORT=1 -DENABLE_PARALLEL_TILE_DECODING=1 -DHAVE_JPEG_DECODER=1 -DWITH_UNCOMPRESSED_CODEC=1 -DHAVE_ZLIB=1 -DHAVE_OPENJPEG_DECODER=1 -DOPJ_STATIC
 
 ./Source/LibHEIF/%: HEIF_CXXFLAGS_PRE = $(LIBHEIF_CXXFLAGS_PRE)
 ./Source/LibHEIF/%: HEIF_CXXFLAGS_POST = $(LIBHEIF_CXXFLAGS_POST)

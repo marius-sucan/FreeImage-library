@@ -87,11 +87,11 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
-      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;HAVE_OPENJPEG_DECODER=1;OPJ_STATIC;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;../LibOpenJPEG;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <StringPooling>false</StringPooling>
       <MinimalRebuild>false</MinimalRebuild>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -115,11 +115,11 @@
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
-      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;HAVE_OPENJPEG_DECODER=1;OPJ_STATIC;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
-      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;../LibOpenJPEG;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <StringPooling>false</StringPooling>
       <MinimalRebuild>false</MinimalRebuild>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -144,10 +144,10 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <WholeProgramOptimization>false</WholeProgramOptimization>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;HAVE_OPENJPEG_DECODER=1;OPJ_STATIC;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <DebugInformationFormat>None</DebugInformationFormat>
-      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;../LibOpenJPEG;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <StringPooling>false</StringPooling>
       <MinimalRebuild>false</MinimalRebuild>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -172,10 +172,10 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <WholeProgramOptimization>false</WholeProgramOptimization>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;WIN32_LEAN_AND_MEAN;LIBHEIF_STATIC_BUILD;LIBDE265_STATIC_BUILD;HAVE_LIBDE265=1;ENABLE_MULTITHREADING_SUPPORT=1;ENABLE_PARALLEL_TILE_DECODING=1;HAVE_JPEG_DECODER=1;WITH_UNCOMPRESSED_CODEC=1;HAVE_ZLIB=1;HAVE_OPENJPEG_DECODER=1;OPJ_STATIC;NOMINMAX;_CRT_SECURE_NO_WARNINGS;_CRT_NONSTDC_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <DebugInformationFormat>None</DebugInformationFormat>
-      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>./libheif;./libheif/api;../LibDe265;../LibJPEG;../ZLib;../LibOpenJPEG;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <StringPooling>false</StringPooling>
       <MinimalRebuild>false</MinimalRebuild>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -430,6 +430,7 @@
     <ClCompile Include="libheif\plugins\encoder_mask.cc" />
     <ClCompile Include="libheif\plugins\nalu_utils.cc" />
     <ClCompile Include="libheif\plugins\decoder_jpeg.cc" />
+    <ClCompile Include="libheif\plugins\decoder_openjpeg.cc" />
     <ClCompile Include="libheif\plugins\decoder_uncompressed.cc" />
     <ClCompile Include="libheif\plugins\encoder_uncompressed.cc" />
     <ClCompile Include="libheif\codecs\uncompressed\unc_boxes.cc" />

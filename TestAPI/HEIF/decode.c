@@ -5,8 +5,8 @@
  * corpus, pillow-heif's synthetic images, and four files derived from one of
  * libheif's, see data/README.md) and checks what the plugin is responsible for:
  * format detection (an AVIF is left to the AVIF plugin; HEVC, JPEG and uncompressed
- * payloads decode, while a HEIF whose codec FreeImage cannot decode - AVC, VVC or
- * JPEG 2000 - is claimed and then refused with a message), the
+ * payloads decode, while a HEIF whose codec FreeImage cannot decode - AVC or VVC -
+ * is claimed and then refused with a message), the
  * bitmap type picked for each pixel format (8-bit to 24/32-bit, 10/12-bit to
  * FIT_RGB16/FIT_RGBA16, monochrome to 8-bit or FIT_UINT16), the geometry after
  * the clap/irot/imir transforms and the direction of the transforms, the
@@ -66,13 +66,18 @@ static const Expected EXPECTED[] = {
     {"hevc32-mini.heif",                FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
     {"avif32.heif",                     FIF_AVIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
     /* The same 32x32 image in five codecs. HEVC and JPEG decode (JPEG through the
-     * bundled LibJPEG), and the zlib-compressed uncompressed 'unci' image through
-     * the bundled ZLib; all three agree to a few levels. AVC needs an H.264 decoder
-     * (OpenH264) and JPEG 2000 a newer OpenJPEG than the bundled 2.0.0 (which
-     * mis-decodes it), so both are detected as HEIF and refused with a message. */
+     * bundled LibJPEG), the zlib-compressed uncompressed 'unci' image through the
+     * bundled ZLib, and JPEG 2000 through Source/LibOpenJPEG; only AVC is refused,
+     * needing an H.264 decoder (OpenH264) that is not bundled.
+     *   j2k32.heif is a fuzzing-corpus file and does NOT hold the picture the
+     * others do: its tile-part carries 32 bytes of packet data for a 32x32 RGB
+     * image, so it decodes to a near-flat gradient, and its checksum pins that,
+     * not fidelity. j2k32-lossless.heif is what pins fidelity - see data/README.md
+     * - and decodes back to unci32's picture within one level. */
     {"avc32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
     {"jpeg32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xdf80f91a274d4f7eULL},
-    {"j2k32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
+    {"j2k32.heif",                      FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x720697d25f1aa223ULL},
+    {"j2k32-lossless.heif",             FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x9b94024bd588a8bbULL},
     {"unci32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xb0cc9d934f8f9eaeULL},
     /* pillow-heif's synthetic images */
     {"RGB_8__128x128.heif",             FIF_HEIF, 1,  128,  128, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x963f9a51718c4545ULL},
