@@ -24,57 +24,27 @@
 
 /**************************************/
 
+/*
+ * FreeImage: silenced.  Upstream's default handler prints the error to stderr,
+ * which is new in OpenEXR 3.3 - before it, every failure reached the caller as
+ * an Iex exception and nothing was written to any stream.  A library embedded
+ * in FreeImage must not print: PluginEXR catches the exception the C++ layer
+ * raises from this very error code and reports it through the callback the
+ * application installed with FreeImage_SetOutputMessage, the same way every
+ * other bundled codec does.  Only the printing is dropped - dispatch_error
+ * still returns the code, so nothing else changes.  Applications that do want
+ * the core's own diagnostics can still install a handler per context with
+ * Imf::ContextInitializer::setErrorHandler().
+ *
+ * Keep this when updating OpenEXR.
+ */
 static void
 default_error_handler (
     exr_const_context_t ctxt, exr_result_t code, const char* msg)
 {
-#ifdef ILMTHREAD_THREADING_ENABLED
-#    ifdef _WIN32
-    static CRITICAL_SECTION sMutex;
-    volatile static long    initialized = 0;
-    if (InterlockedIncrement (&initialized) == 1)
-        InitializeCriticalSection (&sMutex);
-    initialized = 1; // avoids overflow on long running programs...
-#    else
-    static pthread_mutex_t sMutex = PTHREAD_MUTEX_INITIALIZER;
-#    endif
-#endif
-
-#ifdef ILMTHREAD_THREADING_ENABLED
-#    ifdef _WIN32
-    EnterCriticalSection (&sMutex);
-#    else
-    pthread_mutex_lock (&sMutex);
-#    endif
-#endif
-    if (ctxt)
-    {
-        if (ctxt->filename.str)
-            fprintf (
-                stderr,
-                "%s: (%s) %s\n",
-                ctxt->filename.str,
-                exr_get_error_code_as_string (code),
-                msg);
-        else
-            fprintf (
-                stderr,
-                "Context 0x%p: (%s) %s\n",
-                (const void*) ctxt,
-                exr_get_error_code_as_string (code),
-                msg);
-    }
-    else
-        fprintf (stderr, "<ERROR>: %s\n", msg);
-    fflush (stderr);
-
-#ifdef ILMTHREAD_THREADING_ENABLED
-#    ifdef _WIN32
-    LeaveCriticalSection (&sMutex);
-#    else
-    pthread_mutex_unlock (&sMutex);
-#    endif
-#endif
+    (void) ctxt;
+    (void) code;
+    (void) msg;
 }
 
 static exr_result_t
