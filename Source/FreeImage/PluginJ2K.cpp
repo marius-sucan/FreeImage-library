@@ -269,7 +269,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			opj_set_error_handler(c_codec, j2k_error_callback, NULL);
 
 			// setup the encoder parameters using the current image and using user parameters
-			opj_setup_encoder(c_codec, &parameters, image);
+			if( !opj_setup_encoder(c_codec, &parameters, image) ) {
+				throw "Failed to setup the encoder\n";
+			}
 
 			// encode the image
 			bSuccess = opj_start_compress(c_codec, image, c_stream);

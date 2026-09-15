@@ -18,8 +18,8 @@ INSTALLDIR ?= $(DESTDIR)/usr/lib
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-# -lpthread for dav1d's decoder threads (inside libc since glibc 2.34, separate before that),
-# -lm for libavif and dav1d
+# -lpthread for dav1d's decoder threads and OpenJPEG's thread pool (inside libc
+# since glibc 2.34, separate before that), -lm for libavif and dav1d
 LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
@@ -28,8 +28,10 @@ MODULES := $(MODULES:.cc=.o)
 
 # C flags
 CFLAGS ?= -std=c99 -O3 -fPIC -fexceptions -fvisibility=hidden
-# OpenJPEG
-CFLAGS += -DOPJ_STATIC
+# OpenJPEG: OPJ_STATIC keeps its symbols out of the shared library,
+# MUTEX_pthread gives its thread pool a mutex implementation (thread.c
+# tests this before it includes its config header, so it cannot live there)
+CFLAGS += -DOPJ_STATIC -DMUTEX_pthread
 # LibRaw
 CFLAGS += -DNO_LCMS
 # LibJXR

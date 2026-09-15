@@ -1,5 +1,10 @@
 /*
- * Copyright (c) 2012, Mathieu Malaterre <mathieu.malaterre@gmail.com>
+ * The copyright in this software is being made available under the 2-clauses
+ * BSD License, included below. This software may be subject to other third
+ * party and contributor rights, including patent rights, and no such rights
+ * are granted under this license.
+ *
+ * Copyright (c) 2016, Even Rouault
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -23,25 +28,10 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef OPJ_STDINT_H
-#define OPJ_STDINT_H
 
-#include "opj_config.h"
-#ifdef OPJ_HAVE_STDINT_H
-#include <stdint.h>
-#else
-#if defined(_WIN32)
-typedef   signed __int8   int8_t;
-typedef unsigned __int8   uint8_t;
-typedef   signed __int16  int16_t;
-typedef unsigned __int16  uint16_t;
-typedef   signed __int32  int32_t;
-typedef unsigned __int32  uint32_t;
-typedef   signed __int64  int64_t;
-typedef unsigned __int64  uint64_t;
-#else
-#error unsupported platform
-#endif
-#endif
+#ifndef OPJ_TLS_KEYS_H
+#define OPJ_TLS_KEYS_H
 
-#endif /* OPJ_STDINT_H */
+#define OPJ_TLS_KEY_T1  0
+
+#endif /* OPJ_TLS_KEY_H */

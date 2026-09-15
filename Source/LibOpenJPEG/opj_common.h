@@ -1,5 +1,10 @@
 /*
- * Copyright (c) 2012, Mathieu Malaterre <mathieu.malaterre@gmail.com>
+ * The copyright in this software is being made available under the 2-clauses
+ * BSD License, included below. This software may be subject to other third
+ * party and contributor rights, including patent rights, and no such rights
+ * are granted under this license.
+ *
+ * Copyright (c) 2017, IntoPIX SA <support@intopix.com>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -23,21 +28,20 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef OPJ_INTTYPES_H
-#define OPJ_INTTYPES_H
+#ifndef OPJ_COMMON_H
+#define OPJ_COMMON_H
 
-#include "opj_config_private.h"
-#ifdef OPJ_HAVE_INTTYPES_H
-#include <inttypes.h>
-#else
-#if defined(_WIN32)
-#define PRId64 "I64d"
-#define PRIi64 "I64i"
-#define PRIu64 "I64u"
-#define PRIx64 "I64x"
-#else
-#error unsupported platform
-#endif
-#endif
+/*
+ ==========================================================
+   Common constants shared among several modules
+ ==========================================================
+*/
+#define OPJ_COMMON_CBLK_DATA_EXTRA        2    /**< Margin for a fake FFFF marker */
 
-#endif /* OPJ_INTTYPES_H */
+
+#define OPJ_COMP_PARAM_DEFAULT_CBLOCKW        64
+#define OPJ_COMP_PARAM_DEFAULT_CBLOCKH        64
+#define OPJ_COMP_PARAM_DEFAULT_PROG_ORDER     OPJ_LRCP
+#define OPJ_COMP_PARAM_DEFAULT_NUMRESOLUTION  6
+
+#endif /* OPJ_COMMON_H */

@@ -58,7 +58,7 @@ _SkipProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 }
 
 static OPJ_BOOL 
-_SeekProc(OPJ_OFF_T p_nb_bytes, FILE * p_user_data) {
+_SeekProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
 	if( fio->io->seek_proc(fio->handle, (long)p_nb_bytes, SEEK_SET) ) {
 		return OPJ_FALSE;
@@ -82,10 +82,10 @@ opj_freeimage_stream_create(FreeImageIO *io, fi_handle handle, BOOL bRead) {
 		if (l_stream) {
 			opj_stream_set_user_data(l_stream, fio, NULL);
 			opj_stream_set_user_data_length(l_stream, _LengthProc(fio));
-			opj_stream_set_read_function(l_stream, (opj_stream_read_fn)_ReadProc);
-			opj_stream_set_write_function(l_stream, (opj_stream_write_fn)_WriteProc);
-			opj_stream_set_skip_function(l_stream, (opj_stream_skip_fn)_SkipProc);
-			opj_stream_set_seek_function(l_stream, (opj_stream_seek_fn)_SeekProc);
+			opj_stream_set_read_function(l_stream, _ReadProc);
+			opj_stream_set_write_function(l_stream, _WriteProc);
+			opj_stream_set_skip_function(l_stream, _SkipProc);
+			opj_stream_set_seek_function(l_stream, _SeekProc);
 			fio->stream = l_stream;
 			return fio;
 		} else {
@@ -486,7 +486,6 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, const opj_cparamet
 			cmptparm[i].w = w;
 			cmptparm[i].h = h;
 			cmptparm[i].prec = prec;
-			cmptparm[i].bpp = prec;
 			cmptparm[i].sgnd = 0;
 		}
 		// create the image 
