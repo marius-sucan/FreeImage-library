@@ -436,6 +436,13 @@ EncodeImage(FIMEMORY *hmem, FIBITMAP *dib, int flags) {
 
 	BOOL bIsFlipped = FALSE;
 
+	// The catch block frees 'picture' whatever went wrong, but two of the paths
+	// that can throw - an unsupported image type, and WebPPictureInit itself
+	// failing on an ABI mismatch - get there before anything has initialized it.
+	// Zeroing it first is what makes WebPPictureFree a no-op in those cases;
+	// without this, saving e.g. an 8-bit bitmap hands free() a stack address.
+	memset(&picture, 0, sizeof(picture));
+
 	try {
 		const unsigned width = FreeImage_GetWidth(dib);
 		const unsigned height = FreeImage_GetHeight(dib);
