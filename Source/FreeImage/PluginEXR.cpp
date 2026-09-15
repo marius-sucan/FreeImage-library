@@ -48,6 +48,27 @@
 
 static int s_format_id;
 
+/**
+How much larger than the file the uncompressed pixel data may claim to be
+before the data window is treated as a lie.  Used by CheckDataWindow below.
+
+Measured rather than guessed, against flat colour - the most compressible
+content there is - at sizes from 512 to 16384 square, four half channels:
+
+    codec   512     2048    4096    8192    16384
+    DWAB    2494    9590    14012   17672   19806
+    DWAA    605     2220    4071    6915    10574
+    ZIP     350     680     803     876     932     (deflate tops out at 1032)
+    PIZ     129     205     258
+
+The ratio grows with the picture and then levels off: quadrupling the pixel
+count from 8192 to 16384 square moved DWAB by a factor of 1.12, so ~20000:1 is
+where the most compressible file any encoder can write ends up.  This leaves
+better than six times that, and still refuses a data window that would need a
+ratio in the tens of millions, which is what a corrupted one asks for.
+*/
+#define FI_EXR_MAX_COMPRESSION_RATIO 131072
+
 // ----------------------------------------------------------
 
 /**
@@ -173,6 +194,78 @@ SupportsNoPixels() {
 
 // --------------------------------------------------------------------------
 
+/**
+Refuse a data window the file cannot possibly hold.
+
+The data window is a claim made by the header, and nothing checks it against
+the file: FreeImage_AllocateHeaderT takes a damaged or hostile one at face
+value and asks the system for whatever it says, which for a single flipped
+byte can be tens of gigabytes.
+
+OpenEXR has a limit of its own, but Header::sanityCheck() reads it from
+exr_set_default_maximum_image_size(), which is process-global state that a
+library has no business setting, and the per-context
+ContextInitializer::setMaxImageSize() is not wired through to it yet (see the
+TODO in ImfHeader.cpp).  So the check belongs here, where it can also use
+something OpenEXR does not have to hand: the length of the stream.
+
+Both tests below are derived from the file rather than from a fixed maximum
+size, so a genuinely enormous image still loads.
+
+@param header Header of the file being loaded
+@param width Data window width, already known to fit an int
+@param height Data window height, already known to fit an int
+@param stream_bytes Length of the stream, or 0 when it could not be measured
+@throw Iex::InputExc when the file is too small for the picture it describes
+*/
+static void
+CheckDataWindow(const Imf::Header& header, int width, int height, long stream_bytes) {
+	if(stream_bytes <= 0) {
+		// the stream would not say how long it is: nothing to compare against
+		return;
+	}
+
+	// 1. A scanline image is stored in chunks of getCompressionNumScanlines()
+	// rows.  Every chunk costs 8 bytes in the chunk offset table plus an 8 byte
+	// chunk header (its y coordinate and its data size), so a file shorter than
+	// 16 bytes per chunk cannot hold the number of rows it claims.  Exact: no
+	// valid file can fail this.  Tiled images are left to the second test.
+	if(!header.hasTileDescription()) {
+		const int lines_per_chunk = Imf::getCompressionNumScanlines(header.compression());
+		if(lines_per_chunk > 0) {
+			const INT64 chunks = ((INT64)height + lines_per_chunk - 1) / lines_per_chunk;
+			const INT64 needed = chunks * 16;
+			if(needed > (INT64)stream_bytes) {
+				THROW (Iex::InputExc, "Invalid data window: the header describes " << width << " x " << height
+					<< " pixels, whose chunk table alone needs " << needed << " bytes, but the file holds only "
+					<< stream_bytes << " bytes");
+			}
+		}
+	}
+
+	// 2. For any image, tiled or not, compare the uncompressed pixel data the
+	// header describes against the size of the file.
+	double bytes_per_pixel = 0;
+	for (Imf::ChannelList::ConstIterator i = header.channels().begin(); i != header.channels().end(); ++i) {
+		const Imf::Channel &channel = i.channel();
+		const double sample_bytes = (channel.type == Imf::HALF) ? 2.0 : 4.0;
+		const double x_sampling = (channel.xSampling > 0) ? (double)channel.xSampling : 1.0;
+		const double y_sampling = (channel.ySampling > 0) ? (double)channel.ySampling : 1.0;
+		// a subsampled channel keeps one sample per xSampling x ySampling pixels
+		bytes_per_pixel += sample_bytes / (x_sampling * y_sampling);
+	}
+	// in double, because the product overflows every integer type long before
+	// it becomes implausible, and no precision is needed at this magnitude
+	const double raw_bytes = (double)width * (double)height * bytes_per_pixel;
+	if(raw_bytes > (double)stream_bytes * FI_EXR_MAX_COMPRESSION_RATIO) {
+		THROW (Iex::InputExc, "Invalid data window: the header describes " << width << " x " << height
+			<< " pixels, i.e. " << (INT64)(raw_bytes / 1048576.0) << " MB of pixel data, which a file of "
+			<< stream_bytes << " bytes cannot hold");
+	}
+}
+
+// --------------------------------------------------------------------------
+
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	bool bUseRgbaInterface = false;
@@ -188,6 +281,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// save the stream starting point
 		const long stream_start = io->tell_proc(handle);
 
+		// measure the stream, so that CheckDataWindow below can tell whether the
+		// file is big enough to hold the picture its header describes.  Zero means
+		// the size could not be established - a handle whose tell_proc is a 32-bit
+		// long, for instance - and the checks are then skipped rather than guessed.
+		long stream_bytes = 0;
+		if(io->seek_proc(handle, 0, SEEK_END) == 0) {
+			const long stream_end = io->tell_proc(handle);
+			if(stream_end > stream_start) {
+				stream_bytes = stream_end - stream_start;
+			}
+		}
+		io->seek_proc(handle, stream_start, SEEK_SET);
+
 		// wrap the FreeImage IO stream
 		C_IStream istream(io, handle);
 
@@ -196,8 +302,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// get file info			
 		const Imath::Box2i &dataWindow = file.header().dataWindow();
-		int width  = dataWindow.max.x - dataWindow.min.x + 1;
-		int height = dataWindow.max.y - dataWindow.min.y + 1;
+		// the difference of two ints does not fit an int, so widen before subtracting:
+		// OpenEXR only guarantees the corners are within +/- INT_MAX/2
+		const INT64 window_width  = (INT64)dataWindow.max.x - (INT64)dataWindow.min.x + 1;
+		const INT64 window_height = (INT64)dataWindow.max.y - (INT64)dataWindow.min.y + 1;
+		if((window_width <= 0) || (window_height <= 0) || (window_width > INT_MAX) || (window_height > INT_MAX)) {
+			THROW (Iex::InputExc, "Invalid data window: " << window_width << " x " << window_height << " pixels");
+		}
+		const int width  = (int)window_width;
+		const int height = (int)window_height;
 
 		//const Imf::Compression &compression = file.header().compression();
 
@@ -319,6 +432,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(image_type == FIT_UNKNOWN) {
 			THROW (Iex::InputExc, "Unsupported color model: " << exr_color_model);
 		}
+
+		// the data window is only a claim until it has been checked against the file
+		CheckDataWindow(file.header(), width, height, stream_bytes);
 
 		// allocate a new dib
 		dib = FreeImage_AllocateHeaderT(header_only, image_type, width, height, 0);
