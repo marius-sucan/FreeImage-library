@@ -10,7 +10,8 @@
  * memory stream must give the same pixels; and the lossless flags (DEFAULT,
  * NONE, ZIP, PIZ, and their FLOAT variants) must all reload to the same
  * checksum as each other, since they are the same pixels through different
- * compressors. PXR24, B44 and LC are lossy and only have to reload.
+ * compressors. PXR24, B44 and LC are lossy and only have to reload - which
+ * EXR_LC could not do at all until 2026-09-15, see lc.c.
  * Encoded sizes change legitimately when the compressor changes - they moved
  * for ZIP and PXR24 when OpenEXR 3.3 replaced zlib with libdeflate - so they
  * are reported, not asserted. The FAIL lines and the tally are the assertions.
@@ -137,16 +138,8 @@ int main(void) {
                 message[0] = 0;
                 FIBITMAP *back = FreeImage_Load(FIF_EXR, path, 0);
                 if (!back) {
-                    /* EXR_LC writes a subsampled luminance/chroma file, which
-                     * PluginEXR cannot read back - see decode.c's note on
-                     * fi_exr_yc.exr. Recorded here rather than treated as a
-                     * regression: it behaves the same on the OpenEXR the
-                     * library shipped before. */
-                    int known = (m->flag & EXR_LC) != 0;
-                    printf("  %-11s size=%-8ld %s: %s\n", m->name, size,
-                           known ? "refused (known: EXR_LC is write-only)" : "FAIL reload",
-                           message);
-                    if (!known) failures++;
+                    printf("  %-11s size=%-8ld FAIL reload: %s\n", m->name, size, message);
+                    failures++;
                     remove(path);
                     continue;
                 }

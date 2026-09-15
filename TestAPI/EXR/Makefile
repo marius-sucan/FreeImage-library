@@ -15,7 +15,7 @@
 # GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
 include ../../Makefile.openmp
 
-TESTS   = decode regress robust
+TESTS   = decode regress robust lc bombs
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
@@ -34,13 +34,12 @@ $(TESTS): %: %.c ../../Dist/libfreeimage.a
 # AddressSanitizer into a private copy of the library, and runs the tests
 # against it. Mixing instrumented and plain objects is fine.
 #
-# allocator_may_return_null=1 is needed for robust: a corrupted data window
-# makes the plugin ask FreeImage for a bitmap of whatever size the header
-# claims, tens of gigabytes in some of the mutations. The library handles the
-# refusal and rejects the file, which is the path being tested; ASan's default
-# is to abort on a huge request instead of letting malloc return NULL, which
-# would stop the test at the first such mutation. This is not specific to
-# OpenEXR - no FreeImage plugin sanity-checks dimensions before allocating.
+# allocator_may_return_null=1 is needed for robust: a mutation can still leave a
+# header the data window check passes and the decoder then asks a lot of, and
+# the refusal of that allocation is a path worth testing rather than aborting
+# on. bombs is deliberately run WITHOUT it: its whole point is that a corrupted
+# data window must be refused before anything is allocated, so a huge request
+# there has to abort the test rather than quietly return NULL.
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
@@ -76,7 +75,11 @@ asan-run: libfreeimage-asan.a
 	  gcc $(CFLAGS) -fsanitize=address $(INC) $$t.c -o $$t-asan \
 	    libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS) || exit 1; done
 	@for t in $(TESTS); do echo "=== $$t (asan) ==="; \
-	  ASAN_OPTIONS=allocator_may_return_null=1 ./$$t-asan || exit 1; done
+	  if [ $$t = bombs ]; then \
+	    ./$$t-asan || exit 1; \
+	  else \
+	    ASAN_OPTIONS=allocator_may_return_null=1 ./$$t-asan || exit 1; \
+	  fi; done
 
 run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
@@ -97,6 +100,6 @@ clean-bin:
 	rm -f $(TESTS) mkdata $(addsuffix -asan,$(TESTS))
 
 clean: clean-bin
-	rm -rf asan-obj libfreeimage-asan.a fi_exr_rt_*.exr
+	rm -rf asan-obj libfreeimage-asan.a fi_exr_rt_*.exr fi_exr_lc_*.exr
 
 .PHONY: default all asan asan-lib asan-run run data clean clean-bin

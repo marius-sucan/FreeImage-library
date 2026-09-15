@@ -10,8 +10,8 @@
  *
  * The corpus is generated (see README.md) and deliberately covers what
  * FreeImage itself never writes: RLE, ZIPS, B44A, DWAA and DWAB compression,
- * tiled and mipmapped layouts, 32-bit float channels, and the subsampled
- * luminance/chroma layout that RgbaInputFile reconstructs to RGB.
+ * tiled and mipmapped layouts, and 32-bit float channels - plus the subsampled
+ * luminance/chroma layout, which it does write but long could not read.
  *
  * Standalone: build with the Makefile in this directory, run from it.
  * "./decode --record" prints the table above in source form, for when a
@@ -39,14 +39,14 @@ typedef struct {
  * which 3.3 reimplemented in C and which moved by one or two half-float ULP
  * in a handful of pixels.
  *
- * A width of 0 means the file must be *refused*.  fi_exr_yc.exr is there to
- * pin down a plugin limitation that predates this library version: PluginEXR
- * reads only RGB(A) and Y channel layouts, so a file whose chroma is stored
- * subsampled (what OpenEXR calls WRITE_YCA, and what FreeImage's own EXR_LC
- * save flag produces) is rejected with "Unsupported color model: A/BY/RY/Y".
- * FreeImage can therefore write EXR files it cannot read back.  Fixing that
- * means routing such files through Imf::RgbaInputFile, which reconstructs RGB
- * from the subsampled channels; until then this records what really happens. */
+ * A width of 0 would mean the file must be *refused*; no entry uses it now.
+ * fi_exr_yc.exr is the subsampled luminance/chroma file (OpenEXR's WRITE_YCA,
+ * which is what FreeImage's own EXR_LC save flag writes for an RGBAF image).
+ * Until 2026-09-15 PluginEXR recognised only the three-channel Y/BY/RY form and
+ * rejected this one with "Unsupported color model: A/BY/RY/Y", so FreeImage
+ * could write EXR files it could not read back; it now loads as FIT_RGBAF
+ * through Imf::RgbaInputFile, alpha included.  Its checksum stands alone
+ * because subsampled chroma is lossy. */
 static const Expected EXPECTED[] = {
     {"fi_exr_b44.exr",     64, 48, FIT_RGBAF, 128, 0xeb11267f4ec83547ULL},
     {"fi_exr_b44a.exr",    64, 48, FIT_RGBAF, 128, 0xeb11267f4ec83547ULL},
@@ -55,11 +55,12 @@ static const Expected EXPECTED[] = {
     {"fi_exr_float.exr",   64, 48, FIT_RGBF,   96, 0x364325a75bb2aa46ULL},
     {"fi_exr_mipmap.exr",  64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_none.exr",    64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
+    {"fi_exr_offset.exr",  64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_piz.exr",     64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_pxr24.exr",   64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_rle.exr",     64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_tiled.exr",   64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
-    {"fi_exr_yc.exr",       0,  0, FIT_RGBAF, 128, 0x0000000000000000ULL},
+    {"fi_exr_yc.exr",      64, 48, FIT_RGBAF, 128, 0x79a3dc1c1e10ee85ULL},
     {"fi_exr_zip.exr",     64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
     {"fi_exr_zips.exr",    64, 48, FIT_RGBAF, 128, 0x96dba6846837593eULL},
 };
@@ -118,17 +119,18 @@ int main(int argc, char **argv) {
             if (!want) failures++;
             continue;
         }
-        if (e->width == 0) {
+        int w = (int)FreeImage_GetWidth(dib), h = (int)FreeImage_GetHeight(dib);
+        int bpp = (int)FreeImage_GetBPP(dib);
+        FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
+        unsigned long long sum = checksum(dib);
+
+        if (!record && e->width == 0) {
             printf("%-20s loaded, but the table says it must be refused"
                    "   *** MISMATCH\n", e->file);
             failures++;
             FreeImage_Unload(dib);
             continue;
         }
-        int w = (int)FreeImage_GetWidth(dib), h = (int)FreeImage_GetHeight(dib);
-        int bpp = (int)FreeImage_GetBPP(dib);
-        FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
-        unsigned long long sum = checksum(dib);
 
         if (record) {
             printf("    {\"%s\",%*s%3d, %2d, %-10s %3d, 0x%016llxULL},\n",
