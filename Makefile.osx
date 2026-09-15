@@ -27,7 +27,7 @@ include Makefile.openmp
 # libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
 include Makefile.heif
 
-COMPILERFLAGS = -Os -fexceptions -fvisibility=hidden -DNO_LCMS -D__ANSI__ -DOPJ_STATIC -DMUTEX_pthread -DAVIF_CODEC_DAV1D=1 $(OPENMP_CFLAGS)
+COMPILERFLAGS = -Os -fexceptions -fvisibility=hidden -DNO_LCMS -D__ANSI__ -DOPJ_STATIC -DMUTEX_pthread -DAVIF_CODEC_DAV1D=1 -DAVIF_ENABLE_EXPERIMENTAL_MINI=1 $(OPENMP_CFLAGS)
 COMPILERFLAGS_I386 = -arch i386
 COMPILERFLAGS_X86_64 = -arch x86_64
 COMPILERPPFLAGS = -Wno-ctor-dtor-privacy -D__ANSI__ -std=c++11 -stdlib=libc++ -Wc++11-narrowing

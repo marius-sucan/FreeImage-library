@@ -36,8 +36,12 @@ CFLAGS += -DOPJ_STATIC -DMUTEX_pthread
 CFLAGS += -DNO_LCMS
 # LibJXR
 CFLAGS += -DDISABLE_PERF_MEASUREMENT -D__ANSI__
-# libavif: use the bundled dav1d as its AV1 decoder (Source/LibAVIF, Source/LibDav1d)
-CFLAGS += -DAVIF_CODEC_DAV1D=1
+# libavif: use the bundled dav1d as its AV1 decoder (Source/LibAVIF, Source/LibDav1d).
+# AVIF_ENABLE_EXPERIMENTAL_MINI adds the MinimizedImageBox reader: the compact header that
+# replaces the MetaBox in a file branded 'mif3'. Upstream calls it experimental because it
+# also gates the *writer*, which produces files older decoders cannot read; FreeImage never
+# writes AVIF, so here it only ever adds files the library can open.
+CFLAGS += -DAVIF_CODEC_DAV1D=1 -DAVIF_ENABLE_EXPERIMENTAL_MINI=1
 # OpenMP
 CFLAGS += $(OPENMP_CFLAGS)
 CFLAGS += $(INCLUDE)

@@ -54,6 +54,11 @@ static const Expected EXPECTED[] = {
     {"draw_points_idat.avif",                       1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
     {"draw_points_idat_two_ipma.avif",              1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
     {"circle_custom_properties.avif",               1,  100,   60, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x58f31c4067b13045ULL},
+    /* MinimizedImageBox files (brand 'mif3'), which libavif reads only when it is built
+     * with AVIF_ENABLE_EXPERIMENTAL_MINI. The three carry the same 256x256 tile. */
+    {"simple_osm_tile_meta.avif",                   1,  256,  256, FIT_BITMAP, 24,   672, 10, 1,   -1, -1, 0xa3054d39d9bb88bULL},
+    {"simple_osm_tile_alpha.avif",                  1,  256,  256, FIT_BITMAP, 32,   672,  0, 0,   -1, -1, 0xcbcec88ea8d79b7cULL},
+    {"mini_size_zero.avif",                         1,  256,  256, FIT_BITMAP, 32,   672,  0, 0,   -1, -1, 0xcbcec88ea8d79b7cULL},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
 

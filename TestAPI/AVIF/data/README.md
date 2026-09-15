@@ -1,6 +1,6 @@
 # Test images
 
-All files but one come from libavif's test corpus (`tests/data/` of
+All files but four come from libavif's test corpus (`tests/data/` of
 https://github.com/AOMediaCodec/libavif at v1.4.2), where each of them is listed
 with "License: same as libavif", i.e. the BSD 2-Clause license in
 `Source/LibAVIF/LICENSE`. libavif's `tests/data/README.md` describes their
@@ -10,7 +10,28 @@ box is split into two boxes with the same version and flags, one per item, which
 is what link-u's cavif encoder writes and what upstream libavif refuses as
 "Multiple Box[ipma] with a given pair of values of version and flags"; the
 bundled libavif is patched to accept it, and the file must decode to exactly the
-pixels of its source. In short:
+pixels of its source.
+
+The other three come from **libheif** (`tests/data/` of
+https://github.com/strukturag/libheif at v1.23.4, LGPL-3.0, the license in
+`Source/LibHEIF/COPYING`, as for the files in `TestAPI/HEIF/data/`):
+`simple_osm_tile_meta.avif`, `simple_osm_tile_alpha.avif` and
+`mini_size_zero.avif`. All three replace the `meta` box with a
+MinimizedImageBox, the compact header of a file branded `mif3`, which libavif
+reads only when it is built with `AVIF_ENABLE_EXPERIMENTAL_MINI`. Despite the
+name they hold no map data: each is a synthetic 256 x 256 tile (the size
+OpenStreetMap serves) with the word "Red" drawn on it. The last two are the same
+image, and so must decode to the same pixels.
+
+A `mif3` file names no codec in its brands, so these also pin which plugin takes
+one: the AVIF plugin claims a `mif3` file only when the FileTypeBox
+minor_version is `avif`, and leaves the HEVC ones (`hevc32-mini.heif` in
+`TestAPI/HEIF/data/`, minor version `heic`) to the HEIF plugin, which reads
+them. FreeImage asks each plugin once and does not move on when the load then
+fails, so a plugin that claims too much makes files unreadable rather than
+merely mis-routed.
+
+In short:
 
 | file | what it exercises |
 |---|---|
@@ -30,3 +51,6 @@ pixels of its source. In short:
 | `draw_points_idat.avif` | image data stored in an `idat` box |
 | `draw_points_idat_two_ipma.avif` | the same file with its `ipma` box split in two (same version and flags), see above |
 | `circle_custom_properties.avif` | unknown item properties, which must be ignored |
+| `simple_osm_tile_meta.avif` | MinimizedImageBox (`mif3`), 4:4:4, with an ICC profile, Exif and XMP |
+| `simple_osm_tile_alpha.avif` | the same box layout with an alpha channel, no Exif or XMP |
+| `mini_size_zero.avif` | the same file again with a `mini` box of size 0, i.e. one running to the end of the file |

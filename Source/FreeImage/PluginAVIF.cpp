@@ -504,6 +504,25 @@ MimeType() {
 	return "image/avif";
 }
 
+/**
+Does the FileTypeBox held in 'ftyp' (the whole box, 'size' bytes) name 'brand', either as
+its major brand or among its compatible brands? Mirrors libavif's avifFileTypeHasBrand.
+*/
+static BOOL
+ftypHasBrand(const BYTE *ftyp, unsigned size, const char *brand) {
+	if(memcmp(ftyp + 8, brand, 4) == 0) {
+		// major_brand
+		return TRUE;
+	}
+	// compatible_brands[], which follows the 4-byte minor_version
+	for(unsigned offset = 16; offset + 4 <= size; offset += 4) {
+		if(memcmp(ftyp + offset, brand, 4) == 0) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
 static BOOL DLL_CALLCONV
 Validate(FreeImageIO *io, fi_handle handle) {
 	// An AVIF file opens with a FileTypeBox ('ftyp') whose brands name AVIF.
@@ -527,7 +546,25 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	avifROData data;
 	data.data = buffer;
 	data.size = box_size;
-	return avifPeekCompatibleFileType(&data) ? TRUE : FALSE;
+	if(!avifPeekCompatibleFileType(&data)) {
+		return FALSE;
+	}
+	// 'mif3' is a structural brand, not a codec brand: it says the file replaces the
+	// MetaBox with a MinimizedImageBox, and says nothing about what codec the image is
+	// coded in. The codec is named by the FileTypeBox minor_version, or spelled out inside
+	// the box. libavif accepts only AV1 and refuses everything else once it parses the box,
+	// so claiming every 'mif3' file here would take HEVC ones (hevc32-mini.heif, minor
+	// version 'heic') away from the HEIF plugin, which does read them: FreeImage asks each
+	// plugin once and does not move on when the load then fails.
+	// libavif writes 'avif' as the minor_version of the files it produces, and requires it
+	// for any file that does not spell the codec out, so that is the test. The brand is
+	// only ever the deciding one when neither codec brand is present.
+	if(!ftypHasBrand(buffer, box_size, "avif") && !ftypHasBrand(buffer, box_size, "avis")) {
+		if(memcmp(buffer + 12, "avif", 4) != 0) {
+			return FALSE;
+		}
+	}
+	return TRUE;
 }
 
 static BOOL DLL_CALLCONV

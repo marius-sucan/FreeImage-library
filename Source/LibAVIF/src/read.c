@@ -4539,7 +4539,9 @@ static avifResult avifParseMinimizedImageBox(avifDecoderData * data,
         colorItem->premByID = alphaIsPremultiplied;
         avifProperty * alphaAuxProp = avifMetaCreateProperty(meta, "auxC");
         AVIF_CHECKERR(alphaAuxProp, AVIF_RESULT_OUT_OF_MEMORY);
-        static_assert(sizeof(alphaAuxProp->u.auxC.auxType) >= sizeof(AVIF_URN_ALPHA0), "");
+        // FreeImage: spelled with the C11 keyword rather than the <assert.h> macro, because the
+        // FreeImage makefiles compile C as -std=c99, where <assert.h> does not define static_assert.
+        _Static_assert(sizeof(alphaAuxProp->u.auxC.auxType) >= sizeof(AVIF_URN_ALPHA0), "");
         memcpy(alphaAuxProp->u.auxC.auxType, AVIF_URN_ALPHA0, sizeof(AVIF_URN_ALPHA0));
         AVIF_CHECKERR(avifDecoderItemAddProperty(alphaItem, alphaAuxProp), AVIF_RESULT_OUT_OF_MEMORY);
 
