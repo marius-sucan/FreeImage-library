@@ -1,0 +1,10 @@
+# built by this directory's Makefile
+decode
+regress
+robust
+*.o
+*-asan
+libfreeimage-asan.a
+asan-obj/
+# scratch images written by the tests
+fi_webp_rt_*.webp
