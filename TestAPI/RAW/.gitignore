@@ -1,0 +1,8 @@
+# built by this directory's Makefile
+decode
+regress
+robust
+*.o
+*-asan
+libfreeimage-asan.a
+asan-obj/
