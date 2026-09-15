@@ -164,6 +164,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if( !opj_setup_decoder(d_codec, &parameters) ) {
 				throw "Failed to setup the decoder\n";
 			}
+
+			// decode on every core (the pool is created here and freed with the codec);
+			// a header-only load never reaches the stages that use it
+			if(!header_only) {
+				opj_codec_set_threads(d_codec, opj_get_num_cpus());
+			}
 			
 			// read the main header of the codestream and if necessary the JP2 boxes
 			if( !opj_read_header(d_stream, d_codec, &image)) {
@@ -272,6 +278,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			if( !opj_setup_encoder(c_codec, &parameters, image) ) {
 				throw "Failed to setup the encoder\n";
 			}
+
+			// encode on every core (the pool is created here and freed with the codec)
+			opj_codec_set_threads(c_codec, opj_get_num_cpus());
 
 			// encode the image
 			bSuccess = opj_start_compress(c_codec, image, c_stream);
