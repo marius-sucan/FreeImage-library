@@ -9,8 +9,9 @@
  *
  * This test patches the data window of a good file into shapes no file that
  * size could hold, and checks that each one is refused - with a message, and
- * without the allocation being attempted. The last part is what running it
- * under AddressSanitizer adds, so run it that way too:
+ * without the allocation being attempted, both for a full load and for a
+ * header-only one. The last part is what running it under AddressSanitizer
+ * adds, so run it that way too:
  *
  *     make asan-run        # ASAN_OPTIONS deliberately does NOT set
  *                          # allocator_may_return_null for this one, so a huge
@@ -69,19 +70,28 @@ static void expect(const BYTE *src, long len, const char *what,
     FIMEMORY *mem = FreeImage_OpenMemory(buf, (DWORD)len);
     FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_EXR, mem, 0);
 
+    /* the same verdict has to come out of a header-only load. The check runs
+     * before FreeImage_AllocateHeaderT either way, so FIF_LOAD_NOPIXELS is not
+     * a way past it - which is the point: a caller probing the dimensions of a
+     * corrupt file should be told it is corrupt, not handed its claim. */
+    FreeImage_SeekMemory(mem, 0, SEEK_SET);
+    FIBITMAP *hdr = FreeImage_LoadFromMemory(FIF_EXR, mem, FIF_LOAD_NOPIXELS);
+
     int bad = 0;
     if (want_load) {
-        bad = (dib == NULL);
+        bad = (dib == NULL) || (hdr == NULL);
         printf("  %-24s %-8s%s\n", what, dib ? "loaded" : "REFUSED", bad ? "   *** FAIL" : "");
-        if (bad) printf("      message: \"%s\"\n", message);
+        if (bad) printf("      message: \"%s\"  header-only: %s\n", message, hdr ? "loaded" : "REFUSED");
     } else {
-        bad = (dib != NULL) || (message[0] == 0);
+        bad = (dib != NULL) || (hdr != NULL) || (message[0] == 0);
         printf("  %-24s %-8s %s%s\n", what, dib ? "LOADED" : "refused", message,
                bad ? "   *** FAIL" : "");
+        if (hdr) printf("      *** header-only load was NOT refused\n");
     }
     if (bad) failures++;
 
     if (dib) FreeImage_Unload(dib);
+    if (hdr) FreeImage_Unload(hdr);
     FreeImage_CloseMemory(mem);
     free(buf);
 }
