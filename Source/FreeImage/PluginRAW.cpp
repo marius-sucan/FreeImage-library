@@ -43,16 +43,17 @@ class LibRaw_freeimage_datastream : public LibRaw_abstract_datastream {
 private: 
 	FreeImageIO *_io;
 	fi_handle _handle;
+	long _start;
 	long _eof;
 	INT64 _fsize;
 
 public:
 	LibRaw_freeimage_datastream(FreeImageIO *io, fi_handle handle) : _io(io), _handle(handle) {
-		long start_pos = io->tell_proc(handle);
+		_start = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
 		_eof = io->tell_proc(handle);
-		_fsize = _eof - start_pos;
-		io->seek_proc(handle, start_pos, SEEK_SET);
+		_fsize = (INT64)_eof - (INT64)_start;
+		io->seek_proc(handle, _start, SEEK_SET);
 	}
 
 	~LibRaw_freeimage_datastream() {
@@ -66,12 +67,40 @@ public:
 		return _io->read_proc(buffer, (unsigned)size, (unsigned)count, _handle);
 	}
 
+	/**
+	LibRaw counts from the start of the stream it was handed, and that start is
+	wherever the handle stood when the plugin was entered: FreeImage_LoadFromHandle
+	may be called on a stream that already holds something else, which is why
+	size() has always been measured from that point rather than from the end of
+	the file.  FreeImageIO's SEEK_SET, on the other hand, is absolute in the
+	handle, so the two have to be bridged here - otherwise LibRaw's offsets land
+	in front of the image and nothing is recognised.
+	*/
     int seek(INT64 offset, int origin) { 
-		return _io->seek_proc(_handle, (long)offset, origin);
+		INT64 target;
+
+		switch(origin) {
+			case SEEK_SET:
+				target = (INT64)_start + offset;
+				break;
+			case SEEK_END:
+				target = (INT64)_eof + offset;
+				break;
+			case SEEK_CUR:
+			default:
+				target = (INT64)_io->tell_proc(_handle) + offset;
+				break;
+		}
+		// the bytes in front of the stream belong to whoever opened it
+		if(target < (INT64)_start) {
+			return -1;
+		}
+
+		return _io->seek_proc(_handle, (long)target, SEEK_SET);
 	}
 
     INT64 tell() { 
-        return _io->tell_proc(_handle);
+        return (INT64)_io->tell_proc(_handle) - (INT64)_start;
     }
 	
 	INT64 size() {

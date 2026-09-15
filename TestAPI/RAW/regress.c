@@ -138,6 +138,97 @@ static void test_stream(void) {
 	}
 }
 
+/* --- a stream that does not start at byte zero -----------------------------
+   FreeImage_LoadFromHandle reads from wherever the handle stands, so a RAW
+   file may begin part way into a stream that holds something else first.
+   LibRaw_freeimage_datastream reports its size from that point, and its seek()
+   has to offset LibRaw's stream-relative positions by the same amount. When it
+   did not, every offset in the file landed in front of the image and the file
+   was not recognised at all. */
+static void test_offset(void) {
+	static const long PREFIX[] = { 1, 3, 64, 1000 };
+	static const struct { const char *name; int flags; } PATHS[] = {
+		{ "default16",   0               },
+		{ "unprocessed", RAW_UNPROCESSED },
+		{ "preview",     RAW_PREVIEW     },
+	};
+	int i, j, p;
+	printf("-- a stream starting at a non-zero offset\n");
+	for (i = 0; i < NFILES; i++) {
+		long n = 0;
+		BYTE *bytes = slurp(FILES[i], &n);
+		int ok = 1;
+		if (!bytes) { fail(FILES[i], "offset", "cannot read the file"); continue; }
+		for (p = 0; p < (int)(sizeof(PREFIX) / sizeof(PREFIX[0])); p++) {
+			long pre = PREFIX[p];
+			BYTE *buf = (BYTE *)malloc((size_t)(n + pre));
+			if (!buf) { fail(FILES[i], "offset", "out of memory"); ok = 0; break; }
+			/* something that is not a RAW file in front of the RAW file */
+			memset(buf, 0xAB, (size_t)pre);
+			memcpy(buf + pre, bytes, (size_t)n);
+
+			for (j = 0; j < (int)(sizeof(PATHS) / sizeof(PATHS[0])); j++) {
+				FIBITMAP *want = FreeImage_Load(FIF_RAW, FILES[i], PATHS[j].flags);
+				FIMEMORY *m = FreeImage_OpenMemory(buf, (DWORD)(n + pre));
+				FIBITMAP *got = NULL;
+				if (m) {
+					FreeImage_SeekMemory(m, pre, SEEK_SET);
+					got = FreeImage_LoadFromMemory(FIF_RAW, m, PATHS[j].flags);
+				}
+				if (!want) {
+					fail(FILES[i], "offset", "the reference load failed");
+					ok = 0;
+				} else if (!got) {
+					fail(FILES[i], PATHS[j].name,
+					     "not loaded from a stream at offset %ld", pre);
+					ok = 0;
+				} else if (FreeImage_GetWidth(got) != FreeImage_GetWidth(want) ||
+				           FreeImage_GetHeight(got) != FreeImage_GetHeight(want) ||
+				           FreeImage_GetImageType(got) != FreeImage_GetImageType(want) ||
+				           digest(got) != digest(want)) {
+					fail(FILES[i], PATHS[j].name,
+					     "decoded differently at offset %ld", pre);
+					ok = 0;
+				}
+				if (want) FreeImage_Unload(want);
+				if (got) FreeImage_Unload(got);
+				if (m) FreeImage_CloseMemory(m);
+			}
+
+			/* identification has to work from there too */
+			{
+				FIMEMORY *m = FreeImage_OpenMemory(buf, (DWORD)(n + pre));
+				if (m) {
+					FREE_IMAGE_FORMAT fif;
+					FreeImage_SeekMemory(m, pre, SEEK_SET);
+					fif = FreeImage_GetFileTypeFromMemory(m, 0);
+					if (fif != FIF_RAW) {
+						fail(FILES[i], "offset", "GetFileTypeFromMemory at %ld gave %d",
+						     pre, (int)fif);
+						ok = 0;
+					}
+					FreeImage_SeekMemory(m, pre, SEEK_SET);
+					if (!FreeImage_ValidateFromMemory(FIF_RAW, m)) {
+						fail(FILES[i], "offset", "ValidateFromMemory refused at %ld", pre);
+						ok = 0;
+					}
+					/* the plugin must leave the handle where it found it or
+					   before the end, never in front of where it started */
+					if (FreeImage_TellMemory(m) < pre) {
+						fail(FILES[i], "offset", "the handle moved in front of the stream");
+						ok = 0;
+					}
+					FreeImage_CloseMemory(m);
+				}
+			}
+			free(buf);
+		}
+		if (ok)
+			printf("  ok   %-30s offsets 1, 3, 64, 1000 all decode alike\n", FILES[i]);
+		free(bytes);
+	}
+}
+
 /* --- how the paths relate to one another ---------------------------------- */
 static void test_paths(void) {
 	int i;
@@ -354,6 +445,7 @@ int main(void) {
 	FreeImage_SetOutputMessage(quiet);
 	printf("RAW regression test - FreeImage %s\n", FreeImage_GetVersion());
 	test_stream();
+	test_offset();
 	test_paths();
 	test_crop();
 	test_icc();

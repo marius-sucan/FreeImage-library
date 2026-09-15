@@ -9,7 +9,7 @@ run again at the next one.
 | test | what it covers |
 |---|---|
 | `decode` | Loads the four files of `data/` through all six of the plugin's paths - the default 16-bit load, `RAW_DISPLAY`, `RAW_PREVIEW`, `RAW_UNPROCESSED`, `RAW_HALFSIZE` and `FIF_LOAD_NOPIXELS` - and checks geometry, depth, decoded pixels, the ICC profile and the `Raw.*` metadata against a recorded table. Plus format detection for each. |
-| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the relations between paths (header-only matches the full load and carries no pixels, half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the embedded colour profile; the Bayer pattern; and that RAW is read-only. |
+| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the same again from a stream that starts at a non-zero offset, which is the bug described below; the relations between paths (header-only matches the full load and carries no pixels, half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the embedded colour profile; the Bayer pattern; and that RAW is read-only. |
 | `robust` | Truncated prefixes, junk appended, single-byte corruptions, 32-bit words set to `0xFFFFFFFF`, 64-byte regions wiped, and a dense sweep over the first kilobyte where the TIFF header and both IFDs live - 12747 damaged inputs across the four files, plus degenerate buffers. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
 
 ## Running
@@ -74,13 +74,30 @@ high-efficiency mode used to come back as a bitmap of streaks over black, with
 "data corrupted" written to stderr; it is now refused outright. Refusing is the
 correct behaviour and `FreeImage_Load` returning NULL is how it surfaces.
 
-## A limitation these tests found, and do not cover
+## The bug this suite found
 
-`LibRaw_freeimage_datastream` cannot read a stream that does not start at byte
-zero. Its constructor measures the size from the handle's current position, but
-its `seek()` passes the offset to `seek_proc` with `SEEK_SET` unchanged, so
-LibRaw's absolute offsets land in the wrong place and the file is not
-recognised. `FreeImage_LoadFromHandle` is otherwise documented to start from
-wherever the handle happens to be. This predates the 0.22.2 upgrade - the
-wrapper is unchanged by it - so there is no test for it here; it is written
-down so the next person does not have to rediscover it.
+`LibRaw_freeimage_datastream` could not read a stream that did not start at
+byte zero. Its constructor measured the size from the handle's current
+position, but its `seek()` passed the offset to `seek_proc` with `SEEK_SET`
+unchanged, so every offset LibRaw computed landed in front of the image.
+`FreeImage_LoadFromHandle` reads from wherever the handle happens to be, so
+this is a supported thing for a caller to do - a RAW file embedded in a
+container, or appended to something else.
+
+The symptom was worse than a refusal. A DNG carries TIFF magic, so with the
+RAW plugin unable to recognise it, `FreeImage_GetFileTypeFromHandle` fell
+through to the TIFF plugin, which validated it and then failed to load it:
+the caller got `FIF_TIFF` and a NULL bitmap rather than its picture. At offset
+zero the same file identifies as `FIF_RAW` and loads, which is why this was
+invisible for so long.
+
+`seek()` now resolves all three origins to an absolute position, offsets
+`SEEK_SET` by the stream's start, and refuses to move in front of it - with
+`FreeImage_LoadFromHandle` those bytes belong to whoever opened the stream.
+`tell()` subtracts the same start, so LibRaw sees the stream-relative position
+it expects. `regress`'s "a stream starting at a non-zero offset" section covers
+it at offsets 1, 3, 64 and 1000 across three load paths, and fails against the
+previous plugin.
+
+It predates the 0.22.2 upgrade; the wrapper is unchanged by it. This branch
+fixed the same class of bug in OpenJPEG's stream wrapper earlier.
