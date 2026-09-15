@@ -96,7 +96,26 @@
 #ifndef __RPCNDR_H__		/* don't conflict if rpcndr.h already read */
 typedef unsigned char boolean;
 #endif
+#ifndef FALSE			/* in case these macros already exist */
+#define FALSE	0		/* values of boolean */
+#endif
+#ifndef TRUE
+#define TRUE	1
+#endif
 #define HAVE_BOOLEAN		/* prevent jmorecfg.h from redefining it */
+
+/* Define custom RGB color order, prevent jmorecfg.h from redefinition */
+#undef JPEG_HAVE_RGB_CUSTOM
+/* Use Windows custom BGR color order defined in jmorecfg.h.  FreeImage does
+ * not: PluginJPEG.cpp swaps red and blue itself, and the three other users of
+ * this library - LibTIFF4, LibRawLite and LibHEIF - all expect plain RGB.
+ */
+#undef JPEG_USE_RGB_CUSTOM
+
+/* Define custom file I/O functions, prevent jinclude.h from redefinition */
+#undef JPEG_HAVE_FILE_IO_CUSTOM
+/* Use Delphi custom file I/O functions defined in jinclude.h */
+#undef JPEG_USE_FILE_IO_CUSTOM
 
 /*
  * The following options affect code selection within the JPEG library,
