@@ -23,16 +23,18 @@
 #include "Utilities.h"
 #include "../LibOpenJPEG/openjpeg.h"
 #include "J2KHelper.h"
+#include <limits.h>
 
 // --------------------------------------------------------------------------
 
 static OPJ_UINT64 
 _LengthProc(J2KFIO_t *fio) {
-	long start_pos = fio->io->tell_proc(fio->handle);
+	// from the position the handle had when the stream was created to the end of the file:
+	// OpenJPEG needs it to size a last tile-part whose Psot field is 0
 	fio->io->seek_proc(fio->handle, 0, SEEK_END);
-	unsigned file_length = fio->io->tell_proc(fio->handle) - start_pos;
-	fio->io->seek_proc(fio->handle, start_pos, SEEK_SET);
-	return (OPJ_UINT64)file_length;
+	long end_pos = fio->io->tell_proc(fio->handle);
+	fio->io->seek_proc(fio->handle, fio->start, SEEK_SET);
+	return (end_pos > fio->start) ? (OPJ_UINT64)(end_pos - fio->start) : 0;
 }
 
 static OPJ_SIZE_T 
@@ -60,7 +62,14 @@ _SkipProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 static OPJ_BOOL 
 _SeekProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
-	if( fio->io->seek_proc(fio->handle, (long)p_nb_bytes, SEEK_SET) ) {
+	// OpenJPEG's positions count from the start of the stream, which is wherever the
+	// handle stood when the stream was created - not necessarily the start of the file
+	// (FreeImage_LoadFromHandle / FreeImage_SaveToHandle inside a container). The JP2
+	// writer seeks back to patch box lengths, so an absolute seek corrupts such a save.
+	if( (p_nb_bytes < 0) || (p_nb_bytes > (OPJ_OFF_T)(LONG_MAX - fio->start)) ) {
+		return OPJ_FALSE;
+	}
+	if( fio->io->seek_proc(fio->handle, fio->start + (long)p_nb_bytes, SEEK_SET) ) {
 		return OPJ_FALSE;
 	}
 	return OPJ_TRUE;
@@ -77,6 +86,8 @@ opj_freeimage_stream_create(FreeImageIO *io, fi_handle handle, BOOL bRead) {
 	if(fio) {
 		fio->io = io;
 		fio->handle = handle;
+		const long start = io->tell_proc(handle);
+		fio->start = (start > 0) ? start : 0;
 
 		opj_stream_t *l_stream = opj_stream_create(OPJ_J2K_STREAM_CHUNK_SIZE, bRead ? OPJ_TRUE : OPJ_FALSE);
 		if (l_stream) {
