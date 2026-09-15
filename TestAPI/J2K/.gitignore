@@ -1,0 +1,12 @@
+# built by this directory's Makefile
+regress
+robust
+corpus
+*.o
+# scratch images written by the tests
+fi_j2k_*.j2k
+fi_j2k_*.jp2
+# reference-decoder tooling built by hand (see README.md)
+refdec
+*.comps
+*.raw
