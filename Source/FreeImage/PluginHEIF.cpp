@@ -419,10 +419,13 @@ CreateDecodingOptions(const HEIFContext *ctx, const heif_image_handle *handle) {
 	// lenient: files from encoders that bend the rules decode with warnings, not errors
 	options->strict_decoding = 0;
 	// Threads. A tiled image (a phone photo is a grid of 512 x 512 tiles) is decoded by libheif
-	// one tile per thread (heif_context_set_max_decoding_threads), so each libde265 instance
-	// stays single-threaded; a single picture gets libde265's worker threads instead, which
-	// libheif would otherwise limit to one. Measured on an 8-core machine with a 1280 x 854
-	// single picture: 81 ms with one thread, 40 ms with four or more.
+	// one tile per thread (heif_context_set_max_decoding_threads), so each codec instance
+	// stays single-threaded; a single picture gets the codec's own worker threads instead,
+	// which libheif would otherwise limit to one. num_codec_threads reaches every decoder
+	// plugin as heif_decoder_plugin_options::num_threads: libde265 starts that many worker
+	// threads, and OpenJPEG that many in its thread pool. Measured on an 8-core machine:
+	// a 1280 x 854 HEVC picture 81 ms with one thread and 40 ms with four or more, a
+	// 2048 x 2048 lossless JPEG 2000 picture 1052 ms with one and 246 ms with eight.
 	heif_image_tiling tiling;
 	uint64_t tiles = 1;
 	if(heif_image_handle_get_image_tiling(handle, 1, &tiling).code == heif_error_Ok) {

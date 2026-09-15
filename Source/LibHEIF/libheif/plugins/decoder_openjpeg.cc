@@ -41,6 +41,10 @@ struct openjpeg_decoder
 
   size_t read_position = 0;
   std::string error_message;
+
+  // FreeImage: what libheif asked for in heif_decoder_plugin_options::num_threads.
+  // 0 means it did not say, as for the plugin_api_version 5 entry point below.
+  int num_threads = 0;
 };
 
 
@@ -87,6 +91,13 @@ static int openjpeg_does_support_format2(const heif_decoder_plugin_compressed_fo
 heif_error openjpeg_new_decoder2(void** dec, const heif_decoder_plugin_options* options)
 {
   openjpeg_decoder* decoder = new openjpeg_decoder();
+
+  // FreeImage: upstream ignores options entirely, so a JPEG 2000 payload decoded on
+  // one core however many libheif offered. Keep the count for opj_codec_set_threads()
+  // below, the way decoder_libde265.cc passes it to de265_start_worker_threads().
+  if (options) {
+    decoder->num_threads = options->num_threads;
+  }
 
   *dec = decoder;
 
@@ -329,6 +340,15 @@ heif_error openjpeg_decode_next_image2(void* decoder_raw, heif_image** out_img,
   success = opj_setup_decoder(l_codec.get(), &decompression_parameters);
   if (!success) {
     return {heif_error_Decoder_plugin_error, heif_suberror_Unspecified, "opj_setup_decoder()"};
+  }
+
+  // FreeImage: decode on the cores libheif allotted this image. It has to happen after
+  // opj_setup_decoder() and before opj_read_header(); the pool belongs to the codec and
+  // goes with it. Only when a count was given: a tile of a grid is told 1, because
+  // libheif is already running one tile per thread, and leaving the call out for 0 keeps
+  // the OPJ_NUM_THREADS environment variable working, which calling it would override.
+  if (decoder->num_threads > 0) {
+    opj_codec_set_threads(l_codec.get(), decoder->num_threads);
   }
 
 
