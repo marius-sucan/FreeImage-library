@@ -184,9 +184,13 @@
     <ClCompile Include="src\decoders\generic.cpp" />
     <ClCompile Include="src\decoders\kodak_decoders.cpp" />
     <ClCompile Include="src\decoders\load_mfbacks.cpp" />
+    <ClCompile Include="src\decoders\olympus14.cpp" />
+    <ClCompile Include="src\decoders\pana8.cpp" />
     <ClCompile Include="src\decoders\smal.cpp" />
+    <ClCompile Include="src\decoders\sonycc.cpp" />
     <ClCompile Include="src\decoders\unpack.cpp" />
     <ClCompile Include="src\decoders\unpack_thumb.cpp" />
+    <ClCompile Include="src\decompressors\losslessjpeg.cpp" />
     <ClCompile Include="src\demosaic\aahd_demosaic.cpp" />
     <ClCompile Include="src\demosaic\ahd_demosaic.cpp" />
     <ClCompile Include="src\demosaic\dcb_demosaic.cpp" />
@@ -252,8 +256,10 @@
     <ClInclude Include="internal\defines.h" />
     <ClInclude Include="internal\dmp_include.h" />
     <ClInclude Include="internal\libraw_cameraids.h" />
+    <ClInclude Include="internal\libraw_checked_buffer.h" />
     <ClInclude Include="internal\libraw_cxx_defs.h" />
     <ClInclude Include="internal\libraw_internal_funcs.h" />
+    <ClInclude Include="internal\losslessjpeg.h" />
     <ClInclude Include="internal\var_defines.h" />
     <ClInclude Include="internal\x3f_tools.h" />
     <ClInclude Include="libraw\libraw.h" />

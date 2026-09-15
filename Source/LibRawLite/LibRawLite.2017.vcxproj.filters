@@ -21,6 +21,9 @@
     <Filter Include="Source Files\src\decoders">
       <UniqueIdentifier>{41a234b2-c2c4-4406-8e1a-0278736143f6}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\src\decompressors">
+      <UniqueIdentifier>{7c1e4d86-2a90-4f57-9b0e-3d6c5a81f4b2}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\src\demosaic">
       <UniqueIdentifier>{e8bb0df3-5caf-4801-bb46-8a914a87ef64}</UniqueIdentifier>
     </Filter>
@@ -83,7 +86,16 @@
     <ClCompile Include="src\decoders\load_mfbacks.cpp">
       <Filter>Source Files\src\decoders</Filter>
     </ClCompile>
+    <ClCompile Include="src\decoders\olympus14.cpp">
+      <Filter>Source Files\src\decoders</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoders\pana8.cpp">
+      <Filter>Source Files\src\decoders</Filter>
+    </ClCompile>
     <ClCompile Include="src\decoders\smal.cpp">
+      <Filter>Source Files\src\decoders</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decoders\sonycc.cpp">
       <Filter>Source Files\src\decoders</Filter>
     </ClCompile>
     <ClCompile Include="src\decoders\unpack.cpp">
@@ -91,6 +103,9 @@
     </ClCompile>
     <ClCompile Include="src\decoders\unpack_thumb.cpp">
       <Filter>Source Files\src\decoders</Filter>
+    </ClCompile>
+    <ClCompile Include="src\decompressors\losslessjpeg.cpp">
+      <Filter>Source Files\src\decompressors</Filter>
     </ClCompile>
     <ClCompile Include="src\demosaic\aahd_demosaic.cpp">
       <Filter>Source Files\src\demosaic</Filter>
@@ -283,10 +298,16 @@
     <ClInclude Include="internal\libraw_cameraids.h">
       <Filter>Header Files\internal</Filter>
     </ClInclude>
+    <ClInclude Include="internal\libraw_checked_buffer.h">
+      <Filter>Header Files\internal</Filter>
+    </ClInclude>
     <ClInclude Include="internal\libraw_cxx_defs.h">
       <Filter>Header Files\internal</Filter>
     </ClInclude>
     <ClInclude Include="internal\libraw_internal_funcs.h">
+      <Filter>Header Files\internal</Filter>
+    </ClInclude>
+    <ClInclude Include="internal\losslessjpeg.h">
       <Filter>Header Files\internal</Filter>
     </ClInclude>
     <ClInclude Include="internal\var_defines.h">
