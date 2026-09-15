@@ -38,8 +38,12 @@
 
 OPENEXR_CXXSTD ?= -std=c++17
 
-# Makefile.gnu, Makefile.fip, Makefile.cygwin, Makefile.solaris, Makefile.mingw
+# Makefile.gnu, Makefile.fip, Makefile.cygwin and Makefile.mingw compile C++
+# with CXXFLAGS; Makefile.solaris spells the same variable CPPFLAGS.  Setting
+# both is harmless: no makefile here uses CPPFLAGS in its .c rule, so the C
+# sources under Source/OpenEXR/OpenEXRCore never see a C++ standard.
 Source/OpenEXR/%.o: CXXFLAGS += $(OPENEXR_CXXSTD)
+Source/OpenEXR/%.o: CPPFLAGS += $(OPENEXR_CXXSTD)
 
 # Makefile.osx builds one object per architecture, with its own flags variable
 Source/OpenEXR/%.o-i386: CPPFLAGS_I386 += $(OPENEXR_CXXSTD)
