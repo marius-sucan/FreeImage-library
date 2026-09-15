@@ -11,8 +11,7 @@
 #include "IlmThreadConfig.h"
 
 #if ILMTHREAD_THREADING_ENABLED
-#include <cstdint>
-#include <mutex>
+#    include <mutex>
 #endif
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER
@@ -25,14 +24,10 @@ struct OutputStreamMutex
     : public std::mutex
 #endif
 {
-    OPENEXR_IMF_INTERNAL_NAMESPACE::OStream* os = nullptr;
-    uint64_t currentPosition = 0;
+    OPENEXR_IMF_INTERNAL_NAMESPACE::OStream* os              = nullptr;
+    uint64_t                                 currentPosition = 0;
 };
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_EXIT
-
-
-
-
 
 #endif /* IMFOUTPUTSTREAMMUTEX_H_ */

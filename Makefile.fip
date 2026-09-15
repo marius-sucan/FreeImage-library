@@ -10,6 +10,10 @@ include Makefile.openmp
 # libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
 include Makefile.heif
 
+# OpenEXR (Source/OpenEXR): the library's own sources need a newer C++ standard
+# than the rest of FreeImage is compiled with
+include Makefile.openexr
+
 # General configuration variables:
 DESTDIR ?= /
 INCDIR ?= $(DESTDIR)/usr/include
@@ -27,7 +31,9 @@ MODULES := $(MODULES:.cpp=.o)
 MODULES := $(MODULES:.cc=.o)
 
 # C flags
-CFLAGS ?= -std=c99 -O3 -fPIC -fexceptions -fvisibility=hidden
+# -std=gnu99 rather than c99: OpenEXRCore needs the POSIX declarations a strict
+# -std= hides.  See Makefile.gnu.
+CFLAGS ?= -std=gnu99 -O3 -fPIC -fexceptions -fvisibility=hidden
 # OpenJPEG: OPJ_STATIC keeps its symbols out of the shared library,
 # MUTEX_pthread gives its thread pool a mutex implementation (thread.c
 # tests this before it includes its config header, so it cannot live there)

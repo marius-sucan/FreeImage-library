@@ -17,6 +17,10 @@ include Makefile.openmp
 # libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
 include Makefile.heif
 
+# OpenEXR (Source/OpenEXR): the library's own sources need a newer C++ standard
+# than the rest of FreeImage is compiled with
+include Makefile.openexr
+
 INSTALLDIR = /usr/local
 
 # Converts cr/lf to just lf

@@ -48,6 +48,10 @@ include Makefile.openmp
 # libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
 include Makefile.heif
 
+# OpenEXR (Source/OpenEXR): the library's own sources need a newer C++ standard
+# than the rest of FreeImage is compiled with
+include Makefile.openexr
+
 # Define additional libraries needed.
 # libstdc++ is included by default with MinGW, however for
 # WIN32 based builds, LibRawLite needs the winsock libraries.
