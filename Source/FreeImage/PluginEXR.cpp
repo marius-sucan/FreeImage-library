@@ -260,7 +260,26 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// check for supported image color models
 		// --------------------------------------------------------------
 
-		if((components == 1) || (components == 2)) {				
+		if(channels.findChannel("Y") && channels.findChannel("BY") && channels.findChannel("RY")) {
+			// Luminance and chroma, the chroma normally subsampled: Y/BY/RY, or
+			// A/BY/RY/Y once the image has an alpha channel - which is exactly what
+			// SaveAsEXR_LC writes for a RGBAF image (Imf::WRITE_YCA).  Only
+			// Imf::RgbaInputFile puts RGB back together out of these, so the low
+			// level interface further down is not used for them.
+			//
+			// Recognised by channel name rather than by channel count: until
+			// 2026-09-15 only the three channel form was, and the four channel one
+			// fell through to "Unsupported color model: A/BY/RY/Y" - so FreeImage
+			// refused to read back the files its own EXR_LC flag had written.
+			bUseRgbaInterface = true;
+			if(channels.findChannel("A")) {
+				image_type = FIT_RGBAF;
+				components = 4;
+			} else {
+				image_type = FIT_RGBF;
+				components = 3;
+			}
+		} else if((components == 1) || (components == 2)) {				
 			// if the image is gray-alpha (YA), ignore the alpha channel
 			if((components == 1) && channels.findChannel("Y")) {
 				image_type = FIT_FLOAT;
@@ -275,10 +294,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		} else if(components == 3) {
 			if(channels.findChannel("R") && channels.findChannel("G") && channels.findChannel("B")) {
 				image_type = FIT_RGBF;
-			}
-			else if(channels.findChannel("BY") && channels.findChannel("RY") && channels.findChannel("Y")) {
-				image_type = FIT_RGBF;
-				bUseRgbaInterface = true;
 			}
 		} else if(components >= 4) {
 			if(channels.findChannel("R") && channels.findChannel("G") && channels.findChannel("B")) {
@@ -372,25 +387,41 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			Imath::Box2i dw = dataWindow;
 			Imf::Array2D<Imf::Rgba> chunk(chunk_size, width);
 			while (dw.min.y <= dw.max.y) {
+				// how many rows this pass covers: the last chunk is a short one.
+				// Until 2026-09-15 the copy below ran to (dw.max.y - dw.min.y), one
+				// row short of the (dw.max.y - dw.min.y + 1) that were read, so the
+				// bottom scanline of every Y/BY/RY image was left as the zeros
+				// FreeImage_AllocateHeaderT had cleared it to.
+				const int rows = MIN(chunk_size, dw.max.y - dw.min.y + 1);
 				// read a chunk
 				rgbaFile.setFrameBuffer (&chunk[0][0] - dw.min.x - dw.min.y * width, 1, width);
-				rgbaFile.readPixels (dw.min.y, MIN(dw.min.y + chunk_size - 1, dw.max.y));
+				rgbaFile.readPixels (dw.min.y, dw.min.y + rows - 1);
 				// fill the dib
-				const int y_max = ((dw.max.y - dw.min.y) <= chunk_size) ? (dw.max.y - dw.min.y) : chunk_size;
-				for(int y = 0; y < y_max; y++) {
-					FIRGBF *pixel = (FIRGBF*)scanline;
+				for(int y = 0; y < rows; y++) {
 					const Imf::Rgba *half_rgba = chunk[y];
-					for(int x = 0; x < width; x++) {
-						// convert from half to float
-						pixel[x].red = half_rgba[x].r;
-						pixel[x].green = half_rgba[x].g;
-						pixel[x].blue = half_rgba[x].b;
+					if(image_type == FIT_RGBAF) {
+						FIRGBAF *pixel = (FIRGBAF*)scanline;
+						for(int x = 0; x < width; x++) {
+							// convert from half to float
+							pixel[x].red = half_rgba[x].r;
+							pixel[x].green = half_rgba[x].g;
+							pixel[x].blue = half_rgba[x].b;
+							pixel[x].alpha = half_rgba[x].a;
+						}
+					} else {
+						FIRGBF *pixel = (FIRGBF*)scanline;
+						for(int x = 0; x < width; x++) {
+							// convert from half to float
+							pixel[x].red = half_rgba[x].r;
+							pixel[x].green = half_rgba[x].g;
+							pixel[x].blue = half_rgba[x].b;
+						}
 					}
 					// next line
 					scanline += pitch;
 				}
 				// next chunk
-				dw.min.y += chunk_size;
+				dw.min.y += rows;
 			}
 
 		} else {
