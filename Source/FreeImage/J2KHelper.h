@@ -32,6 +32,6 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 /**
 Conversion FIBITMAP => opj_image_t
 */
-opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, const opj_cparameters_t *parameters);
+opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t *parameters);
 
 #endif // FREEIMAGE_J2K_HELPER_H

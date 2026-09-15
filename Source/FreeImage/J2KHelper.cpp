@@ -426,10 +426,10 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 Convert a FIBITMAP to a OpenJPEG image
 @param format_id Plugin ID
 @param dib FreeImage image
-@param parameters Compression parameters
+@param parameters Compression parameters; numresolution is lowered when the image is too small for it
 @return Returns the converted image if successful, returns NULL otherwise
 */
-opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, const opj_cparameters_t *parameters) {
+opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t *parameters) {
 	int prec, numcomps, x, y, index;
 	OPJ_COLOR_SPACE color_space;
 	opj_image_cmptparm_t cmptparm[4];	// maximum of 4 components 
@@ -489,7 +489,22 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, const opj_cparamet
 			}
 		}
 
-		// initialize image components 
+		// fit the number of resolution levels to the image: OpenJPEG refuses to encode when the
+		// lowest level would be empty, i.e. it needs min(w, h) >= 2^(numresolution - 1). The
+		// default of 6 levels therefore needs 32 pixels; smaller images get fewer levels
+		// (down to a single one for a 1-pixel side), which is what the standard allows anyway.
+		{
+			const int min_side = (w < h) ? w : h;
+			int levels = 1;
+			while( (levels < parameters->numresolution) && ((1 << levels) <= min_side) ) {
+				levels++;
+			}
+			if(levels < parameters->numresolution) {
+				parameters->numresolution = levels;
+			}
+		}
+
+		// initialize image components
 		memset(&cmptparm[0], 0, 4 * sizeof(opj_image_cmptparm_t));
 		for(int i = 0; i < numcomps; i++) {
 			cmptparm[i].dx = parameters->subsampling_dx;
