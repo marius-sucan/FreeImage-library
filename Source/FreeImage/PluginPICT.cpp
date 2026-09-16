@@ -459,11 +459,18 @@ Width in pixels for 16 bpp.
 Expands Width units to 32-bit pixel data.
 */
 static void 
-expandBuf( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst ) { 
+expandBuf( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst, const BYTE* dst_end ) { 
 	switch (bpp) {
 		case 16:
 			for ( int i=0; i<width; i++) {
 				WORD src = Read16( io, handle );
+
+				// keep consuming the source even once the row is full, so the
+				// stream stays aligned for the rows that follow
+				if ( dst_end - dst < 4 ) {
+					continue;
+				}
+
 				dst[ FI_RGBA_BLUE ] = (src & 31)*8;				// Blue
 				dst[ FI_RGBA_GREEN ] = ((src >> 5) & 31)*8;		// Green
 				dst[ FI_RGBA_RED ] = ((src >> 10) & 31)*8;		// Red
@@ -476,65 +483,69 @@ expandBuf( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst ) {
 	}
 }
 
+/** Advance a row pointer by n bytes, never past the end of the row. */
+static inline BYTE*
+advanceRow( BYTE* dst, size_t n, BYTE* dst_end ) {
+	return ( (size_t)(dst_end - dst) > n ) ? (dst + n) : dst_end;
+}
+
 /**
-Expands Width units to 8-bit pixel data.
+Expands srcBytes bytes of source to 8-bit pixel data, writing no further than dst_end.
 Max. 8 bpp source format.
+
+srcBytes counts bytes of SOURCE, not pixels: one source byte yields 8, 4, 2 or 1
+destination pixels for a bpp of 1, 2, 4 or 8.  That is what four of the five call
+sites always meant - they pass a PackBits packet length - while the main loops
+here counted source bytes and the "leftover pixels" blocks below them counted
+pixels, so the function could not be right both ways.  The one caller that passed
+a pixel count made a 1-bpp row write eight times its own length.
+
+Clamping at dst_end also subsumes those leftover blocks: a row whose width is not
+a whole number of source bytes simply stops at the row end, and the spare bits in
+the last byte are padding, which is what they were always meant to be.
 */
 static void 
-expandBuf8( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst )
+expandBuf8( FreeImageIO *io, fi_handle handle, int srcBytes, int bpp, BYTE* dst, BYTE* dst_end )
 {
 	switch (bpp) {
 		case 8:
-			io->read_proc( dst, width, 1, handle );
-			break;
-		case 4:
-			for (int i = 0; i < width; i++) {
-				WORD src = Read8( io, handle );
-				*dst = (src >> 4) & 15;
-				*(dst+1) = (src & 15);
-				dst += 2;
+		{
+			// one source byte per pixel
+			int n = srcBytes;
+
+			if ( n > (int)(dst_end - dst) ) {
+				n = (int)(dst_end - dst);
 			}
-			if (width & 1) { // Odd Width?
+			if ( n > 0 ) {
+				io->read_proc( dst, n, 1, handle );
+			}
+			// consume whatever did not fit, to keep the stream aligned
+			for (int i = n; i < srcBytes; i++) {
+				Read8( io, handle );
+			}
+			break;
+		}
+		case 4:
+			for (int i = 0; i < srcBytes; i++) {
 				WORD src = Read8( io, handle );
-				*dst = (src >> 4) & 15;
-				dst++;
+				if (dst < dst_end) { *dst++ = (src >> 4) & 15; }
+				if (dst < dst_end) { *dst++ = (src & 15); }
 			}
 			break;
 		case 2:
-			for (int i = 0; i < width; i++) {
+			for (int i = 0; i < srcBytes; i++) {
 				WORD src = Read8( io, handle );
-				*dst = (src >> 6) & 3;
-				*(dst+1) = (src >> 4) & 3;
-				*(dst+2) = (src >> 2) & 3;
-				*(dst+3) = (src & 3);
-				dst += 4;
-			}
-			if (width & 3)  { // Check for leftover pixels
-				for (int i = 6; i > 8 - (width & 3) * 2; i -= 2) {
-					WORD src = Read8( io, handle );
-					*dst = (src >> i) & 3;
-					dst++;
-				}
+				if (dst < dst_end) { *dst++ = (src >> 6) & 3; }
+				if (dst < dst_end) { *dst++ = (src >> 4) & 3; }
+				if (dst < dst_end) { *dst++ = (src >> 2) & 3; }
+				if (dst < dst_end) { *dst++ = (src & 3); }
 			}
 			break;
 		case 1:
-			for (int i = 0; i < width; i++) {
+			for (int i = 0; i < srcBytes; i++) {
 				WORD src = Read8( io, handle );
-				*dst = (src >> 7) & 1;
-				*(dst+1) = (src >> 6) & 1;
-				*(dst+2) = (src >> 5) & 1;
-				*(dst+3) = (src >> 4) & 1;
-				*(dst+4) = (src >> 3) & 1;
-				*(dst+5) = (src >> 2) & 1;
-				*(dst+6) = (src >> 1) & 1;
-				*(dst+7) = (src  & 1);
-				dst += 8;
-			}
-			if (width & 7) {  // Check for leftover pixels
-				for (int i = 7; i > (8-width & 7); i--) {
-					WORD src = Read8( io, handle );
-					*dst = (src >> i) & 1;
-					dst++;
+				for (int b = 7; b >= 0; b--) {
+					if (dst < dst_end) { *dst++ = (src >> b) & 1; }
 				}
 			}
 			break;
@@ -738,10 +749,18 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 			// ah-ha!  The bits aren't actually packed.  This will be easy.
 			for ( int i = 0; i < height; i++ ) {
 				BYTE* dst = (BYTE*)FreeImage_GetScanLine( dib, height - 1 - i);
+				// the dib is 32-bit for a 16-bpp source and 8-bit otherwise, so
+				// this is where the row ends - writes must not pass it
+				BYTE* dst_end = dst + ((pixelSize == 16) ? (width * 4) : width);
+
 				if (pixelSize == 16) {
-					expandBuf( io, handle, width, pixelSize, dst );
+					expandBuf( io, handle, width, pixelSize, dst, dst_end );
 				} else {
-					expandBuf8( io, handle, width, pixelSize, dst );
+					// rowBytes, not width: expandBuf8() counts SOURCE bytes, and
+					// a 1-, 2- or 4-bpp row packs several pixels into each one.
+					// Passing the pixel count made a 1-bpp row expand to eight
+					// times its own length.
+					expandBuf8( io, handle, rowBytes, pixelSize, dst, dst_end );
 				}
 			}
 		}
@@ -756,6 +775,8 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 				}
 				
 				BYTE* dst = (BYTE*)FreeImage_GetScanLine( dib, height - 1 - i);
+				// the dib is 32-bit for a 16-bpp source and 8-bit otherwise
+				BYTE* dst_end = dst + ((pixelSize == 16) ? (width * 4) : width);
 				BYTE FlagCounter;
 				
 				// Unpack RLE. The data is packed bytewise - except for
@@ -773,21 +794,31 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 							int len = ((FlagCounter ^ 255) & 255) + 2;
 							
 							// This is slow for some formats...
-							if (pixelSize == 16) {
-								expandBuf( io, handle, 1, pixelSize, dst );
-								for ( int k = 1; k < len; k++ ) { 
-									// Repeat the pixel len times.
-									memcpy( dst+(k*4*PixelPerRLEUnit), dst,	4*PixelPerRLEUnit);
+							{
+								const size_t unit = (pixelSize == 16) ? (size_t)(4*PixelPerRLEUnit) : (size_t)PixelPerRLEUnit;
+								const size_t room = (size_t)(dst_end - dst);
+
+								if (pixelSize == 16) {
+									expandBuf( io, handle, 1, pixelSize, dst, dst_end );
+								} else {
+									expandBuf8( io, handle, 1, pixelSize, dst, dst_end );
 								}
-								dst += len*4*PixelPerRLEUnit;
-							}
-							else {
-								expandBuf8( io, handle, 1, pixelSize, dst );
+
 								for ( int k = 1; k < len; k++ ) { 
-									// Repeat the expanded byte len times.
-									memcpy( dst+(k*PixelPerRLEUnit), dst, PixelPerRLEUnit);
+									// Repeat the expanded unit len times, never
+									// past the end of the row.  Offsets, not
+									// pointers, so that the bound itself is not
+									// computed out of range.
+									const size_t off = (size_t)k * unit;
+
+									if (off >= room) {
+										break;
+									}
+
+									memcpy( dst + off, dst, ((room - off) < unit) ? (room - off) : unit );
 								}
-								dst += len*PixelPerRLEUnit;
+
+								dst = advanceRow( dst, (size_t)len * unit, dst_end );
 							}
 							j += pkpixsize + 1;
 						}
@@ -796,12 +827,12 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 						// Unpacked data
 						int len = (FlagCounter & 255) + 1;
 						if (pixelSize == 16) {
-							expandBuf( io, handle, len, pixelSize, dst );
-							dst += len*4*PixelPerRLEUnit;
+							expandBuf( io, handle, len, pixelSize, dst, dst_end );
+							dst = advanceRow( dst, (size_t)len * 4 * PixelPerRLEUnit, dst_end );
 						}
 						else {
-							expandBuf8( io, handle, len, pixelSize, dst );
-							dst += len*PixelPerRLEUnit;
+							expandBuf8( io, handle, len, pixelSize, dst, dst_end );
+							dst = advanceRow( dst, (size_t)len * PixelPerRLEUnit, dst_end );
 						}
 						j += ( len * pkpixsize ) + 1;
 					}
