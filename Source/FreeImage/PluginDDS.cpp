@@ -616,6 +616,28 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 			return NULL;
 	}
 
+	// A DDS surface is stored uncompressed, so its pixel data cannot occupy less
+	// than width * height * dwRGBBitCount bits.  Relate the declared size to the
+	// bytes that are actually there: without this a 131-byte file declaring
+	// dwHeight = 0x00FFFFFF allocates 268 MB and then runs its row loop sixteen
+	// million times over a stream that ended long ago.  The division avoids
+	// overflowing the product for large declared dimensions.
+	{
+		const long pos = io->tell_proc(handle);
+		io->seek_proc(handle, 0, SEEK_END);
+		const long end = io->tell_proc(handle);
+		io->seek_proc(handle, pos, SEEK_SET);
+
+		if (end > pos) {
+			const size_t avail = (size_t)(end - pos);
+			const size_t fileLine = ((size_t)desc->dwWidth * ddspf->dwRGBBitCount + 7) / 8;
+
+			if ((fileLine == 0) || (fileLine > avail) || ((size_t)desc->dwHeight > avail / fileLine)) {
+				return NULL;
+			}
+		}
+	}
+
 	// it is perfectly valid for an uncompressed DDS file to have a width or height which is not a multiple of 4
 	// (only the packed image formats need to be a multiple of 4)
 	const int width = (int)desc->dwWidth;
