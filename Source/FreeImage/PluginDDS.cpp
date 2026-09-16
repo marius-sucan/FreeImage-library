@@ -661,17 +661,26 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 	// read the file
 	// -------------------------------------------------------------------------
 
+	// How many bytes a row occupies IN THE FILE.  This is not the bitmap's line
+	// length: a 16-bit surface is expanded into a 24-bit bitmap, so
+	// FreeImage_GetBPP(dib) reports 24 where the file stores 16, and using it
+	// here made every 16-bit row consume three bytes per pixel instead of two.
+	// With DDSD_PITCH that went unnoticed, because filePitch - line then came
+	// out negative and the seek below happened to wind the stream back by
+	// exactly the difference; without it, delta was 0 and each row swallowed
+	// half of the next one.
+	const int fileLine = CalculateLine(width, bpp);
 	const int line = CalculateLine(width, FreeImage_GetBPP(dib));
-	const int filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (int)desc->dwPitchOrLinearSize : line;
-	const long delta = (long)filePitch - (long)line;
+	const int filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (int)desc->dwPitchOrLinearSize : fileLine;
+	const long delta = (long)filePitch - (long)fileLine;
 
 	if (bpp == 16) {
-		BYTE *pixels = (BYTE*)malloc(line * sizeof(BYTE));
+		BYTE *pixels = (BYTE*)malloc(fileLine * sizeof(BYTE));
 		if (pixels) {
 			for (int y = 0; y < height; y++) {
 				BYTE *dst_bits = FreeImage_GetScanLine(dib, height - y - 1);
 				// get the 16-bit RGB pixels
-				io->read_proc(pixels, 1, line, handle);
+				io->read_proc(pixels, 1, fileLine, handle);
 				io->seek_proc(handle, delta, SEEK_CUR);
 				// convert to 24-bit
 				ConvertLine16To24(dst_bits, (const WORD*)pixels, format16, width);
@@ -680,9 +689,11 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 		free(pixels);
 	}
 	else {
+		// for every other depth the bitmap matches the file, so fileLine == line
+		// and the read fills exactly one scanline
 		for (int y = 0; y < height; y++) {
 			BYTE *pixels = FreeImage_GetScanLine(dib, height - y - 1);
-			io->read_proc(pixels, 1, line, handle);
+			io->read_proc(pixels, 1, fileLine, handle);
 			io->seek_proc(handle, delta, SEEK_CUR);
 		}
 	}
