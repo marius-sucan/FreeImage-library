@@ -49,7 +49,7 @@ Changes:
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
 - updated LibRaw library to version 0.22.2, from 0.21.1;
 - updated LibJPEG library to version 10, from the 9d of January 2020;
-- updated LibTIFF library to version 4.7.2, from a snapshot of master branch taken on 2024-04-14 (commit c5c9e6f0) that the tree labelled 4.6.0, but the code was seven months past the 4.6.0 release of September 2023;
+- updated LibTIFF library to version 4.7.2, from 4.6.0 release of September 2023;
 - updated ZLib library to version 1.3.2, from the 1.2.13 of October 2022;
 - updated OpenEXR library to version 3.3.14, from version 2.2.0. OpenEXR no longer uses ZLib for EXR data since 3.2. ZIP and DWA compression modes use libdeflate, bundled as Source/LibDeflate 1.18 with its symbols hidden;
 - updated OpenJPEG library to version 2.5.4, from a March 2014 trunk snapshot labelled 2.0.0;
