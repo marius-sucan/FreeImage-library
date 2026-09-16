@@ -125,8 +125,17 @@ Get a line from a ASCII io stream
 static BOOL 
 rgbe_GetLine(FreeImageIO *io, fi_handle handle, char *buffer, int length) {
 	int i;
+
+	if (length < 1) {
+		return FALSE;
+	}
+
+	// The last slot of the buffer belongs to the terminator.  Reading into it was
+	// what wiped the NUL that the memset had put there, and the function still
+	// reported a line: the sscanfs the header parser then runs on it went looking
+	// for their conversions past the end of the array.
 	memset(buffer, 0, length);
-	for(i = 0; i < length; i++) {
+	for(i = 0; i < length - 1; i++) {
 		if (!io->read_proc(&buffer[i], 1, 1, handle)) {
 			return FALSE;
 		}
@@ -135,7 +144,7 @@ rgbe_GetLine(FreeImageIO *io, fi_handle handle, char *buffer, int length) {
 		}
 	}
 	
-	return (i < length) ? TRUE : FALSE;
+	return (i < length - 1) ? TRUE : FALSE;
 }
 
 /**
