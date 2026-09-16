@@ -20,10 +20,7 @@ This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It 
 
 Fixes:
 
-- Patches found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39
--- CVE-2021-40266 - NULL pointer dereference in ReadPalette() in PluginTIFF.cpp [fedora-all]
--- CVE-2023-47995 - prevents memory allocation with dimensions that exceed the JPEG format limits
--- CVE-2023-47997 - prevent an infinite loop in PluginTIFF.cpp::Load. 
+- applied fixes found in the Fedora F39 repository for: CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997 found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39 ;
 - fixed buffer overflows in PluginICO.cpp, PSDParser.cpp, PluginTIFF.cpp (with the aforementioned patches)
 - fixed jxr encoder to be able to handle images over 1300 mgpx;
 - fixed bmp decoder/encoder to be able to handle images over 1300 mgpx;
@@ -44,7 +41,6 @@ Fixes:
 
 Changes:
 - FillBackgroundBitmap() has a new optional parameter;
-- applied patches/fixes found in the Fedora F39 repository for: CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995, CVE-2023-47997;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - added FreeImage_RescaleRawBits();
