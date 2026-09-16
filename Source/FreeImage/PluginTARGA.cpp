@@ -617,6 +617,13 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 		BYTE packet_count = rle + 1;
 
 		//packet_count might be corrupt, test if we are not about to write beyond the last image bit
+		//
+		// NB this measures the packet as if its pixels were contiguous, but x
+		// wraps at line_size while line_bits moves on by a whole pitch: every row
+		// the packet crosses costs pitch - line_size bytes this does not count.
+		// It is a cheap early rejection, not the bound - see the per-pixel test
+		// in the loops below, which is what actually keeps the writes inside the
+		// bitmap when line_size is not a multiple of 4.
 
 		if ((line_bits+x) + packet_count*pixel_size > dib_end) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_CORRUPTED);
@@ -632,13 +639,20 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 			//...and fill packet_count pixels with it
 
 			for (int ix = 0; ix < packet_count; ix++) {
+				if (y >= height) {
+					break;
+				}
+
 				_assignPixel<bPP>((line_bits+x), val, as24bit);
 				x += pixel_size;
 
 				if (x >= line_size) {
 					x = 0;
 					y++;
-					line_bits = FreeImage_GetScanLine(dib, y);
+
+					if (y < height) {
+						line_bits = FreeImage_GetScanLine(dib, y);
+					}
 				}
 			}
 
@@ -647,6 +661,10 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 
 			// copy packet_count pixels from file to dib
 			for (int ix = 0; ix < packet_count; ix++) {
+				if (y >= height) {
+					break;
+				}
+
 				BYTE *val = cache.getBytes(file_pixel_size);
 				_assignPixel<bPP>((line_bits+x), val, as24bit);
 				x += pixel_size;
@@ -654,7 +672,10 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 				if (x >= line_size) {
 					x = 0;
 					y++;
-					line_bits = FreeImage_GetScanLine(dib, y);
+
+					if (y < height) {
+						line_bits = FreeImage_GetScanLine(dib, y);
+					}
 				}
 			} //< packet_count
 		} //< has_rle
