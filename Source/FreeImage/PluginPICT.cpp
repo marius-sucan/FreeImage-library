@@ -971,8 +971,24 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		MacRect frame;
 		ReadRect( io, handle, &frame );
 
+		// Read8() returns 0 both for a zero byte and at end of file, so this scan
+		// for the version opcode cannot tell them apart: a file that is all zeros
+		// from here on used to spin for ever.  The stream position is what says
+		// the file is exhausted - the opcode loop below guards itself the same
+		// way, with currentPos.
 		BYTE b = 0;
-		while ((b = Read8(io, handle)) == 0);
+		for (;;) {
+			const long scanPos = io->tell_proc(handle);
+
+			b = Read8(io, handle);
+
+			if ( b != 0 ) {
+				break;
+			}
+			if ( io->tell_proc(handle) == scanPos ) {
+				throw "invalid header: end of file before the version number.";
+			}
+		}
 		if ( b != 0x11 ) {
 			throw "invalid header: version number missing.";
 		}
