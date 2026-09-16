@@ -554,14 +554,26 @@ expandBuf8( FreeImageIO *io, fi_handle handle, int srcBytes, int bpp, BYTE* dst,
 	}
 }
 
+/**
+Unpacks one PackBits row into pLineBuf, writing no further than dstBytes.
+
+srcBytes is the packed length the file gives for the row: it says how much source
+to consume and nothing at all about the destination, since a row of packets can
+expand to any length.  dstBytes is the size of the caller's buffer - a scanline
+in Unpack8Bits, the line buffer in Unpack32Bits - and is the bound that matters.
+*/
 static BYTE* 
-UnpackPictRow( FreeImageIO *io, fi_handle handle, BYTE* pLineBuf, int width, int rowBytes, int srcBytes ) {	
+UnpackPictRow( FreeImageIO *io, fi_handle handle, BYTE* pLineBuf, int width, int rowBytes, int srcBytes, int dstBytes ) {	
 
 	if (rowBytes < 8) { // Ah-ha!  The bits aren't actually packed.  This will be easy.
-		io->read_proc( pLineBuf, rowBytes, 1, handle );
+		const int n = (rowBytes < dstBytes) ? rowBytes : dstBytes;
+		if (n > 0) {
+			io->read_proc( pLineBuf, n, 1, handle );
+		}
 	}
 	else {
 		BYTE* pCurPixel = pLineBuf;
+		BYTE* const pEndPixel = pLineBuf + dstBytes;
 		
 		// Unpack RLE. The data is packed bytewise.
 		for (int j = 0; j < srcBytes; )	{
@@ -575,16 +587,26 @@ UnpackPictRow( FreeImageIO *io, fi_handle handle, BYTE* pLineBuf, int width, int
 					// Packed data.
 					int len = ((FlagCounter ^ 255) & 255) + 2;					
 					BYTE p = Read8( io, handle );
-					memset( pCurPixel, p, len);
-					pCurPixel += len;
+					const int room = (int)(pEndPixel - pCurPixel);
+					const int n = (len < room) ? len : room;
+					memset( pCurPixel, p, n);
+					pCurPixel += n;
 					j += 2;
 				}
 			}
 			else { 
 				// Unpacked data
 				int len = (FlagCounter & 255) + 1;
-				io->read_proc( pCurPixel, len, 1, handle );
-				pCurPixel += len;
+				const int room = (int)(pEndPixel - pCurPixel);
+				const int n = (len < room) ? len : room;
+				if (n > 0) {
+					io->read_proc( pCurPixel, n, 1, handle );
+				}
+				// consume whatever did not fit, to keep the stream aligned
+				for (int i = n; i < len; i++) {
+					Read8( io, handle );
+				}
+				pCurPixel += n;
 				j += len + 1;
 			}
 		}
@@ -608,7 +630,13 @@ Unpack32Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds,
 		rowBytes = (WORD)( width * 4 );
 	}
 	
-	BYTE* pLineBuf = (BYTE*)malloc( rowBytes ); // Let's allocate enough for 4 bit planes
+	// The plane-juggling loop below reads width*4 bytes back out of this buffer,
+	// so it has to be at least that large whatever rowBytes the file declares -
+	// "enough for 4 bit planes" is what the line above always meant.  And it is
+	// zeroed: a row whose packets stop early would otherwise hand the caller
+	// uninitialised heap as pixels.
+	const int lineBufSize = ( rowBytes > width * 4 ) ? rowBytes : width * 4;
+	BYTE* pLineBuf = (BYTE*)calloc( lineBufSize, 1 );
 	if ( pLineBuf )	{
 		try	{
 			for ( int i = 0; i < height; i++ ) { 
@@ -620,7 +648,7 @@ Unpack32Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds,
 					linelen = Read8( io, handle);
 				}
 				
-				BYTE* pBuf = UnpackPictRow( io, handle, pLineBuf, width, rowBytes, linelen );
+				BYTE* pBuf = UnpackPictRow( io, handle, pLineBuf, width, rowBytes, linelen, lineBufSize );
 				
 				// Convert plane-oriented data into pixel-oriented data &
 				// copy into destination bitmap.
@@ -675,6 +703,10 @@ Unpack8Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, 
 		rowBytes = (WORD)width;
 	}
 	
+	// each scanline owns pitch bytes; the padding apple adds to rowBytes lands in
+	// them, and anything beyond is the excess this routine is meant to throw away
+	const int pitch = (int)FreeImage_GetPitch( dib );
+	
 	for ( int i = 0; i < height; i++ ) {
 		int linelen;            // length of source line in bytes.
 		if (rowBytes > 250) {
@@ -683,7 +715,7 @@ Unpack8Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, 
 			linelen = Read8( io, handle );
 		}
 		BYTE* dst = (BYTE*)FreeImage_GetScanLine( dib, height - 1 - i);				
-		dst = UnpackPictRow( io, handle, dst, width, rowBytes, linelen );
+		dst = UnpackPictRow( io, handle, dst, width, rowBytes, linelen, pitch );
 	}
 }
 
