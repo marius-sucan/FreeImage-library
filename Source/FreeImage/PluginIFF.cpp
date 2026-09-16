@@ -303,22 +303,42 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							BYTE rle_count;
 							BYTE byte;
 
+							// the loop condition is only reached between packets, and
+							// a single packet writes up to 128 bytes: the row bound
+							// has to be enforced inside them as well.  The literal
+							// bytes are still all consumed, so that a packet running
+							// past the row does not misalign the rows after it.
 							while (number_of_bytes_written < line) {
-								io->read_proc(&rle_count, 1, 1, handle);
+								if (io->read_proc(&rle_count, 1, 1, handle) != 1) {
+									break;
+								}
 
 								if (rle_count < 128) {
 									for (int k = 0; k < rle_count + 1; k++) {
-										io->read_proc(&byte, 1, 1, handle);
+										if (io->read_proc(&byte, 1, 1, handle) != 1) {
+											break;
+										}
 
-										bits[number_of_bytes_written++] += byte;
+										if (number_of_bytes_written < line) {
+											bits[number_of_bytes_written++] += byte;
+										}
 									}
 								} else if (rle_count > 128) {
-									io->read_proc(&byte, 1, 1, handle);
+									if (io->read_proc(&byte, 1, 1, handle) != 1) {
+										break;
+									}
 
 									for (int k = 0; k < 257 - rle_count; k++) {
+										if (number_of_bytes_written >= line) {
+											break;
+										}
+
 										bits[number_of_bytes_written++] += byte;
 									}
 								}
+								// rle_count == 128 is a PackBits no-op.  It writes
+								// nothing, so only the read check above stops the
+								// loop spinning on a file made of 0x80 bytes.
 							}
 						} else {
 							// don't use compression
