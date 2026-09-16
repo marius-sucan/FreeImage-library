@@ -1696,13 +1696,28 @@ Two results worth keeping:
 * The 14 changed files were also compiled with the stock flags plus `-Wall -Wextra`, and
   produce no new warnings relative to the reference (PluginPICT produces one fewer).
 
+### Found while fixing, outside the 48 — both now fixed
+
+Neither was in the audit; both turned up while working on it.
+
+* **`PSDParser.cpp` — every multi-byte header field was read and written misaligned**
+  (commit `a4df0a0`). `PSDGetValue<N>`/`PSDSetValue<N>` cast a `BYTE*` to a wider type and
+  dereference it. The PSD header puts `Rows` at offset 14 and `Columns` at 18, both 2 mod 4,
+  so *every* PSD did two misaligned `DWORD` loads reading its own dimensions and two
+  misaligned stores writing them — UB in C++, a fault on targets requiring natural
+  alignment. All six accessors go through `memcpy` now. `PSDSetValue<4>`/`<8>` also declared
+  their buffer `const` and wrote through a cast that discarded the qualifier.
+* **DDS — a 16-bit surface read three bytes per pixel where the file stores two**
+  (commit `9bd2f57`). `line` came from the *bitmap's* 24 bpp rather than the file's 16.
+  With `DDSD_PITCH` set, `delta` came out negative and the seek wound the stream back by
+  exactly the overshoot, so it worked by accident; without it, `delta` was 0 and every row
+  swallowed half of the next. One RGB565 image written both ways decoded differently before
+  and identically after — to the value the `DDSD_PITCH` copy already produced.
+
 ### Still open after this pass
 
 * The 23 plausible findings.
-* **`PSDParser.cpp:125`** — UBSan reports `load of misaligned address … for type 'const
-  DWORD'` on *every* PSD, valid ones included, on both builds. Pre-existing and not in the
-  48; harmless on x86, a fault on architectures that require natural alignment.
-* **DDS 16-bit rows without `DDSD_PITCH`** — `line` is computed from the *bitmap's* 24 bpp
-  rather than the file's 16, so each row reads 3×width bytes where the row holds 2×width.
-  With `DDSD_PITCH` set the negative `delta` seek happens to correct it. Also pre-existing
-  and not in the 48; noticed while fixing finding 26.
+* **PSD cannot read back the indexed PSDs it writes.** `FreeImage_Save(FIF_PSD, …)` of an
+  8-bpp palettised bitmap succeeds, and loading the result fails; a 24-bpp round trip is
+  fine. Identical on both builds, so pre-existing. Noticed while checking that the
+  `PSDSetValue` signature change had not altered the write path.
