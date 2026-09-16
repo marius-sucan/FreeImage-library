@@ -2146,14 +2146,31 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 
 	_colourModeData._Length = 0;
 	_colourModeData._plColourData = NULL;
-	if (FreeImage_GetPalette(dib) != NULL) {
+
+	// Only an indexed image carries a colour table, and PSD defines it as a
+	// fixed 768-byte block - 256 reds, then 256 greens, then 256 blues - which
+	// is also the only length this library's own reader accepts.
+	//
+	// This used to allocate GetColorsUsed() * 3 bytes and then index it with a
+	// hard-coded stride of 256, so any palette with fewer than 256 entries
+	// overran it: saving a 1-bpp image (GetColorsUsed() == 2) allocated six
+	// bytes and wrote at offsets 256, 257, 512 and 513.  Bitmap mode has no
+	// colour table at all, so that case is simply gone.
+	if (colourMode == PSDP_INDEXED) {
 		RGBQUAD *pal = FreeImage_GetPalette(dib);
-		_colourModeData._Length = FreeImage_GetColorsUsed(dib) * 3;
-		_colourModeData._plColourData = new BYTE[_colourModeData._Length];
-		for(unsigned i = 0; i < FreeImage_GetColorsUsed(dib); i++ ) {
-			_colourModeData._plColourData[i + 0*256] = pal[i].rgbRed;
-			_colourModeData._plColourData[i + 1*256] = pal[i].rgbGreen;
-			_colourModeData._plColourData[i + 2*256] = pal[i].rgbBlue;
+
+		if (pal != NULL) {
+			const unsigned used = MIN(FreeImage_GetColorsUsed(dib), (unsigned)256);
+
+			_colourModeData._Length = 768;
+			_colourModeData._plColourData = new BYTE[768];
+			memset(_colourModeData._plColourData, 0, 768);
+
+			for(unsigned i = 0; i < used; i++ ) {
+				_colourModeData._plColourData[i + 0*256] = pal[i].rgbRed;
+				_colourModeData._plColourData[i + 1*256] = pal[i].rgbGreen;
+				_colourModeData._plColourData[i + 2*256] = pal[i].rgbBlue;
+			}
 		}
 	}
 
