@@ -72,8 +72,12 @@ Get a char from the stream
 */
 static int 
 readChar(FreeImageIO *io, fi_handle handle) {
-	BYTE c;
-	io->read_proc(&c, 1, 1, handle);
+	BYTE c = 0;
+	// must report EOF: the three scanning loops in readXBMFile() all test their
+	// result against EOF and spin forever if end of file is indistinguishable
+	// from data.  Every caller checks for EOF before indexing hex_table[].
+	if(io->read_proc(&c, 1, 1, handle) != 1)
+		return EOF;
 	return c;
 }
 
