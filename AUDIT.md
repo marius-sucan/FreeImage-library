@@ -1717,7 +1717,22 @@ Neither was in the audit; both turned up while working on it.
 ### Still open after this pass
 
 * The 23 plausible findings.
-* **PSD cannot read back the indexed PSDs it writes.** `FreeImage_Save(FIF_PSD, …)` of an
-  8-bpp palettised bitmap succeeds, and loading the result fails; a 24-bpp round trip is
-  fine. Identical on both builds, so pre-existing. Noticed while checking that the
-  `PSDSetValue` signature change had not altered the write path.
+* The `Save` paths generally: the three PSD defects above were found by accident, not by
+  review, and nothing else on the write side has been looked at.
+* **PSD writing, three defects** — all now fixed, and all on a path the audit never
+  covered (`Save`). Noticed while checking that the `PSDSetValue` signature change had not
+  altered the write path.
+  * `psdColourModeData::Write` emitted the section length in host byte order where the
+    format wants big-endian, so a 768-byte colour table was announced as 196608 and *every*
+    indexed PSD the library produced was unreadable — by its own reader and by anything
+    else (commit `fd65d1d`).
+  * The colour-table buffer was sized `GetColorsUsed() * 3` and then indexed with a
+    hard-coded stride of 256. Saving a 1-bpp image allocated six bytes and wrote at offsets
+    256, 257, 512 and 513 — an ASan heap-buffer-overflow on `FreeImage_Save`, reachable from
+    any 1-bit bitmap (commit `d47ad42`).
+  * The writer never emitted the Indexed Color Table Count resource, without which the
+    reader discards the colour table and substitutes a greyscale ramp (commit `fd65d1d`).
+
+  A 9×5 round trip now preserves pixels at 1, 8, 24 and 32 bpp, and all 256 palette entries
+  at 8 bpp. (1 bpp is PSD *bitmap* mode, which carries no colour table in the format; the
+  reader supplies black and white, so only its pixels round-trip.)
