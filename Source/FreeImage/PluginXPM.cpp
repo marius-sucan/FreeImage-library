@@ -38,6 +38,8 @@
 #include "FreeImage.h"
 #include "Utilities.h"
 
+#include <exception>
+
 // ==========================================================
 // Plugin Interface
 // ==========================================================
@@ -51,7 +53,10 @@ static int s_format_id;
 static BOOL
 FindChar(FreeImageIO *io, fi_handle handle, BYTE look_for) {
 	BYTE c;
-	io->read_proc(&c, sizeof(BYTE), 1, handle);
+	// the first read was the one call here whose result was not looked at, so on
+	// an empty stream the comparison below was against an indeterminate byte
+	if( io->read_proc(&c, sizeof(BYTE), 1, handle) != 1 )
+		return FALSE;
 	while(c != look_for) {
 		if( io->read_proc(&c, sizeof(BYTE), 1, handle) != 1 )
 			return FALSE;
@@ -66,13 +71,16 @@ ReadString(FreeImageIO *io, fi_handle handle) {
 		return NULL;
 	BYTE c;
 	std::string s;
-	io->read_proc(&c, sizeof(BYTE), 1, handle);
+	if( io->read_proc(&c, sizeof(BYTE), 1, handle) != 1 )
+		return NULL;
 	while(c != '"') {
 		s += c;
 		if( io->read_proc(&c, sizeof(BYTE), 1, handle) != 1 )
 			return NULL;
 	}
 	char *cstr = (char *)malloc(s.length()+1);
+	if( cstr == NULL )
+		return NULL;
 	strcpy(cstr,s.c_str());
 	return cstr;
 }
@@ -160,8 +168,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
     if (!handle) return NULL;
 
+	// str is out here so the handlers below can release it: the std::string and
+	// the two std::maps used between the calls to ReadString can all throw
+	char *str = NULL;
+
     try {
-		char *str;
 		
 		BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 		
@@ -177,9 +188,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		int width, height, colors, cpp;
 		if( sscanf(str, "%d %d %d %d", &width, &height, &colors, &cpp) != 4 ) {
 			free(str);
+			str = NULL;
 			throw "Improperly formed info string";
 		}
 		free(str);
+		str = NULL;
 
 		// check info string
 		if((width <= 0) || (height <= 0) || (colors <= 0) || (cpp <= 0)) {
@@ -204,8 +217,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			FILE_RGBA rgba;
 
 			str = ReadString(io, handle);
-			if(!str || (strlen(str) < (size_t)cpp))
+			if(!str || (strlen(str) < (size_t)cpp)) {
+				// a colour line shorter than cpp is an ordinary malformed file, and
+				// it used to throw with str still allocated
+				free(str);
+				str = NULL;
 				throw "Error reading color strings";
+			}
 
 			std::string chrs(str,cpp); //create a string for the color chars using the first cpp chars
 			char *keys = str + cpp; //the color keys for these chars start after the first cpp chars
@@ -252,6 +270,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 					if( n != 3 ) {
 						free(str);
+						str = NULL;
 						throw "Improperly formed hex color value";
 					}
 					rgba.r = (BYTE)red;
@@ -288,11 +307,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						// length: it must not be formatted into msg unbounded
 						snprintf(msg, sizeof(msg), "Unknown color name '%s'", str);
 						free(str);
+						str = NULL;
 						throw msg;
 					}
 				}
 			} else {
 				free(str);
+				str = NULL;
 				throw "Only color visuals are supported";
 			}
 
@@ -309,6 +330,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			free(str);
+			str = NULL;
 		}
 		//done parsing color map
 
@@ -328,6 +350,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// where str ends.  size_t, so that width * cpp cannot overflow.
 			if( strlen(str) < (size_t)width * (size_t)cpp ) {
 				free(str);
+				str = NULL;
 				throw "Pixel string is shorter than the declared image width";
 			}
 			char *pixel_ptr = str;
@@ -351,6 +374,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			free(str);
+			str = NULL;
 		}
 		//done reading pixel data
 
@@ -358,6 +382,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	} catch(const char *text) {
        FreeImage_OutputMessageProc(s_format_id, text);
 
+       free(str);
+       if( dib != NULL )
+           FreeImage_Unload(dib);
+
+       return NULL;
+    } catch(const std::exception& e) {
+       // ReadString grows a std::string for as long as the file keeps supplying
+       // bytes between two quotes, and the colour map allocates as well.  Such
+       // a throw is not a const char*, so it used to pass the handler above,
+       // pass FreeImage_LoadFromHandle - which has no handler either - and
+       // terminate the application.
+       FreeImage_OutputMessageProc(s_format_id, e.what());
+
+       free(str);
        if( dib != NULL )
            FreeImage_Unload(dib);
 
