@@ -110,7 +110,14 @@ template <>
 class PSDGetValue<2> {
 public:
 	static inline WORD get(const BYTE * iprBuffer) {
-		WORD v = ((const WORD*)iprBuffer)[0];
+		// iprBuffer points at a field inside a byte buffer and carries no
+		// alignment guarantee - the PSD header alone puts its two 4-byte fields
+		// at offsets 14 and 18.  Casting to a wider type and dereferencing is a
+		// misaligned load: undefined in C++, and a fault on targets that require
+		// natural alignment.  memcpy is the portable spelling and compiles to
+		// the same single unaligned load where the hardware allows one.
+		WORD v;
+		memcpy(&v, iprBuffer, sizeof(v));
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapShort(&v);
 #endif
@@ -122,7 +129,8 @@ template <>
 class PSDGetValue<4> {
 public:
 	static inline DWORD get(const BYTE * iprBuffer) {
-		DWORD v = ((const DWORD*)iprBuffer)[0];
+		DWORD v;
+		memcpy(&v, iprBuffer, sizeof(v));
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapLong(&v);
 #endif
@@ -134,7 +142,8 @@ template <>
 class PSDGetValue<8> {
 public:
 	static inline UINT64 get(const BYTE * iprBuffer) {
-		UINT64 v = ((const UINT64*)iprBuffer)[0];
+		UINT64 v;
+		memcpy(&v, iprBuffer, sizeof(v));
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapInt64(&v);
 #endif
@@ -181,29 +190,31 @@ public:
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapShort(&v);
 #endif
-		((WORD*)iprBuffer)[0] = v;
+		memcpy(iprBuffer, &v, sizeof(v));
 	}
 };
 
 template <>
 class PSDSetValue<4> {
 public:
-	static inline void set(const BYTE * iprBuffer, DWORD v) {
+	// takes a writable buffer: this stores into it.  It was declared const and
+	// wrote through a cast that discarded the qualifier.
+	static inline void set(BYTE * iprBuffer, DWORD v) {
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapLong(&v);
 #endif
-		((DWORD*)iprBuffer)[0] = v;
+		memcpy(iprBuffer, &v, sizeof(v));
 	}
 };
 
 template <>
 class PSDSetValue<8> {
 public:
-	static inline void set(const BYTE * iprBuffer, UINT64 v) {
+	static inline void set(BYTE * iprBuffer, UINT64 v) {
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapInt64(&v);
 #endif
-		((UINT64*)iprBuffer)[0] = v;
+		memcpy(iprBuffer, &v, sizeof(v));
 	}
 };
 
