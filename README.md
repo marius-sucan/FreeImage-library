@@ -19,7 +19,8 @@ FreeImage is currently sporadically maintained by Hervé Drolon on SourceForge. 
 This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It brings the following changes:
 
 Fixes:
--- Patches found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39
+
+- Patches found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39
 -- CVE-2021-40266 - NULL pointer dereference in ReadPalette() in PluginTIFF.cpp [fedora-all]
 -- CVE-2023-47995 - prevents memory allocation with dimensions that exceed the JPEG format limits
 -- CVE-2023-47997 - prevent an infinite loop in PluginTIFF.cpp::Load. 
