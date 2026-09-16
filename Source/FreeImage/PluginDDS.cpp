@@ -868,11 +868,25 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 
 	memset(&header, 0, sizeof(header));
-	io->read_proc(&header, 1, sizeof(header), handle);
+	if (io->read_proc(&header, 1, sizeof(header), handle) != sizeof(header)) {
+		return NULL;
+	}
 #ifdef FREEIMAGE_BIGENDIAN
 	SwapHeader(&header);
 #endif
-	
+
+	// Validate() makes these checks, but it only runs from
+	// FreeImage_GetFileType().  An application that names the format itself -
+	// which is what happens whenever it is picked from the file extension -
+	// arrives here directly, and used to reach LoadRGB()/LoadDXT() with
+	// whatever the first 128 bytes happened to contain.
+	if (header.dwMagic != MAKEFOURCC('D', 'D', 'S', ' ')) {
+		return NULL;
+	}
+	if (header.surfaceDesc.dwSize != sizeof(header.surfaceDesc) || header.surfaceDesc.ddspf.dwSize != sizeof(header.surfaceDesc.ddspf)) {
+		return NULL;
+	}
+
 	// values which indicate what type of data is in the surface, see DDPF_*
 	const DWORD dwFlags = header.surfaceDesc.ddspf.dwFlags;
 
