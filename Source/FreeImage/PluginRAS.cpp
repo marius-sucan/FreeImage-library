@@ -416,9 +416,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if (header.depth == 1) {
 			linelength = (header.width / 8) + (header.width % 8 ? 1 : 0);
 		} else {
-			linelength = header.width;
+			linelength = header.width * (header.depth / 8);
 		}
 
+		// The pad byte follows the row, so it is the row's own length in bytes
+		// that decides whether there is one.  This took the parity of the width
+		// instead, which gave every odd-width 32-bit image a pad byte the file does
+		// not contain - width*4 is always even - and from the second row on the
+		// whole image was then read one byte late.  24 bpp came out right only by
+		// accident, width*3 having the same parity as width.
 		fill = (linelength % 2) ? 1 : 0;
 
 		unsigned pitch = FreeImage_GetPitch(dib);
