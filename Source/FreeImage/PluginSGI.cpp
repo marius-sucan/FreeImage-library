@@ -132,15 +132,25 @@ static int
 get_rlechar(FreeImageIO *io, fi_handle handle, RLEStatus *pstatus) {
 	if (!pstatus->cnt) {
 		int cnt = 0;
-		while (0 == cnt) {
+		// An opcode whose low seven bits are zero carries no pixels.  This loop
+		// already skipped a bare 0x00; 0x80 went through it, gave a run length of
+		// zero, and the unconditional cnt-- below then took the counter to -1 - at
+		// which point "if (!cnt)" is false forever, no opcode is ever read again,
+		// and with val still -1 the decoder emits the rest of the stream as
+		// literal bytes.  One such byte silently garbles everything after it.
+		//
+		// The format's own reading of a zero count is "end of scanline", but this
+		// decoder does not have that option open to it: it reaches every row
+		// through the offset table and always writes exactly width pixels, so
+		// ending early would leave the rest of the row undefined.  Skipping is
+		// what it already does for 0x00, and what FreeImage's PICT decoder does
+		// for the same opcode ("Apple says ignore").
+		while (0 == (cnt & 0x7F)) {
 			BYTE packed = 0;
 			if(io->read_proc(&packed, sizeof(BYTE), 1, handle) < 1) {
 				return EOF;
 			}
 			cnt = packed;
-		}
-		if (cnt == EOF) {
-			return EOF;
 		}
 		pstatus->cnt = cnt & 0x7F;
 		if (cnt & 0x80) {
