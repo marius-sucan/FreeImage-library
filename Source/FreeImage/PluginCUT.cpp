@@ -152,10 +152,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// unpack the RLE bitmap bits
 
-		BYTE *bits = FreeImage_GetScanLine(dib, header.height - 1);
+		// decode top-down into a bottom-up dib: y counts the rows still to fill.
+		// Addressing the row by index rather than stepping a pointer by the pitch
+		// is what keeps the writes inside the bitmap - see the end-of-row case.
+		int y = (int)header.height - 1;
+		BYTE *bits = FreeImage_GetScanLine(dib, y);
 
 		unsigned i = 0, k = 0;
-		unsigned pitch = FreeImage_GetPitch(dib);
 		// both are WORD, so each promotes to int and the product is computed in
 		// int: 65535 * 65535 overflows it.  Multiply as unsigned, where the full
 		// range fits.
@@ -168,8 +171,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			if (count == 0) {
+				// end of row.  i is not advanced here, so nothing else bounds the
+				// number of these a file may contain: without the row count a run
+				// of them walks bits off the front of the allocation, and the next
+				// record then writes there.
 				k = 0;
-				bits -= pitch;
+
+				if (--y < 0) {
+					break;
+				}
+
+				bits = FreeImage_GetScanLine(dib, y);
 
 				// paint shop pro adds two useless bytes here...
 
