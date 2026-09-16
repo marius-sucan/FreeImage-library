@@ -45,8 +45,8 @@ asan: clean-bin all
 
 # the flags Makefile.gnu compiles the library's C and C++ files with
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
-LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
-LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
+LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden -DWEBP_EXTERN=extern $(OPENMP_CFLAGS)
+LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden -DWEBP_EXTERN=extern $(OPENMP_CFLAGS)
 ASAN        = -fsanitize=address -fno-omit-frame-pointer
 
 WEBP_C   = $(shell find ../../Source/LibWebP/src ../../Source/LibWebP/sharpyuv -name '*.c')

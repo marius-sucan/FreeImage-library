@@ -81,7 +81,23 @@
 
 // Whether the user configured the library to have symbol visibility
 // tagged
-#define OPENEXR_ENABLE_API_VISIBILITY
+//
+// FreeImage: deliberately left undefined - this is upstream's
+// OPENEXR_ENABLE_API_VISIBILITY=OFF.  Defined, it makes IMF_EXPORT, IEX_EXPORT,
+// ILMTHREAD_EXPORT and EXR_EXPORT expand to
+// __attribute__((visibility("default"))), and an explicit attribute overrides
+// -fvisibility=hidden, which is what every makefile targeting ELF or Mach-O
+// passes (Makefile.mingw does not: PE exports are decided by dllexport, and
+// nothing in OpenEXR is declared with it).  That
+// exported ~6500 OpenEXR symbols from libfreeimage.so - 90% of its dynamic
+// symbol table against 255 FreeImage_* entry points - and made the library
+// interpose on any system OpenEXR in the same process: the C core's exr_* names
+// carry no version namespace at all, so every one of them collides across major
+// versions.  Undefined, all of these macros expand to nothing, which is what the
+// MSVC build has always used (_MSC_VER takes the same branch).  Nothing outside
+// Source/OpenEXR needs them: FreeImage.h never mentions Imf or OpenEXR.
+// Keep this undefined when the bundle is updated.
+// #define OPENEXR_ENABLE_API_VISIBILITY
 
 /// \defgroup ExportMacros Macros to manage symbol visibility
 ///
