@@ -103,6 +103,25 @@ typedef struct {
 	BYTE remaining;		// how much of the run is still owed
 } RASRLEState;
 
+/**
+Skip n bytes of the stream.  maplength is an unvalidated DWORD out of the file
+and seek_proc takes a long, which is 32 bits and signed on plenty of builds, so
+the skip is taken in steps that always fit one.
+*/
+static BOOL
+SkipBytes(FreeImageIO *io, fi_handle handle, DWORD n) {
+	while (n > 0) {
+		const long step = (n > 0x10000000) ? 0x10000000 : (long)n;
+
+		if (io->seek_proc(handle, step, SEEK_CUR) != 0) {
+			return FALSE;
+		}
+		n -= (DWORD)step;
+	}
+
+	return TRUE;
+}
+
 static void
 ReadData(FreeImageIO *io, fi_handle handle, BYTE *buf, DWORD length, BOOL rle, RASRLEState *run) {
 	// Read either Run-Length Encoded or normal image data
@@ -343,39 +362,45 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					throw "Invalid palette, return null";
 				}
 
-				r = (BYTE*)malloc(3 * numcolors * sizeof(BYTE));
-				g = r + numcolors;
-				b = g + numcolors;
+				if (numcolors > 0) {
+					r = (BYTE*)malloc(3 * numcolors * sizeof(BYTE));
+					if (NULL == r) {
+						throw FI_MSG_ERROR_MEMORY;
+					}
+					g = r + numcolors;
+					b = g + numcolors;
 
-				io->read_proc(r, 3 * numcolors, 1, handle);
+					io->read_proc(r, 3 * numcolors, 1, handle);
 
-				for (int i = 0; i < numcolors; i++) {
-					pal[i].rgbRed	= r[i];
-					pal[i].rgbGreen = g[i];
-					pal[i].rgbBlue	= b[i];
+					for (int i = 0; i < numcolors; i++) {
+						pal[i].rgbRed	= r[i];
+						pal[i].rgbGreen = g[i];
+						pal[i].rgbBlue	= b[i];
+					}
+
+					free(r);
 				}
 
 				// step over any colormap bytes beyond the entries we took, so the
 				// pixel data starts where the header says it does
 				if(header.maplength > (DWORD)(3 * numcolors)) {
-					io->seek_proc(handle, (long)(header.maplength - 3 * numcolors), SEEK_CUR);
+					SkipBytes(io, handle, header.maplength - 3 * numcolors);
 				}
 
-				free(r);
 				break;
 			}
 
 			case RMT_RAW:
 			{
-				BYTE *colormap;
+				// Skip the SUN raster colormap.  This used to malloc maplength bytes,
+				// read them and free them again - and maplength is an unvalidated
+				// DWORD, so a 34-byte file could ask for 4 GiB and then dereference
+				// whatever malloc returned.  Nothing ever looked at the bytes.
 
-				// Read (skip) SUN raster colormap.
+				if (!SkipBytes(io, handle, header.maplength)) {
+					throw "Invalid colormap";
+				}
 
-				colormap = (BYTE *)malloc(header.maplength * sizeof(BYTE));
-
-				io->read_proc(colormap, header.maplength, 1, handle);
-
-				free(colormap);
 				break;
 			}
 		}
@@ -423,7 +448,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			{
 				BYTE *buf, *bp;
 
-				buf = (BYTE*)malloc(header.width * 3);
+				buf = (BYTE*)malloc((size_t)header.width * 3);
+				if (NULL == buf) {
+					throw FI_MSG_ERROR_MEMORY;
+				}
 
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
@@ -463,7 +491,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			{
 				BYTE *buf, *bp;
 
-				buf = (BYTE*)malloc(header.width * 4);
+				buf = (BYTE*)malloc((size_t)header.width * 4);
+				if (NULL == buf) {
+					throw FI_MSG_ERROR_MEMORY;
+				}
 
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
