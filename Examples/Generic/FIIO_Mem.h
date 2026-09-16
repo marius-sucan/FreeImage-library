@@ -9,7 +9,7 @@
 #ifndef _FIIO_MEM_H_
 #define _FIIO_MEM_H_
 
-#include "freeimage.h"
+#include "FreeImage.h"
 
 #ifdef __cplusplus
 extern "C" {

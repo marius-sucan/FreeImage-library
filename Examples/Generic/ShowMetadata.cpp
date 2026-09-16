@@ -36,6 +36,7 @@
 #include <iostream>
 #include <sstream>
 #include <fstream>
+#include <string.h>
 
 using namespace std;
 
@@ -225,32 +226,32 @@ main(int argc, char *argv[]) {
 
 	// Parse and print metadata
 
-	if(count = FreeImage_GetMetadataCount(FIMD_COMMENTS, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_COMMENTS, dib)) != 0) {
 		cout << "\nFIMD_COMMENTS (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "Comments", dib, FIMD_COMMENTS);
 	}	
-	if(count = FreeImage_GetMetadataCount(FIMD_EXIF_MAIN, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_EXIF_MAIN, dib)) != 0) {
 		cout << "\nFIMD_EXIF_MAIN (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "Exif - main info", dib, FIMD_EXIF_MAIN);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_EXIF_EXIF, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_EXIF_EXIF, dib)) != 0) {
 		cout << "\nFIMD_EXIF_EXIF (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "Exif - advanced info", dib, FIMD_EXIF_EXIF);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_EXIF_GPS, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_EXIF_GPS, dib)) != 0) {
 		cout << "\nFIMD_EXIF_GPS (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "Exif GPS", dib, FIMD_EXIF_GPS);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_EXIF_INTEROP, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_EXIF_INTEROP, dib)) != 0) {
 		cout << "\nFIMD_EXIF_INTEROP (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "Exif interoperability", dib, FIMD_EXIF_INTEROP);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_EXIF_MAKERNOTE, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_EXIF_MAKERNOTE, dib)) != 0) {
 		cout << "\nFIMD_EXIF_MAKERNOTE (" << count << " data)\n-----------------------------------------\n";
 
 		// Get the camera model
@@ -262,12 +263,12 @@ main(int argc, char *argv[]) {
 
 		PrintMetadata(metadataFile, buffer.c_str(), dib, FIMD_EXIF_MAKERNOTE);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_IPTC, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_IPTC, dib)) != 0) {
 		cout << "\nFIMD_IPTC (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "IPTC/NAA", dib, FIMD_IPTC);
 	}
-	if(count = FreeImage_GetMetadataCount(FIMD_GEOTIFF, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_GEOTIFF, dib)) != 0) {
 		cout << "\nFIMD_GEOTIFF (" << count << " data)\n-----------------------------------------\n";
 
 		PrintMetadata(metadataFile, "GEOTIFF", dib, FIMD_GEOTIFF);
@@ -284,7 +285,7 @@ main(int argc, char *argv[]) {
 
 	// print XMP data
 
-	if(count = FreeImage_GetMetadataCount(FIMD_XMP, dib)) {
+	if((count = FreeImage_GetMetadataCount(FIMD_XMP, dib)) != 0) {
 		cout << "\nFIMD_XMP (" << count << " packet)\n-----------------------------------------\n";
 
 		std::string xmp_file(strtok(argv[1], ".") + std::string(".xmp"));

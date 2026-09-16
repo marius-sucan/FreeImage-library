@@ -28,7 +28,9 @@
 //
 // ==========================================================
 
-#include <iostream.h>
+#include <iostream>
+
+using namespace std;
 #include <stdio.h>
 #include <string.h>
 
@@ -46,7 +48,7 @@ void MyMessageFunc(FREE_IMAGE_FORMAT fif, const char *message) {
 
 // ----------------------------------------------------------
 
-bool CloneMultiPage(FREE_IMAGE_FORMAT fif, char *input, char *output, int output_flag) {
+bool CloneMultiPage(FREE_IMAGE_FORMAT fif, const char *input, const char *output, int output_flag) {
 
 	BOOL bMemoryCache = TRUE;
 
@@ -87,8 +89,8 @@ bool CloneMultiPage(FREE_IMAGE_FORMAT fif, char *input, char *output, int output
 int 
 main(int argc, char *argv[]) {
 
-	char *input_filename = "images\\input.tif";
-	char *output_filename = "images\\clone.tif";
+	const char *input_filename = (argc > 1) ? argv[1] : "images/input.tif";
+	const char *output_filename = (argc > 2) ? argv[2] : "clone.tif";
 
 	// call this ONLY when linking with FreeImage as a static library
 #ifdef FREEIMAGE_LIB
@@ -99,9 +101,24 @@ main(int argc, char *argv[]) {
 
 	FreeImage_SetOutputMessage(MyMessageFunc);
 
-	// Copy 'input.tif' to 'clone.tif'
+	// Copy the input to the output, page by page. The format comes from the
+	// file itself rather than being assumed, so this clones any of the paging
+	// formats that can also be written - TIFF, GIF, ICO.
 
-	CloneMultiPage(FIF_TIFF, input_filename, output_filename, 0);
+	FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(input_filename, 0);
+	if (fif == FIF_UNKNOWN) {
+		fif = FreeImage_GetFIFFromFilename(input_filename);
+	}
+
+	if (fif == FIF_UNKNOWN) {
+		cout << input_filename << " : unknown format\n";
+	} else if (!FreeImage_FIFSupportsWriting(fif)) {
+		cout << FreeImage_GetFormatFromFIF(fif) << " : this format cannot be written\n";
+	} else if (CloneMultiPage(fif, input_filename, output_filename, 0)) {
+		cout << input_filename << " -> " << output_filename << "\n";
+	} else {
+		cout << input_filename << " : could not be opened\n";
+	}
 
 	// call this ONLY when linking with FreeImage as a static library
 #ifdef FREEIMAGE_LIB

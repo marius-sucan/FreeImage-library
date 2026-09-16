@@ -39,9 +39,16 @@
 
 #include <assert.h>
 #include <stdio.h>
-#include <io.h>
 #include <string.h>
 #include <stdlib.h>
+
+// Listing a directory is the one thing here that is not portable. <io.h> and
+// _findfirst are Microsoft's; everywhere else it is <dirent.h> and opendir.
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <dirent.h>
+#endif
 
 #include "FreeImage.h"
 
@@ -111,7 +118,7 @@ void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message) {
 	if(fif != FIF_UNKNOWN) {
 		printf("%s Format\n", FreeImage_GetFormatFromFIF(fif));
 	}
-	printf(message);
+	printf("%s", message);
 	printf(" ***\n");
 }
 
@@ -121,11 +128,51 @@ void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message) {
 #define MAX_PATH	260
 #endif
 
+/** Convert one file of the input directory to a numbered PNG
+	@param input_dir Directory being scanned, with its trailing separator
+	@param name File name within that directory
+	@param id Number to use for the output file; incremented on success
+	@param log_file Log to write the outcome to
+*/
+static void ConvertOne(const char *input_dir, const char *name, int *id, FILE *log_file) {
+	char directory[MAX_PATH];
+	char unique[128];
+
+	// make a path to the file
+	snprintf(directory, sizeof(directory), "%s%s", input_dir, name);
+
+	// make a unique filename
+	snprintf(unique, sizeof(unique), "%d.png", *id);
+
+	// open and load the file using the default load option
+	FIBITMAP *dib = GenericLoader(directory, 0);
+
+	if (dib != NULL) {
+		// save the file as PNG
+		bool bSuccess = GenericWriter(dib, unique, PNG_DEFAULT);
+
+		// free the dib
+		FreeImage_Unload(dib);
+
+		if (bSuccess) {
+			fwrite(unique, strlen(unique), 1, log_file);
+		} else {
+			strcpy(unique, "FAILED");
+			fwrite(unique, strlen(unique), 1, log_file);
+		}
+		fwrite(" >> ", 4, 1, log_file);
+		fwrite(directory, strlen(directory), 1, log_file);
+		fwrite("\n", 1, 1, log_file);
+
+		(*id)++;
+	}
+}
+
 int 
 main(int argc, char *argv[]) {
 
-	const char *input_dir = "d:\\images\\";
-	FIBITMAP *dib = NULL;
+	// the directory to scan, with a trailing separator
+	const char *input_dir = (argc > 1) ? argv[1] : "images/";
 	int id = 1;
 
 	// call this ONLY when linking with FreeImage as a static library
@@ -139,10 +186,8 @@ main(int argc, char *argv[]) {
 
 	// print version & copyright infos
 
-	printf(FreeImage_GetVersion());
-	printf("\n");
-	printf(FreeImage_GetCopyrightMessage());
-	printf("\n");
+	printf("%s\n", FreeImage_GetVersion());
+	printf("%s\n", FreeImage_GetCopyrightMessage());
 
 	// open the log file
 
@@ -150,58 +195,37 @@ main(int argc, char *argv[]) {
 
 	// batch convert all supported bitmaps
 
+#ifdef _WIN32
+	// Microsoft's walk wants a pattern rather than a directory
 	_finddata_t finddata;
-	long handle;
+	intptr_t handle;
 	char image_path[MAX_PATH];
 
-	// scan all files
-	strcpy(image_path, input_dir);
-	strcat(image_path, "*.*");
+	snprintf(image_path, sizeof(image_path), "%s*.*", input_dir);
 
 	if ((handle = _findfirst(image_path, &finddata)) != -1) {
 		do {
-			// make a path to a directory
-
-			char *directory = new char[MAX_PATH];
-			strcpy(directory, input_dir);
-			strcat(directory, finddata.name);
-
-			// make a unique filename
-
-			char *unique = new char[128];
-			itoa(id, unique, 10);
-			strcat(unique, ".png");
-
-			// open and load the file using the default load option
-			dib = GenericLoader(directory, 0);
-
-			if (dib != NULL) {
-				// save the file as PNG
-				bool bSuccess = GenericWriter(dib, unique, PNG_DEFAULT);
-
-				// free the dib
-				FreeImage_Unload(dib);
-
-				if(bSuccess) {
-					fwrite(unique, strlen(unique), 1, log_file);
-				} else {
-					strcpy(unique, "FAILED");
-					fwrite(unique, strlen(unique), 1, log_file);
-				}
-				fwrite(" >> ", 4, 1, log_file);
-				fwrite(directory, strlen(directory), 1, log_file);
-				fwrite("\n", 1, 1, log_file);
-
-				id++;
-			}
-
-			delete [] unique;
-			delete [] directory;
-
+			ConvertOne(input_dir, finddata.name, &id, log_file);
 		} while (_findnext(handle, &finddata) == 0);
 
 		_findclose(handle);
 	}
+#else
+	// everywhere else, the directory itself
+	DIR *dir = opendir(input_dir);
+
+	if (dir != NULL) {
+		struct dirent *entry;
+
+		while ((entry = readdir(dir)) != NULL) {
+			// GenericLoader will refuse "." and ".." along with anything else
+			// that is not an image, so there is nothing else to filter here
+			ConvertOne(input_dir, entry->d_name, &id, log_file);
+		}
+
+		closedir(dir);
+	}
+#endif
 
 	fclose(log_file);
 

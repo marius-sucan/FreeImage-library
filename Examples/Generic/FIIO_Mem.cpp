@@ -8,7 +8,7 @@
 
 #include <string.h>
 #include <stdlib.h>
-#include "fiio_mem.h"
+#include "FIIO_Mem.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,0 +1,15 @@
+# built by this directory's Makefile
+BatchLoad
+CloneMultiPage
+CreateAlpha
+FIFImportExport
+LoadFromHandle
+LoadFromMemory
+LoadFromMemory-classified
+ShowMetadata
+WebPAnimation
+*.o
+# scratch files the examples write when they are run
+log_file.txt
+fif_import.csv
+fif_export.csv

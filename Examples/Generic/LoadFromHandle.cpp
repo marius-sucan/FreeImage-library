@@ -47,7 +47,7 @@ void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message) {
 	if(fif != FIF_UNKNOWN) {
 		printf("%s Format\n", FreeImage_GetFormatFromFIF(fif));
 	}
-	printf(message);
+	printf("%s", message);
 	printf(" ***\n");
 }
 
@@ -89,10 +89,8 @@ main(int argc, char *argv[]) {
 
 	// print version & copyright infos
 
-	printf(FreeImage_GetVersion());
-	printf("\n");
-	printf(FreeImage_GetCopyrightMessage());
-	printf("\n");
+	printf("%s\n", FreeImage_GetVersion());
+	printf("%s\n", FreeImage_GetCopyrightMessage());
 
 
 	if(argc != 2) {

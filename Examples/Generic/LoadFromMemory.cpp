@@ -22,43 +22,65 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "FreeImage.h"
 
 // ----------------------------------------------------------
 
+// The read position within the buffer. `handle`, below, is where the buffer
+// starts, so the two together say how far into it we are.
 fi_handle g_load_address;
+
+// How long the buffer is. A plugin is entitled to seek to the end of its input
+// to find out how big it is - several of them do - so the size has to be known
+// here as well; the original example asserted that it would never be asked.
+long g_buffer_size;
 
 // ----------------------------------------------------------
 
-inline unsigned _stdcall
+// DLL_CALLCONV, not _stdcall: FreeImage declares its four I/O callbacks with
+// that macro, which is __stdcall only where the platform wants it and nothing
+// anywhere else. Spelling the convention out by hand does not compile off MSVC.
+
+static unsigned DLL_CALLCONV
 _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
-	BYTE *tmp = (BYTE *)buffer;
+	// Stop at the end of the buffer and report how many whole items came out.
+	// A plugin may ask for more than is left - several do, on the last read of
+	// a stream - and the original of this example answered with whatever
+	// followed the buffer in memory, which is why it crashed on any file whose
+	// size it had not been told in advance.
+	BYTE *start = (BYTE *)handle;
+	BYTE *position = (BYTE *)g_load_address;
+	long remaining = g_buffer_size - (long)(position - start);
 
-	for (unsigned c = 0; c < count; c++) {
-		memcpy(tmp, g_load_address, size);
-
-		g_load_address = (BYTE *)g_load_address + size;
-
-		tmp += size;
+	if ((size == 0) || (remaining <= 0)) {
+		return 0;
 	}
+	if ((unsigned long)remaining < (unsigned long)size * count) {
+		count = (unsigned)((unsigned long)remaining / size);
+	}
+
+	memcpy(buffer, position, (size_t)size * count);
+
+	g_load_address = position + (size_t)size * count;
 
 	return count;
 }
 
-inline unsigned _stdcall
+static unsigned DLL_CALLCONV
 _WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	// there's not much use for saving the bitmap into memory now, is there?
 
 	return size;
 }
 
-inline int _stdcall
+static int DLL_CALLCONV
 _SeekProc(fi_handle handle, long offset, int origin) {
-	assert(origin != SEEK_END);
-
 	if (origin == SEEK_SET) {
 		g_load_address = (BYTE *)handle + offset;
+	} else if (origin == SEEK_END) {
+		g_load_address = (BYTE *)handle + g_buffer_size + offset;
 	} else {
 		g_load_address = (BYTE *)g_load_address + offset;
 	}
@@ -66,17 +88,27 @@ _SeekProc(fi_handle handle, long offset, int origin) {
 	return 0;
 }
 
-inline long _stdcall
+static long DLL_CALLCONV
 _TellProc(fi_handle handle) {
-	assert((int)handle > (int)g_load_address);
+	// how far into the buffer we are. Subtract the pointers themselves: casting
+	// each to int first, as this example used to, throws away the top half of
+	// every address on a 64-bit machine.
+	assert((BYTE *)g_load_address >= (BYTE *)handle);
 
-	return ((int)g_load_address - (int)handle);
+	return (long)((BYTE *)g_load_address - (BYTE *)handle);
 }
 
 // ----------------------------------------------------------
 
 int 
 main(int argc, char *argv[]) {
+	const char *filename = (argc > 1) ? argv[1] : "images/sample.tif";
+
+	// call this ONLY when linking with FreeImage as a static library
+#ifdef FREEIMAGE_LIB
+	FreeImage_Initialise();
+#endif // FREEIMAGE_LIB
+
 	FreeImageIO io;
 
 	io.read_proc  = _ReadProc;
@@ -84,30 +116,55 @@ main(int argc, char *argv[]) {
 	io.tell_proc  = _TellProc;
 	io.seek_proc  = _SeekProc;
 
-	// allocate some memory for the bitmap
+	// read the file into memory. Of course you can get the bytes any way you
+	// want - off the network, out of a resource, from a parent format that
+	// embeds this one - which is the whole point of loading from a handle.
 
-	BYTE *test = new BYTE[159744];
+	FILE *file = fopen(filename, "rb");
 
-	if (test != NULL) {
-		// load the bitmap into memory. ofcourse you can do this any way you want
+	if (file != NULL) {
+		fseek(file, 0, SEEK_END);
+		long file_size = ftell(file);
+		fseek(file, 0, SEEK_SET);
 
-		FILE *file = fopen("e:\\projects\\images\\money-256.tif", "rb");
-		fread(test, 159744, 1, file);
-		fclose(file);
+		BYTE *test = new BYTE[file_size];
 
-		// we store the load address of the bitmap for internal reasons
+		if (fread(test, 1, file_size, file) == (size_t)file_size) {
+			// we store the load address and the length of the bitmap for
+			// internal reasons: the i/o functions above need both
 
-		g_load_address = test;
+			g_load_address = test;
+			g_buffer_size = file_size;
 
-		// convert the bitmap
-		
-		FIBITMAP *dib = FreeImage_LoadFromHandle(FIF_TIFF, &io, (fi_handle)test);
+			// work out the format from the bytes themselves, then convert
 
-		// don't forget to free the dib !
-		FreeImage_Unload(dib);
+			FREE_IMAGE_FORMAT fif = FreeImage_GetFileTypeFromHandle(&io, (fi_handle)test, 0);
+
+			g_load_address = test;
+
+			FIBITMAP *dib = FreeImage_LoadFromHandle(fif, &io, (fi_handle)test);
+
+			if (dib != NULL) {
+				printf("%s : %u x %u, %u bpp\n", filename,
+					FreeImage_GetWidth(dib), FreeImage_GetHeight(dib), FreeImage_GetBPP(dib));
+
+				// don't forget to free the dib !
+				FreeImage_Unload(dib);
+			} else {
+				printf("%s : could not be decoded\n", filename);
+			}
+		}
 
 		delete [] test;
+		fclose(file);
+	} else {
+		printf("%s : could not be opened\n", filename);
 	}
+
+	// call this ONLY when linking with FreeImage as a static library
+#ifdef FREEIMAGE_LIB
+	FreeImage_DeInitialise();
+#endif // FREEIMAGE_LIB
 
 	return 0;
 }
