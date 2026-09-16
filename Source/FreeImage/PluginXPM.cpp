@@ -317,6 +317,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			str = ReadString(io, handle);
 			if(!str)
 				throw "Error reading pixel strings";
+			// the row must actually hold the width * cpp characters the info string
+			// promised: the loop below reads cpp bytes per pixel with no regard for
+			// where str ends.  size_t, so that width * cpp cannot overflow.
+			if( strlen(str) < (size_t)width * (size_t)cpp ) {
+				free(str);
+				throw "Pixel string is shorter than the declared image width";
+			}
 			char *pixel_ptr = str;
 
 			for(int x = 0; x < width; x++ ) {
