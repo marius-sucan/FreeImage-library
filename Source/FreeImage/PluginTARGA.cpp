@@ -243,7 +243,8 @@ public:
 	}
 	
 	inline
-	BYTE* getBytes(size_t count /*must be < _size!*/) {
+	BYTE* getBytes(size_t count /*must be <= _size - the caller sizes the cache to guarantee it*/) {
+		assert(count <= _size);
 		if (_ptr + count >= _end) {
 			
 			// need refill
@@ -593,7 +594,15 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 	if (remaining_size < height) {
 		throw FI_MSG_ERROR_CORRUPTED;
 	}
-	const long sz = (remaining_size / height);
+	long sz = (remaining_size / height);
+
+	// ...but never below one pixel.  getBytes() hands back a pointer and assumes
+	// count bytes are behind it; the file chooses this size, so pixel data
+	// averaging fewer than bPP/8 bytes per row would otherwise build a cache
+	// smaller than a single getBytes(file_pixel_size) call can satisfy.
+	if (sz < file_pixel_size) {
+		sz = file_pixel_size;
+	}
 
 	// ...and allocate cache of this size (yields good results)
 	IOCache cache(io, handle, sz);
