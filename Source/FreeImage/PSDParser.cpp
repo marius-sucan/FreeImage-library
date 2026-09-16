@@ -395,7 +395,15 @@ bool psdColourModeData::Read(FreeImageIO *io, fi_handle handle) {
 }
 
 bool psdColourModeData::Write(FreeImageIO *io, fi_handle handle) {
-	if(io->write_proc(&_Length, sizeof(_Length), 1, handle) != 1) {
+	// the length is a big-endian field in the file, and Read() above decodes it
+	// with psdGetValue.  Writing the int straight out of memory emitted it in
+	// host order, so on a little-endian machine every indexed PSD the library
+	// produced declared a colour table of 0x00030000 bytes instead of 0x300 -
+	// and the library's own reader then failed on it with "Error in Image Data".
+	BYTE Length[4];
+	psdSetValue(Length, sizeof(Length), (DWORD)_Length);
+
+	if(io->write_proc(Length, sizeof(Length), 1, handle) != 1) {
 		return false;
 	}
 	if(0 < _Length) {
@@ -2204,6 +2212,26 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 	_displayInfo._padding = 0;
 	if (!_displayInfo.Write(io, handle)) {
 		return false;
+	}
+
+	// (Photoshop 6.0) Indexed Color Table Count - the number of entries in the
+	// colour table that are actually defined.  ReadImageData() will not use the
+	// colour table unless this resource is present, so an indexed PSD written
+	// without it came back with a default greyscale palette in place of the one
+	// it was saved with.
+	if (colourMode == PSDP_INDEXED) {
+		psdImageResource res;
+		BYTE ShortValue[2];
+
+		if (!res.Write(io, handle, PSDP_RES_INDEXED_COLORS, (int)sizeof(ShortValue))) {
+			return false;
+		}
+
+		psdSetValue(ShortValue, sizeof(ShortValue), (WORD)MIN(FreeImage_GetColorsUsed(dib), (unsigned)256));
+
+		if(io->write_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+			return false;
+		}
 	}
 
 	if(GetThumbnail() == NULL) {
