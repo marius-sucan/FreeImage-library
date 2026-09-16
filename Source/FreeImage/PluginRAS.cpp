@@ -193,15 +193,18 @@ SupportsNoPixels() {
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	SUNHEADER header;	// Sun file header
-	WORD linelength;	// Length of raster line in bytes
-	WORD fill;			// Number of fill bytes per raster line
+	// these four track DWORD header fields: as WORDs they truncated the line
+	// length and, worse, made the row and column loops below wrap at 65536 and
+	// never terminate
+	unsigned linelength;	// Length of raster line in bytes
+	unsigned fill;			// Number of fill bytes per raster line
 	BOOL rle;			// TRUE if RLE file
 	BOOL isRGB;			// TRUE if file type is RT_FORMAT_RGB
 	BYTE fillchar;
 
 	FIBITMAP *dib = NULL;
 	BYTE *bits;			// Pointer to dib data
-	WORD x, y;
+	unsigned x, y;
 
 	if(!handle) {
 		return NULL;
@@ -364,9 +367,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// Each row is multiple of 16 bits (2 bytes).
 
 		if (header.depth == 1) {
-			linelength = (WORD)((header.width / 8) + (header.width % 8 ? 1 : 0));
+			linelength = (header.width / 8) + (header.width % 8 ? 1 : 0);
 		} else {
-			linelength = (WORD)header.width;
+			linelength = header.width;
 		}
 
 		fill = (linelength % 2) ? 1 : 0;
