@@ -257,14 +257,27 @@ rgbe_ReadHeader(FreeImageIO *io, fi_handle handle, unsigned *width, unsigned *he
 		return rgbe_Error(rgbe_read_error, NULL);
 	}
 
-	// get the image width & height
-	if(sscanf(buf,"-Y %d +X %d", height, width) < 2) {
+	// get the image width & height.
+	// %d must land in ints: writing it straight into the unsigned outputs let a
+	// negative value through, and "-Y 1 +X -1" then reached rgbe_ReadPixels()
+	// with numpixels = 4294967295 - twelve bytes written per four read, over a
+	// twelve-byte scanline, until the file ran out.
+	int nWidth = 0, nHeight = 0;
+
+	if(sscanf(buf,"-Y %d +X %d", &nHeight, &nWidth) < 2) {
 		// the fields swap round in this form, so the arguments have to as well:
 		// reading "+X <w> +Y <h>" into (height, width) transposed the image
-		if(sscanf(buf,"+X %d +Y %d", width, height) < 2) {
+		if(sscanf(buf,"+X %d +Y %d", &nWidth, &nHeight) < 2) {
 			return rgbe_Error(rgbe_format_error, "missing image size specifier");
 		}
 	}
+
+	if((nWidth <= 0) || (nHeight <= 0)) {
+		return rgbe_Error(rgbe_format_error, "invalid image size specifier");
+	}
+
+	*width = (unsigned)nWidth;
+	*height = (unsigned)nHeight;
 
 	return TRUE;
 }
