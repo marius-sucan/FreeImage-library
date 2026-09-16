@@ -55,7 +55,12 @@ static BOOL
 VerticalOrientation(FreeImageIO *io, fi_handle handle) {
 	char buffer[128];
 
-	io->read_proc(buffer, 128, 1, handle);
+	// a file shorter than this writes nothing at all - read_proc fills the buffer
+	// only when it can satisfy the whole request - and the orientation then came
+	// out of whatever was on the stack
+	if (io->read_proc(buffer, 128, 1, handle) != 1) {
+		return FALSE;
+	}
 
 	return (buffer[72] & 63) == 8;
 }
@@ -169,10 +174,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		// temporary stuff to load PCD
+		// these three are declared at the top of the function, and the handler at
+		// the bottom is the only thing that frees them.  Re-declaring them here
+		// shadowed those, so the throw on the next line left whichever allocations
+		// had succeeded to the handler - which then freed three pointers that were
+		// still NULL.
 
-		BYTE *y1 = (BYTE*)malloc(width * sizeof(BYTE));
-		BYTE *y2 = (BYTE*)malloc(width * sizeof(BYTE));
-		BYTE *cbcr = (BYTE*)malloc(width * sizeof(BYTE));
+		y1 = (BYTE*)malloc(width * sizeof(BYTE));
+		y2 = (BYTE*)malloc(width * sizeof(BYTE));
+		cbcr = (BYTE*)malloc(width * sizeof(BYTE));
 		if(!y1 || !y2 || !cbcr) throw FI_MSG_ERROR_MEMORY;
 
 		BYTE *yl[] = { y1, y2 };
@@ -185,9 +195,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// read the data
 
 		for (unsigned y = 0; y < height / 2; y++) {
-			io->read_proc(y1, width, 1, handle);
-			io->read_proc(y2, width, 1, handle);
-			io->read_proc(cbcr, width, 1, handle);
+			// a short read leaves the buffer untouched, so an unchecked one turned
+			// the tail of a truncated PCD into whatever malloc had handed back
+			if (io->read_proc(y1, width, 1, handle) != 1 ||
+			    io->read_proc(y2, width, 1, handle) != 1 ||
+			    io->read_proc(cbcr, width, 1, handle) != 1) {
+				throw "Truncated PCD image data";
+			}
 
 			for (int i = 0; i < 2; i++) {
 				BYTE *bits = FreeImage_GetScanLine(dib, start_scan_line);
