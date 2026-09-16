@@ -362,17 +362,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					io->seek_proc(handle, *pri, SEEK_SET);
 				}
 				for (int k = 0; k < width; k++, p += numChannels) {
-					int ch;
 					BYTE packed = 0;
 					if (bIsRLE) {
-						ch = get_rlechar(io, handle, &my_rle_status);
+						const int ch = get_rlechar(io, handle, &my_rle_status);
+						if (ch == EOF) {
+							throw SGI_EOF_IN_IMAGE_DATA;
+						}
 						packed = (BYTE)ch;
 					}
 					else {
-						ch = io->read_proc(&packed, sizeof(BYTE), 1, handle);
-					}
-					if (ch == EOF) {
-						throw SGI_EOF_IN_IMAGE_DATA;
+						// read_proc returns a count of items - 0 or 1 - and never EOF,
+						// so the end-of-file test this shared with the branch above
+						// could not fire for an uncompressed image: a truncated one
+						// kept "reading" nothing and the rest of the picture came out
+						// black, with no error reported.
+						if (io->read_proc(&packed, sizeof(BYTE), 1, handle) != 1) {
+							throw SGI_EOF_IN_IMAGE_DATA;
+						}
 					}
 					*p = packed;
 				}
