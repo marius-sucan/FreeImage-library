@@ -27,22 +27,30 @@
 // File IO functions
 // =====================================================================
 
-unsigned DLL_CALLCONV 
+// static: these four are the stdio implementations SetDefaultIO installs, they
+// are used nowhere but in this file and are declared in no header. Without it
+// they have external linkage, and four names as ordinary as _ReadProc and
+// _TellProc sit in the static library waiting to capture any program that
+// happens to define its own - which is exactly what they did to
+// Examples/Generic/LoadFromMemory.cpp, whose FreeImageIO then read the caller's
+// memory buffer with fread() and crashed.
+
+static unsigned DLL_CALLCONV 
 _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	return (unsigned)fread(buffer, size, count, (FILE *)handle);
 }
 
-unsigned DLL_CALLCONV 
+static unsigned DLL_CALLCONV 
 _WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	return (unsigned)fwrite(buffer, size, count, (FILE *)handle);
 }
 
-int DLL_CALLCONV
+static int DLL_CALLCONV
 _SeekProc(fi_handle handle, long offset, int origin) {
 	return fseek((FILE *)handle, offset, origin);
 }
 
-long DLL_CALLCONV
+static long DLL_CALLCONV
 _TellProc(fi_handle handle) {
 	return ftell((FILE *)handle);
 }
