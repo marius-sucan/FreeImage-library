@@ -43,7 +43,8 @@ static const char *ERR_XBM_MEMORY	= "Out of memory";
 Get a string from a stream. 
 Read the string from the current stream to the first newline character. 
 The result stored in str is appended with a null character.
-@param str Storage location for data 
+@param str Storage location for data; must have room for n + 1 bytes, since the
+terminator is written at str[n] when a line fills the buffer
 @param n Maximum number of characters to read 
 @param io Pointer to the FreeImageIO structure
 @param handle Handle to the stream
@@ -51,7 +52,7 @@ The result stored in str is appended with a null character.
 */
 static char* 
 readLine(char *str, int n, FreeImageIO *io, fi_handle handle) {
-	char c;
+	char c = 0;
 	int count, i = 0;
 	do {
 		count = io->read_proc(&c, 1, 1, handle);
@@ -109,7 +110,10 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	
 	while(!found_declaration && !eof) {
 
-		if( readLine(line, MAX_LINE, io, handle) == NULL) {
+		// n is a character count, not a buffer size: readLine() terminates at
+		// str[n], so passing MAX_LINE wrote one byte past line[MAX_LINE].
+		// MAX_LINE - 1 also makes the over-long-line test below reachable.
+		if( readLine(line, MAX_LINE - 1, io, handle) == NULL) {
 			eof = TRUE;
 		}
 		else {
