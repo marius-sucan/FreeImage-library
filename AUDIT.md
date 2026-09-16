@@ -11,7 +11,7 @@ Confidence key:
 
 ## Summary
 
-48 findings in 20 of the 75 files. **24 are confirmed** — reproduced here against an
+48 findings in 20 of the 75 files. **25 are confirmed** — reproduced here against an
 ASan+UBSan build, with the sanitizer output quoted in each entry; the rest are read from the
 code with the reasoning given.
 
@@ -46,7 +46,6 @@ to any user: no standard 256-colour Sun raster loads at all, and any Radiance fi
 
 ## Findings
 
-(none yet)
 ### 1. PluginCUT.cpp:169 — RLE row pointer walks off the front of the bitmap (OOB write)
 
 `Load()` sets `bits = FreeImage_GetScanLine(dib, header.height - 1)` (the last row in
@@ -96,7 +95,7 @@ Note this also goes (harmlessly) out of bounds on *well-formed* input: a file th
 terminates its last row with `0x00` leaves `bits == buffer_start - pitch`, which is
 already undefined pointer arithmetic even though nothing is written through it.
 
-Confidence: PLAUSIBLE (repro pending)
+Confidence: CONFIRMED
 
 ### 2. PluginCUT.cpp:159 — `width * height` overflows `int` before it is stored
 
