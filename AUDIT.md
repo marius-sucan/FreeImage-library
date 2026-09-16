@@ -15,6 +15,16 @@ Confidence key:
 ASan+UBSan build, with the sanitizer output quoted in each entry; the rest are read from the
 code with the reasoning given.
 
+> **All 25 confirmed findings are fixed**, in 25 commits — one per finding, except that
+> findings 43 and 44 share a commit (they are one defect in `PluginPICT.cpp` seen from two
+> sides, and fixing either alone leaves the other broken) and findings 18, 21 and 39 each
+> take two, because the allocator change they share is its own commit. Each entry below
+> carries the commit that fixed it. Every reproducer that crashed or hung was re-run
+> afterwards, and every valid file in the corpus was checked to decode to the same bytes as
+> before — see "Verifying the fixes" at the end.
+>
+> The 23 *plausible* findings are **not** fixed.
+
 Severity, for the confirmed ones:
 
 | | Finding |
@@ -95,7 +105,7 @@ Note this also goes (harmlessly) out of bounds on *well-formed* input: a file th
 terminates its last row with `0x00` leaves `bits == buffer_start - pitch`, which is
 already undefined pointer arithmetic even though nothing is written through it.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5cd7e6f
 
 ### 2. PluginCUT.cpp:159 — `width * height` overflows `int` before it is stored
 
@@ -111,7 +121,7 @@ Source/FreeImage/PluginCUT.cpp:159:32: runtime error: signed integer overflow:
 65520 * 65535 cannot be represented in type 'int'
 ```
 
-Confidence: CONFIRMED (UB; the wrapped value happens to be correct on this target)
+Confidence: CONFIRMED (UB; the wrapped value happens to be correct on this target) — **FIXED**, commit f052cff
 
 ### 3. PluginPFM.cpp:63 — a full-length header line is returned unterminated, then `sscanf`s
 
@@ -201,7 +211,7 @@ Source/FreeImage/PluginRAS.cpp:420:26: runtime error: load of address 0x7549c53a
 with insufficient space for an object of type 'BYTE'
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit ffa77c9
 
 ### 6. PluginRAS.cpp:97 — the RLE decoder keeps its state in `static` locals
 
@@ -251,7 +261,7 @@ maplength = 765 (one entry short)       ->  loaded 2x2 bpp=8
 `1 << header.depth` is also UB for the `depth == 32` case that reaches this switch
 (shift count equal to the width of `int`).
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit c1f2f66
 
 ### 8. PluginRAS.cpp:327,349,401,441 — four unchecked `malloc`s
 
@@ -375,7 +385,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 1
 (reported as a READ because `bits[n++] += byte` loads before it stores). The same file with
 a BODY of `80 80 80 80` hangs until killed.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 8b585c7
 
 ### 14. PluginIFF.cpp:230 — the chunk walk has no EOF test and `size` wraps
 
@@ -399,7 +409,7 @@ FORM size below 4.
 
 **CONFIRMED.** `FORM` with size `0xFFFFFFF0`, a valid BMHD and no BODY hangs until killed.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5f2b599
 
 ### 15. PluginIFF.cpp:249 — a short BMHD chunk is used uninitialised
 
@@ -527,7 +537,7 @@ Two separate defects, and both want fixing:
   bounds no longer match the bitmap it was given. It should return NULL. `abs(INT_MIN)`
   is also UB in its own right.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 03fcfc5 + b926485
 
 ### 19. PluginDDS.cpp:849 — `Load` never checks the magic number that `Validate` checks
 
@@ -546,7 +556,7 @@ the format itself — `FreeImage_Load(FIF_DDS, ...)`, which is what happens when
 is picked from the file extension — goes straight into `LoadRGB`/`LoadDXT` with whatever
 the first 128 bytes contained. That is the path finding 18 above is reached through.
 
-Confidence: CONFIRMED (it is what the finding-18 repro exercises; that file is only
+Confidence: CONFIRMED (it is what the finding-18 repro exercises; that file is only — **FIXED**, commit 45afab6
 accepted because `Load` does not re-validate)
 
 ### 20. PluginDDS.cpp:648 — division by zero on big-endian / RGB-order builds
@@ -605,7 +615,7 @@ invisible to ASan in exactly this way, whereas `read_proc(ptr, 1, <computed>, ha
 (the DDS form in 18) is caught. Fuzzing this library with ASan will silently miss the
 first shape — the audit has to read for it.
 
-Confidence: CONFIRMED (by direct measurement, not by the sanitizer)
+Confidence: CONFIRMED (by direct measurement, not by the sanitizer) — **FIXED**, commit 03fcfc5 + 508a405
 
 ### 22. PluginICO.cpp:305 — `biBitCount == 2` is accepted, then silently turned into 8 bpp
 
@@ -711,7 +721,7 @@ Related, at :965: `if ( !io->seek_proc(handle, 512, SEEK_CUR) == 0 )` parses as
 obvious reading of the line, `!(seek == 0)`, means the same thing here — but it is one
 edit away from being wrong and should be `if (io->seek_proc(...) != 0)`.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit beec28f
 
 ### 26. PluginDDS.cpp — a 131-byte file asks for 268 MB and 33 million I/O calls
 
@@ -725,7 +735,7 @@ the same check the EXR plugin already grew (`dabc2fc`, "check the data window ag
 file before allocating the bitmap"). `io->read_proc`'s result is ignored on every row, so
 the loop cannot notice that it stopped making progress either.
 
-Confidence: CONFIRMED (resource exhaustion, not memory corruption)
+Confidence: CONFIRMED (resource exhaustion, not memory corruption) — **FIXED**, commit 305c4c8
 
 ---
 
@@ -780,7 +790,7 @@ printf '\x00\x80' > x.wbmp     ->  killed at 12 s
 `readExtHeader` also `malloc`s `sizeParamIdent` and `sizeParamValue` bytes (:155-156)
 without checking either result, and `sizeParamValue` can be 0.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 0691416
 
 ### 28. PluginKOALA.cpp:140 — 10001 bytes of uninitialised stack become the image
 
@@ -846,7 +856,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 4
 The colour-map loop above it does check (`strlen(str) < (size_t)cpp` at :201); the pixel
 loop simply forgot to.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit dabe04b
 
 ### 30. PluginXPM.cpp:190,192 — the allocation result is never checked
 
@@ -873,7 +883,7 @@ ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000
 ```
 Trigger: info string `"2000000000 2000000000 1 1"`.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 6e7bc25
 
 ### 31. PluginXPM.cpp:54,69,75 — the read helpers ignore failures, and `ReadString` is unbounded
 
@@ -972,7 +982,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 1
     #1 loadRLE<24>      Source/FreeImage/PluginTARGA.cpp:635
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit aafe9c5
 
 ### 34. PluginTARGA.cpp:246,599 — `IOCache::getBytes` has a contract the caller does not honour
 
@@ -1017,7 +1027,7 @@ _size`. Both refills (:235, :260) also ignore `read_proc`'s result — the `//##
 problem?` comment in the source is asking exactly the right question, and the answer is
 that a truncated file silently decodes whatever the cache held last.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 2003de9
 
 ### 35. PSDParser.cpp:1330 — `UnpackRLE` clamps the destination but never the source
 
@@ -1058,7 +1068,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... READ of size 128
   allocated by ReadImageData    Source/FreeImage/PSDParser.cpp:1558
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 8c8d529
 
 ### 36. PSDParser.cpp:1567-1591 — the RLE path skipped the CVE-2020-24295 hardening the raw path got
 
@@ -1163,7 +1173,7 @@ loss on save-to-memory rather than an error.
 Minor, same file: `FreeImage_SaveToMemory` (:101), `FreeImage_AcquireMemory` (:121) and
 `FreeImage_WriteMemory` (:210) all dereference `stream->data` after testing only `stream`.
 
-Confidence: CONFIRMED (the backend comparison above was measured; the write truncation is
+Confidence: CONFIRMED (the backend comparison above was measured; the write truncation is — **FIXED**, commit ae73c7a
 read from the code)
 
 ### 39. PluginHDR.cpp:261 — `%d` into `unsigned*` lets a negative width through to the pixel loop
@@ -1211,7 +1221,7 @@ This is finding 18's pattern once more: `FreeImage_AllocateBitmap`'s `abs()` bui
 of a size the caller does not believe in. Here it is reached through a *signed format
 specifier*, not a cast.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 03fcfc5 + 83b4785
 
 ### 40. PluginHDR.cpp:262 — the `+X … +Y …` resolution string is read transposed
 
@@ -1229,7 +1239,7 @@ into `height` and the height into `width`.
 loaded 2x8 bpp=96
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 1666841
 
 ### 41. PluginHDR.cpp:126 — `rgbe_GetLine` is `pfm_get_line` with the same missing terminator
 
@@ -1296,7 +1306,7 @@ The two sibling sites are fine: `PluginPICT.cpp:733` and `:1214` format only an 
 `WORD` into their 256-byte `outputMessage`, and the `sprintf`s in PluginPNM.cpp's `Save` all
 use bounded field widths.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 215257a
 
 ### 43. PluginPICT.cpp:763-807 — `UnpackBits` never bounds the destination scanline
 
@@ -1347,7 +1357,7 @@ ERROR: AddressSanitizer: heap-buffer-overflow ... WRITE of size 1
 `Unpack8Bits` (:656) and `Unpack32Bits` are separate routines with the same shape and should
 be checked against the same rule when this is fixed.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5942c98
 
 ### 44. PluginPICT.cpp:484 — `expandBuf8`'s `width` argument means two different things
 
@@ -1406,7 +1416,7 @@ final pixels of a row:
   `i > 7 - (width & 3) * 2`... though with `width` meaning source bytes in the loop above,
   fixing the unit confusion first is what actually settles these.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5942c98
 
 ### 45. PluginPICT.cpp:547 — `UnpackPictRow` has the same missing destination bound
 
@@ -1482,7 +1492,7 @@ ERROR: AddressSanitizer: stack-buffer-overflow ... WRITE of size 1
     #2 Load        Source/FreeImage/PluginXBM.cpp:323
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 0f9e945
 
 ### 47. PluginXBM.cpp:73 — `readChar` cannot return EOF, so three loops never end
 
@@ -1528,7 +1538,7 @@ never breaks.)
 against the `-1` sentinel, never for range, so `raster_length = bytes_per_line * *heightP`
 (:159) is computed from unvalidated `int`s.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 17d467d
 
 ### 48. Conversion.cpp:379 — `FreeImage_ColorQuantizeEx` clamps the sizes but not the pointer
 
@@ -1653,3 +1663,46 @@ Everything is under `.claude/audit/` (untracked):
 Run with `ASAN_OPTIONS=detect_leaks=0:abort_on_error=0`, and add
 `allocator_may_return_null=1` for finding 30, which needs `malloc` to fail rather than
 ASan to abort.
+
+
+---
+
+## Verifying the fixes
+
+The rig lives in `.claude/audit/` (untracked). Two builds of the library are kept side by
+side: `asan2/` from the current sources and `asan2-ref/` from the sources as they were at
+`b27e278`, both with identical flags, so any difference is the change and not the build.
+
+* `rebuild.sh <file.cpp>` recompiles one file into `asan2/` and re-links the drivers. It
+  verifies the archive member is byte-identical to the object just compiled — `ar r` keys on
+  the basename, and a mismatched one silently *appends* a second member that the linker then
+  ignores, which makes a sanitizer run report "clean" while testing the old code. That
+  happened once during this work and cost a fix that looked applied and was not.
+* `cmp-valid.sh` decodes every file in `minseeds/` and `seeds/` with both builds and compares
+  an FNV-1a hash of the pixels and palette. The corpus was grown as the work went on, to
+  cover each decoder path a fix touched: RLE and uncompressed twins of the same image for
+  IFF, PSD and PICT; TARGA RLE at 8/16/24/32 bpp, widths 16 and 17, literal and run packets,
+  including packets spanning every row boundary; a top-down BMP and its bottom-up twin;
+  8/16/24/32-bit DDS; literal-RLE and run-RLE Radiance files; 8- and 32-bit icons.
+* `dump.c` prints the decoded rows, for the cases where a checksum is not enough — the PICT
+  fixes were checked pixel by pixel against the reference build.
+
+Two results worth keeping:
+
+* Every reproducer that crashed or hung on the reference build is clean on the fixed one,
+  and no valid file in the corpus decodes differently — with one intended exception,
+  `q_raw.pct`, an uncompressed 1-bpp PICT that the reference build *crashes* on and the
+  fixed build decodes correctly.
+* The 14 changed files were also compiled with the stock flags plus `-Wall -Wextra`, and
+  produce no new warnings relative to the reference (PluginPICT produces one fewer).
+
+### Still open after this pass
+
+* The 23 plausible findings.
+* **`PSDParser.cpp:125`** — UBSan reports `load of misaligned address … for type 'const
+  DWORD'` on *every* PSD, valid ones included, on both builds. Pre-existing and not in the
+  48; harmless on x86, a fault on architectures that require natural alignment.
+* **DDS 16-bit rows without `DDSD_PITCH`** — `line` is computed from the *bitmap's* 24 bpp
+  rather than the file's 16, so each row reads 3×width bytes where the row holds 2×width.
+  With `DDSD_PITCH` set the negative `delta` seek happens to correct it. Also pre-existing
+  and not in the 48; noticed while fixing finding 26.
