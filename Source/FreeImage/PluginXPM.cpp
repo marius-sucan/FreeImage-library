@@ -191,6 +191,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		} else {
 			dib = FreeImage_AllocateHeader(header_only, width, height, 8);
 		}
+		// width and height are only tested for <= 0 above, never for plausibility,
+		// so an XPM declaring a huge canvas gets NULL back here - and the palette
+		// loop below writes through whatever FreeImage_GetPalette() then returns
+		if(dib == NULL) {
+			throw FI_MSG_ERROR_DIB_MEMORY;
+		}
 
 		//build a map of color chars to rgb values
 		std::map<std::string,FILE_RGBA> rawpal; //will store index in Alpha if 8bpp
