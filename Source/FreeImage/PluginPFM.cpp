@@ -129,7 +129,16 @@ pfm_get_int(FreeImageIO *io, fi_handle handle) {
 		int i = 0;
 
 		while (1) {
-			i = (i * 10) + (c - '0');
+			const int digit = c - '0';
+
+			// a file may supply digits for as long as it likes, and this used to
+			// accumulate them all: signed overflow, which is undefined, and in the
+			// copy of this loop in PluginPNM (finding 32) the wrapped value is then
+			// used as the width
+			if (i > (INT_MAX - digit) / 10) {
+				throw FI_MSG_ERROR_PARSING;
+			}
+			i = (i * 10) + digit;
 
 			if (io->read_proc(&c, 1, 1, handle) != 1) {
 				throw FI_MSG_ERROR_PARSING;
