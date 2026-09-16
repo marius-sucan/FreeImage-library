@@ -594,6 +594,28 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 
 	const DDPIXELFORMAT *ddspf = &(desc->ddspf);
 
+	// the header stores these unsigned, so anything that does not fit a positive
+	// int is a lie: the casts below would keep a value the allocated bitmap does
+	// not match, and everything computed from them - the line length above all -
+	// would describe a different image
+	if ((desc->dwWidth == 0) || (desc->dwWidth > (DWORD)INT_MAX) ||
+		(desc->dwHeight == 0) || (desc->dwHeight > (DWORD)INT_MAX)) {
+		return NULL;
+	}
+
+	// dwRGBBitCount reaches FreeImage_Allocate() directly, and that silently
+	// coerces a depth it does not know to 8 - after which this function's own
+	// idea of the bit depth and the bitmap's no longer agree
+	switch (ddspf->dwRGBBitCount) {
+		case 8:
+		case 16:
+		case 24:
+		case 32:
+			break;
+		default:
+			return NULL;
+	}
+
 	// it is perfectly valid for an uncompressed DDS file to have a width or height which is not a multiple of 4
 	// (only the packed image formats need to be a multiple of 4)
 	const int width = (int)desc->dwWidth;
