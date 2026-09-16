@@ -314,13 +314,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				// Read SUN raster colormap
 
-				int numcolors = 1 << header.depth;
+				// 1 << depth is undefined for the 32-bit case that also reaches
+				// this switch; a colormap only means anything for the palettised
+				// depths, and GetPalette() below rejects the others anyway
+				int numcolors = (header.depth <= 8) ? (1 << header.depth) : 0;
 				if((DWORD)(3 * numcolors) > header.maplength) {
 					// some RAS may have less colors than the full palette
 					numcolors = header.maplength / 3;
-				} else {
-					throw "Invalid palette";
 				}
+				// a colormap holding exactly the full palette - maplength == 3 *
+				// numcolors, which is what every conforming file has - used to land
+				// in an "else throw", so no complete 256-colour RAS could be read
 
 				RGBQUAD *pal = FreeImage_GetPalette(dib);
 				if (NULL == pal) {
@@ -337,6 +341,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					pal[i].rgbRed	= r[i];
 					pal[i].rgbGreen = g[i];
 					pal[i].rgbBlue	= b[i];
+				}
+
+				// step over any colormap bytes beyond the entries we took, so the
+				// pixel data starts where the header says it does
+				if(header.maplength > (DWORD)(3 * numcolors)) {
+					io->seek_proc(handle, (long)(header.maplength - 3 * numcolors), SEEK_CUR);
 				}
 
 				free(r);
