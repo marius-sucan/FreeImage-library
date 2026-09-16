@@ -89,14 +89,21 @@ _MemoryReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	const int required_bytes = (int)(size) * count;
+	// size * count has to be computed in a type that can hold it.  As
+	// "(int)size * count" it was evaluated in 32 bits and stored in an int, so
+	// any request of 2 GiB or more landed on a negative value and fell out of
+	// the test below - a silent short read that looked like end of file.  A
+	// memory stream is bounded by file_length, which is an int, so a request
+	// that large cannot be served at all: refuse it deliberately rather than
+	// leave it to the arithmetic.
+	const UINT64 required_bytes = (UINT64)size * (UINT64)count;
 	const int remaining_bytes = mem_header->file_length - mem_header->current_position;
 
-	if ((required_bytes > 0) && (remaining_bytes > 0)) {
-		if (required_bytes <= remaining_bytes) {
+	if ((required_bytes <= (UINT64)std::numeric_limits<int>::max()) && (remaining_bytes > 0)) {
+		if ((int)required_bytes <= remaining_bytes) {
 			// copy size bytes count times
 			memcpy(buffer, (char*)mem_header->data + mem_header->current_position, (size_t)required_bytes);
-			mem_header->current_position += required_bytes;
+			mem_header->current_position += (int)required_bytes;
 			return count;
 		}
 		else {
@@ -119,7 +126,16 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	const long required_bytes = (long)(size * count);
+	// the cast to long used to happen AFTER a 32-bit multiply, so size = count =
+	// 0x10000 gave required_bytes == 0: nothing was copied and the function
+	// still returned count, reporting a write that never happened
+	const UINT64 wanted = (UINT64)size * (UINT64)count;
+
+	if (wanted > (UINT64)std::numeric_limits<int>::max()) {
+		return 0;
+	}
+
+	const long required_bytes = (long)wanted;
 
 	// double the data block size if we need to
 	while( (mem_header->current_position + required_bytes) >= mem_header->data_length ) {
