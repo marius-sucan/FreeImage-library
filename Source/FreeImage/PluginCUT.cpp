@@ -156,7 +156,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		unsigned i = 0, k = 0;
 		unsigned pitch = FreeImage_GetPitch(dib);
-		unsigned size = header.width * header.height;
+		// both are WORD, so each promotes to int and the product is computed in
+		// int: 65535 * 65535 overflows it.  Multiply as unsigned, where the full
+		// range fits.
+		unsigned size = (unsigned)header.width * (unsigned)header.height;
 		BYTE count = 0, run = 0;
 
 		while (i < size) {
