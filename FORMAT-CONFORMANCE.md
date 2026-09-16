@@ -68,7 +68,7 @@ the repository):
 
 | # | Commit | Format | Verdict |
 |---|---|---|---|
-| 1 | `1666841` | HDR | **REGRESSION** — see A1 |
+| 1 | `1666841` | HDR | **REGRESSION** — see A1. **Fixed in `04a8dcb`.** |
 | 2 | `b926485` | DDS | Conformant, stricter |
 | 3 | `45afab6` | DDS | Conformant, stricter |
 | 4 | `305c4c8` | DDS | Conformant, stricter |
@@ -98,17 +98,19 @@ the repository):
 | 28 | `beec28f` | PICT | Conformant |
 | 29 | `ae73c7a` | (memory I/O) | Conformant — not a format change |
 
-**One regression, in 29 commits.** Twelve residual non-conformances that the
-range did not introduce are listed in section D, because two of them sit in code
-the fixes changed and one of them the fixes made reachable.
+**One regression, in 29 commits** — fixed in `04a8dcb`, see A1. Twelve residual
+non-conformances that the range did not introduce are listed in section D,
+because two of them sit in code the fixes changed and one of them the fixes made
+reachable.
 
 ---
 
-# A. Regression
+# A. Regression (fixed)
 
-## A1. HDR `1666841` — the `+X … +Y …` branch now mis-decodes the very files it exists for
+## A1. HDR `1666841` — the `+X … +Y …` branch mis-decoded the very files it exists for
 
-`Source/FreeImage/PluginHDR.cpp:267-277`
+`Source/FreeImage/PluginHDR.cpp:267-277`. **Fixed in `04a8dcb`** — see
+"After the fix" below.
 
 The commit swapped the arguments of the second `sscanf` so that
 `"+X <w> +Y <h>"` puts `w` in `width` and `h` in `height`:
@@ -157,8 +159,9 @@ that says the layout is transposed.
 
 ### Measured
 
-Two encodings of the *same* 6×4 image, one in each spelling, decoded by the
-build at the tip of this range:
+Two encodings of the *same* 6×4 picture, one in each spelling, decoded by the
+build at the tip of this range. (The X-major twin has to emit each column
+bottom row first, because `+Y` means the Y axis ascends — see D12.)
 
 ```
 === (a) "-Y 4 +X 6"  (the standard, Y-major form)
@@ -168,7 +171,7 @@ r01: 20 21 22 23 24 25
 r02: 30 31 32 33 34 35
 r03: 40 41 42 43 44 45
 
-=== (b) "+X 6 +Y 4"  (the same image, X-major)
+=== (b) "+X 6 +Y 4"  (the same picture, X-major)
 6x4
 r00: 10 20 30 40 11 21        <- scrambled
 r01: 31 41 12 22 32 42
@@ -201,19 +204,37 @@ either way — `sum=6a285656bea13b03` before and after. The only thing that
 changed in the corpus was the printed dimensions, which is precisely the half of
 the defect the commit fixed.
 
-### What conformance requires
+### After the fix
 
-Either of:
+Conformance allowed two remedies: decode and transpose, or reject the ordering
+explicitly with a clear message. `04a8dcb` does the first. `rgbe_ReadHeader()`
+now reports which axis was named first, and `Load()` reads the X-major form a
+column at a time, scattering each column across the rows. Because `+Y` means
+the Y axis ascends, scanline *x* holds column *x* from the bottom up — already
+the dib's own row order — so only the transpose has to be undone.
 
-1. **Decode and transpose.** Read `xr` scanlines of `yr` pixels, then write them
-   into a `xr`-wide by `yr`-tall bitmap transposed. This is the only fully
-   correct behaviour and it costs one index swap in the copy loop.
-2. **Reject explicitly.** Keep the `-Y … +X …` form only and fail X-major files
-   with "unsupported scanline ordering". Strictly worse than (1), but honest,
-   and better than both the pre-fix transpose and the current scramble.
+The two twins above now decode to the same picture, and so does a 9×12 pair in
+which *both* dimensions clear the 8-pixel threshold, so that both halves really
+are run-length encoded:
 
-Option 1 is preferable. Note that the parse should really come from the flags
-rather than two fixed format strings — see D12.
+```
+--- p_flat_ymajor  ("-Y 4 +X 6")      --- p_flat_xmajor  ("+X 6 +Y 4")
+r00: 10 11 12 13 14 15                r00: 10 11 12 13 14 15
+r01: 20 21 22 23 24 25                r01: 20 21 22 23 24 25
+r02: 30 31 32 33 34 35                r02: 30 31 32 33 34 35
+r03: 40 41 42 43 44 45                r03: 40 41 42 43 44 45
+
+p_rle_ymajor  loaded 9x12 sum=a60f7c4864e6a4e8
+p_rle_xmajor  loaded 9x12 sum=a60f7c4864e6a4e8     <- was "load failed"
+```
+
+Nothing else moved: `leadenhall_market_4k.hdr` (4096×2048) still hashes to
+`63683b0437402dbb`, an RGBF save/reload round-trip is exact, and over the whole
+audit corpus — 104 entries — not one result changed.
+
+The remaining six spellings still do not parse at all; that is D12, and it is
+untouched. The parse should really come from the two signs and the two axis
+letters rather than two fixed format strings, which would close D12 as well.
 
 ---
 
@@ -726,10 +747,9 @@ fix A1 and this at once.
 
 # E. Recommended follow-ups, in order
 
-1. **HDR `+X … +Y …` (A1)** — the only regression in the range. Decode as
-   `xr` scanlines of `yr` pixels and transpose into an `xr`×`yr` bitmap, or
-   reject the ordering explicitly. Today, X-major RLE files that used to load do
-   not, and X-major flat files decode scrambled.
+1. ~~**HDR `+X … +Y …` (A1)**~~ — **done, `04a8dcb`**: the form is now read a
+   column at a time and transposed into the bitmap. It was the only regression
+   in the range.
 2. **RAS over-long colormap (D1)** — read each plane at its own stride
    (`maplength / 3`). The path is new as of `c1f2f66` and produces wrong colours.
 3. **PSD Bitmap polarity (D3)** — invert on write. Newly reachable now that
