@@ -223,22 +223,40 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if((type != ID_ILBM) && (type != ID_PBM))
 			return NULL;
 
+		// the FORM type has been read; size counts what is left of the FORM
+		if (size < 4)
+			return NULL;
+
 		size -= 4;
 
 		unsigned width = 0, height = 0, planes = 0, depth = 0, comp = 0;
 
-		while (size) {
+		// a chunk costs at least its 8-byte header, so anything less than that
+		// left in the FORM ends the walk.  size is unsigned and was decremented
+		// by ch_size + 8 unchecked, so any file whose chunk lengths did not land
+		// exactly on zero used to wrap it to ~4e9 and keep going.
+		while (size >= 8) {
 			DWORD ch_type,ch_size;
 
-			io->read_proc(&ch_type, 4, 1, handle);
+			// past end of file read_proc writes nothing and leaves these holding
+			// the previous iteration's values - the walk has to stop here
+			if (io->read_proc(&ch_type, 4, 1, handle) != 1)
+				break;
 #ifndef FREEIMAGE_BIGENDIAN
 			SwapLong(&ch_type);
 #endif
 
-			io->read_proc(&ch_size,4,1,handle );
+			if (io->read_proc(&ch_size,4,1,handle ) != 1)
+				break;
 #ifndef FREEIMAGE_BIGENDIAN
 			SwapLong(&ch_size);
 #endif
+
+			size -= 8;
+
+			// a chunk that claims more than the FORM has left is malformed
+			if (ch_size > size)
+				break;
 
 			unsigned ch_end = io->tell_proc(handle) + ch_size;
 
@@ -434,16 +452,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 			}
 
+			size -= ch_size;
+
 			// Every odd-length chunk is followed by a 0 pad byte.  This pad
 			//  byte is not counted in ch_size.
 			if (ch_size & 1) {
-				ch_size++;
+				if (size < 1)
+					break;
+
+				size--;
 				ch_end++;
 			}
 
 			io->seek_proc(handle, ch_end - io->tell_proc(handle), SEEK_CUR);
-
-			size -= ch_size + 8;
 		}
 
 		if (dib)
