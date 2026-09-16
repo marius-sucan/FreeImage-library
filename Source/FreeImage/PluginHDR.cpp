@@ -259,7 +259,9 @@ rgbe_ReadHeader(FreeImageIO *io, fi_handle handle, unsigned *width, unsigned *he
 
 	// get the image width & height
 	if(sscanf(buf,"-Y %d +X %d", height, width) < 2) {
-		if(sscanf(buf,"+X %d +Y %d", height, width) < 2) {
+		// the fields swap round in this form, so the arguments have to as well:
+		// reading "+X <w> +Y <h>" into (height, width) transposed the image
+		if(sscanf(buf,"+X %d +Y %d", width, height) < 2) {
 			return rgbe_Error(rgbe_format_error, "missing image size specifier");
 		}
 	}
