@@ -1326,11 +1326,19 @@ void psdParser::UnpackRLE(BYTE* line, const BYTE* rle_line, BYTE* line_end, unsi
 			// (len + 1) bytes of data are copied
 			++len;
 
-			// assert we don't write beyound eol
-			memcpy(line, rle_line, line + len > line_end ? line_end - line : len);
-			line += len;
-			rle_line += len;
-			srcSize -= len;
+			// Clamp against BOTH ends.  Only the destination row was bounded
+			// here, so a packet claiming more bytes than the compressed line
+			// actually holds read straight off the end of rle_line's buffer -
+			// and "srcSize -= len" then underflowed, which left srcSize huge and
+			// defeated the loop's own guard as well.
+			const unsigned taken = (srcSize < (unsigned)len) ? srcSize : (unsigned)len;
+			const size_t room = (size_t)(line_end - line);
+			const size_t written = (taken < room) ? (size_t)taken : room;
+
+			memcpy(line, rle_line, written);
+			line += written;
+			rle_line += taken;
+			srcSize -= taken;
 		}
 		else if ( len > 128 ) { //< MSB is set
 			// RLE compressed packet
@@ -1340,9 +1348,17 @@ void psdParser::UnpackRLE(BYTE* line, const BYTE* rle_line, BYTE* line_end, unsi
 			len ^= 0xFF; // same as (-len + 1) & 0xFF
 			len += 2;    //
 
-			// assert we don't write beyound eol
-			memset(line, *rle_line++, line + len > line_end ? line_end - line : len);
-			line += len;
+			// the byte to repeat has to be there: the opcode may have been the
+			// last byte of the compressed line
+			if (srcSize < 1) {
+				break;
+			}
+
+			const size_t room = (size_t)(line_end - line);
+			const size_t written = ((size_t)len < room) ? (size_t)len : room;
+
+			memset(line, *rle_line++, written);
+			line += written;
 			srcSize--;
 		}
 		else if ( 128 == len ) {
