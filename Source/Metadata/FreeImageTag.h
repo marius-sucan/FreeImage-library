@@ -288,6 +288,7 @@
 #define ANIMTAG_INTERLACED		0x1004
 #define ANIMTAG_FRAMETIME		0x1005
 #define ANIMTAG_DISPOSALMETHOD	0x1006
+#define ANIMTAG_BLENDMETHOD		0x1007
 
 // --------------------------------------------------------------------------
 // Helper functions to deal with the FITAG structure

@@ -761,6 +761,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define XBM_DEFAULT			0
 #define XPM_DEFAULT			0
 #define WEBP_DEFAULT		0		//! save with good quality (75:1)
+#define WEBP_PLAYBACK		0x0001	//! 'Play' the animation to generate each frame (as 32bpp) instead of returning raw frame data when loading
 #define WEBP_LOSSLESS		0x100	//! save in lossless mode
 #define JXR_DEFAULT			0		//! save with quality 80 and no chroma subsampling (4:4:4)
 #define JXR_LOSSLESS		0x0064	//! save lossless

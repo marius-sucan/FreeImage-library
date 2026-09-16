@@ -25,6 +25,7 @@
 #include "../Metadata/FreeImageTag.h"
 
 #include "../LibWebP/src/webp/decode.h"
+#include "../LibWebP/src/webp/demux.h"
 #include "../LibWebP/src/webp/encode.h"
 #include "../LibWebP/src/webp/mux.h"
 
@@ -33,6 +34,66 @@
 // ==========================================================
 
 static int s_format_id;
+
+// ----------------------------------------------------------
+//   Plugin state
+// ----------------------------------------------------------
+
+/**
+What Open() hands to the other entry points. This used to be the WebPMux alone,
+which is all a single still image needs. An animation needs more: the file has to
+stay in memory for the frame decoder to reference, and the decoder itself is worth
+keeping between calls, because it can only move forwards - so remembering where it
+has got to is what makes reading an animation in order cost one frame of work per
+frame instead of replaying it from the beginning each time.
+*/
+typedef struct {
+	WebPMux *mux;				//! the container: still images, raw frames and the metadata chunks come from here
+	WebPData bitstream;			//! the whole file, owned here; the mux and the animation decoder both point into it
+	WebPAnimDecoder *anim;		//! composited-frame decoder, created the first time one is asked for
+	int anim_next;				//! frame the next WebPAnimDecoderGetNext() will return; -1 when the decoder has to be rewound
+	FIBITMAP *cached_frame;		//! the last composited frame handed out
+	int cached_page;			//! which frame that is, -1 when there is none
+	int frame_count;			//! number of ANMF frames, 1 for a still image
+	BOOL is_animation;
+	int canvas_width;			//! the canvas the frames are drawn on (the VP8X size), 0 for a still image
+	int canvas_height;
+	int loop_count;
+} WebPPluginData;
+
+/**
+Attach one FIMD_ANIMATION tag, description included, the way PluginGIF.cpp does
+for the animation tags it writes.
+*/
+static BOOL
+WebP_SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
+	BOOL bResult = FALSE;
+	FITAG *tag = FreeImage_CreateTag();
+	if(tag) {
+		FreeImage_SetTagKey(tag, key);
+		FreeImage_SetTagID(tag, id);
+		FreeImage_SetTagType(tag, type);
+		FreeImage_SetTagCount(tag, count);
+		FreeImage_SetTagLength(tag, length);
+		FreeImage_SetTagValue(tag, value);
+		// get the tag description
+		TagLib& s = TagLib::instance();
+		FreeImage_SetTagDescription(tag, s.getTagDescription(TagLib::ANIMATION, id));
+		// store the tag
+		bResult = FreeImage_SetMetadata(FIMD_ANIMATION, dib, key, tag);
+		FreeImage_DeleteTag(tag);
+	}
+	return bResult;
+}
+
+static void
+WebP_ClearFrameCache(WebPPluginData *state) {
+	if(state->cached_frame != NULL) {
+		FreeImage_Unload(state->cached_frame);
+		state->cached_frame = NULL;
+	}
+	state->cached_page = -1;
+}
 
 // ----------------------------------------------------------
 //   Helpers for the load function
@@ -165,43 +226,110 @@ SupportsNoPixels() {
 
 static void * DLL_CALLCONV
 Open(FreeImageIO *io, fi_handle handle, BOOL read) {
-	WebPMux *mux = NULL;
-	int copy_data = 1;	// 1 : copy data into the mux, 0 : keep a link to local data
+	WebPPluginData *state = (WebPPluginData*)calloc(1, sizeof(WebPPluginData));
+	if(state == NULL) {
+		return NULL;
+	}
+	state->anim_next = -1;
+	state->cached_page = -1;
+	state->frame_count = 1;
 
 	if(read) {
-		// create the MUX object from the input stream
-		WebPData bitstream;
-		// read the input file and put it in memory
-		if(!ReadFileToWebPData(io, handle, &bitstream)) {
+		// read the input file and put it in memory. It stays there for as long as this
+		// object lives: the mux is told to link to it rather than copy it (which also
+		// halves what a large file costs), and the animation decoder reads it directly.
+		if(!ReadFileToWebPData(io, handle, &state->bitstream)) {
+			free(state);
 			return NULL;
 		}
-		// create the MUX object
-		mux = WebPMuxCreate(&bitstream, copy_data);
-		// no longer needed since copy_data == 1
-		free((void*)bitstream.bytes);
-		if(mux == NULL) {
+		// create the MUX object, linked to the bitstream above
+		state->mux = WebPMuxCreate(&state->bitstream, 0);
+		if(state->mux == NULL) {
+			free((void*)state->bitstream.bytes);
+			free(state);
 			FreeImage_OutputMessageProc(s_format_id, "Failed to create mux object from file");
 			return NULL;
 		}
+
+		// an animation has as many pages as it has frames, drawn on the canvas the
+		// VP8X chunk declares; a still image is a single page and has no canvas
+		uint32_t webp_flags = 0;
+		if(WebPMuxGetFeatures(state->mux, &webp_flags) == WEBP_MUX_OK) {
+			state->is_animation = (webp_flags & ANIMATION_FLAG) ? TRUE : FALSE;
+		}
+		if(state->is_animation) {
+			int nframes = 0;
+			WebPMuxAnimParams params;
+			if((WebPMuxNumChunks(state->mux, WEBP_CHUNK_ANMF, &nframes) == WEBP_MUX_OK) && (nframes > 0)) {
+				state->frame_count = nframes;
+			}
+			if(WebPMuxGetAnimationParams(state->mux, &params) == WEBP_MUX_OK) {
+				state->loop_count = params.loop_count;
+			}
+			if(WebPMuxGetCanvasSize(state->mux, &state->canvas_width, &state->canvas_height) != WEBP_MUX_OK) {
+				state->canvas_width = 0;
+				state->canvas_height = 0;
+			}
+			// without a canvas there is nothing to composite onto, so such a file is
+			// read as a plain sequence of frames
+			if((state->canvas_width <= 0) || (state->canvas_height <= 0)) {
+				state->is_animation = FALSE;
+			}
+			// The mux is the more forgiving of the two readers: it will hand out frames
+			// of a file the demuxer refuses - one whose frame runs past the canvas, say -
+			// and the frame decoder is built on the demuxer. Ask it now, once, so that a
+			// file whose frames cannot be composited is presented as the single image it
+			// can actually serve rather than as pages that all fail to load. This parses
+			// the container again and decodes nothing.
+			if(state->is_animation) {
+				WebPDemuxer *demux = WebPDemux(&state->bitstream);
+				if(demux == NULL) {
+					state->is_animation = FALSE;
+					state->frame_count = 1;
+				} else {
+					WebPDemuxDelete(demux);
+				}
+			}
+		}
 	} else {
 		// creates an empty mux object
-		mux = WebPMuxNew();
-		if(mux == NULL) {
+		state->mux = WebPMuxNew();
+		if(state->mux == NULL) {
+			free(state);
 			FreeImage_OutputMessageProc(s_format_id, "Failed to create empty mux object");
 			return NULL;
 		}
 	}
-	
-	return mux;
+
+	return state;
 }
 
 static void DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
-	WebPMux *mux = (WebPMux*)data;
-	if(mux != NULL) {
-		// free the MUX object
-		WebPMuxDelete(mux);
+	WebPPluginData *state = (WebPPluginData*)data;
+	if(state == NULL) {
+		return;
 	}
+	// the decoder and the mux both point into bitstream, so both go first
+	if(state->anim != NULL) {
+		WebPAnimDecoderDelete(state->anim);
+	}
+	WebP_ClearFrameCache(state);
+	if(state->mux != NULL) {
+		WebPMuxDelete(state->mux);
+	}
+	if(state->bitstream.bytes != NULL) {
+		free((void*)state->bitstream.bytes);
+	}
+	free(state);
+}
+
+// ----------------------------------------------------------
+
+static int DLL_CALLCONV
+PageCount(FreeImageIO *io, fi_handle handle, void *data) {
+	WebPPluginData *state = (WebPPluginData*)data;
+	return (state != NULL) ? state->frame_count : 0;
 }
 
 // ----------------------------------------------------------
@@ -330,8 +458,131 @@ DecodeImage(WebPData *webp_image, int flags) {
 	}
 }
 
+/**
+Build the fully composited canvas for a frame of an animation - the picture a
+viewer shows at that point, rather than the rectangle the file stores.
+libwebp's animation decoder does the compositing, which is more than GIF's:
+besides the dispose method it has a blend method, and blending here means real
+alpha compositing of the frame over what is already on the canvas. It only ever
+moves forwards, though, so asking for a frame behind the one it has reached
+means rewinding it and replaying from the start. The frame it last produced is
+kept, so playing an animation in order costs one frame of work per frame, and
+asking again for the frame already on screen costs none; anything else costs the
+replay, exactly as the GIF plugin behaves.
+@param state Plugin state, holding the decoder and the cached frame
+@param page Frame to produce
+@return Returns a 32-bit dib the caller owns, or NULL
+*/
+static FIBITMAP *
+DecodeCompositedFrame(WebPPluginData *state, int page) {
+	// the frame already on hand
+	if((state->cached_frame != NULL) && (state->cached_page == page)) {
+		return FreeImage_Clone(state->cached_frame);
+	}
+
+	if(state->anim == NULL) {
+		WebPAnimDecoderOptions options;
+		if(!WebPAnimDecoderOptionsInit(&options)) {
+			FreeImage_OutputMessageProc(s_format_id, "Library version mismatch");
+			return NULL;
+		}
+		// MODE_BGRA is the order the copy below reads; the FI_RGBA_* indices it
+		// writes to are what make that correct on a big-endian machine as well
+		options.color_mode = MODE_BGRA;
+		options.use_threads = 1;
+		state->anim = WebPAnimDecoderNew(&state->bitstream, &options);
+		if(state->anim == NULL) {
+			FreeImage_OutputMessageProc(s_format_id, "Failed to create the animation decoder");
+			return NULL;
+		}
+		state->anim_next = 0;
+	}
+
+	// the decoder only moves forwards: rewind it when the frame wanted is behind it
+	if((state->anim_next < 0) || (page < state->anim_next)) {
+		WebPAnimDecoderReset(state->anim);
+		state->anim_next = 0;
+	}
+
+	uint8_t *frame_rgba = NULL;
+	int timestamp = 0;
+	while(state->anim_next <= page) {
+		if(!WebPAnimDecoderHasMoreFrames(state->anim) || !WebPAnimDecoderGetNext(state->anim, &frame_rgba, &timestamp)) {
+			// leave the counter in a state that rewinds on the next call rather than
+			// one that would quietly hand out the wrong frame
+			state->anim_next = -1;
+			FreeImage_OutputMessageProc(s_format_id, "Failed to decode animation frame %d", page);
+			return NULL;
+		}
+		state->anim_next++;
+	}
+
+	// frame_rgba belongs to the decoder and only lives until the next call into it
+	FIBITMAP *dib = FreeImage_Allocate(state->canvas_width, state->canvas_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	if(dib == NULL) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_DIB_MEMORY);
+		return NULL;
+	}
+	for(int y = 0; y < state->canvas_height; y++) {
+		const BYTE *src_bits = (const BYTE*)frame_rgba + (size_t)y * (size_t)state->canvas_width * 4;
+		BYTE *dst_bits = (BYTE*)FreeImage_GetScanLine(dib, state->canvas_height - 1 - y);
+		for(int x = 0; x < state->canvas_width; x++) {
+			dst_bits[FI_RGBA_BLUE]	= src_bits[0];	// B
+			dst_bits[FI_RGBA_GREEN]	= src_bits[1];	// G
+			dst_bits[FI_RGBA_RED]	= src_bits[2];	// R
+			dst_bits[FI_RGBA_ALPHA]	= src_bits[3];	// A
+			src_bits += 4;
+			dst_bits += 4;
+		}
+	}
+
+	// keep it, so that this frame again and the frame after it are cheap. Failing to
+	// is not an error: the cache stays empty and playback stays as slow as it was.
+	WebP_ClearFrameCache(state);
+	state->cached_frame = FreeImage_Clone(dib);
+	if(state->cached_frame != NULL) {
+		state->cached_page = page;
+	}
+
+	return dib;
+}
+
+/**
+Describe a frame with the same tags the GIF plugin uses, so that a caller can walk
+a WebP animation with the code it already has for GIF: FrameTime is milliseconds
+(which is what WebP stores, where GIF stores hundredths), and DisposalMethod uses
+GIF's numbering - 1 to leave the canvas alone, 2 to restore the frame's rectangle
+to the background. BlendMethod has no GIF equivalent, GIF having one fully
+transparent colour where WebP blends with alpha, and matters only to a caller that
+composites the raw frames itself.
+*/
+static void
+SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameInfo *webp_frame, int page) {
+	LONG duration = (LONG)webp_frame->duration;
+	WORD left = (WORD)webp_frame->x_offset;
+	WORD top = (WORD)webp_frame->y_offset;
+	BYTE disposal = (webp_frame->dispose_method == WEBP_MUX_DISPOSE_BACKGROUND) ? 2 : 1;
+	BYTE blend = (webp_frame->blend_method == WEBP_MUX_NO_BLEND) ? 1 : 0;
+
+	WebP_SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
+	WebP_SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
+	WebP_SetAnimTag(dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &top);
+	WebP_SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	WebP_SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
+
+	if(page == 0) {
+		WORD logicalwidth = (WORD)state->canvas_width;
+		WORD logicalheight = (WORD)state->canvas_height;
+		LONG loop = (LONG)state->loop_count;
+		WebP_SetAnimTag(dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
+		WebP_SetAnimTag(dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
+		WebP_SetAnimTag(dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
+	}
+}
+
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+	WebPPluginData *state = NULL;
 	WebPMux *mux = NULL;
 	WebPMuxFrameInfo webp_frame = { 0 };	// raw image
 	WebPData color_profile;	// ICC raw data
@@ -345,12 +596,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	try {
-		// get the MUX object
-		mux = (WebPMux*)data;
-		if(!mux) {
+		// get the plugin state, and the MUX object inside it
+		state = (WebPPluginData*)data;
+		if(!state || !state->mux) {
 			throw (1);
 		}
-		
+		mux = state->mux;
+
+		// FreeImage_Load asks for page -1, meaning the one image it expects
+		if(page == -1) {
+			page = 0;
+		}
+		if((page < 0) || (page >= state->frame_count)) {
+			throw (1);
+		}
+
+		const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
+		// WEBP_PLAYBACK asks for the composited canvas rather than the stored frame.
+		// A still image has nothing to composite, so the flag does nothing to it and
+		// such a file loads exactly as it always has.
+		const BOOL playback = (state->is_animation && ((flags & WEBP_PLAYBACK) == WEBP_PLAYBACK)) ? TRUE : FALSE;
+
 		// gets the feature flags from the mux object
 		uint32_t webp_flags = 0;
 		error_status = WebPMuxGetFeatures(mux, &webp_flags);
@@ -358,16 +624,31 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw (1);
 		}
 
-		// get image data
-		error_status = WebPMuxGetFrame(mux, 1, &webp_frame);
+		// get image data. This also carries where the frame sits on the canvas, how
+		// long it lasts and how it is disposed of and blended, which is wanted even
+		// when no pixels are, and costs no decoding.
+		error_status = WebPMuxGetFrame(mux, page + 1, &webp_frame);
 
 		if(error_status == WEBP_MUX_OK) {
-			// decode the data (can be limited to the header if flags uses FIF_LOAD_NOPIXELS)
-			dib = DecodeImage(&webp_frame.bitstream, flags);
+			if(playback) {
+				// the composited canvas: what a viewer shows at this frame
+				dib = header_only ?
+					FreeImage_AllocateHeader(TRUE, state->canvas_width, state->canvas_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK) :
+					DecodeCompositedFrame(state, page);
+			} else {
+				// the frame as it is stored, at its own size and position
+				// (can be limited to the header if flags uses FIF_LOAD_NOPIXELS)
+				dib = DecodeImage(&webp_frame.bitstream, flags);
+			}
 			if(!dib) {
 				throw (1);
 			}
-			
+
+			// describe the frame within the animation
+			if(state->is_animation) {
+				SetFrameMetadata(dib, state, &webp_frame, page);
+			}
+
 			// get ICC profile
 			if(webp_flags & ICCP_FLAG) {
 				error_status = WebPMuxGetChunk(mux, "ICCP", &color_profile);
@@ -576,8 +857,11 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	try {
 
-		// get the MUX object
-		mux = (WebPMux*)data;
+		// get the MUX object out of the plugin state
+		{
+			WebPPluginData *state = (WebPPluginData*)data;
+			mux = state ? state->mux : NULL;
+		}
 		if(!mux) {
 			return FALSE;
 		}
@@ -690,7 +974,7 @@ InitWEBP(Plugin *plugin, int format_id) {
 	plugin->regexpr_proc = RegExpr;
 	plugin->open_proc = Open;
 	plugin->close_proc = Close;
-	plugin->pagecount_proc = NULL;
+	plugin->pagecount_proc = PageCount;
 	plugin->pagecapability_proc = NULL;
 	plugin->load_proc = Load;
 	plugin->save_proc = Save;
