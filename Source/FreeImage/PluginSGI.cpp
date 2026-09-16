@@ -261,6 +261,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			height = sgiHeader.ysize;
 		}
 		
+		// zsize is a raw WORD out of the file, and nothing looked at it until the
+		// switch further down - which is after the multiplication and the malloc
+		// below.  65535 * 65535 overflows an int, and the file was then rejected
+		// for the wrong reason, by the oversized allocation failing.
+		if (zsize < 1 || zsize > 4) {
+			throw SGI_INVALID_CHANNEL_COUNT;
+		}
+
 		if(bIsRLE) {
 			// read the Offset Tables 
 			int index_len = height * zsize;
