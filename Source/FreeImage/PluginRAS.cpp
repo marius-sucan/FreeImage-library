@@ -90,34 +90,45 @@ typedef struct tagSUNHEADER {
 // Internal functions
 // ==========================================================
 
-static void
-ReadData(FreeImageIO *io, fi_handle handle, BYTE *buf, DWORD length, BOOL rle) {
-	// Read either Run-Length Encoded or normal image data
+/**
+The state of a run in progress.  A Sun RLE run may span rows and ReadData is
+called once per row, so it has to survive from one call to the next - but only
+within one image.  These two used to be static locals, which is one image too
+many: an unfinished run left behind by a truncated file was still there when the
+next RAS was decoded, and that file's rows came out filled with the previous
+one's byte.  Two threads decoding RAS at once shared them as well.
+*/
+typedef struct {
+	BYTE repchar;		// the byte the run repeats
+	BYTE remaining;		// how much of the run is still owed
+} RASRLEState;
 
-	static BYTE repchar, remaining= 0;
+static void
+ReadData(FreeImageIO *io, fi_handle handle, BYTE *buf, DWORD length, BOOL rle, RASRLEState *run) {
+	// Read either Run-Length Encoded or normal image data
 
 	if (rle) {
 		// Run-length encoded read
 
 		while(length--) {
-			if (remaining) {
-				remaining--;
-				*(buf++)= repchar;
+			if (run->remaining) {
+				run->remaining--;
+				*(buf++)= run->repchar;
 			} else {
-				io->read_proc(&repchar, 1, 1, handle);
+				io->read_proc(&run->repchar, 1, 1, handle);
 
-				if (repchar == RESC) {
-					io->read_proc(&remaining, 1, 1, handle);
+				if (run->repchar == RESC) {
+					io->read_proc(&run->remaining, 1, 1, handle);
 
-					if (remaining == 0) {
+					if (run->remaining == 0) {
 						*(buf++)= RESC;
 					} else {
-						io->read_proc(&repchar, 1, 1, handle);
+						io->read_proc(&run->repchar, 1, 1, handle);
 
-						*(buf++)= repchar;
+						*(buf++)= run->repchar;
 					}
 				} else {
-					*(buf++)= repchar;
+					*(buf++)= run->repchar;
 				}
 			}
 		}
@@ -205,6 +216,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 	BYTE *bits;			// Pointer to dib data
 	unsigned x, y;
+	RASRLEState run = { 0, 0 };	// one run of RLE state per image, not per process
 
 	if(!handle) {
 		return NULL;
@@ -395,12 +407,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				bits = FreeImage_GetBits(dib) + (header.height - 1) * pitch;
 
 				for (y = 0; y < header.height; y++) {
-					ReadData(io, handle, bits, linelength, rle);
+					ReadData(io, handle, bits, linelength, rle, &run);
 
 					bits -= pitch;
 
 					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle);
+						ReadData(io, handle, &fillchar, fill, rle, &run);
 					}
 				}
 
@@ -416,7 +428,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
 
-					ReadData(io, handle, buf, header.width * 3, rle);
+					ReadData(io, handle, buf, header.width * 3, rle, &run);
 
 					bp = buf;
 
@@ -439,7 +451,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 
 					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle);
+						ReadData(io, handle, &fillchar, fill, rle, &run);
 					}
 				}
 
@@ -456,7 +468,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
 
-					ReadData(io, handle, buf, header.width * 4, rle);
+					ReadData(io, handle, buf, header.width * 4, rle, &run);
 
 					bp = buf;
 
@@ -483,7 +495,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 
 					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle);
+						ReadData(io, handle, &fillchar, fill, rle, &run);
 					}
 				}
 
