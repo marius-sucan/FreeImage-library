@@ -47,6 +47,14 @@
 // ==========================================================
 
 
+struct PageInfo {
+	PageInfo(int d, int l, int t, int w, int h) { 
+		disposal_method = d; left = (WORD)l; top = (WORD)t; width = (WORD)w; height = (WORD)h; 
+	}
+	int disposal_method;
+	WORD left, top, width, height;
+};
+
 struct GIFinfo {
 	BOOL read;
 	//only really used when reading
@@ -65,18 +73,44 @@ struct GIFinfo {
 	unsigned max_right;			// largest (left + width) and (top + height) of the frames written so far
 	unsigned max_bottom;
 
+	//GIF_PLAYBACK cache. Reading frame n used to mean replaying the animation from
+	//the last frame that fully repaints the screen, so walking a file of n frames in
+	//order cost O(n^2) - the complaint behind the slow FreeImage_LockPage() reports.
+	//Keeping the canvas of the frame just handed out turns that into one frame of work
+	//per step. previous_canvas is the canvas as it was before that frame drew its own
+	//pixels; only a frame disposing with GIF_DISPOSAL_PREVIOUS ever needs it, so it is
+	//only kept for those, and an ordinary file holds one spare canvas rather than two.
+	struct PlaybackCache {
+		PlaybackCache() : valid(false), page(-1), frame(GIF_DISPOSAL_LEAVE, 0, 0, 0, 0), delay_time(0), canvas(NULL), previous_canvas(NULL)
+		{
+		}
+		~PlaybackCache() {
+			clear();
+		}
+		void clear() {
+			if( canvas != NULL ) {
+				FreeImage_Unload(canvas);
+				canvas = NULL;
+			}
+			if( previous_canvas != NULL ) {
+				FreeImage_Unload(previous_canvas);
+				previous_canvas = NULL;
+			}
+			valid = false;
+			page = -1;
+		}
+		bool valid;
+		int page;					//the page canvas holds
+		PageInfo frame;				//that page's disposal method and rectangle
+		int delay_time;
+		FIBITMAP *canvas;			//composited result for page
+		FIBITMAP *previous_canvas;	//canvas before page drew, kept only when frame.disposal_method is GIF_DISPOSAL_PREVIOUS
+	} playback;
+
 	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
 		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0)
 	{
 	}
-};
-
-struct PageInfo {
-	PageInfo(int d, int l, int t, int w, int h) { 
-		disposal_method = d; left = (WORD)l; top = (WORD)t; width = (WORD)w; height = (WORD)h; 
-	}
-	int disposal_method;
-	WORD left, top, width, height;
 };
 
 //GIF defines a max of 12 bits per code
@@ -705,6 +739,107 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 	return (int) info->image_descriptor_offsets.size();
 }
 
+// ----------------------------------------------------------
+//   GIF_PLAYBACK helpers
+// ----------------------------------------------------------
+
+//How much of a frame's width lands on the logical screen. A malformed GIF may place a
+//frame beyond the right edge or let it run past it; rows below the screen are dealt
+//with by the scanidx test in the two loops below.
+static int
+GifPlaybackDrawWidth(const PageInfo &frame, int logicalwidth) {
+	return (frame.left < logicalwidth) ? MIN((int)frame.width, logicalwidth - (int)frame.left) : 0;
+}
+
+//Fill a frame's rectangle with a flat colour, for GIF_DISPOSAL_BACKGROUND.
+static void
+GifPlaybackFillRect(FIBITMAP *canvas, const PageInfo &frame, int logicalwidth, int logicalheight, const RGBQUAD &color) {
+	const int draw_width = GifPlaybackDrawWidth(frame, logicalwidth);
+	for( int y = 0; y < frame.height && draw_width > 0; y++ ) {
+		const int scanidx = logicalheight - (y + frame.top) - 1;
+		if( scanidx < 0 ) {
+			break;  // If data is corrupt, don't calculate in invalid scanline
+		}
+		RGBQUAD *scanline = (RGBQUAD *)FreeImage_GetScanLine(canvas, scanidx) + frame.left;
+		for( int x = 0; x < draw_width; x++ ) {
+			*scanline++ = color;
+		}
+	}
+}
+
+//Draw a decoded frame onto the canvas at its own position, honouring transparency, and
+//report its delay time through delay_time when that is not NULL.
+static void
+GifPlaybackCompositeFrame(FIBITMAP *canvas, FIBITMAP *pagedib, const PageInfo &frame, int logicalwidth, int logicalheight, int *delay_time) {
+	RGBQUAD *pal = FreeImage_GetPalette(pagedib);
+	bool have_transparent = false;
+	int transparent_color = 0;
+	if( FreeImage_IsTransparent(pagedib) ) {
+		int count = FreeImage_GetTransparencyCount(pagedib);
+		BYTE *table = FreeImage_GetTransparencyTable(pagedib);
+		for( int i = 0; i < count; i++ ) {
+			if( table[i] == 0 ) {
+				have_transparent = true;
+				transparent_color = i;
+				break;
+			}
+		}
+	}
+	//copy page data into logical buffer, with full alpha opaqueness
+	const int draw_width = GifPlaybackDrawWidth(frame, logicalwidth);
+	for( int y = 0; y < frame.height && draw_width > 0; y++ ) {
+		const int scanidx = logicalheight - (y + frame.top) - 1;
+		if( scanidx < 0 ) {
+			break;  // If data is corrupt, don't calculate in invalid scanline
+		}
+		RGBQUAD *scanline = (RGBQUAD *)FreeImage_GetScanLine(canvas, scanidx) + frame.left;
+		BYTE *pageline = FreeImage_GetScanLine(pagedib, frame.height - y - 1);
+		for( int x = 0; x < draw_width; x++ ) {
+			if( !have_transparent || *pageline != transparent_color ) {
+				*scanline = pal[*pageline];
+				scanline->rgbReserved = 255;
+			}
+			scanline++;
+			pageline++;
+		}
+	}
+	//copy frame time
+	if( delay_time != NULL ) {
+		FITAG *tag;
+		if( FreeImage_GetMetadataEx(FIMD_ANIMATION, pagedib, "FrameTime", FIDT_LONG, &tag) ) {
+			*delay_time = *(LONG *)FreeImage_GetTagValue(tag);
+		}
+	}
+}
+
+//Read one frame's disposal method and rectangle exactly as the backward scan in Load()
+//does, an absent Graphic Control Extension included: its offset is 0 then, and the
+//frame is treated as GIF_DISPOSAL_LEAVE rather than read from the start of the file.
+static PageInfo
+GifPlaybackReadPageInfo(FreeImageIO *io, fi_handle handle, GIFinfo *info, int page) {
+	int disposal_method = GIF_DISPOSAL_LEAVE;
+	if( info->graphic_control_extension_offsets[page] != 0 ) {
+		BYTE packed = 0;
+		io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
+		io->read_proc(&packed, 1, 1, handle);
+		disposal_method = (packed & GIF_PACKED_GCE_DISPOSAL) >> 2;
+	}
+
+	WORD left = 0, top = 0, width = 0, height = 0;
+	io->seek_proc(handle, (long)(info->image_descriptor_offsets[page]), SEEK_SET);
+	io->read_proc(&left, 2, 1, handle);
+	io->read_proc(&top, 2, 1, handle);
+	io->read_proc(&width, 2, 1, handle);
+	io->read_proc(&height, 2, 1, handle);
+#ifdef FREEIMAGE_BIGENDIAN
+	SwapShort(&left);
+	SwapShort(&top);
+	SwapShort(&width);
+	SwapShort(&height);
+#endif
+	return PageInfo(disposal_method, left, top, width, height);
+}
+
 static FIBITMAP * DLL_CALLCONV 
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	if( data == NULL ) {
@@ -751,6 +886,67 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				background.rgbBlue = 0;
 			}
 			background.rgbReserved = 0;
+
+			//If the frame before this one is still cached, this frame is that canvas with
+			//the cached frame's disposal applied and this frame's own pixels drawn on top.
+			//Only when neither shortcut fits does the reconstruction below run.
+			GIFinfo::PlaybackCache &cache = info->playback;
+
+			//the same frame again
+			if( cache.valid && cache.page == page ) {
+				dib = FreeImage_Clone(cache.canvas);
+				if( dib == NULL ) {
+					throw FI_MSG_ERROR_DIB_MEMORY;
+				}
+				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &cache.delay_time);
+				return dib;
+			}
+
+			//the frame after the cached one
+			if( cache.valid && cache.page == page - 1 &&
+				(cache.frame.disposal_method != GIF_DISPOSAL_PREVIOUS || cache.previous_canvas != NULL) ) {
+				FIBITMAP *canvas = FreeImage_Clone((cache.frame.disposal_method == GIF_DISPOSAL_PREVIOUS) ? cache.previous_canvas : cache.canvas);
+				if( canvas != NULL ) {
+					if( cache.frame.disposal_method == GIF_DISPOSAL_BACKGROUND ) {
+						GifPlaybackFillRect(canvas, cache.frame, logicalwidth, logicalheight, background);
+					}
+
+					const PageInfo thisframe = GifPlaybackReadPageInfo(io, handle, info, page);
+
+					//only a frame that disposes with GIF_DISPOSAL_PREVIOUS is ever restored to,
+					//so only those pay for the extra copy
+					FIBITMAP *previous_canvas = (thisframe.disposal_method == GIF_DISPOSAL_PREVIOUS) ? FreeImage_Clone(canvas) : NULL;
+
+					delay_time = 0;
+					FIBITMAP *pagedib = Load(io, handle, page, GIF_LOAD256, data);
+					if( pagedib != NULL ) {
+						GifPlaybackCompositeFrame(canvas, pagedib, thisframe, logicalwidth, logicalheight, &delay_time);
+						FreeImage_Unload(pagedib);
+					}
+					FreeImage_SetMetadataEx(FIMD_ANIMATION, canvas, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+
+					dib = FreeImage_Clone(canvas);
+					if( dib == NULL ) {
+						FreeImage_Unload(canvas);
+						if( previous_canvas != NULL ) {
+							FreeImage_Unload(previous_canvas);
+						}
+						cache.clear();
+						throw FI_MSG_ERROR_DIB_MEMORY;
+					}
+
+					cache.clear();
+					cache.canvas = canvas;
+					cache.previous_canvas = previous_canvas;
+					cache.page = page;
+					cache.frame = thisframe;
+					cache.delay_time = delay_time;
+					cache.valid = true;
+					return dib;
+				}
+				//no memory for the shortcut: drop the cache and rebuild from scratch
+				cache.clear();
+			}
 
 			//allocate entire logical area
 			dib = FreeImage_Allocate(logicalwidth, logicalheight, 32);
@@ -818,77 +1014,53 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			//draw each page into the logical area
 			delay_time = 0;
+			FIBITMAP *previous_canvas_snapshot = NULL;
 			for( page = start; page <= end; page++ ) {
 				PageInfo &info = pageinfo[end - page];
-				//clip the frame to the logical screen: a malformed GIF may declare frames extending beyond it
-				//(rows below the screen are handled by the scanidx test in the loops below)
-				const int draw_width = (info.left < logicalwidth) ? MIN((int)info.width, (int)logicalwidth - (int)info.left) : 0;
 				//things we can skip having to decode
 				if( page != end ) {
 					if( info.disposal_method == GIF_DISPOSAL_PREVIOUS ) {
 						continue;
 					}
 					if( info.disposal_method == GIF_DISPOSAL_BACKGROUND ) {
-						for( y = 0; y < info.height && draw_width > 0; y++ ) {
-							const int scanidx = logicalheight - (y + info.top) - 1;
-							if ( scanidx < 0 ) {
-								break;  // If data is corrupt, don't calculate in invalid scanline
-							}
-							scanline = (RGBQUAD *)FreeImage_GetScanLine(dib, scanidx) + info.left;
-							for( x = 0; x < draw_width; x++ ) {
-								*scanline++ = background;
-							}
-						}
+						GifPlaybackFillRect(dib, info, logicalwidth, logicalheight, background);
 						continue;
 					}
+				}
+
+				//the canvas as it is before the last frame draws its own pixels, which the
+				//next frame needs only if this one disposes with GIF_DISPOSAL_PREVIOUS
+				if( page == end && info.disposal_method == GIF_DISPOSAL_PREVIOUS ) {
+					previous_canvas_snapshot = FreeImage_Clone(dib);
 				}
 
 				//decode page
 				FIBITMAP *pagedib = Load(io, handle, page, GIF_LOAD256, data);
 				if( pagedib != NULL ) {
-					RGBQUAD *pal = FreeImage_GetPalette(pagedib);
-					have_transparent = false;
-					if( FreeImage_IsTransparent(pagedib) ) {
-						int count = FreeImage_GetTransparencyCount(pagedib);
-						BYTE *table = FreeImage_GetTransparencyTable(pagedib);
-						for( int i = 0; i < count; i++ ) {
-							if( table[i] == 0 ) {
-								have_transparent = true;
-								transparent_color = i;
-								break;
-							}
-						}
-					}
-					//copy page data into logical buffer, with full alpha opaqueness
-					for( y = 0; y < info.height && draw_width > 0; y++ ) {
-						const int scanidx = logicalheight - (y + info.top) - 1;
-						if ( scanidx < 0 ) {
-							break;  // If data is corrupt, don't calculate in invalid scanline
-						}
-						scanline = (RGBQUAD *)FreeImage_GetScanLine(dib, scanidx) + info.left;
-						BYTE *pageline = FreeImage_GetScanLine(pagedib, info.height - y - 1);
-						for( x = 0; x < draw_width; x++ ) {
-							if( !have_transparent || *pageline != transparent_color ) {
-								*scanline = pal[*pageline];
-								scanline->rgbReserved = 255;
-							}
-							scanline++;
-							pageline++;
-						}
-					}
-					//copy frame time
-					if( page == end ) {
-						FITAG *tag;
-						if( FreeImage_GetMetadataEx(FIMD_ANIMATION, pagedib, "FrameTime", FIDT_LONG, &tag) ) {
-							delay_time = *(LONG *)FreeImage_GetTagValue(tag);
-						}
-					}
+					GifPlaybackCompositeFrame(dib, pagedib, info, logicalwidth, logicalheight, (page == end) ? &delay_time : NULL);
 					FreeImage_Unload(pagedib);
 				}
 			}
 
 			//setup frame time
 			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+
+			//seed the cache so the next frame can take the shortcut above. pageinfo[0]
+			//describes page `end`, the frame this canvas ends on. Failing to clone is not
+			//an error: the cache simply stays empty and playback stays as slow as it was.
+			cache.clear();
+			cache.canvas = FreeImage_Clone(dib);
+			if( cache.canvas != NULL ) {
+				cache.previous_canvas = previous_canvas_snapshot;
+				previous_canvas_snapshot = NULL;
+				cache.page = end;
+				cache.frame = pageinfo[0];
+				cache.delay_time = delay_time;
+				cache.valid = true;
+			}
+			if( previous_canvas_snapshot != NULL ) {
+				FreeImage_Unload(previous_canvas_snapshot);
+			}
 			return dib;
 		}
 
