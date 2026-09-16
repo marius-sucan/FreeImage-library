@@ -315,7 +315,7 @@ private:
 	unsigned GetChannelOffset(FIBITMAP* bitmap, unsigned c) const;
 	/**	Actually ignore it */
 	bool ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle);
-	void ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes);
+	void ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes, const BYTE* dst_line_end);
 	void UnpackRLE(BYTE* dst, const BYTE* src, BYTE* dst_end, unsigned srcSize);
 	FIBITMAP* ReadImageData(FreeImageIO *io, fi_handle handle);
 	bool WriteLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle);

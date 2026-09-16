@@ -346,6 +346,20 @@ bool psdHeaderInfo::Read(FreeImageIO *io, fi_handle handle) {
 			if (_Version == 1 && (_Width > 30000 || _Height > 30000)) {
 				return false;
 			}
+			// The format defines four depths and no others.  Everything downstream
+			// computes with this number - the source line size, the bytes per
+			// sample, the bit depth handed to the allocator - while the allocator
+			// silently rounds a depth it does not know up to the next one it does,
+			// so an unlisted value puts the two out of step for the whole decode.
+			switch (_BitsPerChannel) {
+				case 1:
+				case 8:
+				case 16:
+				case 32:
+					break;
+				default:
+					return false;
+			}
 
 			return true;
 		}
@@ -1283,14 +1297,23 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 
 }
 
-void psdParser::ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes) {
+/**
+Scatter one channel's worth of a source line into a destination scanline.
+
+dst_line_end is the end of that scanline - not of the whole bitmap.  lineSize is
+a count of SOURCE bytes and the destination advances by dstBpp for each sample,
+so the two are only in step when the header's depth, the channel count and the
+bit depth the allocator settled on all agree; where they do not, the source line
+is the longer and it is the row that has to stop it.
+*/
+void psdParser::ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes, const BYTE* dst_line_end) {
 	switch (bytes) {
 		case 4:
 		{
 			DWORD* d = (DWORD*)dst;
 			const DWORD* s = (const DWORD*)src;
 			dstBpp /= 4;
-			while (lineSize > 0) {
+			while (lineSize > 0 && (const BYTE*)(d + 1) <= dst_line_end) {
 				DWORD v = *s++;
 #ifndef FREEIMAGE_BIGENDIAN
 				SwapLong(&v);
@@ -1306,7 +1329,7 @@ void psdParser::ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, uns
 			WORD* d = (WORD*)dst;
 			const WORD* s = (const WORD*)src;
 			dstBpp /= 2;
-			while (lineSize > 0) {
+			while (lineSize > 0 && (const BYTE*)(d + 1) <= dst_line_end) {
 				WORD v = *s++;
 #ifndef FREEIMAGE_BIGENDIAN
 				SwapShort(&v);
@@ -1319,9 +1342,10 @@ void psdParser::ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, uns
 		}
 		default:
 			if (dstBpp == 1) {
-				memcpy(dst, src, lineSize);
+				const unsigned room = (unsigned)(dst_line_end - dst);
+				memcpy(dst, src, MIN(lineSize, room));
 			} else {
-				while (lineSize > 0) {
+				while (lineSize > 0 && dst < dst_line_end) {
 					*dst = *src++;
 					dst += dstBpp;
 					lineSize--;
@@ -1531,7 +1555,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= dstLineSize) {//<*** flipped
 					io->read_proc(line_start, lineSize, 1, handle);
-					ReadImageLine(dst_line_start, line_start, limitLineSize, dstBpp, bytes);
+					ReadImageLine(dst_line_start, line_start, limitLineSize, dstBpp, bytes,
+					              dst_line_start - channelOffset + dstLineSize);
 				} //< h
 			}//< ch
 
@@ -1621,7 +1646,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 					// - write line to destination -
 
 					UnpackRLE(line_start, rle_line_start, line_start + lineSize, rleLineSize);
-					ReadImageLine(dst_line_start, line_start, lineSize, dstBpp, bytes);
+					ReadImageLine(dst_line_start, line_start, lineSize, dstBpp, bytes,
+					              dst_line_start - channelOffset + dstLineSize);
 				}//< h
 			}//< ch
 
