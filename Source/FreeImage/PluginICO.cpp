@@ -292,10 +292,24 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 
 	// load the BITMAPINFOHEADER
 	BITMAPINFOHEADER bmih;
-	io->read_proc(&bmih, sizeof(BITMAPINFOHEADER), 1, handle);
+	memset(&bmih, 0, sizeof(BITMAPINFOHEADER));
+	if (io->read_proc(&bmih, sizeof(BITMAPINFOHEADER), 1, handle) != 1) {
+		return NULL;
+	}
 #ifdef FREEIMAGE_BIGENDIAN
 	SwapInfoHeader(&bmih);
 #endif
+
+	// An icon stores its XOR and AND masks stacked, so biHeight is twice the
+	// image height and is never negative - unlike a BMP, an icon has no
+	// top-down form.  Neither dimension was checked: biHeight = -4 gave
+	// height = -2, FreeImage_AllocateHeader() abs()ed that into a two-row
+	// bitmap, and the pixel read below is "height * pitch" - int times unsigned,
+	// so evaluated as unsigned - which turned into a request for 4294967264
+	// bytes into a 32-byte bitmap.
+	if ((bmih.biWidth <= 0) || (bmih.biHeight <= 0)) {
+		return NULL;
+	}
 
 	// allocate the bitmap
 	int width  = bmih.biWidth;
