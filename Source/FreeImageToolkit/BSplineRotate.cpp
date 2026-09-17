@@ -654,6 +654,17 @@ FreeImage_RotateEx(FIBITMAP *dib, double angle, double x_shift, double y_shift, 
 
 	if(!FreeImage_HasPixels(dib)) return NULL;
 
+	if(FreeImage_GetImageType(dib) != FIT_BITMAP) {
+		// The dispatch below is on the bit depth alone, and FIT_UINT32, FIT_INT32
+		// and FIT_FLOAT all report 32.  Each was taken apart into four "colour
+		// channels", each byte plane B-spline rotated as if it were an 8-bit
+		// greyscale image, and the pieces reassembled as a 32-bit FIT_BITMAP: the
+		// exponent and mantissa bytes of a float interpolated independently of one
+		// another, and the image type silently changed.  "8, 24 or 32-bit" in this
+		// function's documentation means 8-, 24- or 32-bit FIT_BITMAP.
+		return NULL;
+	}
+
 	try {
 
 		bpp = FreeImage_GetBPP(dib);
