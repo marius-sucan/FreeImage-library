@@ -22,11 +22,11 @@ this build.
 **27 of the 29 are upstream 3.18.0 defects**, not regressions of this fork. The two
 local ones are M10 and N5, both called out as such.
 
-> **Status:** every reproduced finding is fixed except **M10** (WebP), which is left
-> open by decision — it belongs to `PluginWebP.cpp`, not to this API.
+> **Status: every reproduced finding is fixed.**
 > M1–M9, M11 in `d79f90e`; M12, N6 in `28178b1`; C1, C2, N1, N2, N11, N14 in `e669ea6`;
-> **N3, N7, N8, N10, N15, N16 in `6267d80`**. N4 and N13 turned out to have been fixed
-> already, and **N5 and N12 are not defects** — see §5.3. See §5.
+> N3, N7, N8, N10, N15, N16 in `6267d80`; **M10 in `a48037f` and `de6aa23`**.
+> N4 and N13 turned out to have been fixed already, and **N5 and N12 are not defects** —
+> see §5.3. See §5.
 
 ---
 
@@ -52,22 +52,28 @@ A plugin joins the multi-page API by setting `pagecount_proc`. Exactly **7** do:
 | **ICO** | 1 | yes | **yes** | no | pages are icon directory entries |
 | **GIF** | 25 | yes | **yes** | **read + write** | `GIF_PLAYBACK` composites frames |
 | **APNG** | 39 | yes | **yes** | **read + write** | `APNG_PLAYBACK`; local plugin |
-| **WebP** | 35 | yes | **BROKEN — M10** | **read only** (`WEBP_PLAYBACK`) | `Save` ignores `page` |
+| **WebP** | 35 | yes | **yes** (`a48037f`) | **read + write** (`WEBP_PLAYBACK`) | one ANMF frame per page |
 | **AVIF** | 37 | yes | n/a (read-only fif) | **read only** | counts sequence frames |
 | **HEIF** | 38 | yes | n/a (read-only fif) | no | counts *top-level images*, not frames |
 
 Verified round-trips (3 pages in → 3 pages back, values intact):
-TIFF, GIF, ICO, APNG. WebP fails (M10).
+TIFF, GIF, ICO, APNG, WebP. WebP is exact under `WEBP_LOSSLESS`; at the default
+quality the pixels move, as they would for any lossy save.
 
 ## 1.3 Animation
 
-- **Read + write:** GIF, APNG. Both carry `FIMD_ANIMATION` metadata
-  (`FrameTime`, `Loop`, disposal/blend) and both have a `_PLAYBACK` load flag.
-- **Read only:** WebP (`WEBP_PLAYBACK`, added locally), AVIF (sets `FrameTime`/`Loop`).
+- **Read + write:** GIF, APNG, WebP. All three carry `FIMD_ANIMATION` metadata
+  (`FrameTime`, `Loop`, disposal/blend) and all three have a `_PLAYBACK` load flag.
+  WebP's writer was added in `a48037f`; before that it could only read animations.
+- **Read only:** AVIF (sets `FrameTime`/`Loop`; the format has no writer here at all).
 - **Not animation:** HEIF — its `PageCount` returns the number of top-level images, and
   the plugin never emits `FIMD_ANIMATION`. A multi-image HEIC is a burst/collection,
   not a sequence. TIFF and ICO are multi-image but have no time dimension.
 - **`FIMD_ANIMATION` is emitted by exactly 4 plugins:** GIF, APNG, WebP, AVIF.
+- **Where the canvas lives:** GIF and APNG attach `LogicalWidth`/`LogicalHeight`/`Loop`
+  to page 0 alone, so deleting the first page of an animation discards the only record
+  of its canvas. WebP attaches them to every frame (`de6aa23`) precisely so that
+  editing a document does not shrink it. GIF and APNG still have this limitation.
 
 ## 1.4 The trap: MNG is an animation format this API cannot reach
 
@@ -454,7 +460,7 @@ same collision applies across processes and to any two formats sharing a stem
 | M7 | **fixed** | `LockPage` bounds-checks, so `-1` no longer reaches the plugins as their single-image sentinel. |
 | M8 | **fixed** | `AppendPage`/`InsertPage` refuse a second page on a format whose plugin has no `pagecount_proc`; the file written is a valid one-page file. |
 | M9 | **fixed** (behaviour change) | Dropped operations are reported through `FreeImage_OutputMessageProc` and recorded, and `CloseMultiBitmap` returns `FALSE` instead of `TRUE`. |
-| M10 | **open by decision** | WebP's `Save` ignores `page`. The fix belongs in `PluginWebP.cpp` — either build an animation across the `page` calls, or set `pagecount_proc = NULL` for writing. |
+| M10 | **fixed** (`a48037f`, `de6aa23`) | `Save` collects a frame per page and `Close` assembles the animation. The cache stores WebP losslessly, and the canvas now travels on every frame. See §5.4. |
 | M11 | **fixed** | `InsertPage` rejects a negative position instead of silently inserting at the front, and says so when asked to insert at or past the end. |
 | M12 | **fixed** (`28178b1`) | `OpenMultiBitmap` requires a `load_proc` to open an existing file and a `save_proc` for `create_new`, so a new multi-bitmap can no longer be opened in a format that has no writer. `OpenMultiBitmapFromHandle`/`LoadMultiBitmapFromMemory` require the loader only. |
 | N6 | **fixed** (`28178b1`) | `UnlockPage` now checks that the page really was encoded into the cache before replacing the block, instead of writing a reference to block 0 of length 0. |
@@ -612,6 +618,48 @@ Reproducing it needs a bitmap that encodes to more than 2 GiB, and this machine 
 of RAM free, so this one is settled by inspection.
 
 
+## 5.4 WebP: what it took to make the page API work
+
+`Save` ignored its `page` argument, assembled a complete WebP file and wrote it on
+every call, so a three-page save produced three whole files concatenated. This was a
+*local* regression: `ed09abe` gave the plugin a `pagecount_proc` so a caller could read
+animation frames, and thereby advertised a multi-page writer that had never existed.
+
+The writer now collects a frame per `Save(page >= 0)` and assembles the animation in
+`Close()`, reading each frame's `FIMD_ANIMATION` back into a `WebPMuxFrameInfo` — the
+exact inverse of the `SetFrameMetadata` the loader already had. The first frame is held
+rather than pushed, because on its own it is still a lone image; the arrival of a second
+is what makes the output an animation.
+
+Three things were not obvious:
+
+- **A still WebP cannot hold a frame's duration or position.** Every page travels
+  through the multi-page cache as a single-image save, so a page went in with
+  `FrameTime` and came back without it (`ncheck n12` showed `340 -> -1` before this
+  work; GIF and APNG showed no such loss). **Behaviour change:**
+  `FreeImage_Save(FIF_WEBP, dib)` now writes a *one-frame animation* rather than a still
+  when the bitmap carries frame tags. `PluginAPNG.cpp` already did exactly this, for
+  exactly this reason.
+- **The cache was adding a generation of lossy compression.** `cache_fif` is the file's
+  own format, so a page was encoded lossily into the cache and lossily again into the
+  file. The cache now uses `WEBP_LOSSLESS`; WebP is the only multi-page format with
+  anything lossy to turn off.
+- **The canvas has to travel with every frame.** See §1.3.
+
+Two format constraints are worth knowing rather than fixing: WebP stores frame offsets
+in even pixels only (the mux snaps with `offset &= ~1`, so the writer rounds too), and
+`WebPMuxAssemble` refuses an animation whose frames fall outside its canvas — which is
+why the canvas is widened to cover the frames rather than enforced, `Close()` having no
+way to report a refusal.
+
+**Cross-checked against a different implementation.** `webpanim.py` drives Pillow, whose
+WebP encoder and decoder are not FreeImage's. FreeImage reads a four-frame animation
+Pillow wrote with the right durations, canvas and loop count; rewrites it through
+`SaveMultiBitmapToMemory`; and Pillow reads the result back with the same frame count,
+durations, canvas, loop count and exact pixels. The saved file also survives a
+`WEBP_PLAYBACK` read, which goes through libwebp's demuxer rather than its mux.
+
+
 # 6. Rig
 
 `.claude/audit/multipage/mp.c` — single binary, one subcommand per finding.
@@ -646,6 +694,8 @@ gcc -shared -fPIC -o renamefail.so renamefail.c -ldl
 | `cachename [n]` | C2 |
 | `cachefuzz` (separate binary) | C1, N1, N2, N4, N11, N14 — drives `CacheFile` directly under ASan |
 | `ncheck n5 / n8 / n10 / n12 / n15` | N5, N8, N10, N12, N15 |
+| `webpanim.py make`, then `ncheck anim 35 <in> [out]` | M10 — walks an animation, rewrites it, and reads it back composited; `webpanim.py show` checks the result with Pillow |
+| `ncheck canvas 35 c.webp` | M10 — the canvas after the page that declared it is deleted |
 | `ncheck n7prep` then `ncheck n7edit` under `renamefail.so` | N7 — makes `rename()` fail on demand |
 | `mp mk 20 base.psd 1`, then `mkpsd_exif3.py base.psd exif3.psd`, then `ncheck n16 exif3.psd 20` | N16 — a PSD that aborts the unfixed library |
 | `cachestress <n>` | C1/N11 through the public API (`FI_MEMCACHE=1` for the memory cache) |
