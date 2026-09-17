@@ -223,16 +223,17 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 		}
 
 		// simplify the filter, discarding null weights at the right
-		{			
+		{
+			// iTrailing is Right - Left - 1 throughout, so testing it before the
+			// subscript both keeps the read in bounds for an empty window and stops
+			// the walk once the window has been emptied.  The Right == Left test it
+			// replaces could do neither: it ran after the first read, and Right is
+			// unsigned, so once it wrapped below Left it never matched again.
 			int iTrailing = iRight - iLeft - 1;
-			while(m_WeightTable[u].Weights[iTrailing] == 0) {
+			while((iTrailing >= 0) && (m_WeightTable[u].Weights[iTrailing] == 0)) {
 				m_WeightTable[u].Right--;
 				iTrailing--;
-				if(m_WeightTable[u].Right == m_WeightTable[u].Left) {
-					break;
-				}
 			}
-			
 		}
 
 	} // next dst pixel

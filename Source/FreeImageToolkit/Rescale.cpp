@@ -45,6 +45,11 @@ FreeImage_RescaleRect(FIBITMAP *src, int dst_width, int dst_height, int src_left
 	if((src_left < 0) || (src_right > src_width) || (src_top < 0) || (src_bottom > src_height)) {
 		return NULL;
 	}
+	// an empty rectangle has no pixels to filter: the weights table would be built
+	// against a zero source size, and the non-FIT_BITMAP filters divide by it
+	if((src_right <= src_left) || (src_bottom <= src_top)) {
+		return NULL;
+	}
 
 	// select the filter
 	CGenericFilter *pFilter = NULL;
@@ -120,6 +125,11 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
 
    // check the size of the sub image
    if((src_left < 0) || (src_right > src_width) || (src_top < 0) || (src_bottom > src_height)) {
+      FreeImage_Unload(src);
+      return 0;
+   }
+   // an empty rectangle has no pixels to filter: see FreeImage_RescaleRect
+   if((src_right <= src_left) || (src_bottom <= src_top)) {
       FreeImage_Unload(src);
       return 0;
    }
