@@ -343,6 +343,52 @@ int main(int argc, char **argv) {
 		FreeImage_CloseMultiBitmap(m, 0);
 		dump(fif, argv[3], "after  ");
 
+	} else if (!strcmp(cmd, "scenario")) {
+		/* End-to-end model check: apply a mixed sequence of page operations, then
+		   assert that LockPage agrees with the model AND with what Close writes.
+		   Before the M1/M2 fix the locked values were the file's page order, which
+		   stopped matching the model at the first DeletePage. */
+		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
+		int want[8], nwant = 0, k, bad = 0;
+		FIMULTIBITMAP *m;
+		FIBITMAP *d;
+		mk(fif, argv[3], 5);                       /* [20 40 60 80 100] */
+		want[nwant++] = 20; want[nwant++] = 40; want[nwant++] = 60;
+		want[nwant++] = 80; want[nwant++] = 100;
+
+		m = FreeImage_OpenMultiBitmap(fif, argv[3], FALSE, FALSE, TRUE, 0);
+		if (!m) { printf("  open failed\n"); goto done; }
+
+		FreeImage_DeletePage(m, 1);                /* [20 60 80 100] */
+		memmove(want + 1, want + 2, (nwant - 2) * sizeof(int)); nwant--;
+
+		d = page(120, 16, 16); FreeImage_AppendPage(m, d); FreeImage_Unload(d);
+		want[nwant++] = 120;                       /* [20 60 80 100 120] */
+
+		d = page(140, 16, 16); FreeImage_InsertPage(m, 0, d); FreeImage_Unload(d);
+		memmove(want + 1, want, nwant * sizeof(int)); want[0] = 140; nwant++;
+		                                           /* [140 20 60 80 100 120] */
+
+		FreeImage_MovePage(m, nwant - 1, 0);       /* move page 0 to the end */
+		{ int t = want[0];
+		  memmove(want, want + 1, (nwant - 1) * sizeof(int));
+		  want[nwant - 1] = t; }                   /* [20 60 80 100 120 140] */
+
+		printf("  model  : pages=%d  values=[", nwant);
+		for (k = 0; k < nwant; k++) printf("%s%d", k ? " " : "", want[k]);
+		printf("]\n");
+		printf("  API    : pages=%d  values=[", FreeImage_GetPageCount(m));
+		for (k = 0; k < FreeImage_GetPageCount(m); k++) {
+			FIBITMAP *p = FreeImage_LockPage(m, k);
+			int v = firstpix(p);
+			printf("%s%d", k ? " " : "", v);
+			if (k >= nwant || v != want[k]) bad++;
+			if (p) FreeImage_UnlockPage(m, p, FALSE);
+		}
+		printf("]  %s\n", bad ? "*** LockPage DISAGREES WITH THE MODEL ***" : "matches");
+		printf("  close=%d\n", FreeImage_CloseMultiBitmap(m, 0));
+		dump(fif, argv[3], "on disk");
+
 	} else if (!strcmp(cmd, "matrix")) {
 		/* authoritative read/write capability, straight from the library */
 		int f;

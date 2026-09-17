@@ -22,6 +22,10 @@ this build.
 **26 of the 28 are upstream 3.18.0 defects**, not regressions of this fork. The two
 local ones are M10 and N5, both called out as such.
 
+> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`. M10 (WebP) is left open by
+> decision — it belongs to `PluginWebP.cpp`, not to this API. C1, C2 and N1–N16 are
+> open. See §5.
+
 ---
 
 # 1. Format matrix
@@ -127,11 +131,18 @@ reported anywhere. Upstream.
 `target` to immediately before index `source`"** — the two parameters are used the
 opposite way round from their names.
 
-(FreeImage.h carries no doc comment for these functions and this repo ships no manual,
-so the only statement of intent is the FreeImage 3.18.0 reference manual, "Multipage
-functions", which describes `FreeImage_MovePage` as moving the *source* page to the
-position of the *target* page. The reproduced behaviour below is the opposite; it
-stands on its own regardless of how the manual is read.)
+FreeImage.h carries no doc comment for these functions, but the official .NET wrapper
+in this repo states the contract exactly
+(`Wrapper/FreeImage.NET/cs/UnitTest/FreeImage.cs:4879-4887`):
+
+```
+/// Moves the source page to the position of the target page.
+/// <param name="target">New position of the page.</param>
+/// <param name="source">Old position of the page.</param>
+```
+
+So `source` is where the page is now and `target` is where it should end up. The code
+does the opposite.
 
 ```
 $ ./mp move 18 t3.tif 0 2
@@ -380,7 +391,7 @@ same collision applies across processes and to any two formats sharing a stem
 
 ---
 
-# 4. Ranked fixes
+# 4. Ranked fixes (as assessed before any were made)
 
 1. **M4** — one NULL check on `save_proc`; turns a SIGSEGV into `FALSE`. Trivial.
 2. **M5/M6/M7** — bounds-check `page` in `DeletePage`, `LockPage`, `InsertPage` and
@@ -403,7 +414,59 @@ same collision applies across processes and to any two formats sharing a stem
 
 ---
 
-# 5. Rig
+# 5. Fixes applied
+
+`d79f90e` — *MultiPage: fix the ten reproduced defects in the page API*
+(`Source/FreeImage/MultiPage.cpp` only; no other file changed).
+
+| # | Status | What changed |
+|---|---|---|
+| M1 | **fixed** | `LockPage` resolves the page number through the block list via a new non-mutating `FreeImage_FindPage`, and reads `BLOCK_REFERENCE` pages out of the cache. A page can now also be locked on a `create_new` bitmap. |
+| M2 | **fixed** | Falls out of M1: `UnlockPage` already resolved the *logical* index, so once `LockPage` hands back the logical page the edit lands where the caller expects. |
+| M3 | **fixed** (behaviour change) | `MovePage` now moves the page at `source` to position `target`, taking it out of the list before locating the destination. |
+| M4 | **fixed** | `SaveMultiBitmapToHandle` refuses a destination with no `save_proc`, and one with no `pagecount_proc` when there is more than one page. `load_proc`, the loaded dib and the cache read are checked as well. |
+| M5 | **fixed** | `DeletePage` bounds-checks; the `assert(false)` in `FindBlock` is gone, so a bad page number can no longer abort the host process. |
+| M6 | **fixed** | Same bounds check — negative indices can no longer build blocks with negative extents. |
+| M7 | **fixed** | `LockPage` bounds-checks, so `-1` no longer reaches the plugins as their single-image sentinel. |
+| M8 | **fixed** | `AppendPage`/`InsertPage` refuse a second page on a format whose plugin has no `pagecount_proc`; the file written is a valid one-page file. |
+| M9 | **fixed** (behaviour change) | Dropped operations are reported through `FreeImage_OutputMessageProc` and recorded, and `CloseMultiBitmap` returns `FALSE` instead of `TRUE`. |
+| M10 | **open by decision** | WebP's `Save` ignores `page`. The fix belongs in `PluginWebP.cpp` — either build an animation across the `page` calls, or set `pagecount_proc = NULL` for writing. |
+| M11 | **fixed** | `InsertPage` rejects a negative position instead of silently inserting at the front, and says so when asked to insert at or past the end. |
+| C1, C2 | **open** | Both are in `CacheFile.cpp`, which this commit does not touch. |
+| N1–N16 | **open** | |
+
+## The two behaviour changes, in full
+
+Both can break a caller that was written against the old behaviour, so they are worth
+stating plainly:
+
+1. **`FreeImage_MovePage(bitmap, target, source)`** used to move the page at `target`
+   to just before `source`. It now moves the page at `source` to position `target`.
+   An adjacent swap — `MovePage(m, 1, 0)`, which is what the .NET sample does — gives
+   the same result either way; every other move does not.
+2. **`FreeImage_CloseMultiBitmap`** now returns `FALSE` if any page operation was
+   dropped (read-only bitmap, a locked page, an image `cache_fif` cannot encode, a
+   non-multipage format asked for a second page, an out-of-range index), where it
+   used to return `TRUE`. This reaches the .NET wrapper: `FreeImageBitmap`'s
+   `SaveAdd` does `AppendPage` then throws on a `FALSE` close, so adding a page to a
+   single-image file now raises instead of quietly appending a second file to it.
+
+## Verification
+
+- **`testAPI` output is byte-identical** before and after the change — including
+  `testMultiPage`, `testStreamMultiPage` and `testMultiPageMemory`. The
+  `testThumbnail.cpp:132` abort it ends on is pre-existing: it reproduces on a
+  library built from the unmodified `MultiPage.cpp`.
+- **`TestAPI/APNG`**: `regress` 27/27, `robust` 19/19 (3165 damaged inputs).
+- **`mp scenario`** applies delete → append → insert → move to a 5-page document and
+  checks that an independent model, every `LockPage` and the file `Close` writes all
+  agree. Passes on TIFF, GIF, ICO and APNG — the two pages it locks after the append
+  and insert are cache-backed, which was not possible at all before.
+- Round-trips (3 pages in, 3 pages back) still correct for TIFF, GIF, ICO, APNG.
+
+---
+
+# 6. Rig
 
 `.claude/audit/multipage/mp.c` — single binary, one subcommand per finding.
 
