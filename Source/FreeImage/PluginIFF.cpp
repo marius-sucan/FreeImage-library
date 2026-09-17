@@ -261,12 +261,28 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			unsigned ch_end = io->tell_proc(handle) + ch_size;
 
 			if (ch_type == ID_BMHD) {			// Bitmap Header
-				if (dib)
+				// the read below always takes 20 bytes, so a chunk declaring fewer
+				// would eat the header of the next one and leave ch_end pointing
+				// backwards
+				if (ch_size < sizeof(BMHD))
+					return NULL;
+
+				if (dib) {
 					FreeImage_Unload(dib);
+					dib = NULL;
+				}
 
+				// zeroed, and the read is checked: this is declared inside the chunk
+				// loop, so a second BMHD reuses the same stack slot, and a read that
+				// fails writes nothing at all.  A 48-byte file whose second BMHD is at
+				// end of file used to re-use the first one's fields - byte-swapped a
+				// second time - and allocate 1.4 MB at a size that appears nowhere in
+				// it.
 				BMHD bmhd;
+				memset(&bmhd, 0, sizeof(bmhd));
 
-				io->read_proc(&bmhd, sizeof(bmhd), 1, handle);
+				if (io->read_proc(&bmhd, sizeof(bmhd), 1, handle) != 1)
+					return NULL;
 #ifndef FREEIMAGE_BIGENDIAN
 				SwapHeader(&bmhd);
 #endif
@@ -289,6 +305,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				} else {
 					dib = FreeImage_Allocate(width, height, depth);
 				}
+
+				if (!dib)
+					return NULL;
 			} else if (ch_type == ID_CMAP) {	// Palette (Color Map)
 				if (!dib)
 					return NULL;
@@ -374,6 +393,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					unsigned plane_size = n_width/8;
 					unsigned src_size = plane_size * planes;
 					BYTE *src = (BYTE*)malloc(src_size);
+					if (!src) {
+						FreeImage_Unload(dib);
+						return NULL;
+					}
 					BYTE *dest = FreeImage_GetBits(dib);
 
 					dest += FreeImage_GetPitch(dib) * height;
