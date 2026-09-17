@@ -772,13 +772,31 @@ RotateAny(FIBITMAP *src, double dAngle, const void *bkcolor) {
 
 	FIBITMAP *image = src;
 
-	while(dAngle >= 360) {
-		// Bring angle to range of (-INF .. 360)
-		dAngle -= 360;
+	// Bring angle to the range [0 .. 360).
+	//
+	// This was two loops stepping 360 degrees at a time, and neither of them
+	// terminated in bounded time.  At |dAngle| >= 2^63 a double's ULP exceeds
+	// 720, so dAngle - 360 == dAngle and FreeImage_Rotate never returned at all;
+	// below that it still took dAngle/360 iterations, which is 2.8e12 of them
+	// for an angle of 1e15.  A NaN failed both loop conditions and both of the
+	// range tests below, and fell through to Rotate45, where the shear
+	// dimensions come out of an undefined double-to-unsigned conversion - here
+	// that produced a 1x1 bitmap and reported success.
+	//
+	// fmod does the whole reduction in one operation, and it returns a NaN for
+	// an infinity, which is what catches both of those in one test.
+	dAngle = fmod(dAngle, 360);
+	if(dAngle != dAngle) {
+		// not a number, or an infinity
+		return NULL;
 	}
-	while(dAngle < 0) {
-		// Bring angle to range of [0 .. 360) 
+	if(dAngle < 0) {
 		dAngle += 360;
+		if(dAngle >= 360) {
+			// a tiny negative angle rounds up to exactly 360, which none of the
+			// range tests below would then claim
+			dAngle = 0;
+		}
 	}
 	if((dAngle > 45) && (dAngle <= 135)) {
 		// Angle in (45 .. 135] 
