@@ -566,12 +566,18 @@ FreeImage_Copy(FIBITMAP *src, int left, int top, int right, int bottom) {
 	// copy the bits
 	if (bpp == 1) {
 		BOOL value;
-		unsigned y_src, y_dst;
+		// y * src_pitch is an INT64 product - 0a8e25e widened the pitches - but
+		// it was stored in an unsigned and truncated there, so a 1- or 4-bit
+		// image whose pixel data passes 4 GiB copied from and to the wrong rows.
+		// 3.18.0 declares src_pitch as int and breaks at 2 GiB instead, which is
+		// what this replaces rather than introduces.  The loop counters go with
+		// them: dst_height and dst_width are INT64 above.
+		INT64 y_src, y_dst;
 
-		for (int y = 0; y < dst_height; y++) {
+		for (INT64 y = 0; y < dst_height; y++) {
 			y_src = y * src_pitch;
 			y_dst = y * dst_pitch;
-			for (int x = 0; x < dst_width; x++) {
+			for (INT64 x = 0; x < dst_width; x++) {
 				// get bit at (y, x) in src image
 				value = (src_bits[y_src + ((left + x) >> 3)] & (0x80 >> ((left + x) & 0x07))) != 0;
 				// set bit at (y, x) in dst image
@@ -582,7 +588,7 @@ FreeImage_Copy(FIBITMAP *src, int left, int top, int right, int bottom) {
 
 	else if (bpp == 4) {
 		BYTE shift, value;
-		unsigned y_src, y_dst;
+		INT64 y_src, y_dst;
 
 		for (INT64 y = 0; y < dst_height; y++) {
 			y_src = y * src_pitch;
