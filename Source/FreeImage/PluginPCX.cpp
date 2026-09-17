@@ -375,10 +375,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 
 	try {
+		// where this PCX begins.  It is not necessarily byte 0 of the stream:
+		// FreeImage_LoadFromHandle may be given a handle positioned inside a larger
+		// file, and the validation just below already takes care to restore it.
+		const long start_pos = io->tell_proc(handle);
+
 		// check PCX identifier
 		// (note: should have been already validated using FreeImage_GetFileType but check again)
 		{
-			long start_pos = io->tell_proc(handle);
 			BOOL bValidated = pcx_validate(io, handle);
 			io->seek_proc(handle, start_pos, SEEK_SET);
 			if(!bValidated) {
@@ -505,7 +509,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 
-				io->seek_proc(handle, (long)sizeof(PCXHEADER), SEEK_SET);
+				// back to the pixel data, which follows the header of THIS image -
+				// an absolute 128 put an embedded PCX 128 bytes before its own data
+				// and it went on to decode its own header as pixels
+				io->seek_proc(handle, start_pos + (long)sizeof(PCXHEADER), SEEK_SET);
 			}
 			break;
 		}
