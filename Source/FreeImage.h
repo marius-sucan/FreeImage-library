@@ -770,6 +770,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define JXR_LOSSLESS		0x0064	//! save lossless
 #define JXR_PROGRESSIVE		0x2000	//! save as a progressive-JXR (use | to combine with other save flags)
 #define AVIF_DEFAULT		0		//! loading: decode the image, apply its clap/irot/imir transforms, keep ICC, Exif and XMP (this plugin cannot save)
+#define AVIF_PLAYBACK		2		//! loading: 'play' an image sequence - every frame comes back as 32bpp whatever the file's depth (an AVIF frame is a whole picture already, so nothing is composited); a still image has nothing to play and ignores it
 #define HEIF_DEFAULT		0		//! loading: decode the primary image with its clap/irot/imir transforms applied, keep ICC, Exif, XMP and the thumbnail (this plugin cannot save)
 
 // Background filling options ---------------------------------------------------------

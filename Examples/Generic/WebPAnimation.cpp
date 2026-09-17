@@ -29,8 +29,9 @@
 //
 // GIF works the same way, with GIF_PLAYBACK in place of WEBP_PLAYBACK, so the
 // loop in PlayAnimation() below drives either format unchanged once the flag
-// has been chosen. HEIF and AVIF also page, but their frames are always whole
-// pictures and need no flag.
+// has been chosen. HEIF and AVIF also page. Their frames are always whole
+// pictures, so nothing has to be composited there; AVIF_PLAYBACK only asks for
+// them as 32-bit images, which is the form this loop wants.
 //
 // One thing worth knowing before you build a UI on this: the decoder underneath
 // can only move forwards, so it remembers the frame it last produced. Asking

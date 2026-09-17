@@ -727,7 +727,7 @@ relevant I/O image format identifiers.
    FIF_TIFF     = 18,
    FIF_GIF      = 25,
    FIF_WEBP     = 35,
-   FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps)
+   FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps; pass AVIF_PLAYBACK=2 in flags to get every frame as 32bpp)
    FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first)
    FIF_APNG     = 39, (animated PNG: one page per frame, read and written; pass APNG_PLAYBACK=2 in flags for composited frames)
 */

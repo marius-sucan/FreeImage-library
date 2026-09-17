@@ -164,6 +164,105 @@ static FIBITMAP *load_from_memory(const char *path, unsigned long long *sum, int
     return d;
 }
 
+/* --- AVIF_PLAYBACK -------------------------------------------------------- */
+
+/* Largest per-channel difference between two 32-bit bitmaps of the same size,
+ * -1 when they cannot be compared at all. */
+static int max_channel_delta(FIBITMAP *a, FIBITMAP *b) {
+    unsigned y, x, w, h;
+    int worst = 0;
+    if (!a || !b) return -1;
+    w = FreeImage_GetWidth(a); h = FreeImage_GetHeight(a);
+    if (w != FreeImage_GetWidth(b) || h != FreeImage_GetHeight(b)) return -1;
+    if (FreeImage_GetBPP(a) != 32 || FreeImage_GetBPP(b) != 32) return -1;
+    for (y = 0; y < h; y++) {
+        const BYTE *pa = FreeImage_GetScanLine(a, y);
+        const BYTE *pb = FreeImage_GetScanLine(b, y);
+        for (x = 0; x < w * 4; x++) {
+            int d = (int)pa[x] - (int)pb[x];
+            if (d < 0) d = -d;
+            if (d > worst) worst = d;
+        }
+    }
+    return worst;
+}
+
+/* AVIF_PLAYBACK hands every frame of an image sequence back as a 32-bit bitmap,
+ * whatever the file's depth, and a still image ignores it. Each page still has to
+ * be the picture the plain load gives: for an 8-bit file that is libavif doing the
+ * same conversion into a fourth channel, for a 10/12-bit one it is the same picture
+ * quantized by two different routes (libavif rounds 12 bits to 8, FreeImage_ConvertTo32Bits
+ * takes the top byte of the 16 the plain load scales to), so a channel may differ by one. */
+static void check_playback(const Expected *o, const char *path) {
+    FIMULTIBITMAP *mb, *raw;
+    FIBITMAP *hdr;
+    int pages, p, worst = 0, bound;
+
+    /* the flag has to reach the header-only path too, or FIF_LOAD_NOPIXELS would
+     * describe a page in one format and the pixel load produce another */
+    hdr = FreeImage_Load(FIF_AVIF, path, FIF_LOAD_NOPIXELS | AVIF_PLAYBACK);
+    if (!hdr) fail(o->file, "header-only playback load returned NULL");
+    else {
+        if (FreeImage_HasPixels(hdr)) fail(o->file, "header-only playback load has pixels");
+        if (o->pages > 1) {
+            if (FreeImage_GetImageType(hdr) != FIT_BITMAP || FreeImage_GetBPP(hdr) != 32)
+                fail(o->file, "header-only playback load is not 32-bit");
+        } else if (FreeImage_GetImageType(hdr) != o->type || (int)FreeImage_GetBPP(hdr) != o->bpp) {
+            fail(o->file, "a still image did not ignore AVIF_PLAYBACK (header only)");
+        }
+        FreeImage_Unload(hdr);
+    }
+
+    if (o->pages <= 1) {
+        /* nothing to play: the page must be exactly what it is without the flag */
+        FIBITMAP *still = FreeImage_Load(FIF_AVIF, path, AVIF_PLAYBACK);
+        if (!still) fail(o->file, "loading a still image with AVIF_PLAYBACK returned NULL");
+        else {
+            if (FreeImage_GetImageType(still) != o->type || (int)FreeImage_GetBPP(still) != o->bpp)
+                fail(o->file, "a still image did not ignore AVIF_PLAYBACK");
+            if (sum_pixels(still) != o->sum) fail(o->file, "AVIF_PLAYBACK changed a still image");
+            FreeImage_Unload(still);
+        }
+        return;
+    }
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, TRUE, TRUE, AVIF_PLAYBACK);
+    raw = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, TRUE, TRUE, 0);
+    if (!mb || !raw) {
+        fail(o->file, "OpenMultiBitmap with AVIF_PLAYBACK returned NULL");
+        if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+        if (raw) FreeImage_CloseMultiBitmap(raw, 0);
+        return;
+    }
+    pages = FreeImage_GetPageCount(mb);
+    if (pages != o->pages) fail(o->file, "playback page count differs");
+    bound = (o->type == FIT_BITMAP) ? 0 : 1;
+    for (p = 0; p < pages; p++) {
+        FIBITMAP *pg = FreeImage_LockPage(mb, p);
+        FIBITMAP *rp = FreeImage_LockPage(raw, p);
+        FIBITMAP *ref = rp ? FreeImage_ConvertTo32Bits(rp) : NULL;
+        int d;
+        if (!pg || !ref) fail(o->file, "a playback page failed to load");
+        else {
+            if (FreeImage_GetImageType(pg) != FIT_BITMAP || FreeImage_GetBPP(pg) != 32)
+                fail(o->file, "a playback page is not 32-bit");
+            if ((int)FreeImage_GetWidth(pg) != o->width || (int)FreeImage_GetHeight(pg) != o->height)
+                fail(o->file, "a playback page has the wrong size");
+            d = max_channel_delta(pg, ref);
+            if (d < 0) fail(o->file, "a playback page could not be compared with the plain page");
+            else if (d > worst) worst = d;
+        }
+        if (ref) FreeImage_Unload(ref);
+        if (rp) FreeImage_UnlockPage(raw, rp, FALSE);
+        if (pg) FreeImage_UnlockPage(mb, pg, FALSE);
+    }
+    if (worst > bound) fail(o->file, "a playback page differs from the plain page");
+    printf("    {\"%s\", playback -> %d page(s), 32bpp, max channel delta %d (<= %d)}\n",
+           o->file, pages, worst, bound);
+    FreeImage_CloseMultiBitmap(raw, 0);
+    FreeImage_CloseMultiBitmap(mb, 0);
+}
+
 static void run(const Expected *e) {
     char path[512]; Expected o; FIBITMAP *d, *h, *m; FIMULTIBITMAP *mb; int pages = 0, p;
     unsigned long long msum = 0;
@@ -223,6 +322,7 @@ static void run(const Expected *e) {
         FreeImage_CloseMultiBitmap(mb, 0);
     }
     o.pages = pages;
+    check_playback(&o, path);
     FreeImage_Unload(d);
 
     printf("    {\"%s\", %d, %d, %d, %s, %d, %d, %d, %d, %ld, %ld, 0x%llxULL},\n",

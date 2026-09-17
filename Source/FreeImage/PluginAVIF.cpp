@@ -24,6 +24,10 @@
 // - Loads still AVIF images and AVIF image sequences ('avis'); a sequence opens as
 //   a multi-page bitmap, one page per frame, with the GIF-style "FrameTime" and
 //   "Loop" tags in FIMD_ANIMATION.
+// - AVIF_PLAYBACK hands a sequence over the way a player wants it: every frame comes
+//   back as a 32-bit image whatever the file's depth, so one loop can walk an AVIF
+//   animation and a GIF, APNG or WebP one. Nothing is composited - an AVIF frame is
+//   a complete picture already - and a still image has nothing to play and ignores it.
 // - 8-bit content becomes a 24-bit or (with alpha) 32-bit FIT_BITMAP; 10- and 12-bit
 //   content becomes FIT_RGB16 / FIT_RGBA16, scaled to the full 16-bit range;
 //   monochrome content without alpha becomes 8-bit greyscale or FIT_UINT16.
@@ -247,9 +251,29 @@ ReportError(const char *what, avifResult result, const avifDecoder *decoder) {
 /**
 Pick the FreeImage type for an image. Greyscale is only used for monochrome
 content without alpha; everything else goes through RGB(A).
+
+With 'playback' the file's own depth and pixel format are set aside and every frame
+becomes one 32-bit canvas format - see AVIF_PLAYBACK in FreeImage.h.
 */
 static void
-ChooseOutput(const avifImage *image, BOOL has_alpha, BOOL allow_grey, AVIFOutput *out) {
+ChooseOutput(const avifImage *image, BOOL has_alpha, BOOL allow_grey, BOOL playback, AVIFOutput *out) {
+	if(playback) {
+		// One format for every frame of a sequence, whatever the file's depth and pixel
+		// format, so that a caller can walk an AVIF animation with the code it already
+		// has for GIF, APNG and WebP. Nothing is composited here: an AVIF frame is a
+		// complete picture, so this only settles what the pixels look like. A file
+		// without an alpha channel still gets one - libavif fills it with opaque.
+		out->depth = 8;
+		out->type = FIT_BITMAP;
+		out->bpp = 32;
+#if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
+		out->format = AVIF_RGB_FORMAT_BGRA;
+#else
+		out->format = AVIF_RGB_FORMAT_RGBA;
+#endif
+		return;
+	}
+
 	const BOOL deep = (image->depth > 8) ? TRUE : FALSE;
 	const BOOL grey = (allow_grey && (image->yuvFormat == AVIF_PIXEL_FORMAT_YUV400) && !has_alpha) ? TRUE : FALSE;
 
@@ -692,12 +716,12 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 Header-only load: the bitmap after the transforms, without decoding.
 */
 static FIBITMAP *
-LoadHeader(avifDecoder *decoder, int page) {
+LoadHeader(avifDecoder *decoder, int page, BOOL playback) {
 	const avifImage *image = decoder->image;
 	AVIFOutput out;
 	avifCropRect rect;
 
-	ChooseOutput(image, decoder->alphaPresent, TRUE, &out);
+	ChooseOutput(image, decoder->alphaPresent, TRUE, playback, &out);
 
 	// the transforms change the size: the clean aperture first, then an odd number of quarter turns
 	unsigned width = image->width;
@@ -724,7 +748,7 @@ LoadHeader(avifDecoder *decoder, int page) {
 Decode frame 'page' into a new bitmap.
 */
 static FIBITMAP *
-LoadPixels(AVIFContext *ctx, int page) {
+LoadPixels(AVIFContext *ctx, int page, BOOL playback) {
 	avifDecoder *decoder = ctx->decoder;
 	AVIFOutput out;
 	avifRGBImage rgb;
@@ -741,7 +765,7 @@ LoadPixels(AVIFContext *ctx, int page) {
 	BOOL allow_grey = TRUE;
 	FIBITMAP *dib = NULL;
 	for(;;) {
-		ChooseOutput(image, has_alpha, allow_grey, &out);
+		ChooseOutput(image, has_alpha, allow_grey, playback, &out);
 		dib = AllocateOutput(FALSE, &out, image->width, image->height);
 		if(!dib) {
 			return NULL;
@@ -797,10 +821,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
+	// AVIF_PLAYBACK asks for the frames of an image sequence in one canvas format.
+	// A still image has nothing to play and is loaded as it always is, which is what
+	// the APNG and WebP plugins do with their own playback flags.
+	const BOOL playback = ((ctx->decoder->imageCount > 1) && ((flags & AVIF_PLAYBACK) == AVIF_PLAYBACK)) ? TRUE : FALSE;
 	if(header_only) {
-		return LoadHeader(ctx->decoder, page);
+		return LoadHeader(ctx->decoder, page, playback);
 	}
-	return LoadPixels(ctx, page);
+	return LoadPixels(ctx, page, playback);
 }
 
 // ==========================================================
