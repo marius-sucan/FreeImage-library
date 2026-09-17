@@ -322,6 +322,62 @@ int main(int argc, char **argv) {
 		printf("\n");
 	}
 
+	if (!strcmp(cmd, "canvas")) {
+		/* The canvas of an animation is declared by its first page alone (LogicalWidth
+		   /LogicalHeight), which is how GIF does it too. So what happens to the canvas
+		   when the first page is deleted? */
+		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
+		const char *fn = argv[3];
+		FIMULTIBITMAP *m;
+		int k;
+
+		m = FreeImage_OpenMultiBitmap(fif, fn, TRUE, FALSE, TRUE, 0);
+		if (!m) { printf("    open failed\n"); goto canvasdone; }
+		for (k = 0; k < 3; k++) {
+			/* 16x16 frames near the top left of a 64x48 canvas */
+			FIBITMAP *d = page((k + 1) * 60, 16, 16, 24);
+			if (k == 0) {
+				set_anim(d, "LogicalWidth", 64, FIDT_SHORT);
+				set_anim(d, "LogicalHeight", 48, FIDT_SHORT);
+				set_anim(d, "Loop", 3, FIDT_LONG);
+			}
+			set_anim(d, "FrameTime", 100, FIDT_LONG);
+			set_anim(d, "FrameLeft", (LONG)(k * 2), FIDT_SHORT);
+			set_anim(d, "FrameTop", (LONG)(k * 2), FIDT_SHORT);
+			FreeImage_AppendPage(m, d);
+			FreeImage_Unload(d);
+		}
+		FreeImage_CloseMultiBitmap(m, WEBP_LOSSLESS);
+
+		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, TRUE, TRUE, 0);
+		if (m) {
+			FIBITMAP *d = FreeImage_LockPage(m, 0);
+			printf("    as written    : %d frame(s), canvas %ldx%ld (asked for 64x48)\n",
+			       FreeImage_GetPageCount(m),
+			       get_anim(d, "LogicalWidth"), get_anim(d, "LogicalHeight"));
+			if (d) FreeImage_UnlockPage(m, d, FALSE);
+			FreeImage_CloseMultiBitmap(m, 0);
+		}
+
+		/* now delete the page that carried the canvas, and write it again */
+		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, FALSE, TRUE, 0);
+		if (m) {
+			FreeImage_DeletePage(m, 0);
+			FreeImage_CloseMultiBitmap(m, WEBP_LOSSLESS);
+		}
+		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, TRUE, TRUE, 0);
+		if (m) {
+			FIBITMAP *d = FreeImage_LockPage(m, 0);
+			printf("    after deleting the page that declared it: %d frame(s), canvas %ldx%ld\n",
+			       FreeImage_GetPageCount(m),
+			       get_anim(d, "LogicalWidth"), get_anim(d, "LogicalHeight"));
+			if (d) FreeImage_UnlockPage(m, d, FALSE);
+			FreeImage_CloseMultiBitmap(m, 0);
+		}
+	canvasdone:
+		printf("\n");
+	}
+
 	if (!strcmp(cmd, "anim")) {
 		/* Walk an animation with the multi-page API and report what each frame says,
 		   then rewrite it through the API and report again. Used with webpanim.py,
@@ -350,6 +406,30 @@ int main(int argc, char **argv) {
 			printf("\n");
 			if (d) FreeImage_UnlockPage(m, d, FALSE);
 		}
+		/* Read it once more with WEBP_PLAYBACK. That path goes through libwebp's
+		   demuxer and animation decoder rather than the mux, so it only works if the
+		   ANIM and ANMF chunks are properly formed, and it returns composited frames
+		   the size of the canvas. */
+		{
+			FIMULTIBITMAP *pb = FreeImage_OpenMultiBitmap(fif, in, FALSE, TRUE, TRUE, WEBP_PLAYBACK);
+			if (pb != NULL) {
+				int pn = FreeImage_GetPageCount(pb);
+				FIBITMAP *d = FreeImage_LockPage(pb, pn - 1);
+				if (d != NULL) {
+					BYTE *px = FreeImage_GetScanLine(d, FreeImage_GetHeight(d) - 1);
+					printf("      WEBP_PLAYBACK: %d frame(s); last composited to %ux%u %ubpp, top-left RGB=(%d,%d,%d)\n",
+					       pn, FreeImage_GetWidth(d), FreeImage_GetHeight(d), FreeImage_GetBPP(d),
+					       px[FI_RGBA_RED], px[FI_RGBA_GREEN], px[FI_RGBA_BLUE]);
+					FreeImage_UnlockPage(pb, d, FALSE);
+				} else {
+					printf("      WEBP_PLAYBACK: could not composite\n");
+				}
+				FreeImage_CloseMultiBitmap(pb, 0);
+			} else {
+				printf("      WEBP_PLAYBACK: open failed\n");
+			}
+		}
+
 		if (out != NULL) {
 			/* rewrite it, frame for frame, through SaveMultiBitmapToHandle */
 			FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);

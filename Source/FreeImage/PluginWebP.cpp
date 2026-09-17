@@ -602,7 +602,13 @@ SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameI
 	WebP_SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
 	WebP_SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
-	if(page == 0) {
+	// The canvas and the loop count belong to the file rather than to any one frame,
+	// and every frame is drawn on that canvas - so every frame is told about it, not
+	// just the first. PluginGIF.cpp puts them on page 0 alone, which is enough to
+	// describe a file but not to edit one: deleting the first page of an animation
+	// would take the only copy of its canvas with it, and the file written back would
+	// shrink to whatever the surviving frames happen to cover.
+	if(state->is_animation) {
 		WORD logicalwidth = (WORD)state->canvas_width;
 		WORD logicalheight = (WORD)state->canvas_height;
 		LONG loop = (LONG)state->loop_count;
@@ -1203,21 +1209,27 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 		}
 
+		// The canvas and the loop count describe the file, and the loader puts them on
+		// every frame, so take them from whichever pages carry them rather than from
+		// the first alone - the first page of a save is not necessarily the first page
+		// of the animation it came from.
+		{
+			LONG value = 0;
+			if(WebP_GetAnimTag(dib, "LogicalWidth", FIDT_SHORT, &value) && ((int)value > state->out_canvas_width)) {
+				state->out_canvas_width = (int)value;
+			}
+			if(WebP_GetAnimTag(dib, "LogicalHeight", FIDT_SHORT, &value) && ((int)value > state->out_canvas_height)) {
+				state->out_canvas_height = (int)value;
+			}
+			if((state->out_pages == 0) && WebP_GetAnimTag(dib, "Loop", FIDT_LONG, &value)) {
+				state->out_loop = (int)value;
+			}
+		}
+
 		if(state->out_pages == 0) {
 			// The first frame is held rather than pushed: on its own it is a still
 			// image, and only the arrival of a second makes the output an animation.
-			// Its tags also carry what the whole file needs - the canvas and the loop
-			// count - and its colour profile and metadata belong to the file.
-			LONG value = 0;
-			if(WebP_GetAnimTag(dib, "LogicalWidth", FIDT_SHORT, &value)) {
-				state->out_canvas_width = (int)value;
-			}
-			if(WebP_GetAnimTag(dib, "LogicalHeight", FIDT_SHORT, &value)) {
-				state->out_canvas_height = (int)value;
-			}
-			if(WebP_GetAnimTag(dib, "Loop", FIDT_LONG, &value)) {
-				state->out_loop = (int)value;
-			}
+			// Its colour profile and metadata belong to the file.
 			if(!WebP_SetMetadataChunks(state->mux, dib)) {
 				goto done;
 			}
