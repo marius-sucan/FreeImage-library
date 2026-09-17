@@ -304,6 +304,34 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	return dib;
 }
 
+// Can this plugin serve the multi-bitmap the caller is asking for? A format with no
+// loader cannot produce a single page of an existing file, and one with no writer can
+// never be turned into a file at all: FreeImage_OpenMultiBitmap(FIF_AVIF, f, TRUE, ...)
+// used to hand back a perfectly ordinary-looking handle for a format that has no way
+// of writing anything, and the caller found out page by page, or not at all.
+// FreeImage_LoadFromHandle() and FreeImage_SaveToHandle() refuse on exactly these
+// grounds; this entry point simply never asked.
+static BOOL
+FreeImage_CheckMultiBitmapNode(PluginNode *node, FREE_IMAGE_FORMAT fif, BOOL needs_reading, BOOL needs_writing) {
+	if ((node == NULL) || (node->m_plugin == NULL)) {
+		return FALSE;
+	}
+
+	if (needs_reading && (node->m_plugin->load_proc == NULL)) {
+		FreeImage_OutputMessageProc((int)fif, "%s does not support reading",
+			FreeImage_GetFormatFromFIF(fif));
+		return FALSE;
+	}
+
+	if (needs_writing && (node->m_plugin->save_proc == NULL)) {
+		FreeImage_OutputMessageProc((int)fif, "%s does not support writing",
+			FreeImage_GetFormatFromFIF(fif));
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 // Can this document take another page? A plugin with no pagecount_proc has no idea
 // what a page is: its Save writes a complete file every time it is called, so a
 // second page does not extend the first, it concatenates another whole file onto the
@@ -372,6 +400,21 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 			PluginNode *node = list->FindNodeFromFIF(fif);
 
 			if (node) {
+				// An existing file has to be read, and a brand new one has to be
+				// written at FreeImage_CloseMultiBitmap() time - asking for one in a
+				// format that has no writer cannot come to anything, so refuse it
+				// here instead of accepting the call and producing no file at all.
+				// An edit session (create_new FALSE, read_only FALSE) is deliberately
+				// not held to the same test: read_only FALSE only means "modifications
+				// go to the cache", and it is what FreeImage_OpenMultiBitmapFromHandle()
+				// and FreeImage_LoadMultiBitmapFromMemory() pass themselves, so a
+				// caller reading a read-only format that way is not doing anything
+				// wrong. If it does go on to change something, the save at close
+				// refuses and says why.
+				if (!FreeImage_CheckMultiBitmapNode(node, fif, !create_new, create_new)) {
+					return NULL;
+				}
+
 				if (!create_new) {
 					handle = fopen(filename, "rb");
 					if (handle == NULL) {
@@ -447,6 +490,13 @@ FreeImage_OpenMultiBitmapFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_h
 				PluginNode *node = list->FindNodeFromFIF(fif);
 			
 				if (node) {
+					// the stream is there to be read; the format it will eventually be
+					// written back as is FreeImage_SaveMultiBitmapToHandle()'s argument,
+					// not this one, so only the loader is required here
+					if (!FreeImage_CheckMultiBitmapNode(node, fif, TRUE, FALSE)) {
+						return NULL;
+					}
+
 					std::unique_ptr<FIMULTIBITMAP> bitmap (new FIMULTIBITMAP);
 					std::unique_ptr<MULTIBITMAPHEADER> header (new MULTIBITMAPHEADER);
 					header->io = *io;
@@ -1017,23 +1067,40 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				DWORD compressed_size = 0;
 				BYTE *compressed_data = NULL;
 
-				// open a memory handle
+				// Encode the page into the cache. None of these three used to be
+				// checked, so a cache_fif that cannot encode this bitmap - every
+				// read-only format, for one, since cache_fif is the file's own format -
+				// left compressed_data NULL and compressed_size 0, and the block was
+				// then overwritten with a reference to block 0 of length 0: a page
+				// pointing at another page's data.
 				FIMEMORY *hmem = FreeImage_OpenMemory();
-				// save the page to memory
-				FreeImage_SaveToMemory(header->cache_fif, page, hmem, 0);
-				// get the buffer from the memory stream
-				FreeImage_AcquireMemory(hmem, &compressed_data, &compressed_size);
+
+				if ((hmem == NULL)
+					|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, 0)
+					|| !FreeImage_AcquireMemory(hmem, &compressed_data, &compressed_size)
+					|| (compressed_data == NULL) || (compressed_size == 0)) {
+					FreeImage_OutputMessageProc(header->fif,
+						"FreeImage_UnlockPage: %s cannot store this page, the changes are lost",
+						FreeImage_GetFormatFromFIF(header->cache_fif));
+					header->failed = TRUE;
+					if (hmem != NULL) {
+						FreeImage_CloseMemory(hmem);
+					}
+					FreeImage_Unload(page);
+					header->locked_pages.erase(page);
+					return;
+				}
 
 				// write the data to the cache
-				
+
 				if (i->m_type == BLOCK_REFERENCE) {
 					header->m_cachefile.deleteFile(i->getReference());
 				}
-				
+
 				int iPage = header->m_cachefile.writeFile(compressed_data, compressed_size);
-				
+
 				*i = PageBlock(BLOCK_REFERENCE, iPage, compressed_size);
-				
+
 				// get rid of the compressed data
 
 				FreeImage_CloseMemory(hmem);
@@ -1157,6 +1224,11 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 		PluginNode *node = list->FindNodeFromFIF(fif);
 
 		if (node) {
+				// as above: the memory stream is read here, and written back through
+				// FreeImage_SaveMultiBitmapToMemory()'s own format argument
+				if (!FreeImage_CheckMultiBitmapNode(node, fif, TRUE, FALSE)) {
+					return NULL;
+				}
 
 				FIMULTIBITMAP *bitmap = new(std::nothrow) FIMULTIBITMAP;
 

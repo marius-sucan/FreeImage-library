@@ -343,6 +343,32 @@ int main(int argc, char **argv) {
 		FreeImage_CloseMultiBitmap(m, 0);
 		dump(fif, argv[3], "after  ");
 
+	} else if (!strcmp(cmd, "openmodes")) {
+		/* Which (format, mode) combinations does OpenMultiBitmap accept, and can the
+		   resulting bitmap actually do anything? */
+		static const int fifs[] = { -1, 999, 18 /*TIFF*/, 0 /*BMP*/, 37 /*AVIF*/,
+		                            38 /*HEIF*/, 34 /*RAW*/, 24 /*DDS*/ };
+		unsigned f;
+		mk(FIF_TIFF, "om.tif", 2);
+		printf("  %-8s %-24s %s\n", "FIF", "mode", "OpenMultiBitmap");
+		for (f = 0; f < sizeof(fifs)/sizeof(fifs[0]); f++) {
+			FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)fifs[f];
+			const char *name = (fifs[f] >= 0 && fifs[f] < FreeImage_GetFIFCount())
+			                   ? FreeImage_GetFormatFromFIF(fif) : "<invalid>";
+			int mode;
+			for (mode = 0; mode < 3; mode++) {
+				/* 0: read-only  1: read/write  2: create_new */
+				BOOL create_new = (mode == 2);
+				BOOL read_only  = (mode == 0);
+				const char *label = mode == 0 ? "read-only" :
+				                    mode == 1 ? "read/write (edit)" : "create_new";
+				const char *fn = create_new ? "om_new.out" : "om.tif";
+				FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(fif, fn, create_new, read_only, TRUE, 0);
+				printf("  %-8s %-24s %s\n", name, label, m ? "ACCEPTED" : "NULL");
+				if (m) FreeImage_CloseMultiBitmap(m, 0);
+			}
+		}
+
 	} else if (!strcmp(cmd, "scenario")) {
 		/* End-to-end model check: apply a mixed sequence of page operations, then
 		   assert that LockPage agrees with the model AND with what Close writes.
