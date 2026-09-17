@@ -148,6 +148,8 @@ FreeImage_FlipVertical(FIBITMAP *src) {
 	size_t pitch  = FreeImage_GetPitch(src);
 	size_t height = FreeImage_GetHeight(src);
 	size_t line   = FreeImage_GetLine(src);
+	const unsigned width = FreeImage_GetWidth(src);
+	const unsigned bpp   = FreeImage_GetBPP(src);
 
 	// copy between aligned memories
 	Mid = (BYTE*)FreeImage_Aligned_Malloc(pitch * sizeof(BYTE), FIBITMAP_ALIGNMENT);
@@ -159,9 +161,15 @@ FreeImage_FlipVertical(FIBITMAP *src) {
 
 	for(size_t y = 0; y < height/2; y++) {
 
+		// 3a57bb4 narrowed these three from 'pitch' to 'line' so that a
+		// FreeImage_CreateView() result would stop swapping the whole of the
+		// backing image's row.  'line' is still rounded up to a whole byte, so at
+		// 1 and 4 bpp the last byte of the view's row - shared with the backing
+		// image's next pixels - was still going with it.  Reading that byte into
+		// Mid is harmless; only the pixels are written back.
 		memcpy(Mid, From + line_s, line);
-		memcpy(From + line_s, From + line_t, line);
-		memcpy(From + line_t, Mid, line);
+		CopyRowPixels(From + line_s, From + line_t, width, bpp);
+		CopyRowPixels(From + line_t, Mid, width, bpp);
 		line_s += pitch;
 		line_t -= pitch;
 	}
