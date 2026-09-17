@@ -234,52 +234,69 @@ SupportsNoPixels() {
 
 // ----------------------------------------------------------
 
+/**
+What Open hands to the rest of the plugin: the header, and where this ICO begins
+in the stream.  Everything the directory holds - its own position, and every
+dwImageOffset in it - is an offset from the start of the ICO, which is not
+necessarily the start of the file it is being read out of.
+*/
+typedef struct tagICOSTATE {
+	ICONHEADER	header;
+	long		start_pos;
+} ICOSTATE;
+
 static void * DLL_CALLCONV
 Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	// Allocate memory for the header structure
-	ICONHEADER *lpIH = (ICONHEADER*)malloc(sizeof(ICONHEADER));
-	if(lpIH == NULL) {
+	ICOSTATE *state = (ICOSTATE*)malloc(sizeof(ICOSTATE));
+	if(state == NULL) {
 		return NULL;
 	}
 
+	// taken before the header is read, so that it is the position of the ICO
+	state->start_pos = io->tell_proc(handle);
+
 	if (read) {
 		// Read in the header
-		io->read_proc(lpIH, 1, sizeof(ICONHEADER), handle);
+		if (io->read_proc(&state->header, 1, sizeof(ICONHEADER), handle) != sizeof(ICONHEADER)) {
+			free(state);
+			return NULL;
+		}
 #ifdef FREEIMAGE_BIGENDIAN
-		SwapIconHeader(lpIH);
+		SwapIconHeader(&state->header);
 #endif
 
-		if(!(lpIH->idReserved == 0) || !(lpIH->idType == 1)) {
+		if(!(state->header.idReserved == 0) || !(state->header.idType == 1)) {
 			// Not an ICO file
-			free(lpIH);
+			free(state);
 			return NULL;
 		}
 	}
 	else {
 		// Fill the header
-		lpIH->idReserved = 0;
-		lpIH->idType = 1;
-		lpIH->idCount = 0;
+		state->header.idReserved = 0;
+		state->header.idType = 1;
+		state->header.idCount = 0;
 	}
 
-	return lpIH;
+	return state;
 }
 
 static void DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
-	// free the header structure
-	ICONHEADER *lpIH = (ICONHEADER*)data;
-	free(lpIH);
+	// free the state structure
+	ICOSTATE *state = (ICOSTATE*)data;
+	free(state);
 }
 
 // ----------------------------------------------------------
 
 static int DLL_CALLCONV
 PageCount(FreeImageIO *io, fi_handle handle, void *data) {
-	ICONHEADER *lpIH = (ICONHEADER*)data;
+	ICOSTATE *state = (ICOSTATE*)data;
 
-	if(lpIH) {
-		return lpIH->idCount;
+	if(state) {
+		return state->header.idCount;
 	}
 	return 1;
 }
@@ -430,7 +447,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		FIBITMAP *dib = NULL;
 
 		// get the icon header
-		ICONHEADER *icon_header = (ICONHEADER*)data;
+		ICOSTATE *state = (ICOSTATE*)data;
+		ICONHEADER *icon_header = state ? &state->header : NULL;
 
 		if (icon_header) {
 			// load the icon descriptions
@@ -438,16 +456,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if(icon_list == NULL) {
 				return NULL;
 			}
-			io->seek_proc(handle, sizeof(ICONHEADER), SEEK_SET);
-			io->read_proc(icon_list, icon_header->idCount * sizeof(ICONDIRENTRY), 1, handle);
+			io->seek_proc(handle, state->start_pos + (long)sizeof(ICONHEADER), SEEK_SET);
+
+			// the (size, 1) form of read_proc writes nothing at all unless it can
+			// satisfy the whole request, and this result used to be discarded: a
+			// file that declares 64 icons and contains none left icon_list holding
+			// whatever malloc had returned, and the seek below went to an offset
+			// taken from it - 0xBEBEBEBE under a sanitiser that fills fresh memory
+			if (io->read_proc(icon_list, icon_header->idCount * sizeof(ICONDIRENTRY), 1, handle) != 1) {
+				free(icon_list);
+				FreeImage_OutputMessageProc(s_format_id, "Truncated icon directory");
+				return NULL;
+			}
 #ifdef FREEIMAGE_BIGENDIAN
 			SwapIconDirEntries(icon_list, icon_header->idCount);
 #endif
 
 			// load the requested icon
 			if (page < icon_header->idCount) {
-				// seek to the start of the bitmap data for the icon
-				io->seek_proc(handle, icon_list[page].dwImageOffset, SEEK_SET);
+				// seek to the start of the bitmap data for the icon.  dwImageOffset
+				// counts from the start of the ICO, not of the stream.
+				io->seek_proc(handle, state->start_pos + (long)icon_list[page].dwImageOffset, SEEK_SET);
 
 				if( IsPNG(io, handle) ) {
 					// Vista icon support
@@ -701,7 +730,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	}
 	
 	// get the icon header
-	icon_header = (ICONHEADER*)data;
+	ICOSTATE *state = (ICOSTATE*)data;
+	icon_header = &state->header;
 
 	try {
 		FIBITMAP *icon_dib = NULL;
@@ -720,8 +750,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		vPages.push_back(icon_dib);
 		icon_header->idCount++;
 
-		// write the header
-		io->seek_proc(handle, 0, SEEK_SET);
+		// write the header, where this ICO starts.  Save reads the pages already
+		// written back through Load, so the two have to agree about that.
+		io->seek_proc(handle, state->start_pos, SEEK_SET);
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapIconHeader(icon_header);
 #endif
