@@ -37,6 +37,15 @@
 #include "Utilities.h"
 #include "FreeImage.h"
 
+// the cache and spool files are named after the process that owns them
+#ifdef _WIN32
+#include <process.h>
+#define FI_GetProcessId() _getpid()
+#else
+#include <unistd.h>
+#define FI_GetProcessId() getpid()
+#endif
+
 namespace {
 
 // ----------------------------------------------------------
@@ -144,18 +153,34 @@ struct MULTIBITMAPHEADER {
 // Helper functions
 // =====================================================================
 
+// Name a file that keeps a multi-bitmap company while it is open: the block cache,
+// and the spool the rewritten file is built in.
+//
+// This used to be done by replacing the file's extension, which made the name a
+// function of the stem alone. "a.tif" and "a.tiff" in one directory therefore both
+// wanted "a.ficache", and each opened it "w+b" - truncating the other's - so whichever
+// closed first lost every page it held. Two processes on one file, or one process
+// opening the same file twice, collided just as completely.
+//
+// So the whole filename is kept rather than its stem, and the process id and the
+// address of the multi-bitmap's own header are added: two live multi-bitmaps cannot
+// share a header address, and two processes cannot share a process id, which is as
+// much uniqueness as this needs. Both files are still created beside the image -
+// the spool has to be, because rename() only replaces a file atomically within one
+// filesystem, and there is no reason to send the cache somewhere else on its own.
+// The name is about 30 characters longer than the image's, which matters only for a
+// filename already close to the system's limit.
 inline void
-ReplaceExtension(std::string& dst_filename, const std::string& src_filename, const std::string& dst_extension) {
-	size_t lastDot = src_filename.find_last_of('.');
-	if (lastDot == std::string::npos) {
-		dst_filename = src_filename;
-		dst_filename += ".";
-		dst_filename += dst_extension;
-	}
-	else {
-		dst_filename = src_filename.substr(0, lastDot + 1);
-		dst_filename += dst_extension;
-	}
+MakeCompanionName(std::string& dst_filename, const std::string& src_filename, const void *owner, const char *dst_extension) {
+	char suffix[64];
+
+	sprintf(suffix, ".%lu.%llx.",
+		(unsigned long)FI_GetProcessId(),
+		(unsigned long long)(size_t)owner);
+
+	dst_filename = src_filename;
+	dst_filename += suffix;
+	dst_filename += dst_extension;
 }
 
 } //< ns
@@ -451,7 +476,7 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 
 				if (!read_only) {
 					std::string cache_name;
-					ReplaceExtension(cache_name, filename, "ficache");
+					MakeCompanionName(cache_name, filename, header.get(), "ficache");
 					
 					if (!header->m_cachefile.open(cache_name, keep_cache_in_memory)) {
 						// an error occured ...
@@ -682,7 +707,7 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 
 					std::string spool_name;
 
-					ReplaceExtension(spool_name, header->m_filename, "fispool");
+					MakeCompanionName(spool_name, header->m_filename, header, "fispool");
 
 					// open the spool file and the source file
         
@@ -810,9 +835,15 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 	int ref = header->m_cachefile.writeFile(compressed_data, compressed_size);
 	// get rid of the compressed data
 	FreeImage_CloseMemory(hmem);
-	
+
+	// 0 is the cache saying it stored nothing. It could not be told apart from a
+	// real block number until block numbering was moved to start at 1.
+	if (ref == 0) {
+		return res;
+	}
+
 	res = PageBlock(BLOCK_REFERENCE, ref, compressed_size);
-	
+
 	return res;
 }
 
@@ -1098,6 +1129,19 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				}
 
 				int iPage = header->m_cachefile.writeFile(compressed_data, compressed_size);
+
+				if (iPage == 0) {
+					// the cache stored nothing, so there is no block for the page to
+					// point at. Leave the block as it was rather than aim it at 0,
+					// which is no longer a block number at all.
+					FreeImage_OutputMessageProc(header->fif,
+						"FreeImage_UnlockPage: the cache could not store this page, the changes are lost");
+					header->failed = TRUE;
+					FreeImage_CloseMemory(hmem);
+					FreeImage_Unload(page);
+					header->locked_pages.erase(page);
+					return;
+				}
 
 				*i = PageBlock(BLOCK_REFERENCE, iPage, compressed_size);
 
