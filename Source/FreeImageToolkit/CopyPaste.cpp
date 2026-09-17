@@ -94,7 +94,6 @@ Combine1(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned 
 static BOOL 
 Combine4(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned alpha) {
 	int swapTable[16];
-	BOOL bOddStart, bOddEnd;
 
 	// check the bit depth of src and dst images
 	if((FreeImage_GetBPP(dst_dib) != 4) || (FreeImage_GetBPP(src_dib) != 4)) {
@@ -136,7 +135,9 @@ Combine4(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned 
 		}
 	}
 
-	BYTE *dst_bits = FreeImage_GetBits(dst_dib) + ((size_t)(FreeImage_GetHeight(dst_dib) - FreeImage_GetHeight(src_dib) - y) *	FreeImage_GetPitch(dst_dib)) + (x >> 1);
+	// the start of the destination row, not of the byte holding pixel x: at 4 bpp
+	// the two differ by a nibble and the loop below indexes by pixel
+	BYTE *dst_bits = FreeImage_GetBits(dst_dib) + ((size_t)(FreeImage_GetHeight(dst_dib) - FreeImage_GetHeight(src_dib) - y) *	FreeImage_GetPitch(dst_dib));
 	BYTE *src_bits = FreeImage_GetBits(src_dib);    
 
 	// combine images
@@ -151,34 +152,28 @@ Combine4(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned 
 		return FALSE;
 	}
 
-	bOddStart = (x & 0x01) ? TRUE : FALSE;
-
-	if ((bOddStart && !(src_width & 0x01)) || (!bOddStart && (src_width & 0x01)))	{
-		bOddEnd = TRUE;
-	}
-	else {
-		bOddEnd = FALSE;
-	}
-
+	// A destination x that is odd puts the source nibbles half a byte out of step
+	// with the destination ones.  The row cannot simply be copied across: it has
+	// to be written a pixel at a time, which also keeps the destination nibbles
+	// outside [x, x + src_width) untouched without any special-casing of the two
+	// end bytes.  The temporary row is still taken so that a source and a
+	// destination sharing pixels behave as a read-then-write.
 	for(unsigned rows = 0; rows < src_height; rows++) {
 		memcpy(buffer, src_bits, src_line);
-		
-		// change the values in the temp row to be those from the swap table
-		
-		for (unsigned cols = 0; cols < src_line; cols++) {
-			buffer[cols] = (BYTE)((swapTable[HINIBBLE(buffer[cols]) >> 4] << 4) + swapTable[LOWNIBBLE(buffer[cols])]);
+
+		for (unsigned cols = 0; cols < src_width; cols++) {
+			// source pixel 'cols', mapped through the palette swap table
+			const BYTE index = (cols & 1) ? (BYTE)(buffer[cols >> 1] & 0x0F) : (BYTE)(buffer[cols >> 1] >> 4);
+			const BYTE value = (BYTE)(swapTable[index] & 0x0F);
+			// destination pixel 'x + cols'
+			const unsigned dst_x = x + cols;
+			if (dst_x & 1) {
+				dst_bits[dst_x >> 1] = (BYTE)((dst_bits[dst_x >> 1] & 0xF0) | value);
+			} else {
+				dst_bits[dst_x >> 1] = (BYTE)((dst_bits[dst_x >> 1] & 0x0F) | (value << 4));
+			}
 		}
 
-		if (bOddStart) {	
-			buffer[0] = HINIBBLE(dst_bits[0]) + LOWNIBBLE(buffer[0]);
-		}
-		
-		if (bOddEnd)	{
-			buffer[src_line - 1] = HINIBBLE(buffer[src_line - 1]) + LOWNIBBLE(dst_bits[src_line - 1]);
-		}
-
-		memcpy(dst_bits, buffer, src_line);
-		
 		dst_bits += FreeImage_GetPitch(dst_dib);
 		src_bits += FreeImage_GetPitch(src_dib);
 	}
