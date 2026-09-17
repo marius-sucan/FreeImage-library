@@ -325,49 +325,46 @@ Fast generic assign (faster than for loop)
 */
 inline void 
 AssignPixel(BYTE* dst, const BYTE* src, unsigned bytesperpixel) {
+	// A constant-size memcpy rather than a cast through WORD*, DWORD* or float*.
+	// At 3, 6 and 12 bytes per pixel two pixels out of every three start at an
+	// address that is not a multiple of the type being cast to, and a misaligned
+	// load or store is undefined behaviour: it traps on SPARC and on the older
+	// ARMs this tree still carries makefiles for, and UBSan reports it on x86
+	// even though the hardware tolerates it.  GCC, Clang and MSVC all lower a
+	// constant-size memcpy to the same unaligned move, so nothing is given up.
 	switch (bytesperpixel) {
 		case 1:	// FIT_BITMAP (8-bit)
 			*dst = *src;
 			break;
 
 		case 2: // FIT_UINT16 / FIT_INT16 / 16-bit
-			*(reinterpret_cast<WORD*>(dst)) = *(reinterpret_cast<const WORD*> (src));
+			memcpy(dst, src, 2);
 			break;
 
 		case 3: // FIT_BITMAP (24-bit)
-			*(reinterpret_cast<WORD*>(dst)) = *(reinterpret_cast<const WORD*> (src));
-			dst[2] = src[2];
+			memcpy(dst, src, 3);
 			break;
 
 		case 4: // FIT_BITMAP (32-bit) / FIT_UINT32 / FIT_INT32 / FIT_FLOAT
-			*(reinterpret_cast<DWORD*>(dst)) = *(reinterpret_cast<const DWORD*> (src));
+			memcpy(dst, src, 4);
 			break;
 
 		case 6: // FIT_RGB16 (3 x 16-bit)
-			*(reinterpret_cast<DWORD*>(dst)) = *(reinterpret_cast<const DWORD*> (src));
-			*(reinterpret_cast<WORD*>(dst + 4)) = *(reinterpret_cast<const WORD*> (src + 4));	
+			memcpy(dst, src, 6);
 			break;
 
-		// the rest can be speeded up with int64
-			
 		case 8: // FIT_RGBA16 (4 x 16-bit)
-			*(reinterpret_cast<DWORD*>(dst)) = *(reinterpret_cast<const DWORD*> (src));
-			*(reinterpret_cast<DWORD*>(dst + 4)) = *(reinterpret_cast<const DWORD*> (src + 4));	
+			memcpy(dst, src, 8);
 			break;
-		
+
 		case 12: // FIT_RGBF (3 x 32-bit IEEE floating point)
-			*(reinterpret_cast<float*>(dst)) = *(reinterpret_cast<const float*> (src));
-			*(reinterpret_cast<float*>(dst + 4)) = *(reinterpret_cast<const float*> (src + 4));
-			*(reinterpret_cast<float*>(dst + 8)) = *(reinterpret_cast<const float*> (src + 8));
+			memcpy(dst, src, 12);
 			break;
-		
+
 		case 16: // FIT_RGBAF (4 x 32-bit IEEE floating point)
-			*(reinterpret_cast<float*>(dst)) = *(reinterpret_cast<const float*> (src));
-			*(reinterpret_cast<float*>(dst + 4)) = *(reinterpret_cast<const float*> (src + 4));
-			*(reinterpret_cast<float*>(dst + 8)) = *(reinterpret_cast<const float*> (src + 8));
-			*(reinterpret_cast<float*>(dst + 12)) = *(reinterpret_cast<const float*> (src + 12));
+			memcpy(dst, src, 16);
 			break;
-			
+
 		default:
 			assert(FALSE);
 	}
