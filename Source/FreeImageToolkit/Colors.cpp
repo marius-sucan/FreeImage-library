@@ -900,7 +900,36 @@ FreeImage_ApplyPaletteIndexMapping(FIBITMAP *dib, BYTE *srcindices,	BYTE *dstind
 	int bpp = FreeImage_GetBPP(dib);
 	switch (bpp) {
 		case 1: {
-
+			// Documented as supported since the function was added, but never
+			// written: it returned 0 having done nothing, which a caller cannot tell
+			// from "the index was not present".  The shape is the 4-bit case below,
+			// one bit at a time; iterating over pixels rather than over the bytes of
+			// the line leaves the padding bits of the last byte alone.
+			const unsigned pixels = FreeImage_GetWidth(dib);
+			for (unsigned y = 0; y < height; y++) {
+				BYTE *bits = FreeImage_GetScanLine(dib, y);
+				for (unsigned x = 0; x < pixels; x++) {
+					const BYTE mask = (BYTE)(0x80 >> (x & 0x07));
+					for (unsigned j = 0; j < count; j++) {
+						a = srcindices;
+						b = dstindices;
+						for (int i = ((swap) ? 0 : 1); i < 2; i++) {
+							if ((BYTE)((bits[x >> 3] & mask) != 0) == (BYTE)(a[j] & 0x01)) {
+								if (b[j] & 0x01) {
+									bits[x >> 3] |= mask;
+								} else {
+									bits[x >> 3] &= (BYTE)(~mask);
+								}
+								result++;
+								j = count;
+								break;
+							}
+							a = dstindices;
+							b = srcindices;
+						}
+					}
+				}
+			}
 			return result;
 		}
 		case 4: {
