@@ -377,11 +377,16 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	// 'src_bits' is a pointer to the first scanline and is already
 	// set up correctly.
 	if (src_bits) {
+		// A memcpy of FreeImage_GetLine() bytes carried more than the pixels: that
+		// length is rounded up to a whole byte, so at 1 and 4 bpp the bits past the
+		// last pixel went across too.  In a FreeImage_CreateView() result those are
+		// the backing image's next pixels, and every row after the first overwrote
+		// them with line 0's copy.  The switch above already takes this care when it
+		// builds line 0; CopyRowPixels takes it here.
 		unsigned pitch = FreeImage_GetPitch(dib);
-		unsigned bytes = FreeImage_GetLine(dib);
 		dst_bits = src_bits + pitch;
 		for (unsigned y = 1; y < height; y++) {
-			memcpy(dst_bits, src_bits, bytes);
+			CopyRowPixels(dst_bits, src_bits, width, bpp);
 			dst_bits += pitch;
 		}
 	}
