@@ -22,10 +22,11 @@ this build.
 **27 of the 29 are upstream 3.18.0 defects**, not regressions of this fork. The two
 local ones are M10 and N5, both called out as such.
 
-> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`; M12 and N6 in `28178b1`;
-> **C1, C2, N1, N2, N11 and N14 in `e669ea6`**. M10 (WebP) is left open by decision —
-> it belongs to `PluginWebP.cpp`, not to this API. N3, N4, N5, N7, N8, N10, N12, N13,
-> N15 and N16 are open. See §5.
+> **Status:** every reproduced finding is fixed except **M10** (WebP), which is left
+> open by decision — it belongs to `PluginWebP.cpp`, not to this API.
+> M1–M9, M11 in `d79f90e`; M12, N6 in `28178b1`; C1, C2, N1, N2, N11, N14 in `e669ea6`;
+> **N3, N7, N8, N10, N15, N16 in `6267d80`**. N4 and N13 turned out to have been fixed
+> already, and **N5 and N12 are not defects** — see §5.3. See §5.
 
 ---
 
@@ -463,7 +464,16 @@ same collision applies across processes and to any two formats sharing a stem
 | N2 | **fixed** (`e669ea6`) | `(long)nr * BLOCK_SIZE` — the product used to be computed in 32 bits. |
 | N11 | **fixed** (`e669ea6`) | `deleteBlock` takes the block out of the list holding it and frees it, instead of leaving it to be flushed to a reused offset. |
 | N14 | **fixed** (`e669ea6`) | `writeFile` rounds the block count up instead of always adding one. |
-| N3, N4, N5, N7, N8, N10, N12, N13, N15, N16 | **open** | |
+| N3 | **fixed** (`6267d80`) | A page over 2 GiB once encoded is refused with a message. `writeFile` takes an `int`, and the `DWORD` used to arrive there negative. |
+| N4 | **was already fixed** | Closed by `e669ea6` (block numbers start at 1). The open-list above was stale. |
+| N5 | **not a defect** | Could not be reproduced — see §5.3. |
+| N7 | **fixed** (`6267d80`) | `Close` no longer removes the original before renaming the spool over it (POSIX replaces atomically); on a failed rename the original is intact and the spool is cleaned up. The `remove` is kept under `#ifdef _WIN32`, where `rename` will not replace. |
+| N8 | **fixed** (`6267d80`) | New `FreeImage_AppendPageEx`, `FreeImage_InsertPageEx` and `FreeImage_DeletePageEx` return `BOOL`. The `void` originals now delegate to them, so nothing existing changes. |
+| N10 | **fixed** (`6267d80`) | An existing file that yields no page is refused at open instead of returning a handle whose every `LockPage` is NULL. |
+| N12 | **not a defect** | The claim was wrong — see §5.3. |
+| N13 | **was already fixed** | Closed by `d79f90e` (`load_proc` and the loaded dib are both checked). The open-list above was stale. |
+| N15 | **fixed** (`6267d80`) | ICO's `PageCount` returns 0 when its `Open` failed, like the other six. |
+| N16 | **fixed** (`6267d80`) for the reachable aborts | Three asserts a malformed file could reach are gone; `NDEBUG` is still not defined, by decision — see §5.3. |
 
 ## The two behaviour changes, in full
 
@@ -530,6 +540,78 @@ AddressSanitizer: negative-size-param: (size=-65528)
 
 ---
 
+## 5.3 The four that were not what the audit said
+
+Six of the ten findings this pass examined were real and are fixed. The other four are
+worth recording carefully, because two of them were simply wrong.
+
+### N12 — withdrawn, the claim was mine and it was wrong
+
+N12 said the cache "silently drops whatever the single-page writer cannot carry (e.g.
+`FIMD_ANIMATION`)". It does not. Every page goes into the cache through
+`SaveToMemory(cache_fif, dib, hmem, 0)` and comes back through `LoadFromMemory`, and
+that trip preserves `FrameTime`, `FrameLeft`, `FrameTop` and `DisposalMethod` on both
+GIF and APNG — tested end to end through `AppendPage`, and again on the round trip in
+isolation (`ncheck n12`).
+
+My first run did show them being lost, and that was a bug in the test, not the library:
+each `FIMD_ANIMATION` tag has one type the plugins will accept, and
+`FreeImage_GetMetadataEx` filters on it. `FrameLeft` written as `FIDT_LONG` is invisible
+to a GIF writer that asks for `FIDT_SHORT`, so the writer never saw the tags at all.
+Written as `FIDT_SHORT` (and `DisposalMethod` as `FIDT_BYTE`) everything survives.
+`FrameTime` appeared to survive the first run only because it really is `FIDT_LONG`.
+
+The other half of N12 — a generation of lossy loss before the final save — cannot happen
+either: `cache_fif` is the file's own format, and every format this API can write
+(TIFF, ICO, GIF, APNG) is lossless. The one lossy multi-page format, WebP, cannot be
+written at all (M10).
+
+### N5 — real hazard, no reproduction
+
+`LockPage` keeps a decoder open for the life of the multi-bitmap while the public
+`SaveMultiBitmapToHandle`/`ToMemory` open a second one on the same handle. Locking a
+page, saving, and locking again returns correct data on TIFF, GIF, ICO and APNG, with
+the saves succeeding (`ncheck n5`); every plugin seeks to the page it wants before
+reading it, so the two decoders do not disturb each other.
+
+Left alone. The fix would be to reuse `header->read_data` when it is already open, which
+is tidier but changes a path that works today for no demonstrated gain.
+
+### N16 — real, reproduced, and fixed where it bites
+
+A crafted PSD carrying an EXIF *3* image resource and no EXIF 1 **aborts the process**:
+
+```
+$ python3 mkpsd_exif3.py base.psd exif3.psd
+$ ./ncheck n16 exif3.psd 20
+ncheck: PSDParser.cpp:2081: psdParser::Load(...): Assertion `false' failed.
+Aborted (core dumped)
+```
+
+The `assert(false)` was not guarding anything — the two lines under it read the resource
+correctly, and the comment above it says only that the author had not found such a file.
+Two more asserts a file's own contents can reach went with it: `PluginJXR.cpp`'s
+`default:` over Exif value types, and `PluginTIFF.cpp`'s `assert(Bpc <= 2)` on CMYK,
+which is *not* a note — `Bpc` indexes the copy loops below it — so that one became a
+real check that refuses the image.
+
+`NDEBUG` is still not defined outside `Makefile.mingw`, deliberately. Defining it would
+close the remaining asserts across the bundled decoders in one line, but it would also
+have turned that TIFF assert into a silently wrong stride rather than an abort. Now that
+the three reachable ones are real code, defining it is a safe follow-up rather than a
+prerequisite — but it wants an audit of the remaining asserts first, and `PluginTARGA.cpp`
+has nine.
+
+### N3 — real, not reproducible here
+
+`writeFile` takes an `int` and is handed a `DWORD`. A page whose encoded form exceeds
+2 GiB arrives negative, and `PageBlock` could not describe it anyway. Since `e669ea6`
+that already failed safely rather than corrupting anything, so what was left was the
+absence of a diagnostic; there is now an explicit check and a message naming the limit.
+Reproducing it needs a bitmap that encodes to more than 2 GiB, and this machine has 2 GB
+of RAM free, so this one is settled by inspection.
+
+
 # 6. Rig
 
 `.claude/audit/multipage/mp.c` — single binary, one subcommand per finding.
@@ -541,6 +623,10 @@ gcc -g -O0 -o mp mp.c -I../../../Dist ../../../Dist/libfreeimage.a \
 # the cache stress test links CacheFile.cpp on its own, under the sanitizers
 g++ -g -O1 -fsanitize=address,undefined -I../../../Source -I../../../Source/FreeImage \
     -D__ANSI__ cachefuzz.cpp ../../../Source/FreeImage/CacheFile.cpp -o cachefuzz
+
+gcc -g -O0 -o ncheck ncheck.c -I../../../Dist ../../../Dist/libfreeimage.a \
+    -lstdc++ -lm -lpthread -fopenmp
+gcc -shared -fPIC -o renamefail.so renamefail.c -ldl
 ```
 
 | Subcommand | Finding |
@@ -559,6 +645,9 @@ g++ -g -O1 -fsanitize=address,undefined -I../../../Source -I../../../Source/Free
 | `blockzero [dim]` | C1 (`FI_NODEL=1`, `FI_DEL01=1` are the controls) |
 | `cachename [n]` | C2 |
 | `cachefuzz` (separate binary) | C1, N1, N2, N4, N11, N14 — drives `CacheFile` directly under ASan |
+| `ncheck n5 / n8 / n10 / n12 / n15` | N5, N8, N10, N12, N15 |
+| `ncheck n7prep` then `ncheck n7edit` under `renamefail.so` | N7 — makes `rename()` fail on demand |
+| `mkpsd_exif3.py` + `ncheck n16 exif3.psd 20` | N16 — a PSD that aborts the unfixed library |
 | `cachestress <n>` | C1/N11 through the public API (`FI_MEMCACHE=1` for the memory cache) |
 | `savelock <fif> <file>` | N5 |
 | `wrongfif <fif> <file>` | N10 |
