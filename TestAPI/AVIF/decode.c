@@ -263,6 +263,62 @@ static void check_playback(const Expected *o, const char *path) {
     FreeImage_CloseMultiBitmap(mb, 0);
 }
 
+/* FreeImage_OpenMultiBitmap() with read_only FALSE asks for a document that can be
+ * written back to its file, and AVIF has no writer: the pages come out all the same,
+ * so an animation can still be played, and the close reports that nothing could be
+ * saved. FreeImage_LoadMultiBitmapFromMemory() passes read_only FALSE itself and has
+ * no file behind it, so it is not held to the same test. */
+static void check_readwrite_close(const char *file) {
+    char path[512];
+    FIMULTIBITMAP *mb;
+    FIBITMAP *pg;
+    FILE *f;
+    long n;
+    BYTE *buf;
+    FIMEMORY *mem;
+
+    snprintf(path, sizeof(path), "data/%s", file);
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, TRUE, TRUE, 0);
+    if (!mb) fail(file, "read-only OpenMultiBitmap returned NULL");
+    else if (!FreeImage_CloseMultiBitmap(mb, 0)) fail(file, "read-only CloseMultiBitmap returned FALSE");
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, FALSE, TRUE, AVIF_PLAYBACK);
+    if (!mb) fail(file, "OpenMultiBitmap with read_only FALSE returned NULL");
+    else {
+        if (FreeImage_GetPageCount(mb) < 2) fail(file, "a writable session lost the animation's pages");
+        pg = FreeImage_LockPage(mb, 1);
+        if (!pg) fail(file, "a page of a writable session failed to load");
+        else {
+            if (FreeImage_GetBPP(pg) != 32) fail(file, "a writable session ignored AVIF_PLAYBACK");
+            FreeImage_UnlockPage(mb, pg, FALSE);
+        }
+        if (FreeImage_CloseMultiBitmap(mb, 0))
+            fail(file, "CloseMultiBitmap returned TRUE for a format that cannot be written");
+    }
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, tmppath("fi_avif_created.avifs"), TRUE, FALSE, TRUE, 0);
+    if (mb) {
+        fail(file, "OpenMultiBitmap created a document in a format that cannot be written");
+        FreeImage_CloseMultiBitmap(mb, 0);
+    }
+
+    f = fopen(path, "rb");
+    if (!f) { fail(file, "could not open the file"); return; }
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    buf = (BYTE *)malloc(n);
+    if (fread(buf, 1, n, f) == (size_t)n) {
+        mem = FreeImage_OpenMemory(buf, (DWORD)n);
+        mb = FreeImage_LoadMultiBitmapFromMemory(FIF_AVIF, mem, 0);
+        if (!mb) fail(file, "LoadMultiBitmapFromMemory returned NULL");
+        else if (!FreeImage_CloseMultiBitmap(mb, 0))
+            fail(file, "CloseMultiBitmap returned FALSE for a memory stream");
+        FreeImage_CloseMemory(mem);
+    }
+    fclose(f); free(buf);
+    printf("    {\"%s\", read_only=1 close -> TRUE, read_only=0 close -> FALSE, from memory close -> TRUE}\n", file);
+}
+
 static void run(const Expected *e) {
     char path[512]; Expected o; FIBITMAP *d, *h, *m; FIMULTIBITMAP *mb; int pages = 0, p;
     unsigned long long msum = 0;
@@ -354,6 +410,7 @@ int main(int argc, char **argv) {
     if (FreeImage_GetFIFFromFormat("AVIF") != FIF_AVIF) fail("plugin", "GetFIFFromFormat");
     if (FreeImage_GetFIFFromFilename("x.avifs") != FIF_AVIF) fail("plugin", "GetFIFFromFilename(.avifs)");
     if (FreeImage_GetFileType("../sample.png", 0) == FIF_AVIF) fail("plugin", "a PNG was detected as AVIF");
+    check_readwrite_close("colors-animated-8bpc.avif");
     printf("--- observed (paste into EXPECTED after checking) ---\n");
     for (i = 0; i < NEXPECTED; i++) run(&EXPECTED[i]);
     printf("--- %d failure(s) ---\n", g_failures);

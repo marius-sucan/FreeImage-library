@@ -738,6 +738,9 @@ relevant I/O image format identifiers.
 FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 ; If the multi-page image was opened with read_only=0, any modifications
 ; to the image will be saved to disk; do not use FreeImage_Save() to save a multi-page image.
+; It returns 0 when it could not save what was asked of it: among others when the file
+; was opened by name with read_only=0 in a format that has no writer, such as AVIF or
+; HEIF. The pages can still be read in such a session, nothing can be saved back.
 
    Return DllCall(getFIMfunc("CloseMultiBitmap"), "uptr", hFIMULTIBITMAP, "int", flags)
 }

@@ -559,6 +559,24 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 				header->cache_fif = fif;
 				header->load_flags = flags;
 
+				// A format with no writer can still be read page by page - that is how an
+				// AVIF image sequence is played here, a frame at a time - but the writable
+				// session asked for with read_only FALSE can never end in a file: the save
+				// at FreeImage_CloseMultiBitmap() has nothing to write with. The document
+				// is handed over all the same, so the pages can be read, and the close
+				// reports the failure instead of returning the TRUE that says the file on
+				// disk is the document the caller asked for.
+				// FreeImage_OpenMultiBitmapFromHandle() and FreeImage_LoadMultiBitmapFromMemory()
+				// pass read_only FALSE themselves and are deliberately left out of this:
+				// they have no filename, which is what the save at close tests
+				// (header->m_filename), so nothing was ever going to be written back.
+
+				if (!read_only && (node->m_plugin->save_proc == NULL)) {
+					FreeImage_OutputMessageProc(fif, "%s does not support writing: \"%s\" can be read page by page, but nothing can be saved back to it - FreeImage_CloseMultiBitmap() will report the failure",
+						FreeImage_GetFormatFromFIF(fif), filename);
+					header->failed = TRUE;
+				}
+
 				// store the MULTIBITMAPHEADER in the surrounding FIMULTIBITMAP structure
 
 				bitmap->data = header.get();

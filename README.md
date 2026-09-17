@@ -44,6 +44,7 @@ Changes:
 - FillBackgroundBitmap() has a new optional parameter;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
+- FreeImage_CloseMultiBitmap() returns FALSE when the document was opened by name with read_only=0 in a format that has no writer, such as AVIF or HEIF. Its pages can still be read - this is how an AVIF animation is played - but nothing can be saved back to the file, and the close no longer says otherwise;
 - added FreeImage_RescaleRawBits();
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4; AVIF image sequences open as multi-page bitmaps, and the new AVIF_PLAYBACK flag plays one: every frame comes back as 32bpp, whatever the file's depth;
