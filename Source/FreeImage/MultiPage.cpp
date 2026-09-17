@@ -106,6 +106,7 @@ struct MULTIBITMAPHEADER {
 		, read_only(TRUE)
 		, cache_fif(fif)
 		, load_flags(0)
+		, failed(FALSE)
 		, read_data(NULL)
 	{
 		SetDefaultIO(&io);
@@ -124,6 +125,12 @@ struct MULTIBITMAPHEADER {
 	BOOL read_only;
 	FREE_IMAGE_FORMAT cache_fif;
 	int load_flags;
+	// Set when a page operation had to be dropped - a locked page, a format that
+	// cannot hold what was asked of it, a cache write that failed. The mutators
+	// return void and cannot say so themselves, so this is what
+	// FreeImage_CloseMultiBitmap() reports rather than claiming a success it did
+	// not achieve.
+	BOOL failed;
 	// Decoder state belonging to the plugin, opened by the first
 	// FreeImage_LockPage() call and kept until FreeImage_CloseMultiBitmap().
 	// It used to be opened and closed around every single page request, which
@@ -223,9 +230,102 @@ FreeImage_FindBlock(FIMULTIBITMAP *bitmap, int position) {
 		return block_target;
 	}
 	
-	// we should never go here ...
-	assert(false);
+	// The position is not in the list. Every caller checks the page number against
+	// FreeImage_GetPageCount() before coming here, so this means the block list and
+	// the page count have got out of step. Return end() and let the caller fail:
+	// an assert(false) used to stand here, and since only Makefile.mingw defines
+	// NDEBUG, it took the whole host process down on a bad page number.
 	return header->m_blocks.end();
+}
+
+// Resolve a logical page number to the block that holds it, *without* splitting
+// anything. FreeImage_FindBlock() above cuts a single page out of a run, which is
+// what the writers need but never what a reader needs: splitting on every read turns
+// one block into as many blocks as there are pages, and makes walking a document
+// quadratic in the block list.
+// On return, *file_page is the page's index inside the source file, or -1 when the
+// page lives in the cache and so has no place in the file at all.
+static BlockListIterator
+FreeImage_FindPage(MULTIBITMAPHEADER *header, int position, int *file_page) {
+	int count = 0;
+
+	*file_page = -1;
+
+	for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); ++i) {
+		const int page_count = i->getPageCount();
+
+		if (page_count <= 0) {
+			// an empty run - opening a file with no readable pages makes one
+			continue;
+		}
+
+		if (position < count + page_count) {
+			if (i->m_type == BLOCK_CONTINUEUS) {
+				*file_page = i->getStart() + (position - count);
+			}
+			return i;
+		}
+
+		count += page_count;
+	}
+
+	return header->m_blocks.end();
+}
+
+// Read one page back out of the cache, where FreeImage_SavePageToBlock() or
+// FreeImage_UnlockPage() put it, encoded in cache_fif.
+static FIBITMAP *
+FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
+	const int size = block.getSize();
+
+	if (size <= 0) {
+		return NULL;
+	}
+
+	BYTE *compressed_data = (BYTE*)malloc(size * sizeof(BYTE));
+
+	if (compressed_data == NULL) {
+		return NULL;
+	}
+
+	FIBITMAP *dib = NULL;
+
+	if (header->m_cachefile.readFile(compressed_data, block.getReference(), size)) {
+		FIMEMORY *hmem = FreeImage_OpenMemory(compressed_data, size);
+
+		if (hmem != NULL) {
+			dib = FreeImage_LoadFromMemory(header->cache_fif, hmem, 0);
+			FreeImage_CloseMemory(hmem);
+		}
+	}
+
+	free(compressed_data);
+
+	return dib;
+}
+
+// Can this document take another page? A plugin with no pagecount_proc has no idea
+// what a page is: its Save writes a complete file every time it is called, so a
+// second page does not extend the first, it concatenates another whole file onto the
+// stream. Every reader then sees only the first page, and the rest is trailing
+// rubbish - which FreeImage_CloseMultiBitmap() used to report as a success.
+static BOOL
+FreeImage_CanHoldAnotherPage(FIMULTIBITMAP *bitmap) {
+	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+
+	if ((header->node == NULL) || (header->node->m_plugin == NULL)) {
+		return FALSE;
+	}
+
+	if ((header->node->m_plugin->pagecount_proc == NULL) && (FreeImage_GetPageCount(bitmap) >= 1)) {
+		FreeImage_OutputMessageProc(header->fif,
+			"%s is not a multi-page format: it cannot hold more than one page",
+			FreeImage_GetFormatFromFIF(header->fif));
+		header->failed = TRUE;
+		return FALSE;
+	}
+
+	return TRUE;
 }
 
 int DLL_CALLCONV
@@ -398,7 +498,27 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 
 		if(node) {
 			MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
-			
+
+			// A plugin that cannot write is not a destination. This used to go
+			// straight on and call save_proc, which every read-only format leaves
+			// NULL - a call to address zero, and the caller had asked a perfectly
+			// answerable question: FreeImage_FIFSupportsWriting() knows.
+			if (node->m_plugin->save_proc == NULL) {
+				FreeImage_OutputMessageProc(fif, "%s does not support writing",
+					FreeImage_GetFormatFromFIF(fif));
+				return FALSE;
+			}
+
+			// ... and a plugin that has no idea what a page is cannot be handed
+			// several of them: it would write one complete file per page, one after
+			// another, into the same stream.
+			if ((node->m_plugin->pagecount_proc == NULL) && (FreeImage_GetPageCount(bitmap) > 1)) {
+				FreeImage_OutputMessageProc(fif,
+					"%s is not a multi-page format: cannot write %d pages",
+					FreeImage_GetFormatFromFIF(fif), FreeImage_GetPageCount(bitmap));
+				return FALSE;
+			}
+
 			// dst data
 			void *data = FreeImage_Open(node, io, handle, FALSE);
 			// src data
@@ -420,42 +540,48 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 						case BLOCK_CONTINUEUS:
 						{
 							for (int j = i->getStart(); j <= i->getEnd(); j++) {
-								
+
 								// load the original source data
-								FIBITMAP *dib = header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags, data_read);
-								
+								FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ?
+									header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags, data_read) : NULL;
+
+								// a page that will not load is not a page to hand to
+								// save_proc, which is entitled to a bitmap
+								if (dib == NULL) {
+									success = FALSE;
+									break;
+								}
+
 								// save the data
 								success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
 								count++;
-								
+
 								FreeImage_Unload(dib);
+
+								if (!success) {
+									break;
+								}
 							}
-							
+
 							break;
 						}
 						
 						case BLOCK_REFERENCE:
 						{
-							// read the compressed data
-							
-							BYTE *compressed_data = (BYTE*)malloc(i->getSize() * sizeof(BYTE));
-							
-							header->m_cachefile.readFile((BYTE *)compressed_data, i->getReference(), i->getSize());
-							
-							// uncompress the data
-							
-							FIMEMORY *hmem = FreeImage_OpenMemory(compressed_data, i->getSize());
-							FIBITMAP *dib = FreeImage_LoadFromMemory(header->cache_fif, hmem, 0);
-							FreeImage_CloseMemory(hmem);
-							
-							// get rid of the buffer
-							free(compressed_data);
-							
+							// read the page back out of the cache
+
+							FIBITMAP *dib = FreeImage_LoadPageFromCache(header, *i);
+
+							if (dib == NULL) {
+								success = FALSE;
+								break;
+							}
+
 							// save the data
-							
+
 							success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
 							count++;
-							
+
 							// unload the dib
 
 							FreeImage_Unload(dib);
@@ -559,6 +685,16 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 				header->locked_pages.erase(header->locked_pages.begin()->first);
 			}
 
+			// A page operation that had to be dropped is not a success, whatever the
+			// save above did. FreeImage_AppendPage() and the other mutators return
+			// void, so this is the only place the caller can be told that the file
+			// on disk is not the document they asked for - it used to return TRUE
+			// after silently discarding every page it had been handed.
+
+			if (header->failed) {
+				success = FALSE;
+			}
+
 			// delete the FIMULTIBITMAPHEADER
 
 			delete header;
@@ -635,14 +771,26 @@ FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	if (!bitmap || !data) {
 		return;
 	}
-	
+
 	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
-	
+
+	if (!FreeImage_CanHoldAnotherPage(bitmap)) {
+		return;
+	}
+
 	if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
 		// add the block
 		header->m_blocks.push_back(block);
 		header->changed = TRUE;
 		header->page_count = -1;
+	} else {
+		// the page was dropped - the bitmap is read-only, a page is locked, or
+		// cache_fif cannot encode this bitmap. This function returns void, so say so
+		// here and remember it for FreeImage_CloseMultiBitmap().
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_AppendPage: the page could not be stored (the bitmap is read-only or has locked pages, or %s cannot encode this image)",
+			FreeImage_GetFormatFromFIF(header->cache_fif));
+		header->failed = TRUE;
 	}
 }
 
@@ -651,76 +799,165 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 	if (!bitmap || !data) {
 		return;
 	}
-	if (page >= FreeImage_GetPageCount(bitmap)) {
+
+	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+	const int page_count = FreeImage_GetPageCount(bitmap);
+
+	// A negative position used to fall through the "insert at the front" branch below
+	// and silently put the page at 0; a position at or past the end is
+	// FreeImage_AppendPage()'s job and was refused without a word, so a caller working
+	// from a stale page count lost the page and was told nothing.
+
+	if ((page < 0) || (page >= page_count)) {
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_InsertPage: cannot insert at %d (the bitmap has %d page(s); use FreeImage_AppendPage to add at the end)",
+			page, page_count);
+		header->failed = TRUE;
 		return;
 	}
-	
-	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
-	
+
+	if (!FreeImage_CanHoldAnotherPage(bitmap)) {
+		return;
+	}
+
 	if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
 		// add a block
 		if (page > 0) {
 			BlockListIterator block_source = FreeImage_FindBlock(bitmap, page);
+
+			if (block_source == header->m_blocks.end()) {
+				FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
+				header->failed = TRUE;
+				return;
+			}
 			header->m_blocks.insert(block_source, block);
 		} else {
 			header->m_blocks.push_front(block);
 		}
-		
+
 		header->changed = TRUE;
 		header->page_count = -1;
+	} else {
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_InsertPage: the page could not be stored (the bitmap is read-only or has locked pages, or %s cannot encode this image)",
+			FreeImage_GetFormatFromFIF(header->cache_fif));
+		header->failed = TRUE;
 	}
 }
 
 void DLL_CALLCONV
 FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
-	if (bitmap) {
-		MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+	if (!bitmap) {
+		return;
+	}
 
-		if ((!header->read_only) && (header->locked_pages.empty())) {
-			if (FreeImage_GetPageCount(bitmap) > 1) {
-				BlockListIterator i = FreeImage_FindBlock(bitmap, page);
-				
-				if (i != header->m_blocks.end()) {
-					switch(i->m_type) {
-						case BLOCK_CONTINUEUS :
-							header->m_blocks.erase(i);
-							break;
-							
-						case BLOCK_REFERENCE :
-							header->m_cachefile.deleteFile(i->getReference());
-							header->m_blocks.erase(i);
-							break;
-					}
-					
-					header->changed = TRUE;
-					header->page_count = -1;
-				}
-			}
+	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+
+	if (header->read_only || !header->locked_pages.empty()) {
+		FreeImage_OutputMessageProc(header->fif, "FreeImage_DeletePage: the bitmap is %s",
+			header->read_only ? "read-only" : "holding locked pages");
+		header->failed = TRUE;
+		return;
+	}
+
+	const int page_count = FreeImage_GetPageCount(bitmap);
+
+	// Neither end was checked. A negative page made FreeImage_FindBlock() split a run
+	// into blocks with negative extents, after which the page count and the file
+	// disagreed for good; a page at or past the end reached an assert(false), which
+	// aborts the process in any build that does not define NDEBUG - which is all of
+	// them except MinGW.
+
+	if ((page < 0) || (page >= page_count)) {
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_DeletePage: page %d does not exist (the bitmap has %d page(s))",
+			page, page_count);
+		header->failed = TRUE;
+		return;
+	}
+
+	if (page_count <= 1) {
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_DeletePage: a multi-page bitmap must keep at least one page");
+		header->failed = TRUE;
+		return;
+	}
+
+	BlockListIterator i = FreeImage_FindBlock(bitmap, page);
+
+	if (i != header->m_blocks.end()) {
+		switch(i->m_type) {
+			case BLOCK_CONTINUEUS :
+				header->m_blocks.erase(i);
+				break;
+
+			case BLOCK_REFERENCE :
+				header->m_cachefile.deleteFile(i->getReference());
+				header->m_blocks.erase(i);
+				break;
 		}
+
+		header->changed = TRUE;
+		header->page_count = -1;
 	}
 }
 
 FIBITMAP * DLL_CALLCONV
 FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
-	if (bitmap) {
-		MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+	if (!bitmap) {
+		return NULL;
+	}
 
-		// only lock if the page wasn't locked before...
+	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+	const int page_count = FreeImage_GetPageCount(bitmap);
 
-		for (std::map<FIBITMAP *, int>::iterator i = header->locked_pages.begin(); i != header->locked_pages.end(); ++i) {
-			if (i->second == page) {
-				return NULL;
-			}
+	// A page number outside the document is a caller error, not something to guess
+	// at. -1 in particular used to be passed on to the plugin, where it is their own
+	// "this is a single image, not a page" value, and came back as page 0.
+
+	if ((page < 0) || (page >= page_count)) {
+		FreeImage_OutputMessageProc(header->fif,
+			"FreeImage_LockPage: page %d does not exist (the bitmap has %d page(s))",
+			page, page_count);
+		return NULL;
+	}
+
+	// only lock if the page wasn't locked before...
+
+	for (std::map<FIBITMAP *, int>::iterator i = header->locked_pages.begin(); i != header->locked_pages.end(); ++i) {
+		if (i->second == page) {
+			return NULL;
 		}
+	}
 
-		// open the bitmap once and keep the decoder for the life of the
+	// Find out where the page actually lives. The number the caller uses is a
+	// position in the document as it stands now, which stops matching the page's
+	// position in the file as soon as anything has been deleted, inserted or moved -
+	// and a page appended or edited in this session is not in the file at all, it is
+	// in the cache. This used to be handed straight to the plugin as a file page
+	// number, so after a FreeImage_DeletePage() every lock returned the wrong page,
+	// and FreeImage_UnlockPage() then wrote the caller's edit over a different one.
+
+	int file_page = -1;
+	BlockListIterator block = FreeImage_FindPage(header, page, &file_page);
+
+	if (block == header->m_blocks.end()) {
+		return NULL;
+	}
+
+	FIBITMAP *dib = NULL;
+
+	if (block->m_type == BLOCK_REFERENCE) {
+		// the page is in the cache, not in the file - so it can be locked even on a
+		// multi-bitmap created with create_new, which has no file behind it yet
+		dib = FreeImage_LoadPageFromCache(header, *block);
+	} else {
+		// Open the bitmap once and keep the decoder for the life of the
 		// multi-bitmap, rather than opening and closing it around every page.
 		// Reopening made each request re-parse the file from the beginning -
 		// for a GIF, a scan of every block in it - and threw away whatever the
 		// plugin had worked out about the pages it had already decoded. Closed
 		// in FreeImage_CloseMultiBitmap().
-		// A multi-bitmap created with create_new has no file behind it yet, so
-		// there is nothing to open and nothing to lock.
 
 		if (header->read_data == NULL) {
 			if (header->handle == NULL) {
@@ -730,24 +967,19 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 			header->read_data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
 		}
 
-		// load the bitmap data
-
-		if (header->read_data != NULL) {
-			FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ? header->node->m_plugin->load_proc(&header->io, header->handle, page, header->load_flags, header->read_data) : NULL;
-
-			// if there was still another bitmap open, get rid of it
-
-			if (dib) {
-				header->locked_pages[dib] = page;
-
-				return dib;
-			}
-
-			return NULL;
+		if ((header->read_data != NULL) && (header->node->m_plugin->load_proc != NULL)) {
+			dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, header->load_flags, header->read_data);
 		}
 	}
 
-	return NULL;
+	if (dib != NULL) {
+		// Remember the position the caller asked for. Every mutator refuses to run
+		// while a page is locked, so the block list cannot move underneath this and
+		// the number is still the right one when FreeImage_UnlockPage() resolves it.
+		header->locked_pages[dib] = page;
+	}
+
+	return dib;
 }
 
 void DLL_CALLCONV
@@ -766,6 +998,19 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				// cut loose the block from the rest
 
 				BlockListIterator i = FreeImage_FindBlock(bitmap, header->locked_pages[page]);
+
+				if (i == header->m_blocks.end()) {
+					// the page was locked and nothing may change the list while it
+					// is, so this cannot happen - but the edit has nowhere to go, and
+					// writing it to end() would corrupt the list
+					FreeImage_OutputMessageProc(header->fif,
+						"FreeImage_UnlockPage: page %d is no longer in the bitmap, the changes are lost",
+						header->locked_pages[page]);
+					header->failed = TRUE;
+					FreeImage_Unload(page);
+					header->locked_pages.erase(page);
+					return;
+				}
 
 				// compress the data
 
@@ -805,25 +1050,68 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 
 BOOL DLL_CALLCONV
 FreeImage_MovePage(FIMULTIBITMAP *bitmap, int target, int source) {
-	if (bitmap) {
-		MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
-
-		if ((!header->read_only) && (header->locked_pages.empty())) {
-			if ((target != source) && ((target >= 0) && (target < FreeImage_GetPageCount(bitmap))) && ((source >= 0) && (source < FreeImage_GetPageCount(bitmap)))) {
-				BlockListIterator block_source = FreeImage_FindBlock(bitmap, target);
-				BlockListIterator block_target = FreeImage_FindBlock(bitmap, source);
-
-				header->m_blocks.insert(block_target, *block_source);			
-				header->m_blocks.erase(block_source);
-				
-				header->changed = TRUE;
-				
-				return TRUE;
-			}
-		}
+	if (!bitmap) {
+		return FALSE;
 	}
 
-	return FALSE;
+	MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
+
+	if (header->read_only || !header->locked_pages.empty()) {
+		return FALSE;
+	}
+
+	const int page_count = FreeImage_GetPageCount(bitmap);
+
+	if ((target == source)
+		|| (target < 0) || (target >= page_count)
+		|| (source < 0) || (source >= page_count)) {
+		return FALSE;
+	}
+
+	// "source" is where the page is now and "target" is where it should end up - the
+	// description the .NET wrapper carries for this function spells that out ("Moves
+	// the source page to the position of the target page", target = "New position of
+	// the page", source = "Old position of the page"). The two were used the other way
+	// round: the page at "target" was the one that moved, and it landed just before
+	// "source" instead of at "target".
+
+	BlockListIterator block_source = FreeImage_FindBlock(bitmap, source);
+
+	if (block_source == header->m_blocks.end()) {
+		return FALSE;
+	}
+
+	// FreeImage_FindBlock() has cut the page out as a block of its own, so it can be
+	// lifted out whole. Take it out first and only then look for the destination, so
+	// that "target" counts positions in the list the page is no longer part of -
+	// otherwise moving a page to a later position leaves it one short.
+
+	const PageBlock moved = *block_source;
+
+	header->m_blocks.erase(block_source);
+	// the document is one page shorter for the moment, and the test below has to see
+	// that: FreeImage_GetPageCount() returns the cached count until it is invalidated
+	header->page_count = -1;
+
+	if (target >= FreeImage_GetPageCount(bitmap)) {
+		header->m_blocks.push_back(moved);
+	} else {
+		BlockListIterator block_target = FreeImage_FindBlock(bitmap, target);
+
+		if (block_target == header->m_blocks.end()) {
+			// put the page back rather than drop it
+			header->m_blocks.push_back(moved);
+			header->page_count = -1;
+			return FALSE;
+		}
+		header->m_blocks.insert(block_target, moved);
+	}
+
+	header->changed = TRUE;
+	// ... and the count is back up again, so drop the shortened one cached above
+	header->page_count = -1;
+
+	return TRUE;
 }
 
 BOOL DLL_CALLCONV
