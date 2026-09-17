@@ -32,8 +32,12 @@ remaining **2 are not reachable** (20, 37) and the entries say what stands in th
 > or hung was re-run afterwards, and every valid file in the corpus was checked to decode to
 > the same bytes as before — see "Verifying the fixes" at the end.
 >
-> **The 21 confirmed in the second pass are not fixed yet.** See "Second pass" below for
-> what changed and what it found on the way.
+> **The 21 confirmed in the second pass are fixed too**, in 21 further commits, one per
+> finding (`6083928`..`350b9f0`). Each entry carries its commit. The whole second-pass rig
+> was re-run afterwards and diffed against `baseline.txt`: every one of the 21 blocks
+> changed, and every control line in it — the well-formed twin each reproducer was built
+> against — is byte-identical. So are all 72 valid files in the seed corpus. See "Second
+> pass" below for what that pass changed and what it found on the way.
 
 Severity, across all 46 confirmed findings — second-pass ones in **bold**:
 
@@ -59,19 +63,23 @@ The five I would fix first, counting both passes:
    that allocator's "be helpful" behaviour, `default: bpp = 8`, is still there and is what
    makes findings 22 and 36 reachable.
 3. **43/44/45 (PluginPICT.cpp)** — the unpackers write into the bitmap with no end-of-row
-   test at all. 43 and 44 are fixed; **45 is the same defect in `UnpackPictRow`, which both
-   remaining decompressors use, and it is not**.
+   test at all. 43 and 44 were fixed in the first pass; 45 is the same defect in
+   `UnpackPictRow`, which both remaining decompressors use. *(fixed)*
 4. **36 (PSDParser.cpp)** — `_BitsPerChannel` is never validated. `depth = 9` gets a 27-bpp
    request coerced to 8 bpp and overflows the bitmap on *both* compression paths, including
-   the one carrying the CVE-2020-24295 fix.
+   the one carrying the CVE-2020-24295 fix. *(fixed: the depth is validated where it is
+   read, and `ReadImageLine` is bounded by the destination row rather than by the buffer)*
 5. **6 (PluginRAS.cpp:97)** — `static BYTE repchar, remaining`. One image's bytes come out
-   as another's, and it is two words to fix.
+   as another's. *(fixed: the state moved onto `Load`'s stack, which is where one image's
+   worth of it belongs — a Sun run spans rows, so it could not simply be dropped)*
 
 Note 7, 9, 10, 11, 16, 17, 22 and 40 are not security issues but they are *correctness* ones
 that would be visible to any user: no standard 256-colour Sun raster loads at all, a
 Radiance file using `+X … +Y …` comes out transposed, an odd-width 32-bit Sun raster is
 skewed from its second row on, and a PCX or ICO that does not start at byte 0 of the stream
-cannot be read at all.
+cannot be read at all. All eight are fixed; the four that had to choose between two
+defensible readings of a malformed file — 9, 11, 17 and 22, and 32's sample clamp with them
+— are written up in `FORMAT-CONFORMANCE.md`.
 
 ---
 
@@ -193,7 +201,7 @@ handed contain a NUL, then re-runs the *real* `sscanf` on a copy placed hard aga
 So both halves are established: `pfm_get_line` returns TRUE with no terminator, and
 glibc's `sscanf` on such a buffer reads past the end of the array.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5b478cd
 
 ### 4. PluginPFM.cpp:123 — unbounded digit accumulation in `pfm_get_int`
 
@@ -214,7 +222,7 @@ Source/FreeImage/PluginPFM.cpp:123:11: runtime error: signed integer overflow:
 PFM does then reject the file (`width <= 0`), so this one is UB without a wrong result —
 unlike its twin in PNM, finding 32, where the wrapped value is used.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 422ad35
 
 ### 5. PluginRAS.cpp:384,403,411,443,451 — `WORD` loop counters against `DWORD` file fields (infinite loop → heap overflow)
 
@@ -301,7 +309,7 @@ One correction to the text above: `repchar` *does* have an initialiser. Both nam
 `static`, so both have static storage duration and are zero-initialised; the sentence
 about an indeterminate value on the very first run is wrong. Everything else holds.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 6815aa3
 
 ### 7. PluginRAS.cpp:315 — a RAS file with a *complete* colormap is rejected
 
@@ -367,7 +375,7 @@ the product wraps — `CalculateLine(width, 24)` is the same `width * 3`, so the
 conditions coincide. `f08b_ras24_widthwrap.ras` (width `0x55555556`) and
 `f08c_ras32_widthwrap.ras` (width `0x40000001`) both fail with "DIB allocation failed".
 
-Confidence: CONFIRMED (missing NULL checks) / NOT REACHABLE (the width wrap)
+Confidence: CONFIRMED (missing NULL checks) / NOT REACHABLE (the width wrap) — **FIXED**, commit dcdb5d1
 
 ### 9. PluginRAS.cpp:372 — 32-bit rows get a padding byte they do not have
 
@@ -397,7 +405,7 @@ The 24-bit twin `poc/f09b_ras24_oddwidth.ras` decodes correctly, which isolates 
 the 32-bit case: for 24 bpp the row length `width * 3` has the same parity as `width`, so
 `fill = (width % 2)` happens to be right.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 7c56d90
 
 ### 10. PluginSGI.cpp:364 — the EOF check in the uncompressed path can never fire
 
@@ -430,7 +438,7 @@ is 0 or 1 and never `EOF`. The second half of the finding — `if (cnt == EOF)` 
 is dead by construction rather than by test: `cnt` is assigned from a `BYTE` inside a
 `while (0 == cnt)` loop, so it is 1..255 at that point and can never be -1.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 3f911a2
 
 ### 11. PluginSGI.cpp:145 — an `0x80` opcode leaves the RLE counter negative
 
@@ -467,7 +475,7 @@ consumes `width - k` extra bytes of input. A conforming file never contains a mi
 `0x80`, since FreeImage reaches each row through the offset table and stops at `width`
 pixels without ever reading the terminator.
 
-Confidence: CONFIRMED (malformed input only; memory-safe)
+Confidence: CONFIRMED (malformed input only; memory-safe) — **FIXED**, commit b598bf4
 
 ### 12. PluginSGI.cpp:266 — the RLE index is sized from an unvalidated channel count
 
@@ -496,7 +504,7 @@ into `EOF`, so the load fails cleanly with "EOF in image data". An offset that l
 *inside* the file decodes the bytes it points at, which is what the format's own index
 asks for.
 
-Confidence: CONFIRMED (the overflow) / not a bug (the seek)
+Confidence: CONFIRMED (the overflow) / not a bug (the seek) — **FIXED**, commit 15e7582
 
 ### 13. PluginIFF.cpp:306 — the PBM RLE loop checks its bound only between packets (heap overflow)
 
@@ -611,7 +619,7 @@ two-chunk file is the reproducer to keep.
 The load itself always fails afterwards, because a truncated BMHD means EOF and therefore
 no BODY chunk — so the damage is a wrongly-sized allocation rather than wrong pixels.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit ab469a8
 
 ### 16. PluginPCX.cpp:454,490 — the palette seek assumes the PCX starts at byte 0 of the file
 
@@ -647,7 +655,7 @@ The `SEEK_END - 769` palette lookup happens to survive here only because the PCX
 last thing in the file; with any trailing data it reads the palette from the wrong place
 too.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 9e64484
 
 ### 17. PluginPCX.cpp:153 — an `0xC0` packet becomes a 256-byte run
 
@@ -685,7 +693,7 @@ control, no C0    : row 0              = 11 12 .. 18   row 1              = 01 0
 The first row is replaced by 256 bytes of one value and every later row is shifted by one
 row. `length` bounds the total, so the heap is not touched.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 0b2c4d2
 
 Not a bug, worth recording: the `line` buffer is sized `MAX(lineLength, width * header.bpp)`
 (:514), and that `MAX` is load-bearing. I checked the two indexing loops that a corrupt
@@ -881,7 +889,7 @@ The 4-bpp control `poc/f22c_ico_4bpp_w16.ico` — the same image at a depth the 
 does support — decodes correctly at `bpp=4`. Only 16 of the bitmap's 64 pixel bytes are
 ever written, so this under-reads rather than overflows; ASan is quiet on it.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit b522371
 
 ### 23. PluginICO.cpp:424 — the icon directory is used whether or not it was read
 
@@ -918,7 +926,7 @@ offset 0, and at stream offset 64 the loader reads its directory from absolute 6
 bytes of the preceding data, `0x5A` here — and seeks to `0x5A5A5A5A`. An ICO embedded in a
 container is unreadable, and the seek target comes from bytes before it.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 350b9f0
 
 ### 24. PluginPCD.cpp:173-175 — the three scratch buffers are shadowed, so the handler frees nothing
 
@@ -968,7 +976,7 @@ Narrow, as expected — PCD's dimensions are constants, so the requests are 768 
 never fail on their own — but the shadowing is exactly as described and the handler is a
 no-op.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit b450eb4
 
 ### 25. PluginPICT.cpp:975 — `Read8` cannot signal EOF, so the version scan spins forever
 
@@ -1129,7 +1137,7 @@ background 0x35 -> 75 75 75 75 ...     (nibbles 7 and 5)
 background 0x05 -> 55 55 55 55 ...     (control)
 ```
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit b527e6e
 
 ### 29. PluginXPM.cpp:322 — the pixel row is indexed by the *declared* width, not its own length
 
@@ -1254,7 +1262,7 @@ colour string that runs into EOF) took the `return NULL` path on every build tri
 is no MSan available here to observe it directly.
 
 Confidence: CONFIRMED (the leak, the escaping exception, the unchecked malloc) /
-NOT REPRODUCED (`FindChar`'s uninitialised read)
+NOT REPRODUCED (`FindChar`'s uninitialised read) — **FIXED**, commit 23e9b72
 
 ### 32. PluginPNM.cpp:81 — the same unbounded digit accumulator as PFM
 
@@ -1296,7 +1304,7 @@ allocates a 1.2 GB bitmap and reports a width that appears nowhere in it. The pa
 above is therefore too generous — this is a wrong result and a resource-exhaustion vector,
 not only UB.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 5f2f20a
 
 ### 33. PluginTARGA.cpp:621 — the RLE overflow guard measures rows at `line_size`, but they are spaced at `pitch`
 
@@ -1488,7 +1496,7 @@ For every depth the format actually allows, `lineSize <= dstLineSize` holds and 
 branch can overflow — `poc/f36c` / `f36d` (the same image at depth 8) decode identically
 and correctly. It is the unvalidated depth that breaks the invariant.
 
-Confidence: CONFIRMED (both branches; root cause corrected)
+Confidence: CONFIRMED (both branches; root cause corrected) — **FIXED**, commit d720503
 
 ### 37. PSDParser.cpp:1274,1290 — `ReadImageLine` decrements its counter past zero
 
@@ -1670,7 +1678,7 @@ list it: the literal `"FORMAT=32-bit_rle_rgbe\n"` is 23 characters, so the compa
 always stops at or before `buf[23]` — either at a difference or at the literal's own NUL.
 The `sscanf`s are the reachable ones, and they are enough.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 329a428
 
 ### 42. PluginXPM.cpp:281 — `sprintf` of a file-controlled string into a 256-byte stack buffer
 
@@ -1889,7 +1897,7 @@ unbounded, so this is the same severity as 43: an out-of-bounds write of attacke
 bytes. (The reproducers use the `memset` branch; the literal branch overflows the same
 way through `read_proc`.)
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit 6083928
 
 ### 46. PluginXBM.cpp:59-62 — `readLine` writes the terminator one byte past the buffer
 
@@ -2015,7 +2023,7 @@ FIQ_LFPQUANT : returns a bitmap  (it has the `ReservePalette != NULL` guard)
 Two of the three quantizers crash on an argument the entry point accepts, and the third
 does not. This is caller-facing API behaviour, reachable with one call and no file.
 
-Confidence: CONFIRMED
+Confidence: CONFIRMED — **FIXED**, commit fffaa05
 
 ---
 
@@ -2170,7 +2178,6 @@ Neither was in the audit; both turned up while working on it.
 
 ### Still open after this pass
 
-* The 21 findings confirmed by the second pass — see below. None is fixed.
 * The `Save` paths generally: the three PSD defects above were found by accident, not by
   review, and nothing else on the write side has been looked at.
 * **PSD writing, three defects** — all now fixed, and all on a path the audit never
@@ -2225,31 +2232,31 @@ the same stack slot — 15. ASan's `0xbe` malloc fill does the same job for the 
 
 ### Verdicts
 
-| # | Site | Verdict |
-|---|---|---|
-| 3 | PluginPFM.cpp:63 | **CONFIRMED** — guard-page probe: glibc `sscanf` reads past the 256-byte line buffer |
-| 4 | PluginPFM.cpp:123 | **CONFIRMED** — UBSan signed overflow (no wrong result; PFM rejects the file) |
-| 6 | PluginRAS.cpp:97 | **CONFIRMED, worse** — a well-formed image decodes entirely as the *previous* file's byte |
-| 8 | PluginRAS.cpp:334,362,414,454 | **CONFIRMED** — SIGSEGV on each of the four when the allocation is refused. The `width * 3` wrap in the same entry is **not reachable** |
-| 9 | PluginRAS.cpp:385 | **CONFIRMED** — 32-bit odd-width rows read one byte late from the second row on |
-| 10 | PluginSGI.cpp:364 | **CONFIRMED** — a truncated uncompressed SGI loads as a half-black image |
-| 11 | PluginSGI.cpp:145 | **CONFIRMED** — the opcode byte `0x82` comes out as a pixel |
-| 12 | PluginSGI.cpp:266 | **CONFIRMED** — UBSan `65535 * 65535`. The unchecked seek in the same entry is not a bug |
-| 15 | PluginIFF.cpp:267 | **CONFIRMED** — a 48-byte file allocates 1.4 MB at a size that is nowhere in it |
-| 16 | PluginPCX.cpp:454,490 | **CONFIRMED** — at stream offset 64 the PCX decodes its own header as pixels |
-| 17 | PluginPCX.cpp:153 | **CONFIRMED** — one `0xC0` byte replaces a row with 256 copies of one value and shifts the rest |
-| 20 | PluginDDS.cpp:703 | **NOT REPRODUCIBLE** — closed by this audit's fixes for 18 and 26 |
-| 22 | PluginICO.cpp:319 | **CONFIRMED** — `biBitCount == 2` yields an 8-bpp bitmap with a quarter of its rows read |
-| 23 | PluginICO.cpp:438 | **CONFIRMED** — seeks to `0xBEBEBEBE`; and at a stream offset, to bytes taken from in front of the file |
-| 24 | PluginPCD.cpp:173 | **CONFIRMED** — 1536 bytes leak when the third allocation is refused |
-| 28 | PluginKOALA.cpp:140 | **CONFIRMED, both halves** — stack disclosure, and `background` unmasked |
-| 31 | PluginXPM.cpp:69,75,207 | **CONFIRMED (3 of 4)** — leak, `std::bad_alloc` into the application, `strcpy` through NULL. `FindChar`'s uninitialised `c` is real UB but not steerable |
-| 32 | PluginPNM.cpp:81 | **CONFIRMED, worse** — 22 bytes allocate a 1215752191×1 bitmap |
-| 36 | PSDParser.cpp:1609 | **CONFIRMED, different cause** — heap overflow on *both* branches; `_BitsPerChannel` is never validated |
-| 37 | PSDParser.cpp:1300,1316 | **NOT REPRODUCIBLE** — latent, and provably so |
-| 41 | PluginHDR.cpp:126 | **CONFIRMED** — two `sscanf` over-reads per load; the `strcmp` listed with them is not one |
-| 45 | PluginPICT.cpp:558 | **CONFIRMED** — ASan heap overflow through `Unpack8Bits` *and* `Unpack32Bits` |
-| 48 | Conversion.cpp:379 | **CONFIRMED** — `FIQ_WUQUANT` and `FIQ_NNQUANT` crash; `FIQ_LFPQUANT` does not |
+| # | Site | Verdict | Fixed in |
+|---|---|---|---|
+| 3 | PluginPFM.cpp:63 | **CONFIRMED** — guard-page probe: glibc `sscanf` reads past the 256-byte line buffer | `5b478cd` |
+| 4 | PluginPFM.cpp:123 | **CONFIRMED** — UBSan signed overflow (no wrong result; PFM rejects the file) | `422ad35` |
+| 6 | PluginRAS.cpp:97 | **CONFIRMED, worse** — a well-formed image decodes entirely as the *previous* file's byte | `6815aa3` |
+| 8 | PluginRAS.cpp:334,362,414,454 | **CONFIRMED** — SIGSEGV on each of the four when the allocation is refused. The `width * 3` wrap in the same entry is **not reachable** | `dcdb5d1` |
+| 9 | PluginRAS.cpp:385 | **CONFIRMED** — 32-bit odd-width rows read one byte late from the second row on | `7c56d90` |
+| 10 | PluginSGI.cpp:364 | **CONFIRMED** — a truncated uncompressed SGI loads as a half-black image | `3f911a2` |
+| 11 | PluginSGI.cpp:145 | **CONFIRMED** — the opcode byte `0x82` comes out as a pixel | `b598bf4` |
+| 12 | PluginSGI.cpp:266 | **CONFIRMED** — UBSan `65535 * 65535`. The unchecked seek in the same entry is not a bug | `15e7582` |
+| 15 | PluginIFF.cpp:267 | **CONFIRMED** — a 48-byte file allocates 1.4 MB at a size that is nowhere in it | `ab469a8` |
+| 16 | PluginPCX.cpp:454,490 | **CONFIRMED** — at stream offset 64 the PCX decodes its own header as pixels | `9e64484` |
+| 17 | PluginPCX.cpp:153 | **CONFIRMED** — one `0xC0` byte replaces a row with 256 copies of one value and shifts the rest | `0b2c4d2` |
+| 20 | PluginDDS.cpp:703 | **NOT REPRODUCIBLE** — closed by this audit's fixes for 18 and 26 | — |
+| 22 | PluginICO.cpp:319 | **CONFIRMED** — `biBitCount == 2` yields an 8-bpp bitmap with a quarter of its rows read | `b522371` |
+| 23 | PluginICO.cpp:438 | **CONFIRMED** — seeks to `0xBEBEBEBE`; and at a stream offset, to bytes taken from in front of the file | `350b9f0` |
+| 24 | PluginPCD.cpp:173 | **CONFIRMED** — 1536 bytes leak when the third allocation is refused | `b450eb4` |
+| 28 | PluginKOALA.cpp:140 | **CONFIRMED, both halves** — stack disclosure, and `background` unmasked | `b527e6e` |
+| 31 | PluginXPM.cpp:69,75,207 | **CONFIRMED (3 of 4)** — leak, `std::bad_alloc` into the application, `strcpy` through NULL. `FindChar`'s uninitialised `c` is real UB but not steerable | `23e9b72` |
+| 32 | PluginPNM.cpp:81 | **CONFIRMED, worse** — 22 bytes allocate a 1215752191×1 bitmap | `5f2f20a` |
+| 36 | PSDParser.cpp:1609 | **CONFIRMED, different cause** — heap overflow on *both* branches; `_BitsPerChannel` is never validated | `d720503` |
+| 37 | PSDParser.cpp:1300,1316 | **NOT REPRODUCIBLE** — latent, and provably so | — |
+| 41 | PluginHDR.cpp:126 | **CONFIRMED** — two `sscanf` over-reads per load; the `strcmp` listed with them is not one | `329a428` |
+| 45 | PluginPICT.cpp:558 | **CONFIRMED** — ASan heap overflow through `Unpack8Bits` *and* `Unpack32Bits` | `6083928` |
+| 48 | Conversion.cpp:379 | **CONFIRMED** — `FIQ_WUQUANT` and `FIQ_NNQUANT` crash; `FIQ_LFPQUANT` does not | `fffaa05` |
 
 ### Corrections to the first pass
 
@@ -2315,3 +2322,60 @@ Run with
 and `UBSAN_OPTIONS=print_stacktrace=1`. The `detect_stack_use_after_return=0` matters: with
 it on (the default on this toolchain) ASan moves large locals to a freshly mapped fake
 stack, which is zero-filled, and finding 28's disclosure disappears.
+
+### Fixing the 21
+
+2026-09-16, same branch, 21 commits `6083928`..`350b9f0` — one per finding, in the order
+45, 36, 6, 8, 9, 31, 48, 24, 3, 41, 4, 32, 12, 10, 11, 22, 17, 16, 28, 15, 23. The
+memory-safety ones went first. Each commit was made only after its own reproducer had been
+re-run, its control had been re-run, and every valid file in the corpus had been decoded
+again; where the corpus had no coverage of the format (PFM, PCD, ICO multi-page, ASCII PNM)
+the same files were decoded against a stashed build of the same tree, so the comparison is
+against the code as it was and not against a memory of it.
+
+Re-running the whole rig afterwards and diffing against `baseline.txt`: all 21 blocks
+changed, every control line is byte-identical, and the two NOT REPRODUCIBLE blocks (20, 37)
+are unchanged. `sums.sh`, added for this round, decodes the 58 files in `minseeds/` and the
+14 in `seeds/` and prints one line each; it is identical before and after all 21 commits.
+
+Six of the fixes needed a decision rather than a check, because the file that provokes them
+is malformed and more than one reading is defensible. They are written up in
+`FORMAT-CONFORMANCE.md`; in short:
+
+* **9** — the Sun pad byte follows the *row*, so its presence is decided by the row's length
+  in bytes, not by the width.
+* **11** — an SGI opcode with a zero run length is skipped, not treated as end-of-scanline.
+  This decoder reaches every row through the offset table and always writes exactly `width`
+  pixels, so ending early would leave the rest of the row undefined; and the same loop
+  already skipped a bare `0x00`.
+* **17** — a PCX run length of zero emits nothing, which is what the specification says and
+  what netpbm and ImageMagick do.
+* **22** — 2 bpp leaves the ICO whitelist rather than being added to the allocator.
+* **32** — an ASCII PNM sample is held to the `maxval` the header declares.
+* **28** — a `.koa` shorter than a whole KOALA image is refused rather than zero-filled.
+
+Three fixes are wider than the entry that prompted them, and deliberately:
+
+* **17** could not skip a zero-length packet without the decode being able to make progress
+  without writing, which needed the other half of that entry — the two unchecked buffer
+  refills — fixed as well.
+* **24** takes the two unchecked reads named in its entry with it. The audit's own PCD
+  reproducer is 205824 bytes where a 768x512 image needs 786432: it used to "load", three
+  quarters of it uninitialised heap.
+* **45** had to size `Unpack32Bits`' line buffer for what the plane-juggling loop reads back
+  out of it, because a bound has to be a real buffer size; the same change removes a heap
+  over-read on the way out and an uninitialised tail on a short row.
+
+Two entries were corrected while fixing them:
+
+* **31**'s fourth claim, `FindChar`'s uninitialised `BYTE c`, is marked NOT REPRODUCED
+  because no input steers it. It is still undefined behaviour and it is one line — the first
+  read's result is checked now, like every other read in that function.
+* **8**'s RMT_RAW `malloc` is not fixed by checking it. The colormap was read and freed
+  again without ever being looked at, so the allocation is gone entirely and the plugin
+  seeks past it; the 4 GiB request a 34-byte file could make no longer exists.
+
+Still not fixed, and outside the 21 on purpose: `LFPQuantizer::Quantize`'s misaligned 4-byte
+load (visible in the finding-48 block of `check.sh` to this day) and
+`FreeImage_LoadFromHandle`'s missing `catch`. Both are recorded under "Found while
+re-testing" above.
