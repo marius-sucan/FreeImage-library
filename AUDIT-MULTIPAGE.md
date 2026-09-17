@@ -22,9 +22,10 @@ this build.
 **27 of the 29 are upstream 3.18.0 defects**, not regressions of this fork. The two
 local ones are M10 and N5, both called out as such.
 
-> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`; M12 and N6 in `28178b1`.
-> M10 (WebP) is left open by decision — it belongs to `PluginWebP.cpp`, not to this
-> API. C1, C2 and the remaining N findings are open. See §5.
+> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`; M12 and N6 in `28178b1`;
+> **C1, C2, N1, N2, N11 and N14 in `e669ea6`**. M10 (WebP) is left open by decision —
+> it belongs to `PluginWebP.cpp`, not to this API. N3, N4, N5, N7, N8, N10, N12, N13,
+> N15 and N16 are open. See §5.
 
 ---
 
@@ -456,8 +457,13 @@ same collision applies across processes and to any two formats sharing a stem
 | M11 | **fixed** | `InsertPage` rejects a negative position instead of silently inserting at the front, and says so when asked to insert at or past the end. |
 | M12 | **fixed** (`28178b1`) | `OpenMultiBitmap` requires a `load_proc` to open an existing file and a `save_proc` for `create_new`, so a new multi-bitmap can no longer be opened in a format that has no writer. `OpenMultiBitmapFromHandle`/`LoadMultiBitmapFromMemory` require the loader only. |
 | N6 | **fixed** (`28178b1`) | `UnlockPage` now checks that the page really was encoded into the cache before replacing the block, instead of writing a reference to block 0 of length 0. |
-| C1, C2 | **open** | Both are in `CacheFile.cpp`, which this commit does not touch. |
-| N1–N16 | **open** | |
+| C1 | **fixed** (`e669ea6`) | Block numbers start at 1, so `Block::next == 0` can only ever mean end-of-chain. `writeFile`'s `0` is now an unambiguous failure return, and both callers check it. |
+| C2 | **fixed** (`e669ea6`) | The cache and spool are named after the whole filename plus the process id and the header's address, instead of the stem alone. |
+| N1 | **fixed** (`e669ea6`) | `readFile` checks `lockBlock` for NULL, bounds the copy to the caller's buffer, and returns FALSE for a chain that ends early. |
+| N2 | **fixed** (`e669ea6`) | `(long)nr * BLOCK_SIZE` — the product used to be computed in 32 bits. |
+| N11 | **fixed** (`e669ea6`) | `deleteBlock` takes the block out of the list holding it and frees it, instead of leaving it to be flushed to a reused offset. |
+| N14 | **fixed** (`e669ea6`) | `writeFile` rounds the block count up instead of always adding one. |
+| N3, N4, N5, N7, N8, N10, N12, N13, N15, N16 | **open** | |
 
 ## The two behaviour changes, in full
 
@@ -488,6 +494,40 @@ stating plainly:
   and insert are cache-backed, which was not possible at all before.
 - Round-trips (3 pages in, 3 pages back) still correct for TIFF, GIF, ICO, APNG.
 
+## What the cache stress test found (`cachefuzz`)
+
+`.claude/audit/multipage/cachefuzz.cpp` links `CacheFile.cpp` directly, with a stub
+for `FreeImage_OutputMessageProc` and nothing else of the library, so it can drive the
+block store far harder than a document can and run under ASan+UBSan. It does the exact
+C1 shape, then ~5200 writes, ~3000 reads and ~2000 deletes across memory- and
+disk-backed caches with single- and multi-block payloads.
+
+Against the **fixed** code: clean, ASan and UBSan included.
+
+Against the **unfixed** code it fails four different ways, which is what makes it
+worth keeping — two of these were only ever "by inspection" before:
+
+```
+the C1 shape:
+  first three block numbers: 0, 1, 2 *** 0 IS IN USE ***
+  two-block payload came back CORRUPT
+  memory cache, small          writeFile returned 0 (size 65528)
+  disk cache, small            readFile returned WRONG DATA (ref 21, 196584 bytes)     [x22]
+  disk cache, small            final data WRONG (ref 1)
+
+AddressSanitizer: negative-size-param: (size=-65528)
+  #2 CacheFile::readFile(unsigned char*, int, int) CacheFile.cpp:216
+```
+
+- The `negative-size-param` is **N1**, and it is a memory-safety bug rather than the
+  robustness gap it was filed as: a chain longer than the page it holds drives
+  `size - s` negative and the `memcpy` length to a huge `size_t`.
+- The 22 `WRONG DATA` reads are **N11**, the stale block flushed to a reused offset.
+  I could not reach it through the multi-page API in the original audit and recorded
+  it as a latent hazard; driven directly it is plain, reproducible corruption.
+- `writeFile returned 0` on a legitimate write is **N4**, block 0 being handed out and
+  mistaken for the failure return.
+
 ---
 
 # 6. Rig
@@ -497,6 +537,10 @@ stating plainly:
 ```
 gcc -g -O0 -o mp mp.c -I../../../Dist ../../../Dist/libfreeimage.a \
     -lstdc++ -lm -lpthread -fopenmp
+
+# the cache stress test links CacheFile.cpp on its own, under the sanitizers
+g++ -g -O1 -fsanitize=address,undefined -I../../../Source -I../../../Source/FreeImage \
+    -D__ANSI__ cachefuzz.cpp ../../../Source/FreeImage/CacheFile.cpp -o cachefuzz
 ```
 
 | Subcommand | Finding |
@@ -514,7 +558,8 @@ gcc -g -O0 -o mp mp.c -I../../../Dist ../../../Dist/libfreeimage.a \
 | `openmodes` | M12 — the (format, mode) accept/refuse matrix |
 | `blockzero [dim]` | C1 (`FI_NODEL=1`, `FI_DEL01=1` are the controls) |
 | `cachename [n]` | C2 |
-| `cachestress <n>` | N11 (`FI_MEMCACHE=1` to compare against the memory cache) |
+| `cachefuzz` (separate binary) | C1, N1, N2, N4, N11, N14 — drives `CacheFile` directly under ASan |
+| `cachestress <n>` | C1/N11 through the public API (`FI_MEMCACHE=1` for the memory cache) |
 | `savelock <fif> <file>` | N5 |
 | `wrongfif <fif> <file>` | N10 |
 
