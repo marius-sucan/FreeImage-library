@@ -678,7 +678,16 @@ FreeImage_Paste(FIBITMAP *dst, FIBITMAP *src, int left, int top, int alpha) {
 
 		// perform promotion if needed
 		if(bpp_dst == bpp_src) {
-			clone = src;
+			const BOOL srcIsRGB565 = IS_FORMAT_RGB565(src) ? TRUE : FALSE;
+			if((bpp_dst == 16) && (isRGB565 != srcIsRGB565)) {
+				// Same depth, different 16-bit layout.  Combine16_555 and
+				// Combine16_565 test only FreeImage_GetBPP, so the source words
+				// would be copied across unconverted: pure red in 555 (0x7C00)
+				// read as 565 is a dark green.  Convert instead.
+				clone = isRGB565 ? FreeImage_ConvertTo16Bits565(src) : FreeImage_ConvertTo16Bits555(src);
+			} else {
+				clone = src;
+			}
 		} else if(bpp_dst > bpp_src) {
 			// perform promotion
 			switch(bpp_dst) {
