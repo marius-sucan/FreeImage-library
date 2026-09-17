@@ -565,7 +565,26 @@ Rotate8Bit(FIBITMAP *dib, double angle, double x_shift, double y_shift, double x
 	}
 
 	// allocate a temporary array
-	ImageRasterArray = (double*)malloc(width * height * sizeof(double));
+	//
+	// width * height was an int product, promoted to size_t only afterwards.  At
+	// 65536 x 65536 it is exactly 2^32, which as an int is 0: malloc(0) handed
+	// back a one-byte chunk, the test below passed, and the copy loop that
+	// follows wrote 32 GiB of double into it.  Between 2^31 and 2^32 pixels the
+	// product is negative instead and the size wraps to something enormous, so
+	// the allocation fails and that case was survivable - the dangerous window
+	// is the neighbourhood of each multiple of 2^32 pixels.
+	//
+	// The rest of this file addresses the array with long arithmetic (y * Width
+	// at :196, :248 and :495, and y*width just below), so an image that does not
+	// fit a long is refused here rather than mis-indexed later; a long is 32 bits
+	// on Win64.
+	const size_t npixels = (size_t)width * (size_t)height;
+	if((npixels == 0) || (npixels > (size_t)LONG_MAX) ||
+		(npixels > ((size_t)-1) / sizeof(double))) {
+		FreeImage_Unload(dst);
+		return NULL;
+	}
+	ImageRasterArray = (double*)malloc(npixels * sizeof(double));
 	if(!ImageRasterArray) {
 		FreeImage_Unload(dst);
 		return NULL;
