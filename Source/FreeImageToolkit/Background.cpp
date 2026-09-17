@@ -196,9 +196,15 @@ GetAlphaBlendedColor(const RGBQUAD *bgcolor, const RGBQUAD *fgcolor, RGBQUAD *bl
 	BYTE alpha = fgcolor->rgbReserved;
 	BYTE not_alpha = ~alpha;
 	
-	blended->rgbRed = (BYTE)( ((WORD)fgcolor->rgbRed * alpha + not_alpha * (WORD)bgcolor->rgbRed)   >> 8 );
-	blended->rgbGreen = (BYTE)( ((WORD)fgcolor->rgbGreen * alpha + not_alpha * (WORD)bgcolor->rgbGreen) >> 8) ;
-	blended->rgbBlue = (BYTE)(((WORD)fgcolor->rgbBlue * alpha + not_alpha * (WORD)bgcolor->rgbBlue) >> 8);
+	// ~alpha is 255 - alpha, so the two weights sum to 255 and the shift divided
+	// by 256.  FreeImage_Composite has the same expression and special-cases the
+	// two ends; this one does not, because it is only ever reached with
+	// 0 < alpha < 255 (:262 returns early at 0, :272 skips the block at 255) - so
+	// it was *always* one level dark.  Blending a colour over itself returned
+	// that colour minus one.
+	blended->rgbRed = (BYTE)( ((WORD)fgcolor->rgbRed * alpha + not_alpha * (WORD)bgcolor->rgbRed + 127)   / 255 );
+	blended->rgbGreen = (BYTE)( ((WORD)fgcolor->rgbGreen * alpha + not_alpha * (WORD)bgcolor->rgbGreen + 127) / 255) ;
+	blended->rgbBlue = (BYTE)(((WORD)fgcolor->rgbBlue * alpha + not_alpha * (WORD)bgcolor->rgbBlue + 127) / 255);
 	blended->rgbReserved = 0xFF;
 
 	return TRUE;

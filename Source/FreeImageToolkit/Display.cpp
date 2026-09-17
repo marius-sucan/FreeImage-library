@@ -166,10 +166,19 @@ FreeImage_Composite(FIBITMAP *fg, BOOL useFileBkg, RGBQUAD *appBkColor, FIBITMAP
 			}
 			else {
 				// output = alpha * foreground + (1-alpha) * background
+				//
+				// ~alpha is 255 - alpha, so the two weights sum to 255 - and the
+				// shift divided by 256, which left every blend one level dark.
+				// Compositing a colour over itself is the clean test, since the
+				// answer has to be that colour whatever the alpha: white over
+				// white came back 254 at all 254 intermediate alphas.  /255 with a
+				// rounding term is the form FreeImage_PreMultiplyWithAlpha fifty
+				// lines below already uses, and 255*255 + 127 still fits the
+				// promoted int the expression is evaluated in.
 				not_alpha = (BYTE)~alpha;
-				cp_bits[FI_RGBA_BLUE] = (BYTE)((alpha * (WORD)fgc.rgbBlue  + not_alpha * (WORD)bkc.rgbBlue) >> 8);
-				cp_bits[FI_RGBA_GREEN] = (BYTE)((alpha * (WORD)fgc.rgbGreen + not_alpha * (WORD)bkc.rgbGreen) >> 8);
-				cp_bits[FI_RGBA_RED] = (BYTE)((alpha * (WORD)fgc.rgbRed   + not_alpha * (WORD)bkc.rgbRed) >> 8);
+				cp_bits[FI_RGBA_BLUE] = (BYTE)((alpha * (WORD)fgc.rgbBlue  + not_alpha * (WORD)bkc.rgbBlue + 127) / 255);
+				cp_bits[FI_RGBA_GREEN] = (BYTE)((alpha * (WORD)fgc.rgbGreen + not_alpha * (WORD)bkc.rgbGreen + 127) / 255);
+				cp_bits[FI_RGBA_RED] = (BYTE)((alpha * (WORD)fgc.rgbRed   + not_alpha * (WORD)bkc.rgbRed + 127) / 255);
 			}
 
 			fg_bits += bytespp;
