@@ -260,6 +260,21 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	FREE_IMAGE_COLOR_TYPE color_type;
 	if (src_bpp <= 8) {
 		color_type = GetExtendedColorType(src, &bIsGreyscale);
+		if (src_bpp == 4) {
+			// A 4-bit source always has to have its palette handed to the filters.
+			// The 1-bit branches below can stand in for a missing one (the bit is
+			// black or white) and so can the 8-bit ones (the index is the grey
+			// level), but there is no such identity at 4 bpp: only the palette says
+			// what grey an index means.  GetExtendedColorType applies the 8-bit ramp
+			// test, pal[i].rgbBlue == i, to 4-bit palettes as well, so pal[i] =
+			// {i,i,i} - sixteen near-black greys - came back FIC_MINISBLACK,
+			// src_pal stayed NULL, and all six 4-bit branches dereferenced it under
+			// the comment "we always have got a palette for 4-bit images".  Every
+			// 4-bit palette that reaches FIC_MINISBLACK or FIC_MINISWHITE has that
+			// problem, so send them all down the palette path, which resolves the
+			// entries itself and needs no ramp assumption.
+			color_type = FIC_PALETTE;
+		}
 	} else {
 		color_type = FIC_RGB;
 	}
