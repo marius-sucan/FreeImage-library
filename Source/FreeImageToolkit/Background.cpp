@@ -825,11 +825,29 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 	int width = FreeImage_GetWidth(src);
 	int height = FreeImage_GetHeight(src);
 
+	// The new size is the image plus all four borders, so the sum is what has to
+	// be checked - not each border on its own, which is all the test below does.
+	// Every clause there is "< 0", so two large positive borders walked straight
+	// through it and wrapped width + left + right to a small positive number: the
+	// allocation succeeded at that size and the memcpy loop further down then
+	// wrote a full-width row into a bitmap a few pixels wide.  INT64 also makes
+	// the negations safe, which they are not in int, -INT_MIN being undefined.
+	const INT64 newWidth64  = (INT64)width  + (INT64)left + (INT64)right;
+	const INT64 newHeight64 = (INT64)height + (INT64)top  + (INT64)bottom;
+
+	if ((newWidth64 <= 0) || (newHeight64 <= 0) ||
+		(newWidth64 > INT_MAX) || (newHeight64 > INT_MAX)) {
+		return NULL;
+	}
+
 	// Relay on FreeImage_Copy, if all parameters left, top, right and
 	// bottom are smaller than or equal zero. The color pointer may be
 	// NULL in this case.
 	if ((left <= 0) && (right <= 0) && (top <= 0) && (bottom <= 0)) {
-		return FreeImage_Copy(src, -left, -top,	width + right, height + bottom);
+		// -left and -top are in range: all four borders are <= 0 here and the
+		// sums above are positive, so each one on its own is greater than -width
+		// or -height.
+		return FreeImage_Copy(src, (int)-(INT64)left, (int)-(INT64)top, width + right, height + bottom);
 	}
 
 	// From here, we need a valid color, since the image will be enlarged on
@@ -838,13 +856,13 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 		return NULL;
 	}
 
-	if (((left < 0) && (-left >= width)) || ((right < 0) && (-right >= width)) ||
-		((top < 0) && (-top >= height)) || ((bottom < 0) && (-bottom >= height))) {
+	if (((left < 0) && (-(INT64)left >= width)) || ((right < 0) && (-(INT64)right >= width)) ||
+		((top < 0) && (-(INT64)top >= height)) || ((bottom < 0) && (-(INT64)bottom >= height))) {
 		return NULL;
 	}
 
-	unsigned newWidth = width + left + right;
-	unsigned newHeight = height + top + bottom;
+	unsigned newWidth = (unsigned)newWidth64;
+	unsigned newHeight = (unsigned)newHeight64;
 
 	FREE_IMAGE_TYPE type = FreeImage_GetImageType(src);
 	unsigned bpp = FreeImage_GetBPP(src);
@@ -884,24 +902,28 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 
 	} else {
 
-		int bytespp = bpp / 8;
+		// the row offsets are products of a border and the pixel size, and a
+		// border is only bounded by the size checks above - which allow it up to
+		// INT_MAX.  In int, left * bytespp overflows well before the allocation
+		// that bounds it in practice would have failed.
+		const INT64 bytespp = bpp / 8;
 		BYTE *srcPtr = FreeImage_GetScanLine(src, height - 1 - ((top >= 0) ? 0 : -top));
 		BYTE *dstPtr = FreeImage_GetScanLine(dst, newHeight - 1 - ((top <= 0) ? 0 : top));
 
 		unsigned srcPitch = FreeImage_GetPitch(src);
 		unsigned dstPitch = FreeImage_GetPitch(dst);
 
-		int lineWidth = bytespp * (width + MIN(0, left) + MIN(0, right));
+		const INT64 lineWidth = bytespp * (width + MIN(0, left) + MIN(0, right));
 		int lines = height + MIN(0, top) + MIN(0, bottom);
 
 		if (left <= 0) {
-			srcPtr += (-left * bytespp);
+			srcPtr += (-(INT64)left * bytespp);
 		} else {
-			dstPtr += (left * bytespp);
+			dstPtr += ((INT64)left * bytespp);
 		}
 
 		for (int i = 0; i < lines; i++) {
-			memcpy(dstPtr, srcPtr, lineWidth);
+			memcpy(dstPtr, srcPtr, (size_t)lineWidth);
 			srcPtr -= srcPitch;
 			dstPtr -= dstPitch;
 		}
