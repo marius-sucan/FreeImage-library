@@ -307,6 +307,16 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 		dst_bpp_s1 = dst_bpp;
 	}
 
+	if (rawBits && (dst_bpp != src_bpp)) {
+		// FreeImage_RescaleRawBits has a single bpp parameter, and the caller sized
+		// dst_bits and dst_pitch for it.  The rules above may well have picked a
+		// different destination depth - a 16-bit FIT_BITMAP always promotes to 24,
+		// and so does a non-greyscale palette - and there is no way to tell the
+		// caller, so writing dst_bpp pixels into a buffer laid out for src_bpp would
+		// simply overrun it.  Refuse instead.
+		return NULL;
+	}
+
 	// early exit if destination size is equal to source size
 	if ((src_width == dst_width) && (src_height == dst_height)) {
 		FIBITMAP *out = src;

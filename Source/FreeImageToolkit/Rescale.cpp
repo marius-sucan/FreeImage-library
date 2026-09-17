@@ -101,9 +101,14 @@ FreeImage_Rescale(FIBITMAP *src, int dst_width, int dst_height, FREE_IMAGE_FILTE
 BOOL DLL_CALLCONV
 FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, int width, int height, int src_pitch, int dst_pitch, unsigned bpp, int dst_width, int dst_height, int src_left, int src_top, int src_right, int src_bottom, FREE_IMAGE_FILTER filter) {
    FIBITMAP *src = NULL;
+   if((src_pitch <= 0) || (dst_pitch <= 0)) {
+      // both are signed here but unsigned inside the library, where a negative
+      // value becomes a stride of billions
+      return FALSE;
+   }
    src = FreeImage_AllocateHeaderForBits(src_bits, src_pitch, type, width, height, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
    if(!src) {
-      return NULL;
+      return FALSE;
    }
 
    const int src_width = FreeImage_GetWidth(src);
@@ -111,7 +116,7 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
 
    if (!FreeImage_HasPixels(src) || (dst_width <= 0) || (dst_height <= 0) || (src_width <= 0) || (src_height <= 0)) {
       FreeImage_Unload(src);
-      return NULL;
+      return FALSE;
    }
 
    FIBITMAP *dst = NULL;
@@ -126,12 +131,12 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
    // check the size of the sub image
    if((src_left < 0) || (src_right > src_width) || (src_top < 0) || (src_bottom > src_height)) {
       FreeImage_Unload(src);
-      return 0;
+      return FALSE;
    }
    // an empty rectangle has no pixels to filter: see FreeImage_RescaleRect
    if((src_right <= src_left) || (src_bottom <= src_top)) {
       FreeImage_Unload(src);
-      return 0;
+      return FALSE;
    }
 
    // select the filter
@@ -159,16 +164,41 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
 
    if (!pFilter) {
       FreeImage_Unload(src);
-      return 0;
+      return FALSE;
    }
 
    CResizeEngine Engine(pFilter);
    dst = Engine.scale(src, dst_width, dst_height, src_left, src_top,
          src_right - src_left, src_bottom - src_top, 0, 1, dst_pitch, dst_bits);
 
-   FreeImage_Unload(dst);
    delete pFilter;
-   return 1;
+
+   if(!dst) {
+      // either the destination bit depth would have had to change, which this
+      // entry point cannot express, or the header allocation failed
+      FreeImage_Unload(src);
+      return FALSE;
+   }
+
+   BOOL bResult = TRUE;
+   if(FreeImage_GetBits(dst) != dst_bits) {
+      // scale() writes through the header it wrapped around dst_bits on the
+      // filtered path, but its early exit - when the source rectangle is already
+      // the destination size - returns a freshly allocated bitmap instead, which
+      // would leave dst_bits untouched
+      const unsigned line = FreeImage_GetLine(dst);
+      if((unsigned)dst_pitch >= line) {
+         for(unsigned y = 0; y < FreeImage_GetHeight(dst); y++) {
+            memcpy(dst_bits + (size_t)y * dst_pitch, FreeImage_GetScanLine(dst, y), line);
+         }
+      } else {
+         bResult = FALSE;
+      }
+   }
+
+   FreeImage_Unload(dst);
+   FreeImage_Unload(src);   // the header wrapped around src_bits, leaked until now
+   return bResult;
 }
 
 FIBITMAP * DLL_CALLCONV
