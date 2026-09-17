@@ -136,6 +136,26 @@ GetRGBAPalette(FIBITMAP *dib, RGBQUAD * const buffer) {
 	return buffer;
 }
 
+/**
+Returns the number of samples that make up one pixel of the given bitmap:
+1 for FIT_UINT16 and FIT_FLOAT, 3 for FIT_RGB16 and FIT_RGBF, 4 for FIT_RGBA16
+and FIT_RGBAF.
+
+The divisor has to be the width of the *image*.  FreeImage_GetLine() is the
+length of a whole source row, whereas the src_width and width parameters of the
+two filter methods are the width of the rectangle being rescaled, which
+FreeImage_RescaleRect lets the caller make narrower than the image.  Dividing by
+the rectangle overstates the sample count, and the result is used to step the
+destination pointer as well as the source one.
+@param dib A pointer to a FreeImage bitmap
+@param sample_size sizeof(WORD) or sizeof(float), according to the image type
+@return Returns the number of samples per pixel
+*/
+static inline INT64
+SamplesPerPixel(FIBITMAP *dib, size_t sample_size) {
+	return (INT64)((FreeImage_GetLine(dib) / FreeImage_GetWidth(dib)) / sample_size);
+}
+
 // --------------------------------------------------------------------------
 
 CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigned uSrcSize) {
@@ -1145,7 +1165,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       case FIT_UINT16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / src_width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
@@ -1179,7 +1199,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       case FIT_RGB16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / src_width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
@@ -1217,7 +1237,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       case FIT_RGBA16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / src_width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
@@ -1259,7 +1279,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       case FIT_RGBAF:
       {
          // Calculate the number of floats per pixel (1 for 32-bit, 3 for 96-bit or 4 for 128-bit)
-         const INT64 floatspp = (FreeImage_GetLine(src) / src_width) / sizeof(float);
+         const INT64 floatspp = SamplesPerPixel(src, sizeof(float));
          #pragma omp parallel for schedule(dynamic) default(shared)
          for(INT64 y = 0; y < height; y++) {
             // scale each row
@@ -1971,7 +1991,7 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       case FIT_UINT16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
 
          const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
          WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
@@ -2012,7 +2032,7 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       case FIT_RGB16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
 
          const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
          WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
@@ -2058,7 +2078,7 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       case FIT_RGBA16:
       {
          // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
+         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
 
          const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
          WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
@@ -2108,7 +2128,7 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       case FIT_RGBAF:
       {
          // Calculate the number of floats per pixel (1 for 32-bit, 3 for 96-bit or 4 for 128-bit)
-         const INT64 floatspp = (FreeImage_GetLine(src) / width) / sizeof(float);
+         const INT64 floatspp = SamplesPerPixel(src, sizeof(float));
 
          const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(float);
          float *const dst_base = (float *)FreeImage_GetBits(dst);
