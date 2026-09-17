@@ -38,6 +38,20 @@
 
 #define RBLOCK		64	// image blocks of RBLOCK*RBLOCK pixels
 
+/**
+Rounding bias for the sample type of a skew.
+
+The weighted value is computed in double and stored back as T, so half a unit
+makes that a round-to-nearest for the BYTE and WORD instantiations.  For the
+float one it is not rounding at all - it is an offset of 0.5 on data whose whole
+range is typically 0..1.  Most of it cancels in the running pxlLeft - pxlOldLeft
+difference, but not at the two ends of each row or column, where pxlOldLeft comes
+from the background and carries no bias: a uniform 0.125 FIT_FLOAT image rotated
+by 10 degrees over a black background came out spanning -0.83 .. +1.04.
+*/
+template <class T> struct SkewRounding { static double bias() { return 0.5; } };
+template <> struct SkewRounding<float> { static double bias() { return 0.0; } };
+
 // --------------------------------------------------------------------------
 
 /**
@@ -94,7 +108,7 @@ HorizontalSkewT(FIBITMAP *src, FIBITMAP *dst, int row, int iOffset, double weigh
 		AssignPixel((BYTE*)&pxlSrc[0], (BYTE*)src_bits, bytespp);
 		// calculate weights
 		for(INT64 j = 0; j < samples; j++) {
-			pxlLeft[j] = static_cast<T>(pxlBkg[j] + (pxlSrc[j] - pxlBkg[j]) * weight + 0.5);
+			pxlLeft[j] = static_cast<T>(pxlBkg[j] + (pxlSrc[j] - pxlBkg[j]) * weight + SkewRounding<T>::bias());
 		}
 		// check boundaries 
 		iXPos = i + iOffset;
@@ -231,7 +245,7 @@ VerticalSkewT(FIBITMAP *src, FIBITMAP *dst, int col, int iOffset, double weight,
 		AssignPixel((BYTE*)(&pxlSrc[0]), src_bits, bytespp);
 		// calculate weights
 		for(INT64 j = 0; j < samples; j++) {
-			pxlLeft[j] = static_cast<T>(pxlBkg[j] + (pxlSrc[j] - pxlBkg[j]) * weight + 0.5);
+			pxlLeft[j] = static_cast<T>(pxlBkg[j] + (pxlSrc[j] - pxlBkg[j]) * weight + SkewRounding<T>::bias());
 		}
 		// check boundaries
 		iYPos = i + iOffset;
