@@ -47,6 +47,7 @@ Changes:
 - added support for animated WebP files and example file;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
+- added APNG reading and writing (FIF_APNG=39, extensions apng/png) on the bundled LibPNG: animations open as multi-page bitmaps, `APNG_PLAYBACK` composites each frame the way `GIF_PLAYBACK` and `WEBP_PLAYBACK` do, and FreeImage_AppendPage()/InsertPage() write one. `FreeImage_GetFileType()` now answers FIF_APNG, not FIF_PNG, for a file carrying an acTL chunk;
 - updated LibRaw library to version 0.22.2, from 0.21.1;
 - updated LibJPEG library to version 10, from the 9d of January 2020;
 - updated LibTIFF library to version 4.7.2, from 4.6.0 release of September 2023;

@@ -315,6 +315,7 @@ copy Source\FreeImage.h Dist\x64
     <ClCompile Include="Source\FreeImage\J2KHelper.cpp" />
     <ClCompile Include="Source\FreeImage\MNGHelper.cpp" />
     <ClCompile Include="Source\FreeImage\Plugin.cpp" />
+    <ClCompile Include="Source\FreeImage\PluginAPNG.cpp" />
     <ClCompile Include="Source\FreeImage\PluginAVIF.cpp" />
     <ClCompile Include="Source\FreeImage\PluginHEIF.cpp" />
     <ClCompile Include="Source\FreeImage\PluginBMP.cpp" />

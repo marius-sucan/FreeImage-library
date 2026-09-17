@@ -273,6 +273,7 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <ClCompile Include="..\FreeImage\J2KHelper.cpp" />
     <ClCompile Include="..\FreeImage\MNGHelper.cpp" />
     <ClCompile Include="..\FreeImage\Plugin.cpp" />
+    <ClCompile Include="..\FreeImage\PluginAPNG.cpp" />
     <ClCompile Include="..\FreeImage\PluginAVIF.cpp" />
     <ClCompile Include="..\FreeImage\PluginHEIF.cpp" />
     <ClCompile Include="..\FreeImage\PluginBMP.cpp" />

@@ -142,5 +142,16 @@ void DLL_CALLCONV InitWEBP(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitJXR(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitAVIF(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitHEIF(Plugin *plugin, int format_id);
+void DLL_CALLCONV InitAPNG(Plugin *plugin, int format_id);
+
+// ==========================================================
+//   Shared between the PNG and the APNG plugins
+// ==========================================================
+
+/** Does this stream hold an *animated* PNG? Both plugins read the same signature,
+and the acTL chunk is the only thing that tells the two formats apart.
+@see PluginAPNG.cpp
+*/
+BOOL APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle);
 
 #endif //!PLUGIN_H

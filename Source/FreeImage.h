@@ -421,7 +421,8 @@ FI_ENUM(FREE_IMAGE_FORMAT) {
 	FIF_WEBP	= 35,
 	FIF_JXR		= 36,
 	FIF_AVIF	= 37,
-	FIF_HEIF	= 38
+	FIF_HEIF	= 38,
+	FIF_APNG	= 39
 };
 
 /** Image type used in FreeImage.
@@ -670,6 +671,8 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 
 #define FIF_LOAD_NOPIXELS 0x8000	//! loading: load the image header only (not supported by all plugins, default to full loading)
 
+#define APNG_DEFAULT		0
+#define APNG_PLAYBACK		2		//! 'Play' the APNG to generate each frame (as 32bpp) instead of returning raw frame data when loading
 #define BMP_DEFAULT         0
 #define BMP_SAVE_RLE        1
 #define CUT_DEFAULT         0

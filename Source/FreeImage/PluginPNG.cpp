@@ -29,6 +29,7 @@
 
 #include "FreeImage.h"
 #include "Utilities.h"
+#include "Plugin.h"
 
 #include "../Metadata/FreeImageTag.h"
 
@@ -274,9 +275,27 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	BYTE png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 	BYTE signature[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
+	const long start = io->tell_proc(handle);
+
 	io->read_proc(&signature, 1, 8, handle);
 
-	return (memcmp(png_signature, signature, 8) == 0);
+	if (memcmp(png_signature, signature, 8) != 0) {
+		return FALSE;
+	}
+
+	// An animated PNG is still a PNG, and this loader still reads one: it returns the
+	// default image, which is what any decoder that knows nothing of APNG shows. That
+	// is not the answer a caller asking FreeImage_GetFileType() what the file *is*
+	// wants, though, so leave those files to FIF_APNG, which can read every frame of
+	// them. FreeImage_Load(FIF_PNG, ...) is unaffected - it never asks.
+	if (start >= 0) {
+		io->seek_proc(handle, start, SEEK_SET);
+		if (APNG_IsAnimatedStream(io, handle)) {
+			return FALSE;
+		}
+	}
+
+	return TRUE;
 }
 
 static BOOL DLL_CALLCONV
