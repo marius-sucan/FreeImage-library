@@ -341,6 +341,12 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
    } else {
       dst = FreeImage_AllocateT(image_type, dst_width, dst_height, dst_bpp, 0, 0, 0);
    }
+   if (!dst) {
+      // Allocation failure is the expected outcome for the very large images this
+      // path exists for, and everything below writes through dst without testing it
+      // - GetPalette, the two filter methods and GetScanLine all take it as given.
+      return NULL;
+   }
 
 	if (dst_bpp == 8) {
 		RGBQUAD * const dst_pal = FreeImage_GetPalette(dst);
