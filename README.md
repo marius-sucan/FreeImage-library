@@ -38,6 +38,7 @@ Fixes:
 - fixed the G3 plugin hanging on a damaged fax file;
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went. Reading an n-frame file from beginning to end cost O(n^2);
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
+- and many other fixes
 
 Changes:
 - FillBackgroundBitmap() has a new optional parameter;
