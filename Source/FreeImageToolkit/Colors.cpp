@@ -700,6 +700,16 @@ FreeImage_ApplyColorMapping(FIBITMAP *dib, RGBQUAD *srccolors, RGBQUAD *dstcolor
 			unsigned size = FreeImage_GetColorsUsed(dib);
 			RGBQUAD *pal = FreeImage_GetPalette(dib);
 			RGBQUAD *a, *b;
+			// This branch used to increment result once per changed palette
+			// entry, while the documentation above - and the 16-, 24- and 32-bit
+			// branches below - say the return value is the number of pixels
+			// changed.  A hundred pixels all carrying one remapped index answered
+			// 1 where the 24-bit version of the same image answered 100, and
+			// nothing in the return value said which question had been answered.
+			// Remember which entries moved, then count the pixels that use one.
+			BYTE changed[256];
+			unsigned nchanged = 0;
+			memset(changed, 0, sizeof(changed));
 			for (unsigned x = 0; x < size; x++) {
 				for (unsigned j = 0; j < count; j++) {
 					a = srccolors;
@@ -709,12 +719,39 @@ FreeImage_ApplyColorMapping(FIBITMAP *dib, RGBQUAD *srccolors, RGBQUAD *dstcolor
 							pal[x].rgbBlue = b[j].rgbBlue;
 							pal[x].rgbGreen = b[j].rgbGreen;
 							pal[x].rgbRed = b[j].rgbRed;
-							result++;
+							changed[x] = 1;
+							nchanged++;
 							j = count;
 							break;
 						}
 						a = dstcolors;
 						b = srccolors;
+					}
+				}
+			}
+			if (nchanged > 0) {
+				const unsigned width = FreeImage_GetWidth(dib);
+				const unsigned height = FreeImage_GetHeight(dib);
+				for (unsigned y = 0; y < height; y++) {
+					const BYTE *bits = FreeImage_GetScanLine(dib, y);
+					if (bpp == 1) {
+						for (unsigned x = 0; x < width; x++) {
+							if (changed[(bits[x >> 3] & (0x80 >> (x & 0x07))) ? 1 : 0]) {
+								result++;
+							}
+						}
+					} else if (bpp == 4) {
+						for (unsigned x = 0; x < width; x++) {
+							if (changed[(x & 0x01) ? (bits[x >> 1] & 0x0F) : (bits[x >> 1] >> 4)]) {
+								result++;
+							}
+						}
+					} else {
+						for (unsigned x = 0; x < width; x++) {
+							if (changed[bits[x]]) {
+								result++;
+							}
+						}
 					}
 				}
 			}
