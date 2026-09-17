@@ -319,8 +319,11 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 		case 4: {
 			unsigned bytes = (width / 2);
 			memset(dst_bits, (index | (index << 4)), bytes);
-			//if (bytes % 2) {
-			if (bytes & 1) {
+			// a row ends on a half byte when the *width* is odd, not when the byte
+			// count is.  The two agree only for width % 4 == 3, so widths of 1, 5,
+			// 9 ... left their last pixel unfilled and widths of 2, 6, 10 ... wrote
+			// a nibble into the scanline padding instead.
+			if (width & 1) {
 				dst_bits[bytes] &= 0x0F;
 				dst_bits[bytes] |= (index << 4);
 			}
