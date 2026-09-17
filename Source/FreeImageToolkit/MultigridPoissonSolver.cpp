@@ -472,6 +472,17 @@ FIBITMAP* DLL_CALLCONV
 FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	if(!FreeImage_HasPixels(Laplacian)) return NULL;
 
+	// The solver works on the FIT_FLOAT square built below, and FreeImage_Paste
+	// refuses a source of any other type (CopyPaste.cpp:663-667).  That return
+	// value used to be dropped, so an 8- or 24-bit Laplacian left the square as
+	// FreeImage_AllocateT had zeroed it and the solver returned a plausible
+	// FIT_FLOAT image of exactly the right dimensions, derived from nothing and
+	// with no diagnostic.
+	if(FreeImage_GetImageType(Laplacian) != FIT_FLOAT) {
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_MultigridPoissonSolver: the Laplacian must be a FIT_FLOAT image");
+		return NULL;
+	}
+
 	int width = FreeImage_GetWidth(Laplacian);
 	int height = FreeImage_GetHeight(Laplacian);
 
@@ -495,14 +506,24 @@ FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	if(!I) return NULL;
 
 	// copy Laplacian into I and shift pixels to create a boundary
-	FreeImage_Paste(I, Laplacian, 1, 1, 255);
+	if(!FreeImage_Paste(I, Laplacian, 1, 1, 255)) {
+		FreeImage_Unload(I);
+		return NULL;
+	}
 
 	// solve the PDE equation
-	fmg_mglin(I, size, ncycle);
+	//
+	// fmg_mglin returns FALSE from its catch(int) when a grid allocation or the
+	// grid size check fails; running on regardless returned the unsolved square.
+	if(!fmg_mglin(I, size, ncycle)) {
+		FreeImage_Unload(I);
+		return NULL;
+	}
 
 	// shift pixels back
 	FIBITMAP *U = FreeImage_Copy(I, 1, 1, width + 1, height + 1);
 	FreeImage_Unload(I);
+	if(!U) return NULL;
 
 	// remap pixels to [0..1]
 	NormalizeY(U, 0, 1);
