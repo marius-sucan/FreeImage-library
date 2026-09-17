@@ -246,7 +246,15 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	
 	// Check for RGBA case if bitmap supports alpha 
 	// blending (8-bit greyscale, 24- or 32-bit images)
-	if (supports_alpha && applyAlpha == 0 && (options & FI_COLOR_IS_RGBA_COLOR)) {
+	//
+	// FI_COLOR_ALPHA_IS_INDEX excludes this: it says rgbReserved is a palette
+	// index, not an alpha value, and GetPaletteIndex below reads it that way.
+	// Blending anyway discarded the index and substituted the blend's own
+	// rgbReserved, which GetAlphaBlendedColor always sets to 0xFF - so
+	// FreeImage_AllocateEx(w, h, 8, &grey, FI_COLOR_IS_RGBA_COLOR), which sets
+	// both flags on its way here, filled with white whatever grey was asked for.
+	if (supports_alpha && applyAlpha == 0 && (options & FI_COLOR_IS_RGBA_COLOR)
+			&& !(options & FI_COLOR_ALPHA_IS_INDEX)) {
 		
 		if (color->rgbReserved == 0) {
 			// the fill color is fully transparent; we are done
@@ -610,7 +618,10 @@ FreeImage_AllocateExT(FREE_IMAGE_TYPE type, int width, int height, int bpp, cons
 				// 8-bit implies FIT_BITMAP so, get a RGBQUAD color
 				RGBQUAD *rgb = (RGBQUAD *)color;
 				RGBQUAD *pal = FreeImage_GetPalette(bitmap);
-				RGBQUAD rgbq;
+				// value-initialised, as in the 1- and 4-bit cases above: only
+				// rgbReserved is set below, and GetAlphaBlendedColor reads the
+				// other three if the caller asked for an RGBA fill
+				RGBQUAD rgbq = RGBQUAD();
 
 				if (palette != NULL) {
 					// clone the specified palette
