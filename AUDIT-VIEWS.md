@@ -1,8 +1,12 @@
 # Audit: do the toolkit functions work on `FreeImage_CreateView` results?
 
-Branch `qpv` @ `b0825f8`, audited 2026-09-17. **No source file was modified by this
-audit.** Companion to `AUDIT.md` (`Source/FreeImage/`) and `AUDIT-TOOLKIT.md`
-(`Source/FreeImageToolkit/`); neither of those looked at views.
+Branch `qpv` @ `b0825f8`, audited 2026-09-17 (`15ad866`). Companion to `AUDIT.md`
+(`Source/FreeImage/`) and `AUDIT-TOOLKIT.md` (`Source/FreeImageToolkit/`); neither of
+those looked at views.
+
+> **All three findings are fixed**, in `ab712b0`, `9aedd43` and `93dc31e`. The audit
+> itself changed no source file; see "The fixes" at the end for what changed, and for
+> the evidence that no pixel of an ordinary bitmap moved.
 
 ## The claim under test
 
@@ -31,8 +35,9 @@ That sentence is two promises, and they were tested separately:
 > its view**: every RESULT check passed, in all 3,330 cells.
 
 All three defects are **upstream** FreeImage 3.18.0; one of them (`FlipVertical`) was
-half-fixed on this branch in 2023 and the rest of it is still there. The three are
-findings 1, 2 and 3 below. Finding 4 is the design question behind them.
+half-fixed on this branch in 2023 and the rest of it was still there. The three are
+findings 1, 2 and 3 below. Finding 4 is the design question behind them, and the
+fixes answer it the way it recommends.
 
 | | |
 |---|---|
@@ -110,9 +115,10 @@ as long as those bits are never used and never written back, and in all three ca
 they are not: the pixels are then addressed individually. The line between the two is
 the whole of findings 1-3, so the CONTAIN check tracks writes only.
 
-**What the matrix did not run.** Every entry point was exercised with the view as its
-*primary* bitmap argument. Four shapes were settled by inspection rather than by a
-run: `FreeImage_Composite` with the view as the *background* (`bg`) rather than the
+**What the matrix did not run** *(at audit time — all four were added before the fixes
+went in, and all four pass; see "The fixes")*. Every entry point was exercised with
+the view as its *primary* bitmap argument. Four shapes were settled by inspection
+rather than by a run: `FreeImage_Composite` with the view as the *background* (`bg`) rather than the
 foreground, `FreeImage_SetChannel`/`SetComplexChannel` with the view as the *source*,
 `FreeImage_Paste` with a view on both sides at once, and `FreeImage_Paste`'s
 `alpha < 256` blending path. All four are per-row `FreeImage_GetScanLine` loops at
@@ -127,7 +133,7 @@ different matter and are covered by the ASan build, which is clean.
 
 ---
 
-# 1. `FreeImage_Invert` inverts the backing image's pixels past the view's right edge — CONFIRMED, upstream
+# 1. `FreeImage_Invert` inverts the backing image's pixels past the view's right edge — CONFIRMED, upstream  **Fixed in `ab712b0`.**
 
 `Source/FreeImageToolkit/Colors.cpp:76-84`:
 
@@ -174,7 +180,7 @@ nibble. 8 bpp and above are unaffected: `GetLine` is exact there.
 
 ---
 
-# 2. `FreeImage_FillBackground` replicates its first row over the backing image's pixels — CONFIRMED, upstream
+# 2. `FreeImage_FillBackground` replicates its first row over the backing image's pixels — CONFIRMED, upstream  **Fixed in `9aedd43`.**
 
 `Source/FreeImageToolkit/Background.cpp:376-387`:
 
@@ -229,7 +235,7 @@ scanline's 4-bit parity test and is fixed (`4065a7f`).
 
 ---
 
-# 3. `FreeImage_FlipVertical` still swaps the backing image's pixels — CONFIRMED, upstream, half-fixed locally
+# 3. `FreeImage_FlipVertical` still swaps the backing image's pixels — CONFIRMED, upstream, half-fixed locally  **Fixed in `93dc31e`.**
 
 `Source/FreeImageToolkit/Flip.cpp:160-167`:
 
@@ -373,6 +379,105 @@ out of this audit's scope.
 
 ---
 
+# The fixes
+
+Three commits, one per finding, on top of the audit (`15ad866`):
+
+| commit | finding | what changed |
+|---|---|---|
+| `ab712b0` | 1 | `Colors.cpp` `FreeImage_Invert`, plus the three helpers in `Source/Utilities.h` |
+| `9aedd43` | 2 | `Background.cpp` `FillBackgroundBitmap`'s row-replication loop |
+| `93dc31e` | 3 | `Flip.cpp` `FreeImage_FlipVertical`'s row swap |
+
+74 inserted lines and 5 deleted, over four files. The shape of all three is the same,
+and it is what finding 4 recommends: stop at the last byte a row wholly owns, then
+merge the pixels left over in the next one under a mask. `Source/Utilities.h` carries
+the rule, next to `CalculateLine()` whose rounding is what causes it:
+
+```cpp
+inline unsigned CalculateWholeRowBytes(const unsigned width, const unsigned bitdepth);
+inline BYTE     CalculateRowTailMask  (const unsigned width, const unsigned bitdepth);
+inline void     CopyRowPixels(BYTE *dst, const BYTE *src, unsigned width, unsigned bitdepth);
+```
+
+`CalculateRowTailMask` is 0 above 4 bpp, so `CopyRowPixels` degenerates to the plain
+`memcpy` those call sites already did, and nothing above 4 bpp changes at all. None of
+the three names existed anywhere in `Source/` beforehand.
+
+`FreeImage_Invert` does not use `CopyRowPixels` — it has no source row. It inverts the
+whole bytes with `~` as before and then the remaining pixels with `bits[whole] ^= tail`,
+since inverting bits under a mask is an XOR with it.
+
+## What the fixes were verified against
+
+**The view contract now holds without exception.** The matrix was first extended by the
+four call shapes this report had settled by inspection — `Composite` with the view as
+the *background*, `SetChannel` with the view as the *source*, `Paste` with a view on
+both sides, and `Paste`'s `alpha < 256` blending path — and its containment rule for
+PRODUCE tests was tightened from "no pixel outside the rectangle changed" to "no pixel
+of the backing image changed at all", since those functions only read their source.
+That makes it 41 call shapes × 18 pixel formats × 5 geometries = **3,690 cells**:
+
+| | before the fixes | after |
+|---|---|---|
+| rows failing CONTAIN | 30 | **0** |
+| rows failing RESULT | 0 | 0 |
+| cells that ran the function | 2,226 | 2,226 |
+| inert / n-a | 829 / 635 | 829 / 635 |
+| `./vw -selfcheck` | 0 failures | 0 failures |
+| ASan + UBSan reports | 0 | 0 |
+
+The 30 failures were all on the containment axis: those cells produced the *right*
+pixels inside the view and damaged the backing image on the way, so the count of
+cells that ran the function is the same on both sides.
+
+`-selfcheck` still passing after the fixes is the part that matters: it proves the
+detectors are still live, so "0 failing rows" means the defects are gone rather than
+the test having gone blind.
+
+Each finding's own reproduction:
+
+| | before | after |
+|---|---|---|
+| `Invert`, 1 bpp / 4 bpp | 12 / 4 pixels outside the view changed | **0 / 0** |
+| `FillBackground`, 1 bpp / 4 bpp | 6 / 3 | **0 / 0** |
+| `FlipVertical`, 1 bpp / 4 bpp | 12 / 4 | **0 / 0** |
+| `FlipVertical` as 3.18.0 writes it | 64 | 64 (unchanged — it is a simulation, not the library) |
+
+**No pixel of an ordinary bitmap moved.** The fixes change what those three functions
+leave in a row's *padding*, which matters because file writers emit it. `pad.c` runs
+all three over 5,400 ordinary-bitmap shapes — widths 1..40, heights 1/2/3/7/17, nine
+pixel formats — against a build with the fixes and a build without, and compares two
+signatures per case:
+
+```
+cases                                    : 5400
+PIXEL signatures changed (must be 0)     : 0
+byte signatures changed                  : 636
+  ...on a byte-aligned row (must be 0)   : 0
+  ...depths involved                     : ['1', '4']
+  ...operations involved                 : ['fill', 'flipv', 'invert']
+```
+
+Every byte-level difference is at 1 or 4 bpp, on a row that does not end on a byte
+boundary, in one of the three functions changed. Nothing else moves.
+
+**The toolkit regression matrix agrees.** `.claude/audit/toolkit/bench` hashes every
+`FreeImage_GetLine()` byte, padding included. 58 of its 2,281 cases move, and they are
+exactly `invert.*` (4), `fill.*` (45) and `flipv.*` (9) at 1 and 4 bpp on its 29×17
+images — a width that ends mid-byte at both depths. No other row moves. That shape is
+one of the 5,400 above, so its pixels are covered by the comparison. `baseline.txt` was
+regenerated; `.claude/audit/toolkit/README.md` records why.
+
+**The library still builds.** A full `make` from clean: exit 0, 0 errors, and the same
+49 warnings as before, none of them in the four changed files. `ClassicRotate.cpp` and
+`PluginHDR.cpp`, which carry warnings of their own and include `Utilities.h`, produce
+identical warning counts compiled against the old and the new header. `-Wall -Wextra`
+on the three changed sources: 0 warnings, before and after. The reproductions were
+re-run against `Dist/libfreeimage.a` from that build, not only against the audit trees.
+
+---
+
 # The rig
 
 `.claude/audit/views/`, untracked like the rest of `.claude/audit/`.
@@ -383,7 +488,10 @@ out of this audit's scope.
 | `vw.c -selfcheck` | injects each failure mode by hand and requires the detector to fire. **Run this before believing a clean matrix.** |
 | `repro.c` | the three findings as standalone before/after pixel dumps, plus 3.18.0's `FlipVertical` loop run against a view for comparison |
 | `build.sh` | builds `vw` against `.claude/audit/stock2`; `build.sh asan` also builds `vw_asan` against `.claude/audit/asan3` |
+| `pad.c` | 5,400 ordinary-bitmap shapes, a pixel-only and a byte-level signature each. Run against a build with and without the fixes: the pixel one must not move |
+| `rb.sh` | recompiles the named sources into both audit trees, verifies the archive member, and relinks every driver here plus the toolkit rig's `bench` |
 | `run-stock.txt`, `run-asan.txt` | the two runs behind the numbers above |
+| `prefix-run.txt`, `postfix-run.txt` | the 41-shape matrix either side of the fixes |
 
     cd .claude/audit/views
     ./build.sh asan
