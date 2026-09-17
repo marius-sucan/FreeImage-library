@@ -3,11 +3,12 @@
 Branch `qpv` @ `bb98084`, audited 2026-09-17. Scope: the 14 files in
 `Source/FreeImageToolkit/` (9,300 lines). **No files were modified by this audit.**
 
-Three passes, in this order and all on 2026-09-17: the audit itself (`38e5afb`); a
+Four passes, in this order and all on 2026-09-17: the audit itself (`38e5afb`); a
 fixing pass for the 26 findings it confirmed (`28287d1`..`9081915`, 25 of them fixed);
-and a second analysis pass over the 14 it had left unconfirmed, which reproduced ten
-of them and found one more. The second pass changed no source file either — see
-"Second pass".
+a second analysis pass over the 14 it had left unconfirmed, which changed no source
+file, reproduced ten of them and found one more (`e4dd2b8`); and a second fixing pass
+for those eleven (`a27b34e`..`5a763c7`, one commit each). See "Second pass" and
+"Second fixing pass".
 
 This is the companion to `AUDIT.md`, whose scope was the 75 files of
 `Source/FreeImage/` and which did not reach this directory.
@@ -41,11 +42,11 @@ Every entry is also marked **upstream** or **local**:
 `Filters.h` are clean); finding 40 is in `Source/Utilities.h` and is reported here
 because `ClassicRotate.cpp` is what reaches it.
 
-> **25 of the 37 confirmed findings are fixed**, in 25 commits
-> (`28287d1`..`9081915`). Each entry below carries the commit that fixed it. The other
-> twelve — finding 25 and the eleven the second pass confirmed — are open; see
-> "Second pass" below for the list, and "Fixing pass" for what the first round of
-> fixes was verified against.
+> **36 of the 37 confirmed findings are fixed**, in 36 commits — 25 in
+> `28287d1`..`9081915` and 11 in `a27b34e`..`5a763c7`. Each entry below carries the
+> commit that fixed it. The one exception is finding 25, a documented limitation
+> rather than a defect. Two further entries are open on purpose: 34, which no caller
+> can reach, and 37, which is undefined behaviour with nothing observable behind it.
 
 **37 are CONFIRMED**, each reproduced here — 26 by the first pass, 10 more by the
 second, plus one (41) the second pass found. **1 is confirmed undefined behaviour with
@@ -87,8 +88,9 @@ walks 32 bytes past the caller's buffer without anything noticing. The table is 
 | **Real, but no caller can reach it** | 34 the skew gap-fill loops have no destination bound |
 | **Not a defect** | 32 `getMemIO` and a NULL stream · 35 `CreateView`'s dead `left < 0` tests |
 
-The five I would fix first were findings 6, 1, 3, 4 and 8; all five are fixed. Of what
-the second pass leaves open, in the same order of priority:
+The five I would fix first were findings 6, 1, 3, 4 and 8; all five are fixed. So are
+the eleven the second pass added, in this order of priority — the commit for each is
+on its entry below:
 
 1. **30 (`Background.cpp:841-847`)** — `FreeImage_EnlargeCanvas` never tests the sum
    of its four borders. Two large positive ones wrap `width + left + right` to a small
@@ -107,7 +109,8 @@ the second pass leaves open, in the same order of priority:
    `FreeImage_RescaleRect` silently rescales the wrong columns whenever `left` is not a
    multiple of 8 (1 bpp) or is odd (4 bpp).
 
-Then 41 (the rotate hang), 28 (one word: `INT64 y_src, y_dst`), 38, 33, 39, 36, 37.
+Then 41 (the rotate hang), 28 (one word: `INT64 y_src, y_dst`), 38, 33, 39 and 36.
+Only 37 is left of those, and deliberately — see its entry.
 
 ### Findings by file
 
@@ -293,6 +296,66 @@ pass's sanitized build stayed quiet.
   `CWeightsTable`'s constructor, `FreeImage_Copy`'s prologue, `FreeImage_EnlargeCanvas`'s
   guard, `FreeImage_MakeThumbnail`'s head and `RotateAny`'s reduction loops are all
   byte-identical upstream. That is how finding 28's "local" label was overturned.
+
+## Second fixing pass
+
+*Added 2026-09-17, after the second analysis pass. Eleven commits, `a27b34e`..`5a763c7`
+on `qpv`, one per finding; each entry above carries its commit and each commit message
+carries the before/after measurement. Ten source files changed, all in this directory,
+plus `Resize.h`.*
+
+| finding | commit | what changed |
+|---|---|---|
+| 30 | `a27b34e` | `EnlargeCanvas` computes both new sizes in `INT64` and validates them before anything uses them; the per-side negations and the two row offsets move to `INT64` as well |
+| 26 | `2877e63` | `CWeightsTable` sizes its window in `double` and caps it at the source line, clamps `iLeft`/`iRight` before the narrowing conversion, `calloc`s the table, tests both allocations, and reports failure through a new `isValid()`; the two filter methods return `BOOL` and `scale()` acts on it |
+| 29 | `0c9b29b` | `Rotate8Bit` computes the pixel count in `size_t` and refuses one that would not fit the `long` arithmetic the rest of the file indexes with |
+| 31 | `281eba3` | the six stdio entry points truncate an in-place transform's `FILE*` to `ftell()`; the memory one sets `file_length` |
+| 27 | `cf6d13e` | both filters keep the sub-byte remainder of `src_offset_x` and add it to the sample index, at all eight sites |
+| 41 | `bf0c159` | `RotateAny` reduces the angle with `fmod` and rejects an infinity or a `NaN` |
+| 28 | `d14d5a5` | `FreeImage_Copy`'s 1- and 4-bit row offsets and loop counters are `INT64` |
+| 38 | `3f0e1dc` | `MakeThumbnail` clones at exactly `max_pixel_size` instead of rescaling, and the dead `== 0` line goes |
+| 33 | `422618c` | the Poisson solver checks its input type and all three of the results it was discarding |
+| 39 | `557d6f3` | `ApplyColorMapping` counts the pixels carrying a remapped index, which is what it documents |
+| 36 | `5a763c7` | both alpha blends divide by 255 with a rounding term |
+
+**Finding 37 is deliberately not fixed** — it is undefined behaviour with nothing
+observable behind it, no tool on this machine can even flag it, and hoisting the
+assignment inside `if (bg)` is a change with no measurable before and after. It stays
+on the list. So do 34 (unreachable) and 25 (a documented limitation).
+
+### How the fixes were verified
+
+* Every probe in `.claude/audit/toolkit/tk2.c` was run before its fix and after it, and
+  the before/after lines are quoted in the commit messages. All 22 now exit 0 with the
+  expected values: nothing crashes, nothing hangs, and the three probes that used to
+  segfault (26, 26b, 30) return a correct answer rather than merely surviving.
+* Four probes were added or sharpened to check *correctness* rather than absence of a
+  crash, because "it did not crash" is not the same claim:
+  * 26 and 26b fill the source half black and half white, so the one output pixel has
+    a right answer (127) rather than just an address;
+  * 36b drives all 256 foregrounds × 256 alphas against six backgrounds through
+    `FreeImage_Composite` and compares every one against
+    `(a*fg + (255-a)*bg + 127) / 255` computed in integer arithmetic — 345,534 of
+    393,216 triples were wrong before, 0 after;
+  * 39b rebuilds `bench.c`'s three palettised sources, counts by hand the pixels whose
+    palette entry `FreeImage_SwapColors` is about to change, and compares that with
+    what the function returns.
+* The 2,281-case matrix was re-run after every commit. **Nine of the eleven move no
+  row at all.** The two that do move exactly the rows they should:
+  * `557d6f3` (finding 39) moves four — `swapcol.n.1col`, `.4col`, `.8col`, `.8trn` —
+    and only the returned count, not a pixel or a palette entry;
+  * `5a763c7` (finding 36) moves eight — five `composite.*` and three `fill.*.rgba` —
+    and only the pixels, by at most two levels, towards the exact answer.
+  `baseline.txt` carries the twelve new values.
+* The whole matrix re-run under ASan + UBSan + LeakSanitizer produces **no sanitizer
+  output at all**, and is byte-identical to the plain build.
+* Every changed file was compiled with `-Wall -Wextra` against its pre-fix self: the
+  same warning classes in the same numbers, with nothing added. (`Resize.cpp` has to be
+  compared against its own `Resize.h`; against the new one the old `.cpp` does not
+  compile, which is not a warning result.)
+* All 91 translation units under `Source/FreeImage`, `Source/FreeImageToolkit` and
+  `Source/Metadata` still compile. Nothing outside this directory includes `Resize.h`
+  or names `CWeightsTable`, `horizontalFilter` or `verticalFilter`.
 
 ---
 
@@ -646,7 +709,7 @@ R: ConvertTo24Bits(src) row0 = 255 ...   0 (left half white, right half black)
 
 The 24-bit output is black where the source is white.
 
-## 26. `CWeightsTable` — unchecked allocations, and the window size overflows `int` — CONFIRMED (second pass), upstream
+## 26. `CWeightsTable` — unchecked allocations, and the window size overflows `int` — CONFIRMED (second pass), upstream  **Fixed in `2877e63`.**
 
 *The first pass filed this as BY INSPECTION, unable to make `malloc` fail. It does not
 need to fail on its own: an extreme minification overflows the `int` that sizes the
@@ -724,7 +787,7 @@ cannot express, clamp `iLeft`/`iRight` before the narrowing conversion, and test
 `malloc` results — which means the constructor needs a way to report failure, and
 `horizontalFilter`/`verticalFilter` need to act on it.
 
-## 27. Sub-byte horizontal offsets are silently truncated — CONFIRMED (second pass), upstream
+## 27. Sub-byte horizontal offsets are silently truncated — CONFIRMED (second pass), upstream  **Fixed in `cf6d13e`.**
 
 *The first pass filed this as BY INSPECTION. The probe that missed it asked for a
 destination the same size as the rectangle, which `scale()`'s early exit hands to
@@ -771,7 +834,7 @@ agrees — so this is silently wrong output, not corruption.
 sub-byte remainder into the sample index (`i + (src_offset_x & 7)` for 1-bit,
 `i + (src_offset_x & 1)` for 4-bit) rather than to drop it.
 
-## 38. `FreeImage_MakeThumbnail` — dead code, and a `<` that changes the pixel format — CONFIRMED (second pass), upstream
+## 38. `FreeImage_MakeThumbnail` — dead code, and a `<` that changes the pixel format — CONFIRMED (second pass), upstream  **Fixed in `3f0e1dc`.**
 
 *The first pass called both halves "noise that hides the intent". The dead test is.
 The `<` is not: at exactly `max_pixel_size` it sends a palettised or 16-bit image
@@ -1055,7 +1118,7 @@ exactly the check that `FreeImage_Copy` and `FreeImage_CreateView` were given in
 repository (`CopyPaste.cpp:559-568`, `:860-868`) with the comment "memcpy() may not be
 passed a NULL pointer, not even with a length of 0". The same reasoning applies here.
 
-## 30. `FreeImage_EnlargeCanvas` never checks the sum of its four borders — CONFIRMED (second pass), upstream
+## 30. `FreeImage_EnlargeCanvas` never checks the sum of its four borders — CONFIRMED (second pass), upstream  **Fixed in `a27b34e`.**
 
 *The first pass filed this as BY INSPECTION and concluded that
 `FreeImage_AllocateBitmap`'s `width < 0` check saves it. It saves the shrinking case
@@ -1175,7 +1238,7 @@ dark green. `FreeImage_Paste` returns TRUE. `Combine16_555` and `Combine16_565` 
 only `FreeImage_GetBPP(...) != 16` (`:241`, `:301`) and never look at the masks of
 either image.
 
-## 28. `FreeImage_Copy`'s 1-bit and 4-bit row offsets are still 32-bit — CONFIRMED (second pass), upstream, **incompletely fixed locally** (`0a8e25e`)
+## 28. `FreeImage_Copy`'s 1-bit and 4-bit row offsets are still 32-bit — CONFIRMED (second pass), upstream, **incompletely fixed locally** (`0a8e25e`)  **Fixed in `d14d5a5`.**
 
 *The first pass filed this as BY INSPECTION — "a 4 GiB 1-bit bitmap is 34
 gigapixels". It is, and this machine can hold one: 2147483647 × 17 at 1 bpp is
@@ -1399,7 +1462,7 @@ construction and every one of these casts is value-preserving. They are still wo
 tidying, because the commit set out to make the function 64-bit clean, but nothing can
 reach them.
 
-## 41. `RotateAny` reduces the angle by repeated subtraction, and hangs — CONFIRMED (second pass), upstream
+## 41. `RotateAny` reduces the angle by repeated subtraction, and hangs — CONFIRMED (second pass), upstream  **Fixed in `bf0c159`.**
 
 *New in the second pass; it turned up while checking what `Rotate45` can be handed.*
 
@@ -1517,7 +1580,7 @@ T: AdjustColors(0,0,1.0,FALSE) = 0 (nothing was wrong)
 T: AdjustColors(10,0,1.0,FALSE) = 1
 ```
 
-## 39. `FreeImage_ApplyColorMapping` counts palette entries, not pixels — CONFIRMED (second pass), upstream
+## 39. `FreeImage_ApplyColorMapping` counts palette entries, not pixels — CONFIRMED (second pass), upstream  **Fixed in `557d6f3`.**
 
 `Colors.cpp:700-725`, the 1/4/8-bit case, increments `result` (`:712`) once per changed
 *palette entry*. The documentation at `:673-674` and `:681` says "the total number of
@@ -1571,7 +1634,7 @@ falling off the end of the `if`, not by a check.
 
 # Display.cpp
 
-## 36. The alpha blends divide by 256, not 255 — CONFIRMED (second pass), upstream
+## 36. The alpha blends divide by 256, not 255 — CONFIRMED (second pass), upstream  **Fixed in `5a763c7`.**
 
 `Display.cpp:169-172` and `Background.cpp:196-201`:
 
@@ -1674,7 +1737,7 @@ error. The documentation (`:638`) says "Input dib (8, 24 or 32-bit)", which is e
 the ambiguity: it means 8/24/32-bit **FIT_BITMAP**. One
 `FreeImage_GetImageType(dib) != FIT_BITMAP` test at the top fixes all three.
 
-## 29. `malloc(width * height * sizeof(double))` overflows `int` — CONFIRMED (second pass), upstream
+## 29. `malloc(width * height * sizeof(double))` overflows `int` — CONFIRMED (second pass), upstream  **Fixed in `0c9b29b`.**
 
 *The first pass filed this as BY INSPECTION: "nothing on this machine could hold both
 it and the `double` array". It does not have to. The `double` array is what fails, and
@@ -1767,7 +1830,7 @@ to `IRHO[-1]` — and `fmg_solve` dereferences the result of
 in range. Rejecting `ng < 2` alongside the existing `ng > NGMAX` check at `:337` is
 enough. Reached from `FreeImage_TmoFattal02` as well as directly.
 
-## 33. The solver does not check its input type or any of its results — CONFIRMED (second pass), upstream
+## 33. The solver does not check its input type or any of its results — CONFIRMED (second pass), upstream  **Fixed in `422618c`.**
 
 `MultigridPoissonSolver.cpp:471-514`. `FreeImage_HasPixels` is the only validation;
 the function then builds a FIT_FLOAT square and calls
@@ -1798,7 +1861,7 @@ One `if` on the image type at the top, and three tested return values, is the fi
 
 # JPEGTransform.cpp
 
-## 31. An in-place transform never truncates the file — CONFIRMED (second pass), upstream
+## 31. An in-place transform never truncates the file — CONFIRMED (second pass), upstream  **Fixed in `281eba3`.**
 
 `JPEGTransform.cpp:333-335`:
 
