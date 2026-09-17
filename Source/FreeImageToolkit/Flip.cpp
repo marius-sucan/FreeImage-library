@@ -64,13 +64,21 @@ FreeImage_FlipHorizontal(FIBITMAP *src) {
 
 			case 4 :
 			{
-				for(unsigned c = 0; c < line; c++) {
-					bits[c] = new_bits[line - c - 1];
-
-					BYTE nibble = (bits[c] & 0xF0) >> 4;
-
-					bits[c] = bits[c] << 4;
-					bits[c] |= nibble;
+				// Reversing whole bytes and then swapping their nibbles only mirrors
+				// the row when it holds an even number of pixels.  With an odd width
+				// the last byte's low nibble is padding, and reversing brings it to
+				// the front: every pixel was displaced by one and the first was lost.
+				// Work in pixels, as the 1-bit case above does.
+				for(size_t x = 0; x < width; x++) {
+					// get pixel at (x, y) from the untouched copy
+					const BYTE value = (x & 1) ? (BYTE)(new_bits[x >> 1] & 0x0F) : (BYTE)(new_bits[x >> 1] >> 4);
+					// set pixel at (width - 1 - x, y)
+					const size_t new_x = width - 1 - x;
+					if (new_x & 1) {
+						bits[new_x >> 1] = (BYTE)((bits[new_x >> 1] & 0xF0) | value);
+					} else {
+						bits[new_x >> 1] = (BYTE)((bits[new_x >> 1] & 0x0F) | (value << 4));
+					}
 				}
 			}
 			break;
