@@ -1541,6 +1541,22 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
+	// What cannot be written is refused here, where there is still something to
+	// return FALSE to. The file itself is only assembled in Close(), which returns
+	// void - so a page accepted now and found impossible then would leave
+	// FreeImage_Save() answering TRUE over a file it would otherwise have removed.
+	// The test is the plugin's own: a lone page is written by the PNG writer, whose
+	// depths these are, and a page of an animation goes through ConvertTo32Bits(),
+	// which takes all of them.
+	{
+		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+		if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) ||
+		   ((image_type == FIT_BITMAP) && !SupportsExportDepth(FreeImage_GetBPP(dib)))) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+			return FALSE;
+		}
+	}
+
 	try {
 		// The first page is held rather than compressed: a lone one is written as the
 		// plain PNG it is, and it is the arrival of a second that turns the output

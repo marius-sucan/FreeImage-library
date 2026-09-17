@@ -657,6 +657,65 @@ out:
 	remove(one);
 }
 
+/* The file is only assembled in Close(), which cannot fail out loud, so anything
+   that cannot be written has to be refused by Save() while FreeImage_Save() is
+   still listening - otherwise it answers TRUE and leaves its output in place. */
+static void test_refusals(void) {
+	const char *path = scratch("apng_refuse.png");
+	const char *seed = scratch("apng_refuse_seed.png");
+	FIBITMAP *floats = FreeImage_AllocateT(FIT_FLOAT, 16, 16, 32, 0, 0, 0);
+	FIBITMAP *rgb16 = FreeImage_Allocate(16, 16, 16, FI16_565_RED_MASK, FI16_565_GREEN_MASK, FI16_565_BLUE_MASK);
+	FIBITMAP *header = NULL, *whole = make_frame(16, 16, 1, -1, 0, 255);
+	FILE *f;
+
+	/* the only way to a header-only bitmap through the public API */
+	if (whole && FreeImage_Save(FIF_PNG, whole, seed, 0)) {
+		header = FreeImage_Load(FIF_PNG, seed, FIF_LOAD_NOPIXELS);
+	}
+
+	printf("\n=== what cannot be written is refused, not half written\n");
+
+	if (floats && FreeImage_Save(FIF_APNG, floats, path, 0)) {
+		fail("saving an FIT_FLOAT image reported success");
+		remove(path);
+	} else if ((f = fopen(path, "rb")) != NULL) {
+		fclose(f);
+		fail("saving an FIT_FLOAT image left a file behind");
+		remove(path);
+	} else {
+		ok("an FIT_FLOAT image is refused and leaves no file");
+	}
+
+	if (rgb16 && FreeImage_Save(FIF_APNG, rgb16, path, 0)) {
+		fail("saving a 16-bit bitmap reported success, but the plugin does not export 16");
+		remove(path);
+	} else {
+		ok("a 16-bit bitmap is refused, as SupportsExportDepth says");
+	}
+
+	/* FreeImage_SaveToHandle stops a header-only image itself; this is the path
+	   that does not - the one FreeImage_SaveMultiBitmapToHandle takes */
+	if (!header || FreeImage_HasPixels(header)) {
+		fail("could not make a header-only bitmap to try");
+	} else {
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
+		if (mb) {
+			FreeImage_AppendPage(mb, header);
+			FreeImage_CloseMultiBitmap(mb, 0);
+			ok("a header-only page does not crash the writer");
+			remove(path);
+		} else {
+			fail("could not open a multi-bitmap to try the header-only page on");
+		}
+	}
+
+	if (floats) FreeImage_Unload(floats);
+	if (header) FreeImage_Unload(header);
+	if (whole) FreeImage_Unload(whole);
+	if (rgb16) FreeImage_Unload(rgb16);
+	remove(seed);
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -672,6 +731,7 @@ int main(void) {
 	test_mixed_depths();
 	test_transparency();
 	test_header_only();
+	test_refusals();
 	test_size();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);
