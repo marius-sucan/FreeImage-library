@@ -36,6 +36,13 @@ extern "C" {
 #include "Utilities.h"
 #include "FreeImageIO.h"
 
+// for the in-place truncation in truncateInPlaceStdIO() below
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 // ----------------------------------------------------------
 //   Source manager & Destination manager setup
 //   (see PluginJPEG.cpp)
@@ -381,6 +388,63 @@ closeStdIO(fi_handle src_handle, fi_handle dst_handle) {
 	}
 }
 
+/**
+Shorten an in-place transform's file to what was actually written.
+
+An in-place transform opens one FILE* in "r+b", seeks back to the start of the
+stream and writes the new image over the old one.  transfoptions.trim is always
+set, so a transform that cannot carry a partial edge MCU drops it and the result
+is shorter than what it replaced - and nothing here shortened the file, which
+kept its original size with the tail of the previous image left after EOI.
+Decoders stop at EOI so the image still loads, but the size is wrong and the
+tail is a fragment of the pre-transform entropy-coded data.
+
+Only a destination this file opened can be truncated.  A caller that hands the
+same handle to FreeImage_JPEGTransformFromHandle twice with its own FreeImageIO
+has to do this itself: FreeImageIO has no truncate operation to call.
+@param src_handle Source handle, as returned by openStdIO
+@param dst_handle Destination handle; nothing is done unless it is the source
+*/
+static void
+truncateInPlaceStdIO(fi_handle src_handle, fi_handle dst_handle) {
+	if(!dst_handle || (dst_handle != src_handle)) {
+		return;
+	}
+	FILE *f = (FILE*)dst_handle;
+	if(fflush(f) != 0) {
+		return;
+	}
+	const long end = ftell(f);
+	if(end < 0) {
+		return;
+	}
+#ifdef _WIN32
+	if(_chsize(_fileno(f), end) != 0) {
+#else
+	if(ftruncate(fileno(f), (off_t)end) != 0) {
+#endif
+		FreeImage_OutputMessageProc(FIF_JPEG, "Cannot truncate the transformed file");
+	}
+}
+
+/**
+The same for a memory stream, where the length is a field rather than a syscall.
+_MemoryWriteProc only ever grows file_length, so an in-place transform that
+produced fewer bytes left the tail of the old image readable past the new EOI.
+@param src_stream Source stream
+@param dst_stream Destination stream; nothing is done unless it is the source
+*/
+static void
+truncateInPlaceMemory(FIMEMORY* src_stream, FIMEMORY* dst_stream) {
+	if(!dst_stream || (dst_stream != src_stream) || !dst_stream->data) {
+		return;
+	}
+	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(dst_stream->data);
+	if(mem_header->current_position < mem_header->file_length) {
+		mem_header->file_length = mem_header->current_position;
+	}
+}
+
 static BOOL
 openStdIO(const char* src_file, const char* dst_file, FreeImageIO* dst_io, fi_handle* src_handle, fi_handle* dst_handle) {
 	*src_handle = NULL;
@@ -492,6 +556,9 @@ FreeImage_JPEGTransform(const char *src_file, const char *dst_file, FREE_IMAGE_J
 	
 	BOOL ret = JPEGTransformFromHandle(&io, src, &io, dst, operation, NULL, NULL, NULL, NULL, perfect);
 
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 
 	return ret;
@@ -509,6 +576,9 @@ FreeImage_JPEGCrop(const char *src_file, const char *dst_file, int left, int top
 	
 	BOOL ret = FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, FIJPEG_OP_NONE, &left, &top, &right, &bottom, FALSE);
 	
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 	
 	return ret;
@@ -526,6 +596,9 @@ FreeImage_JPEGTransformU(const wchar_t *src_file, const wchar_t *dst_file, FREE_
 	
 	BOOL ret = JPEGTransformFromHandle(&io, src, &io, dst, operation, NULL, NULL, NULL, NULL, perfect);
 	
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 
 	return ret;
@@ -543,6 +616,9 @@ FreeImage_JPEGCropU(const wchar_t *src_file, const wchar_t *dst_file, int left, 
 	
 	BOOL ret = FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, FIJPEG_OP_NONE, &left, &top, &right, &bottom, FALSE);
 
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 
 	return ret;
@@ -560,6 +636,9 @@ FreeImage_JPEGTransformCombined(const char *src_file, const char *dst_file, FREE
 	
 	BOOL ret = FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, operation, left, top, right, bottom, perfect);
 
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 
 	return ret;
@@ -577,6 +656,9 @@ FreeImage_JPEGTransformCombinedU(const wchar_t *src_file, const wchar_t *dst_fil
 	
 	BOOL ret = FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, operation, left, top, right, bottom, perfect);
 
+	if(ret) {
+		truncateInPlaceStdIO(src, dst);
+	}
 	closeStdIO(src, dst);
 
 	return ret;
@@ -618,6 +700,12 @@ FreeImage_JPEGTransformCombinedFromMemory(FIMEMORY* src_stream, FIMEMORY* dst_st
 		return FALSE;
 	}
 	
-	return FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, operation, left, top, right, bottom, perfect);
+	BOOL ret = FreeImage_JPEGTransformFromHandle(&io, src, &io, dst, operation, left, top, right, bottom, perfect);
+	
+	if(ret) {
+		truncateInPlaceMemory(src_stream, dst_stream);
+	}
+	
+	return ret;
 }
 
