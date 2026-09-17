@@ -3,6 +3,12 @@
 Branch `qpv` @ `bb98084`, audited 2026-09-17. Scope: the 14 files in
 `Source/FreeImageToolkit/` (9,300 lines). **No files were modified by this audit.**
 
+Three passes, in this order and all on 2026-09-17: the audit itself (`38e5afb`); a
+fixing pass for the 26 findings it confirmed (`28287d1`..`9081915`, 25 of them fixed);
+and a second analysis pass over the 14 it had left unconfirmed, which reproduced ten
+of them and found one more. The second pass changed no source file either — see
+"Second pass".
+
 This is the companion to `AUDIT.md`, whose scope was the 75 files of
 `Source/FreeImage/` and which did not reach this directory.
 
@@ -10,8 +16,13 @@ Confidence key:
 
 - **CONFIRMED** — made to happen here, with the sanitizer output or the printed
   pixels quoted in the entry.
-- **BY INSPECTION** — a defect in the text of the code that could not be driven from
-  the public API on this machine; the entry says what stands in the way.
+- **CONFIRMED (second pass)** — filed BY INSPECTION by the first pass and reproduced
+  by the second; the entry opens with a note saying what the first pass had missed.
+- **NOT REACHABLE** — a defect in the text of the code that no caller can drive; the
+  entry says how that was established, and by measurement rather than by argument.
+- **NOT A DEFECT** — looked wrong, is not; the entry says why.
+- **BY INSPECTION** — *no finding carries this any more.* All fourteen that did were
+  settled by the second pass; see "Second pass" below.
 
 Every entry is also marked **upstream** or **local**:
 
@@ -26,23 +37,31 @@ Every entry is also marked **upstream** or **local**:
 
 ## Summary
 
-**40 findings.** Twelve of the fourteen files carry at least one (`Resize.h` and
+**41 findings.** Twelve of the fourteen files carry at least one (`Resize.h` and
 `Filters.h` are clean); finding 40 is in `Source/Utilities.h` and is reported here
 because `ClassicRotate.cpp` is what reaches it.
 
-> **25 of the 26 confirmed findings are now fixed**, in 25 commits
-> (`28287d1`..`9081915`). Each entry below carries the commit that fixed it. The one
-> exception is finding 25, a documented limitation rather than a defect — see
-> "Fixing pass" below for why, and for what the fixes were verified against.
-**26 are CONFIRMED**, each reproduced here; 14 are BY INSPECTION.
-**36 are upstream 3.18.0 defects; 4 are local.**
+> **25 of the 37 confirmed findings are fixed**, in 25 commits
+> (`28287d1`..`9081915`). Each entry below carries the commit that fixed it. The other
+> twelve — finding 25 and the eleven the second pass confirmed — are open; see
+> "Second pass" below for the list, and "Fixing pass" for what the first round of
+> fixes was verified against.
 
-The four local ones are findings 3 and 4, both from `2bdea22`
-("added FreeImage_RescaleRawBits()"); finding 23, from `5112d61`
-("added parameter applyAlpha for FillBackgroundBitmap()"); and finding 28, an
-incomplete widening in `0a8e25e`. The OpenMP work (`eef30db`, `d4bb86c`, `0bc96b8`)
-produced **no** defect at all — see "What was checked and is correct" at the end,
-including a byte-for-byte thread-count sweep.
+**37 are CONFIRMED**, each reproduced here — 26 by the first pass, 10 more by the
+second, plus one (41) the second pass found. **1 is confirmed undefined behaviour with
+no observable failure** (37). **1 is a real defect that no caller can reach** (34).
+**2 are not defects** (32, 35). Nothing is left at BY INSPECTION.
+
+**37 are upstream 3.18.0 defects; 3 are local; 1 is upstream and was only half-fixed
+locally.**
+
+The three local ones are findings 3 and 4, both from `2bdea22`
+("added FreeImage_RescaleRawBits()"), and finding 23, from `5112d61`
+("added parameter applyAlpha for FillBackgroundBitmap()"). Finding 28 was filed as
+local and is not: 3.18.0 has the same defect one power of two earlier, and `0a8e25e`
+moved the wall from 2 GiB to 4 GiB without removing it. The OpenMP work (`eef30db`,
+`d4bb86c`, `0bc96b8`) produced **no** defect at all — see "What was checked and is
+correct" at the end, including a byte-for-byte thread-count sweep.
 
 The confirmed findings were re-run against a plain `-O2` build of the same sources as
 well as the sanitized one. **Five of them are hard crashes with no sanitizer
@@ -53,37 +72,42 @@ walks 32 bytes past the caller's buffer without anything noticing. The table is 
 
 | Class | Findings |
 |---|---|
-| **Heap buffer overflow, write** | 1 `wordspp`/`floatspp` use the rectangle width · 4b `RescaleRawBits` destination sized by the caller, bit depth chosen by the library · 5 multigrid `IRHO[-1]` |
-| **Heap buffer overflow, read** | 2 `CWeightsTable` `Weights[-1]` on an empty rectangle |
+| **Heap buffer overflow, write** | 1 `wordspp`/`floatspp` use the rectangle width · 4b `RescaleRawBits` destination sized by the caller, bit depth chosen by the library · 5 multigrid `IRHO[-1]` · **29** `malloc(0)` then 32 GiB of `double` in `Rotate8Bit` · **30** `EnlargeCanvas` writes a 30-byte row into an 8-pixel bitmap |
+| **Heap buffer overflow, read** | 2 `CWeightsTable` `Weights[-1]` on an empty rectangle · **26c** `Weights[INT_MAX]` when the window bounds overflow |
 | **Stack use after scope** | 6 `FillBackgroundBitmap`'s `blend` (8-, 24- and 32-bit) |
-| **Null-pointer write / crash** | 3 `scale()` no longer checks its own allocation · 7 4-bit identity palette |
+| **Null-pointer write / crash** | 3 `scale()` no longer checks its own allocation · 7 4-bit identity palette · **26a/b** `m_WindowSize` overflows `int`, `malloc` says no, the weight loop writes through the NULL |
 | **Memory leak** | 4a `RescaleRawBits` leaks its source header |
-| **Silently wrong output** | 8 verticalFilter's stray `*= 0xFF` · 9 16-bit 565 horizontal offset · 10 `FI_RESCALE_TRUE_COLOR` inverts MINISWHITE · 11 4-bit `FlipHorizontal` at odd widths · 12 `Combine4`/`Paste`/`EnlargeCanvas` at odd x · 13 `IsVisualGreyscaleImage` tests entry 0 only · 14 4-bit `FillBackground` misses the last column · 16 `RotateEx` mangles FIT_FLOAT/UINT32/INT32 · 17 the skew filters add 0.5 to float samples · 18 `Paste` 555→565 · 19 `Invert` destroys the alpha channel |
-| **Does nothing, reports success** | 15 `ApplyPaletteIndexMapping` on 1-bit, documented as supported · 22 `Set/GetComplexChannel` accept a channel they do not implement |
+| **Hang** | **41** `RotateAny` reduces the angle 360° at a time — forever at `\|angle\| >= 2^63` or ±inf |
+| **Silently wrong output** | 8 verticalFilter's stray `*= 0xFF` · 9 16-bit 565 horizontal offset · 10 `FI_RESCALE_TRUE_COLOR` inverts MINISWHITE · 11 4-bit `FlipHorizontal` at odd widths · 12 `Combine4`/`Paste`/`EnlargeCanvas` at odd x · 13 `IsVisualGreyscaleImage` tests entry 0 only · 14 4-bit `FillBackground` misses the last column · 16 `RotateEx` mangles FIT_FLOAT/UINT32/INT32 · 17 the skew filters add 0.5 to float samples · 18 `Paste` 555→565 · 19 `Invert` destroys the alpha channel · **27** `RescaleRect` drops sub-byte `left` at 1 and 4 bpp · **28** `FreeImage_Copy` takes the wrong rows past 4 GiB · **36** every alpha blend is one level dark |
+| **Does nothing, reports success** | 15 `ApplyPaletteIndexMapping` on 1-bit, documented as supported · 22 `Set/GetComplexChannel` accept a channel they do not implement · **33** the Poisson solver "solves" an equation it never received |
 | **Depths refused that the code could handle** | 25 `Rotate` on 4-bit, 16-bit and FIT_INT16, even at exact right angles |
-| **API / ABI** | 23 `FreeImage_FillBackground`'s new 4th parameter breaks the Delphi and VB6 wrappers · 24 `AllocateExT` uses a bitmap it has not checked |
-| **Undefined behaviour, portability** | 40 `AssignPixel`'s unaligned `WORD`/`DWORD` accesses · 29 `int` overflow in the B-spline allocation · 28 32-bit row offsets in 64-bit `FreeImage_Copy` · 36/37 null-pointer arithmetic and a /256 blend |
+| **API / ABI, documented behaviour** | 23 `FreeImage_FillBackground`'s new 4th parameter breaks the Delphi and VB6 wrappers · 24 `AllocateExT` uses a bitmap it has not checked · **38** `MakeThumbnail` changes the pixel format at exactly `max_pixel_size` · **39** `ApplyColorMapping` returns a palette-entry count where pixels are documented |
+| **Damaged output file** | **31** an in-place `JPEGTransform` leaves the tail of the old image after `EOI` |
+| **Undefined behaviour, portability** | 40 `AssignPixel`'s unaligned `WORD`/`DWORD` accesses · 37 null-pointer arithmetic in `Composite` (no observable failure) |
+| **Real, but no caller can reach it** | 34 the skew gap-fill loops have no destination bound |
+| **Not a defect** | 32 `getMemIO` and a NULL stream · 35 `CreateView`'s dead `left < 0` tests |
 
-The five I would fix first:
+The five I would fix first were findings 6, 1, 3, 4 and 8; all five are fixed. Of what
+the second pass leaves open, in the same order of priority:
 
-1. **6 (`Background.cpp:268`)** — `RGBQUAD blend` is declared inside an `if` block and
-   `color_intl = &blend` on the next line outlives it. Every `FreeImage_FillBackground`,
-   `FreeImage_AllocateEx(T)` and `FreeImage_EnlargeCanvas` call with
-   `FI_COLOR_IS_RGBA_COLOR` and a partly transparent colour reads a dead stack object.
-   Moving two declarations out of the block fixes it. Upstream, and it is the oldest
-   and most widely reachable of these.
-2. **1 (`Resize.cpp:1142`, `:1176`, `:1214`, `:1256`)** — `FreeImage_GetLine(src)` is
-   divided by the *rectangle* width, so every `FreeImage_RescaleRect` of a rectangle
-   narrower than the image writes past the end of the destination row for
-   FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF and FIT_RGBAF. One
-   substitution: use `FreeImage_GetWidth(src)`.
-3. **3 (`Resize.cpp:337`)** — restore the `if (!dst) return NULL;` that `2bdea22`
-   deleted. `FreeImage_Rescale(dib, 100000, 100000, …)` segfaults today.
-4. **4 (`Rescale.cpp:97`)** — `FreeImage_RescaleRawBits` leaks its source header on
-   every successful call, reports success when `scale()` failed, and lets `scale()`
-   pick a destination bit depth the caller never sized a buffer for.
-5. **8 (`Resize.cpp:1340`)** — one stray `value *= 0xFF` makes every vertical upscale
-   of a 1-bit image with a non-black/white palette saturate to 255.
+1. **30 (`Background.cpp:841-847`)** — `FreeImage_EnlargeCanvas` never tests the sum
+   of its four borders. Two large positive ones wrap `width + left + right` to a small
+   positive number, the allocation succeeds, and the copy loop writes a full-width row
+   into it. A plain `-O3` segfault on a public entry point, from four `int`s.
+2. **26 (`Resize.cpp:182`, `:187-191`, `:204`, `:232`)** — three compounding defects in
+   `CWeightsTable`'s constructor: the window size overflows `int`, neither allocation
+   is tested, and the window bounds overflow too. Two distinct segfaults from
+   `FreeImage_Rescale` on a 60 MB bitmap.
+3. **29 (`BSplineRotate.cpp:568`)** — `(size_t)width * height * sizeof(double)`. One
+   cast; today a 4-gigapixel 8-bit image gets `malloc(0)` and 32 GiB of writes.
+4. **31 (`JPEGTransform.cpp:333`)** — an in-place `FreeImage_JPEGTransform` leaves 38
+   to 53 bytes of the previous image after `EOI` and reports success. It is the only
+   finding here that damages a file on disk.
+5. **27 (`Resize.cpp:585`, `:644`, `:715`, `:761`, `:792`, `:830`, `:1368`, `:1566`)** —
+   `FreeImage_RescaleRect` silently rescales the wrong columns whenever `left` is not a
+   multiple of 8 (1 bpp) or is odd (4 bpp).
+
+Then 41 (the rotate hang), 28 (one word: `INT64 y_src, y_dst`), 38, 33, 39, 36, 37.
 
 ### Findings by file
 
@@ -93,7 +117,7 @@ The five I would fix first:
 | `Rescale.cpp` | 260 | 4, 38 |
 | `Background.cpp` | 900 | 6, 13, 14, 21, 23, 24, 30 |
 | `CopyPaste.cpp` | 887 | 12, 18, 28, 35 |
-| `ClassicRotate.cpp` | 916 | 17, 25, 34, 40 |
+| `ClassicRotate.cpp` | 916 | 17, 25, 34, 40, 41 |
 | `Colors.cpp` | 967 | 15, 19, 20, 39 |
 | `BSplineRotate.cpp` | 730 | 16, 29 |
 | `MultigridPoissonSolver.cpp` | 505 | 5, 33 |
@@ -111,7 +135,7 @@ that is the file that reaches it and the file a fix would have to be tested agai
 
 *Added 2026-09-17, after the report above was written and pushed as `38e5afb`.*
 
-**25 of the 26 confirmed findings are fixed**, in 25 commits — one per finding,
+**25 of the 26 findings the first pass confirmed are fixed**, in 25 commits — one per finding,
 `28287d1`..`9081915` on `qpv`. Each heading below carries the commit that fixed it, and
 each commit message carries the before/after measurement. Eleven source files changed —
 ten of the fourteen in this directory (`Resize.cpp`, `Rescale.cpp`, `Background.cpp`,
@@ -119,9 +143,10 @@ ten of the fourteen in this directory (`Resize.cpp`, `Rescale.cpp`, `Background.
 `ClassicRotate.cpp`, `MultigridPoissonSolver.cpp`) plus `Source/Utilities.h` — and four
 language wrappers.
 
-The 14 **BY INSPECTION** findings are not touched: they were the ones that could not be
-driven from the public API here, so there is nothing to measure a fix against. They keep
-their entries below.
+The 14 **BY INSPECTION** findings were not touched by this pass: they were the ones
+that could not be driven from the public API here, so there was nothing to measure a
+fix against. *That premise did not survive — see "Second pass" below, which reproduced
+ten of them. None of the ten is fixed yet.*
 
 **Finding 25 was deliberately not fixed.** `FreeImage_Rotate` refuses 4-bit and 16-bit
 images, and that is what its own documentation says it does — "Rotates a 1-, 8-, 24- or
@@ -186,6 +211,88 @@ in the commit that fixes it:
   `Source/FreeImageLib` still compile after the `Utilities.h` change.
 * `AssignPixel`'s constant-size `memcpy` costs nothing: `objdump` of the rebuilt `-O3`
   `ClassicRotate.o` contains no call to `memcpy` at all.
+
+## Second pass
+
+*Added 2026-09-17, after the fixing pass. Scope: the fourteen findings the first pass
+left at BY INSPECTION. No source file was modified. Nothing else in the report was
+re-examined, except where a second-pass result contradicted it.*
+
+The first pass wrote that those fourteen "could not be driven from the public API on
+this machine". **Ten of them can.** Of the rest, one is undefined behaviour with
+nothing observable behind it, one is a real defect that no caller can reach, and two
+are not defects. One further defect turned up while checking what `Rotate45` can be
+handed, and is filed as finding 41.
+
+| # | file | first pass | second pass |
+|---|---|---|---|
+| 26 | `Resize.cpp` | allocations unchecked | **CONFIRMED** — two segfaults; the window size and the window bounds both overflow `int` first |
+| 27 | `Resize.cpp` | sub-byte `left` truncated | **CONFIRMED** — wrong columns at 1 and 4 bpp, valid bitmap returned |
+| 28 | `CopyPaste.cpp` | 32-bit row offsets | **CONFIRMED** — a real 4.25 GiB 1-bit bitmap; row 16 gets row 0. Also **re-attributed**: upstream, not local |
+| 29 | `BSplineRotate.cpp` | `int` overflow | **CONFIRMED** — `malloc(0)`, then an ASan heap-buffer-overflow on the first write |
+| 30 | `Background.cpp` | non-positive size | **CONFIRMED** — segfault; the first pass checked the shrinking direction only |
+| 31 | `JPEGTransform.cpp` | no truncation | **CONFIRMED** — 38 to 53 stale bytes after `EOI`, TRUE returned |
+| 32 | `JPEGTransform.cpp` | NULL `src_stream` | **NOT A DEFECT** — every memory I/O proc guards its handle |
+| 33 | `MultigridPoissonSolver.cpp` | no input check | **CONFIRMED** — an 8-bit Laplacian yields a non-NULL all-zero "solution" |
+| 34 | `ClassicRotate.cpp` | gap fill unbounded | **NOT REACHABLE** — 33.6 M instrumented skews, worst ratio 0.9907, zero overruns |
+| 35 | `CopyPaste.cpp` | dead `left < 0` | **NOT A DEFECT** — dead, and nothing hides behind it |
+| 36 | `Display.cpp` | /256 not /255 | **CONFIRMED** — white over white is 254 at all 254 intermediate alphas |
+| 37 | `Display.cpp` | NULL pointer arithmetic | **CONFIRMED UB, nothing observable** — and no sanitizer on this machine can flag it |
+| 38 | `Rescale.cpp` | dead code, `<` vs `<=` | **CONFIRMED** — the `<` changes the pixel format of palettised and 16-bit sources |
+| 39 | `Colors.cpp` | counts palette entries | **CONFIRMED** — returns 1 where the 24-bit path returns 100 |
+| 41 | `ClassicRotate.cpp` | *(new)* | **CONFIRMED** — `FreeImage_Rotate` never returns for `\|angle\| >= 2^63` or ±inf |
+
+### What the first pass was missing
+
+Five of the ten — 31, 33, 36, 38 and 39 — needed nothing but a probe; they are wrong
+answers from ordinary calls on small images, and the first pass simply reasoned about
+them instead of running them. The other five each turned on one idea:
+
+* **Make the arithmetic fail, not the machine.** Findings 26 and 29 were filed as
+  needing more memory than this machine has. Both are integer overflows: 26 wraps
+  `m_WindowSize` so that `malloc` is *asked* for 22 GB and refuses, and 29 wraps
+  `width * height` to exactly 0 so that `malloc` succeeds with one byte. Neither needs
+  a large allocation to *succeed* — the largest bitmap either one needs is 60 MB (26)
+  or a 4 GB destination (29).
+* **Address space is not memory.** Finding 28 needs a >4 GiB stride, not >4 GiB of
+  pixels. `mmap(MAP_NORESERVE)` plus `FreeImage_AllocateHeaderForBits` gives it for a
+  few pages, and once the mechanism was visible the 4.25 GiB public-API version was
+  worth running too — peak RSS 4.46 GB, which this machine does have.
+* **Check that the probe reaches the code.** Finding 27's first probe asked for a
+  destination the same size as the rectangle, which `scale()` hands to
+  `FreeImage_Copy` before any filter runs. One different number in the call and the
+  defect is plain. (The same probe also used `FreeImage_Allocate`'s default 1-bit
+  palette, which is all black, so every output pixel was 0 whatever the bug.)
+* **Test the other direction.** Finding 30's guard is four `left < 0` clauses; the
+  first pass tested negative borders, found NULL and stopped. Positive borders walk
+  through it.
+
+For 34 the answer was to measure rather than to argue: the two gap-fill loops were
+instrumented in a scratch build and driven through 201,684 rotations. For 37 the
+answer was to check the tool rather than the code — GCC 15's
+`-fsanitize=pointer-overflow` does not diagnose `NULL + n`, which is why the first
+pass's sanitized build stayed quiet.
+
+### How the second pass was verified
+
+* `.claude/audit/toolkit/tk2.c` — 20 probes, one or more per finding, built against
+  both trees by `.claude/audit/toolkit/build2.sh` (`tk2_stock`; `build2.sh asan` adds
+  `tk2_asan`). Every quoted line above is that program's output.
+* Each crash was reproduced on the plain `-O3` build first and then re-run under
+  ASan + UBSan for the line number. Findings 26, 29 and 30 are segfaults with no
+  sanitizer involved; 28, 27, 31, 33, 36, 38 and 39 are wrong answers, and the whole
+  probe set is clean under ASan + UBSan + LeakSanitizer.
+* `sweep34.c` + `mk34.py` + `build34.sh` — `build34.sh` makes `s34/`, a scratch copy of
+  the stock tree with the four skew gap-fill loops instrumented, and links `sweep34`:
+  196 image shapes × 1,029 angles between −360° and +360°, with and without a
+  `bkcolor`. `s34/` was deleted afterwards; the script rebuilds it in a minute.
+* The 2,281-case regression matrix was re-run afterwards against the untouched trees:
+  `common 2281  differing 0  added 0  removed 0`. The second pass changed no source
+  and no build tree.
+* Attribution was re-checked against 3.18.0 (`6712d75`) for every entry it names:
+  `CWeightsTable`'s constructor, `FreeImage_Copy`'s prologue, `FreeImage_EnlargeCanvas`'s
+  guard, `FreeImage_MakeThumbnail`'s head and `RotateAny`'s reduction loops are all
+  byte-identical upstream. That is how finding 28's "local" label was overturned.
 
 ---
 
@@ -539,52 +646,173 @@ R: ConvertTo24Bits(src) row0 = 255 ...   0 (left half white, right half black)
 
 The 24-bit output is black where the source is white.
 
-## 26. `CWeightsTable`'s two allocations are unchecked — BY INSPECTION, upstream
+## 26. `CWeightsTable` — unchecked allocations, and the window size overflows `int` — CONFIRMED (second pass), upstream
 
-`Resize.cpp:167-171`:
+*The first pass filed this as BY INSPECTION, unable to make `malloc` fail. It does not
+need to fail on its own: an extreme minification overflows the `int` that sizes the
+window, and the wrapped value asks for tens of gigabytes. Two segfaults, both from
+`FreeImage_Rescale` on a bitmap this machine allocates without trouble.*
+
+`Resize.cpp:182-191`:
 
 ```cpp
+m_WindowSize = 2 * (int)ceil(dWidth) + 1;
+m_LineLength = uDstSize;
+
 m_WeightTable = (Contribution*)malloc(m_LineLength * sizeof(Contribution));
 for(unsigned u = 0; u < m_LineLength; u++) {
     m_WeightTable[u].Weights = (double*)malloc(m_WindowSize * sizeof(double));
 }
 ```
 
-Neither result is tested, and the constructor has no way to report failure. For a
-minifying Lanczos3 pass `m_WindowSize` is `2*ceil(3/dScale)+1`, so a 1×1 destination
-from a large source asks for a window as wide as the source — the allocation sizes are
-driven by the caller's ratio, not by a constant. The destructor `free()`s the same
-pointers, so a partial construction also corrupts the heap. Not reproduced here: on
-this machine the sizes needed to fail the allocation are also large enough that the
-source bitmap cannot be allocated first.
+`dWidth` is `dFilterWidth / dScale`, so for a Lanczos3 minification it is
+`3 * src_width / dst_width` — driven entirely by the caller's ratio. There are three
+defects on those ten lines, and they compound:
 
-## 27. Sub-byte horizontal offsets are silently truncated — BY INSPECTION, upstream
+**26a — `m_WindowSize` overflows `int`.** `2 * (int)ceil(dWidth) + 1` is evaluated in
+`int` and then stored in an `unsigned`. For `ceil(dWidth)` between 2^30 and 2^31 the
+product wraps and the field ends up near 3 × 10^9, so each `Weights` row asks for
+about 24 GB.
 
-`horizontalFilter` does `src_offset_x >>= 3` for 1-bit (`Resize.cpp:527`, `:586`,
-`:657`) and `>>= 1` for 4-bit (`:703`, `:734`, `:772`); `verticalFilter` does
-`+ (src_offset_x >> 3)` (`:1310`) and `+ (src_offset_x >> 1)` (`:1506`) and then
-indexes the source by the *destination* column `x`, not by `src_offset_x + x`. The
-remainder is lost in every case, so `FreeImage_RescaleRect` on a 1-bit image with
-`left` not a multiple of 8, or a 4-bit image with an odd `left`, samples the wrong
-columns. `FreeImage_CreateView` documents exactly this restriction and rejects such
-offsets (`CopyPaste.cpp:783-785`, `:819-832`); `FreeImage_RescaleRect` does not.
+**26b — neither allocation is tested.** `malloc` returns NULL and the weight loop
+writes through it. A 500,000,000 × 1 1-bit image — 59.6 MB, allocated without
+complaint — rescaled to 1 × 1 with Lanczos3:
 
-## 38. `FreeImage_MakeThumbnail` — dead code, and `<` where `<=` is meant — BY INSPECTION, upstream
+```
+26: src 1bpp 500000000x1 pitch=62500000 (59.6 MB)
+26: dWidth = 3*500000000/1 = 1500000000 ; 2*(int)ceil(dWidth)+1 = 3000000001 as unsigned
+26: so malloc(m_WindowSize * 8) asks for 22.4 GB
+Source/FreeImageToolkit/Resize.cpp:182:19: runtime error: signed integer overflow: 1500000000 * 2 cannot be represented in type 'int'
+Source/FreeImageToolkit/Resize.cpp:214:41: runtime error: store to null pointer of type 'double'
+==1660901==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000000
+==1660901==The signal is caused by a WRITE memory access.
+    #0 CWeightsTable::CWeightsTable(...) Source/FreeImageToolkit/Resize.cpp:214
+    #1 CResizeEngine::horizontalFilter(...) Source/FreeImageToolkit/Resize.cpp:572
+    #2 CResizeEngine::scale(...) Source/FreeImageToolkit/Resize.cpp:467
+    #3 FreeImage_RescaleRect Source/FreeImageToolkit/Rescale.cpp:83
+    #4 FreeImage_Rescale Source/FreeImageToolkit/Rescale.cpp:98
+```
 
-`Rescale.cpp:169-176`:
+**26c — the window bounds overflow `int` too.** Push the ratio a little further and
+`(int)(dCenter + dWidth + 0.5)` at `:204` overflows as well. The conversion yields
+`INT_MIN`, `iRight` becomes `INT_MIN`, and `iTrailing = iRight - iLeft - 1` at `:232`
+wraps the other way to `INT_MAX`. The trailing-zero trim then reads
+`Weights[2147483647]`. On an 800,000,000 × 1 source (95.4 MB) — this is probe `26b`,
+which is why its output says so:
+
+```
+26b: (int)ceil(3*W) = -2147483648 -> m_WindowSize = 1, Weights = malloc(8)
+26b: iRight = MIN((int)(3.5*W), W) = MIN(-2147483648, 800000000) ; iTrailing = 2147483647
+Source/FreeImageToolkit/Resize.cpp:232:8: runtime error: signed integer overflow: -2147483648 - 1
+==1660906==ERROR: AddressSanitizer: SEGV on unknown address 0x762ed5be00e8
+==1660906==The signal is caused by a READ memory access.
+    #0 CWeightsTable::CWeightsTable(...) Source/FreeImageToolkit/Resize.cpp:233
+```
+
+The `iTrailing >= 0` guard added by `71aa1b2` (finding 2) is not what lets this
+happen — `iTrailing` really is positive, because it wrapped. The 3.18.0 text reads
+`Weights[iTrailing]` unconditionally at the same value, so both crashes are upstream;
+the constructor is byte-identical in `6712d75` apart from that guard.
+
+The thresholds, for a Lanczos3 minification to one pixel: `src_width` above
+357,913,941 (3·src > 2^30) reaches 26a, and above 613,566,757 (3.5·src > 2^31)
+reaches 26c. At 1 bpp those are a 45 MB and a 77 MB image. `FreeImage_RescaleRect`
+reaches them with the same ratio inside a rectangle.
+
+A fix has to do all three: compute the window in a 64-bit type and refuse a ratio it
+cannot express, clamp `iLeft`/`iRight` before the narrowing conversion, and test both
+`malloc` results — which means the constructor needs a way to report failure, and
+`horizontalFilter`/`verticalFilter` need to act on it.
+
+## 27. Sub-byte horizontal offsets are silently truncated — CONFIRMED (second pass), upstream
+
+*The first pass filed this as BY INSPECTION. The probe that missed it asked for a
+destination the same size as the rectangle, which `scale()`'s early exit hands to
+`FreeImage_Copy` — and `FreeImage_Copy` gets the sub-byte offset right. Make the
+destination a different width and the filter runs.*
+
+`horizontalFilter` does `src_offset_x >>= 3` for 1-bit (`Resize.cpp:585`, `:644`,
+`:715`) and `>>= 1` for 4-bit (`:761`, `:792`, `:830`); `verticalFilter` does
+`+ (src_offset_x >> 3)` (`:1368`) and `+ (src_offset_x >> 1)` (`:1566`) and then
+indexes the source by the *rectangle* column `i`, not by `src_offset_x + i`. The
+remainder is lost in every case.
+
+A 32 × 1 1-bit image with one lit pixel at column 8, an 8-wide rectangle doubled to
+16 output columns:
+
+```
+27: 1bpp pixel at col 8, rect [ 4,12) x2 -> ................  first lit col -1, expected 8
+27: 1bpp pixel at col 8, rect [ 6,14) x2 -> ................  first lit col -1, expected 4
+27: 1bpp pixel at col 8, rect [ 8,16) x2 -> ##..............  first lit col  0, expected 0
+27: 1bpp pixel at col 8, rect [10,18) x2 -> ##..............  first lit col  0, expected -4
+```
+
+Only the byte-aligned `left = 8` is right. `left = 4` and `left = 6` both truncate to
+byte 0 and rescale `[0,8)`, which has no lit pixel at all; `left = 10` truncates to
+byte 1 and rescales `[8,16)`, showing a pixel that is *outside* the rectangle the
+caller asked for.
+
+4-bit is the same at odd offsets — a 0..15 index ramp, a 4-wide rectangle doubled:
+
+```
+27: 4bpp ramp, rect [0,4) x2 ->    0   0  17  17  34  34  51  51   (expected   0   0  17  17  34  34  51  51)
+27: 4bpp ramp, rect [1,5) x2 ->    0   0  17  17  34  34  51  51   (expected  17  17  34  34  51  51  68  68)
+27: 4bpp ramp, rect [2,6) x2 ->   34  34  51  51  68  68  85  85   (expected  34  34  51  51  68  68  85  85)
+27: 4bpp ramp, rect [3,7) x2 ->   34  34  51  51  68  68  85  85   (expected  51  51  68  68  85  85 102 102)
+```
+
+`left = 1` returns `left = 0`'s pixels and `left = 3` returns `left = 2`'s.
+`FreeImage_RescaleRect` returns a valid bitmap in every case. Nothing reads out of
+bounds — `(left>>3) + (width-1)/8 <= (right-1)/8` stays inside the row, and ASan
+agrees — so this is silently wrong output, not corruption.
+
+`FreeImage_CreateView` documents exactly this restriction and rejects such offsets
+(`CopyPaste.cpp:812-832`); `FreeImage_RescaleRect` does not. The fix is to carry the
+sub-byte remainder into the sample index (`i + (src_offset_x & 7)` for 1-bit,
+`i + (src_offset_x & 1)` for 4-bit) rather than to drop it.
+
+## 38. `FreeImage_MakeThumbnail` — dead code, and a `<` that changes the pixel format — CONFIRMED (second pass), upstream
+
+*The first pass called both halves "noise that hides the intent". The dead test is.
+The `<` is not: at exactly `max_pixel_size` it sends a palettised or 16-bit image
+through the rescaler, which promotes it to 8 or 24 bpp.*
+
+`Rescale.cpp:208-216`:
 
 ```cpp
 if(!FreeImage_HasPixels(dib) || (max_pixel_size <= 0)) return NULL;
 …
-if(max_pixel_size == 0) max_pixel_size = 1;
+if(max_pixel_size == 0) max_pixel_size = 1;      // 214 - dead
 
-if((width < max_pixel_size) && (height < max_pixel_size)) {
+if((width < max_pixel_size) && (height < max_pixel_size)) {   // 216
+	return FreeImage_Clone(dib);
+}
 ```
 
-The `== 0` test can never be true after the `<= 0` rejection. The `<` on the next
-comparison means an image exactly `max_pixel_size` wide is rescaled to its own size
-instead of being cloned. Neither is a correctness problem for callers; both are noise
-that hides the intent.
+The `== 0` test can never be true after the `<= 0` rejection: inert.
+
+The `<` means an image whose larger dimension *equals* `max_pixel_size` is not
+cloned — it goes to `FreeImage_Rescale` at a ratio of exactly 1.0. For a 24-bit source
+that is merely a wasted call, because `CResizeEngine::scale`'s early exit clones. For
+anything whose destination depth the rescaler chooses for itself, it is a format
+change. Four 100 × 40 sources, `max_pixel_size` 99, 100 and 101:
+
+```
+38: 24-bit 100x40          max=100 -> 100x40 24 bpp  pixels identical to the source
+38: 24-bit 100x40          max=101 -> 100x40 24 bpp  pixels identical to the source
+38: 4-bit colour 100x40    max=100 -> 100x40 24 bpp  size or depth changed
+38: 4-bit colour 100x40    max=101 -> 100x40  4 bpp  pixels identical to the source
+38: 1-bit 100x40           max=100 -> 100x40  8 bpp  size or depth changed
+38: 1-bit 100x40           max=101 -> 100x40  1 bpp  pixels identical to the source
+38: 16-bit 565 100x40      max=100 -> 100x40 24 bpp  size or depth changed
+38: 16-bit 565 100x40      max=101 -> 100x40 16 bpp  pixels identical to the source
+```
+
+`FreeImage_MakeThumbnail(dib, 100)` on a 100 × 40 4-bit image returns 24 bpp;
+`FreeImage_MakeThumbnail(dib, 101)` on the same image returns 4 bpp. A caller asking
+for "a thumbnail no larger than N" gets a different pixel format depending on whether
+its image is N or N−1 wide. `<=` on both comparisons removes the discontinuity and the
+wasted rescale, and the dead `== 0` line goes with it.
 
 ---
 
@@ -740,8 +968,8 @@ AD: ==1648833==ERROR: AddressSanitizer: stack-use-after-scope
     #3 FreeImage_AllocateExT Source/FreeImageToolkit/Background.cpp:631
 ```
 
-So the uninitialised read itself is BY INSPECTION; the call path that reaches it is
-CONFIRMED. Adding `= RGBQUAD()` to `:607` matches the two cases beside it.
+So the uninitialised read itself is by inspection only; the call path that reaches it
+is CONFIRMED. Adding `= RGBQUAD()` to `:607` matches the two cases beside it.
 
 While tracing this, two neighbouring behaviours are worth writing down because they
 look like bugs to a caller and are not covered elsewhere: with
@@ -827,9 +1055,14 @@ exactly the check that `FreeImage_Copy` and `FreeImage_CreateView` were given in
 repository (`CopyPaste.cpp:559-568`, `:860-868`) with the comment "memcpy() may not be
 passed a NULL pointer, not even with a length of 0". The same reasoning applies here.
 
-## 30. `FreeImage_EnlargeCanvas` can compute a non-positive size — BY INSPECTION, upstream
+## 30. `FreeImage_EnlargeCanvas` never checks the sum of its four borders — CONFIRMED (second pass), upstream
 
-`Background.cpp:808-814`:
+*The first pass filed this as BY INSPECTION and concluded that
+`FreeImage_AllocateBitmap`'s `width < 0` check saves it. It saves the shrinking case
+only. Make the sum overflow **upwards** and it wraps to a small positive width, the
+allocation succeeds, and the copy loop writes through a wild pointer.*
+
+`Background.cpp:841-847`:
 
 ```cpp
 	if (((left < 0) && (-left >= width)) || ((right < 0) && (-right >= width)) ||
@@ -841,20 +1074,43 @@ passed a NULL pointer, not even with a length of 0". The same reasoning applies 
 	unsigned newHeight = height + top + bottom;
 ```
 
-The guard rejects each side individually but not their sum, so `left = right = -9` on
-a 10-wide image (with some other side positive, or the `FreeImage_Copy` shortcut at
-`:798` takes over) yields `newWidth = -8`. The documentation at `:761` promises NULL
-in this case. What actually saves it today is the `if (width < 0) return NULL;` added
-to `FreeImage_AllocateBitmap` (`Source/FreeImage/BitmapAccess.cpp:309`) during the
-previous audit:
+The guard tests each side on its own and never looks at the sum. The shrinking case is
+indeed caught downstream:
 
 ```
-O: EnlargeCanvas(left=-9,right=-9,top=+5) on a 10x10 = (nil)
+30:   10 + -9 + -9           = -8
+30: EnlargeCanvas(left=-9,right=-9,top=5) = (nil)
+30: EnlargeCanvas(left=-5,right=-5,top=1) = (nil) (newWidth would be 0)
 ```
 
-Left as-is, the memcpy loop at `:870-874` would run with a negative `lineWidth`
-(`:861`) converted to a huge `size_t`. The check belongs here too, next to the one that
-is already written.
+But every clause of that guard is `left < 0`, so two large *positive* borders walk
+straight through it:
+
+```
+30:   10 + INT_MAX + INT_MAX = 8   <-- wraps to a small positive
+30: now left = right = INT_MAX, which the guard lets through:
+Source/FreeImageToolkit/Background.cpp:846:28: runtime error: signed integer overflow: 2147483647 + 10
+Source/FreeImageToolkit/Background.cpp:900:20: runtime error: signed integer overflow: 2147483647 * 3
+==1660913==ERROR: AddressSanitizer: SEGV on unknown address 0x74edb2fe0675
+==1660913==The signal is caused by a WRITE memory access.
+    #0 __memmove_avx_unaligned_erms
+    #1 memcpy
+    #2 FreeImage_EnlargeCanvas Source/FreeImageToolkit/Background.cpp:904
+```
+
+`FreeImage_AllocateExT` is handed `newWidth = 8`, succeeds, and then `:894` computes
+`lineWidth` from the *original* width (30 bytes) while `:900` advances `dstPtr` by
+`left * bytespp` — itself an overflowed `int` — into an 8-pixel row. The `memcpy` at
+`:904` writes 30 bytes there. Sanitizers are not needed; the plain `-O3` build
+segfaults on the same call.
+
+The 4-bit and 1-bit shapes go through `FreeImage_Copy` + `FreeImage_Paste` instead and
+come back NULL (`30c`), so only `bpp >= 8` crashes.
+
+The documentation at `:794` promises NULL "if the new image's size will be negative in
+either x- or y-direction". Two lines of arithmetic in `INT64` before the cast to
+`unsigned` — and a test that the result is positive and that `left`/`top` fit inside
+it — keep that promise for both directions.
 
 ---
 
@@ -919,30 +1175,62 @@ dark green. `FreeImage_Paste` returns TRUE. `Combine16_555` and `Combine16_565` 
 only `FreeImage_GetBPP(...) != 16` (`:241`, `:301`) and never look at the masks of
 either image.
 
-## 28. `FreeImage_Copy`'s 1-bit and 4-bit row offsets are still 32-bit — BY INSPECTION, **local** (`0a8e25e`)
+## 28. `FreeImage_Copy`'s 1-bit and 4-bit row offsets are still 32-bit — CONFIRMED (second pass), upstream, **incompletely fixed locally** (`0a8e25e`)
 
-`CopyPaste.cpp:571-601`. The commit widened `src_width`, `dst_width`, `dst_line`,
-`dst_pitch` and `src_pitch` to `INT64`, and the 4-bit loop counters with them, but the
-row offsets kept their original type:
+*The first pass filed this as BY INSPECTION — "a 4 GiB 1-bit bitmap is 34
+gigapixels". It is, and this machine can hold one: 2147483647 × 17 at 1 bpp is
+4.25 GiB, and the destination of the copy is 64 × 17.*
+
+`CopyPaste.cpp:566-600`. Commit `0a8e25e` widened `src_width`, `dst_width`,
+`dst_line`, `dst_pitch` and `src_pitch` to `INT64`, and the 4-bit loop counters with
+them, but the row offsets kept their original type:
 
 ```cpp
 	if (bpp == 1) {
 		BOOL value;
-		unsigned y_src, y_dst;                 // 574
+		unsigned y_src, y_dst;                 // 569
 
-		for (int y = 0; y < dst_height; y++) { // 577  - still int
-			y_src = y * src_pitch;             // INT64 product truncated into unsigned
+		for (int y = 0; y < dst_height; y++) { // 571  - still int
+			y_src = y * src_pitch;             // 572  INT64 product truncated into unsigned
 ```
 
-and the same at `:590`. `y * src_pitch` is computed in 64 bits and then truncated, so a
-1-bit or 4-bit image whose pixel data exceeds 4 GiB copies from and to the wrong rows.
-The `bpp >= 8` branch below (`:607-611`) does the arithmetic in `INT64` throughout and
-is correct. Not reproduced: a 4 GiB 1-bit bitmap is 34 gigapixels.
+and the same at `:585-588`. At a pitch of 2^28 the seventeenth row starts at exactly
+2^32, so `y_src` comes out 0:
 
-## 35. `FreeImage_CreateView`'s `left < 0` and `top < 0` tests are dead — BY INSPECTION, upstream
+```
+28p: 1-bit 2147483647x17 pitch=268435456 -> 4.25 GiB of pixels
+28p: copy scanline  0 = 00 00   (source has 00 00)
+28p: copy scanline 16 = 00 00   (source has ff ff)   <-- took row 0 instead
+```
 
-`CopyPaste.cpp:812`: both parameters are `unsigned`. The condition is harmless because
-`right > width` covers the real case, but it is what a reader checks first.
+`FreeImage_Copy` returns a valid bitmap; only the pixels are wrong. Peak RSS for that
+run was 4.46 GB. The 4-bit branch behaves identically (probe `28b`, using a sparse
+`MAP_NORESERVE` mapping and `FreeImage_AllocateHeaderForBits` so the same result can
+be had for a few pages of memory). The `bpp >= 8` branch below (`:602-606`) does the
+arithmetic in `INT64` throughout and is correct.
+
+**The attribution in the first pass was wrong.** 3.18.0 declares `src_pitch` as `int`
+(`6712d75:CopyPaste.cpp`), so upstream computes `y * src_pitch` entirely in 32 bits
+and breaks at 2 GiB, with signed overflow rather than truncation. `0a8e25e` moved the
+wall from 2 GiB to 4 GiB and made the failure well-defined; it did not introduce it.
+The remaining fix is one word: `INT64 y_src, y_dst;`.
+
+## 35. `FreeImage_CreateView`'s `left < 0` and `top < 0` tests are dead — NOT A DEFECT (second pass), upstream
+
+`CopyPaste.cpp:816`: both parameters are `unsigned`, so both tests are constant-false
+and `-Wtype-limits` says so. The second pass looked for something behind them and
+found nothing:
+
+```
+35: CreateView(left=4,right=4)  = (nil)
+35: CreateView(top=4,bottom=4)  = (nil)
+35: CreateView(right=20 > 16)   = (nil)
+```
+
+An empty view is rejected downstream — `FreeImage_AllocateHeaderForBits` refuses a
+zero width or height (`BitmapAccess.cpp:302`) — and `right > width` covers the
+out-of-range case. This is dead code and a reader's first stumble, not a bug. Deleting
+the two clauses is the whole of it.
 
 ---
 
@@ -1065,22 +1353,104 @@ misaligned. It is free on x86 and it is undefined behaviour everywhere. The tree
 `Makefile.solaris` (SPARC traps) and `Makefile.iphone`; `memcpy` compiles to the same
 instructions on x86 and is correct on both.
 
-## 34. The skew gap-fill loops have no destination bound — BY INSPECTION, upstream
+## 34. The skew gap-fill loops have no destination bound — REAL, NOT REACHABLE (second pass), upstream
 
-`ClassicRotate.cpp:80-90` and `:215-227` write `iOffset` pixels of background into
+`ClassicRotate.cpp:93-101` and `:228-241` write `iOffset` pixels of background into
 `dst` with no comparison against `dst_width`/`dst_height`. `Rotate45` is the only
-caller and its shear offsets are bounded by the destination it allocated, so this is
-not reachable today; it is worth a bound because these are template functions with a
-`bkcolor` the caller supplies.
+caller. The first pass said its shear offsets are bounded by the destination it
+allocated; the second pass measured it.
 
-## Residual notes from the INT64 widening (`bbb140a`) — BY INSPECTION, **local**
+Both loops were instrumented in a scratch build (`.claude/audit/toolkit/s34`) to record
+the worst `iOffset / dst_extent` ratio, and `FreeImage_Rotate` was driven over 196
+image shapes (widths and heights from the set 1, 2, 3, 5, 7, 8, 13, 16, 31, 33, 64,
+100, 129, 257) × 1,029 angles from −360.0° to +360.0° in 0.7° steps, alternating
+between a supplied `bkcolor` and NULL:
+
+```
+sweep34: 201684 rotations, 22070027 horizontal skews, 11556468 vertical skews
+sweep34: horizontal worst iOffset/dst_width  = 106/107 = 0.990654  (overruns: 0)
+sweep34: vertical   worst iOffset/dst_height = 181/183 = 0.989071  (overruns: 0)
+```
+
+Zero overruns in 33.6 million skews. The algebra agrees: for the second (vertical)
+shear at a negative angle — the tightest of the three — the margin is
+`dst_height − max_offset ≈ src_height·(cos θ − 2 sin θ tan(θ/2)) + 1`, and
+`cos θ − 2 sin θ tan(θ/2) = (1 − 5t²)/(1 + t²)` with `t = |tan(θ/2)|`, which stays
+positive until `t = 0.4472`, i.e. `θ = 48.2°`. `RotateAny` never hands `Rotate45`
+more than 45°, where the factor is still 0.142.
+
+So the missing bound is real in the text of the code and unreachable through any
+caller — but the margin is under 1%, and these are template functions taking a
+`bkcolor` from the caller. A `MIN(iOffset, dst_width)` on each of the four loops costs
+nothing and removes the dependence on that algebra.
+
+## Residual notes from the INT64 widening (`bbb140a`) — NOT REACHABLE (second pass), **local**
 
 The widening is correct where it matters, but three `int` narrowings were left inside
-it: `iXPos < (int)dst_width` (`:101`), `iYPos < (int)dst_height` (`:238`, `:255`,
-`:263`, `:268`), `div((int)y, 8)` (`:352`, `:540`) and
-`src_width + unsigned(...)` (`:653`, `:685`, `:716`). None of them can be reached with
-a real bitmap — every one needs a dimension above `INT_MAX` — but they mean the
-function is not actually 64-bit clean, which is what the commit set out to make it.
+it: `iXPos < (int)dst_width` (`:114`), `iYPos < (int)dst_height` (`:252`, `:268`,
+`:276`, `:281`), `div((int)y, 8)` and `src_width + unsigned(...)` in `Rotate45`.
+
+The second pass settled these: **no FIBITMAP can carry a dimension above `INT_MAX`.**
+Every allocation entry point — `FreeImage_AllocateBitmap`, and therefore
+`FreeImage_Allocate`, `FreeImage_AllocateT`, `FreeImage_AllocateEx(T)` and
+`FreeImage_AllocateHeaderForBits` — takes `int width, int height` and rejects a
+negative one, so `FreeImage_GetWidth`/`GetHeight` are bounded by `INT_MAX` by
+construction and every one of these casts is value-preserving. They are still worth
+tidying, because the commit set out to make the function 64-bit clean, but nothing can
+reach them.
+
+## 41. `RotateAny` reduces the angle by repeated subtraction, and hangs — CONFIRMED (second pass), upstream
+
+*New in the second pass; it turned up while checking what `Rotate45` can be handed.*
+
+`ClassicRotate.cpp:775-781`:
+
+```cpp
+	while(dAngle >= 360) {
+		// Bring angle to range of (-INF .. 360)
+		dAngle -= 360;
+	}
+	while(dAngle < 0) {
+		// Bring angle to range of [0 .. 360)
+		dAngle += 360;
+	}
+```
+
+`angle` is a `double` the caller chooses freely, and `FreeImage_Rotate` negates it
+(`:845`) before passing it here, so both loops are live. Neither terminates in bounded
+time:
+
+```
+R: FreeImage_Rotate(dib, 370)   ... -> 0x63cf02f18500 10x10
+R: FreeImage_Rotate(dib, 1e+15) ...    <-- still looping after 3 s
+R: FreeImage_Rotate(dib, inf)   ...    <-- still looping after 3 s
+```
+
+* **Forever**, for `|angle| >= 2^63` (9.2233720368547758e18) and for ±infinity: at that
+  magnitude the ULP of a `double` exceeds 720, so `x - 360 == x` and `x + 360 == x`.
+  Measured, not assumed — the smallest `x` with `x - 360 == x` is exactly 2^63.
+* **Effectively forever** below it: `1e15` needs 2.78 × 10^12 iterations.
+
+`NaN` takes a third path — both conditions are false, so it falls through the
+reduction and the three `else if` range tests, reaches `Rotate45`, and the shear
+dimensions come out of `unsigned((double)src_height * fabs(dTan) + 0.5)` with a `NaN`
+operand, which is an undefined conversion. Here it produced a 1 × 1 bitmap and
+reported success:
+
+```
+R: FreeImage_Rotate(dib, -nan) ... -> 0x5a56d3bbc500 1x1
+```
+
+1-bit images are safe from all three: `FreeImage_Rotate` gates them behind
+`fmod(angle, 90) != 0` (`:855`), and `fmod` of an infinity or a `NaN` is `NaN`, which
+fails the test and returns NULL. Every other depth and every non-FIT_BITMAP type calls
+`RotateAny` directly.
+
+`FreeImage_RotateEx` is not affected — `Rotate8Bit` multiplies the angle by `PI/180`
+and hands it to `cos`/`sin` with no reduction loop.
+
+`dAngle = fmod(dAngle, 360)` does the whole reduction in one operation, plus a test
+that the angle is finite. Upstream: the two loops are byte-identical in `6712d75`.
 
 ---
 
@@ -1147,12 +1517,24 @@ T: AdjustColors(0,0,1.0,FALSE) = 0 (nothing was wrong)
 T: AdjustColors(10,0,1.0,FALSE) = 1
 ```
 
-## 39. `FreeImage_ApplyColorMapping` counts palette entries, not pixels — BY INSPECTION, upstream
+## 39. `FreeImage_ApplyColorMapping` counts palette entries, not pixels — CONFIRMED (second pass), upstream
 
-`Colors.cpp:681-706`, the 1/4/8-bit case, increments `result` once per changed
-*palette entry*. The documentation at `:643-644` and `:664` says "the total number of
-pixels changed", which is what the 16-, 24- and 32-bit cases below do count. A caller
-cannot tell the two apart from the return value.
+`Colors.cpp:700-725`, the 1/4/8-bit case, increments `result` (`:712`) once per changed
+*palette entry*. The documentation at `:673-674` and `:681` says "the total number of
+pixels changed", which is what the 16-, 24- and 32-bit cases below do count.
+
+A 10 × 10 8-bit image whose hundred pixels all carry index 7, mapped against one
+colour, next to the same hundred pixels as 24-bit:
+
+```
+39: 8-bit, 100 pixels all index 7, one palette entry matches -> returned 1   (documented: 100)
+39: 24-bit control, the same 100 pixels                      -> returned 100
+```
+
+The two branches answer different questions and nothing in the return value says
+which. Counting the pixels that carry a remapped index is one pass over the bitmap;
+the alternative is to document the palettised return as a palette-entry count, which
+contradicts the parameter documentation rather than fixing it.
 
 ## Notes on `Colors.cpp` and `Channels.cpp` that are *not* bugs
 
@@ -1189,9 +1571,9 @@ falling off the end of the `if`, not by a check.
 
 # Display.cpp
 
-## 36. The alpha blends divide by 256, not 255 — BY INSPECTION, upstream
+## 36. The alpha blends divide by 256, not 255 — CONFIRMED (second pass), upstream
 
-`Display.cpp:169-172` and `Background.cpp:193-198`:
+`Display.cpp:169-172` and `Background.cpp:196-201`:
 
 ```cpp
 not_alpha = (BYTE)~alpha;
@@ -1199,13 +1581,34 @@ cp_bits[FI_RGBA_BLUE] = (BYTE)((alpha * (WORD)fgc.rgbBlue + not_alpha * (WORD)bk
 ```
 
 `~alpha` is `255 - alpha`, so the weights sum to 255 and the shift divides by 256.
-`FreeImage_Composite` special-cases `alpha == 0` and `alpha == 255` (`:155-166`), which
-hides the worst of it, but `GetAlphaBlendedColor` does not: it is called only with
-`0 < alpha < 255` and is always one level dark. `FreeImage_PreMultiplyWithAlpha`
-fifteen lines below gets it right — `(alpha * c + 127) / 255` (`:222-224`) — so the
-correct form is already in the file.
+Blending a colour over *itself* is the clean test, because the answer has to be that
+colour whatever the alpha. A white 32-bit foreground at every alpha from 0 to 255,
+composited over a white `appBkColor`:
 
-## 37. `FreeImage_Composite` computes a scanline pointer for a background it may not have — BY INSPECTION, upstream
+```
+36: white over white, 256 alphas: 254 of 256 are not 255 (first a=1, worst short by 1)
+36:   a=1 -> 254   a=128 -> 254   a=254 -> 254   (all should be 255)
+```
+
+Every intermediate alpha loses one level; only the `alpha == 0` and `alpha == 255`
+special cases at `:152-163` come out right, and they get there by not blending at all.
+The error is bounded — `floor(v·255/256)` is `v - ceil(v/256)`, so at most one level —
+but it is systematic and it is in the direction of dark: a value `v` blended over
+itself always returns `v - 1`.
+
+`GetAlphaBlendedColor` in `Background.cpp` has no special cases to hide behind. It is
+reached only with `0 < alpha < 255` (`:262` returns early at 0, `:272` skips the block
+at 255), so it is *always* one level dark:
+
+```
+36: AllocateEx(24bpp, white @ alpha 128) -> 127 127 127  (over black; the exact answer is 128)
+```
+
+`FreeImage_PreMultiplyWithAlpha` fifteen lines below `Display.cpp:172` gets it
+right — `(alpha * c + 127) / 255` (`:222-224`) — so the correct form is already in the
+file.
+
+## 37. `FreeImage_Composite` computes a scanline pointer for a background it may not have — CONFIRMED undefined behaviour, no observable failure (second pass), upstream
 
 `Display.cpp:106`:
 
@@ -1214,10 +1617,27 @@ BYTE *bg_bits = FreeImage_GetScanLine(bg, y);
 ```
 
 `bg` is allowed to be NULL (the checkerboard case). `FreeImage_GetScanLine` returns
-NULL for it, and `bg_bits` is then advanced by `bg_bits += 3` once per pixel
-(`:176`) — pointer arithmetic on a null pointer, which is undefined, although it is
-never dereferenced (`:137` guards the read). This build did not flag it; it costs one
-`if` to make it well-defined.
+NULL for it, and `bg_bits` is then advanced by `bg_bits += 3` once per pixel (`:176`).
+The second pass confirmed the path is taken — a 64 × 4 foreground with
+`appBkColor = NULL` and `bg = NULL` runs that statement 256 times — and that nothing
+comes of it:
+
+```
+37: Composite(fg, useFileBkg=FALSE, appBkColor=NULL, bg=NULL) - checkerboard path
+37: -> 0x6d6effde0090 (bg_bits is NULL and is advanced by 3 once per pixel: 256 times)
+```
+
+Adding a non-zero offset to a null pointer is undefined (C17 6.5.6p8,
+C++ [expr.add]/4), but the value is never dereferenced — `:134` guards every read
+behind `if(bg)` — and the only inference a compiler could draw from the UB is that
+`bg_bits` is non-null, which nothing tests. **No tool here can flag it**:
+GCC 15.2's `-fsanitize=pointer-overflow` diagnoses wraparound, not `NULL + n`, and a
+one-line check confirms it stays silent on `(char*)0 + 3`; Clang, which does diagnose
+it, is not installed on this machine.
+
+So: real UB in the text, no reachable misbehaviour, and the fix is to hoist the
+assignment inside `if (bg)`. Everything else about `bg` is validated properly — `:53`
+rejects a background of a different size or bit depth.
 
 ---
 
@@ -1254,7 +1674,12 @@ error. The documentation (`:638`) says "Input dib (8, 24 or 32-bit)", which is e
 the ambiguity: it means 8/24/32-bit **FIT_BITMAP**. One
 `FreeImage_GetImageType(dib) != FIT_BITMAP` test at the top fixes all three.
 
-## 29. `malloc(width * height * sizeof(double))` overflows `int` — BY INSPECTION, upstream
+## 29. `malloc(width * height * sizeof(double))` overflows `int` — CONFIRMED (second pass), upstream
+
+*The first pass filed this as BY INSPECTION: "nothing on this machine could hold both
+it and the `double` array". It does not have to. The `double` array is what fails, and
+the source only has to be addressable, not resident — a sparse `MAP_NORESERVE` mapping
+under `FreeImage_AllocateHeaderForBits` costs a few pages.*
 
 `BSplineRotate.cpp:538-539` and `:568`:
 
@@ -1263,15 +1688,37 @@ int width = FreeImage_GetWidth(dib);
 int height = FreeImage_GetHeight(dib);
 …
 ImageRasterArray = (double*)malloc(width * height * sizeof(double));
+if(!ImageRasterArray) { … return NULL; }
 ```
 
-`width * height` is an `int` product; the promotion to `size_t` happens afterwards.
-At 2^31 pixels it overflows — signed overflow, so formally undefined, and in practice
-either a negative value (the allocation fails, which is handled) or, at exactly
-2^32 pixels, zero (the allocation succeeds and the copy loop at `:574-581` writes
-32 GB into it). The threshold needs a source image of 2 GB or more, which is why this
-is BY INSPECTION: nothing on this machine could hold both it and the `double` array.
-`(size_t)width * height * sizeof(double)` is the fix, with a check afterwards.
+`width * height` is an `int` product; the promotion to `size_t` happens afterwards. At
+65536 × 65536 it is exactly 2^32, which as an `int` is 0 — so `malloc(0)` returns a
+valid minimal chunk, the NULL check passes, and the copy loop at `:574-581` starts
+writing 32 GiB of `double` into it:
+
+```
+29: width*height = 65536*65536 = 4294967296 ; as int that is 0
+29: so malloc(width*height*sizeof(double)) asks for 0 bytes
+Source/FreeImageToolkit/BSplineRotate.cpp:568:43: runtime error: signed integer overflow: 65536 * 65536
+Source/FreeImageToolkit/BSplineRotate.cpp:579:14: runtime error: store to address … with insufficient space for an object of type 'double'
+==1661112==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x7b14b7fe00b0
+WRITE of size 8 at 0x7b14b7fe00b0 thread T0
+    #0 Rotate8Bit Source/FreeImageToolkit/BSplineRotate.cpp:579
+    #1 FreeImage_RotateEx Source/FreeImageToolkit/BSplineRotate.cpp:673
+0x7b14b7fe00b1 is located 0 bytes after 1-byte region [0x7b14b7fe00b0,0x7b14b7fe00b1)
+allocated by thread T0 here:
+    #1 Rotate8Bit Source/FreeImageToolkit/BSplineRotate.cpp:568
+```
+
+The plain `-O3` build segfaults on the same call. Between 2^31 and 2^32 pixels the
+product is negative instead, the size wraps to something enormous, `malloc` fails and
+the NULL check does its job — so the dangerous window is the neighbourhood of each
+multiple of 2^32 pixels, which an 8-bit bitmap reaches at 4 GiB.
+
+The destination of that run is a real `FreeImage_Allocate(65536, 65536, 8)`, i.e. 4 GB
+resident, so the finding does need a machine with 4 GB free — but not the 36 GB the
+first pass assumed. `(size_t)width * height * sizeof(double)` is the fix, keeping the
+check afterwards.
 
 ---
 
@@ -1320,20 +1767,38 @@ to `IRHO[-1]` — and `fmg_solve` dereferences the result of
 in range. Rejecting `ng < 2` alongside the existing `ng > NGMAX` check at `:337` is
 enough. Reached from `FreeImage_TmoFattal02` as well as directly.
 
-## 33. The solver does not check its input type or any of its results — BY INSPECTION, upstream
+## 33. The solver does not check its input type or any of its results — CONFIRMED (second pass), upstream
 
-`MultigridPoissonSolver.cpp:466-490`. `FreeImage_HasPixels` is the only validation;
+`MultigridPoissonSolver.cpp:471-514`. `FreeImage_HasPixels` is the only validation;
 the function then builds a FIT_FLOAT square and calls
-`FreeImage_Paste(I, Laplacian, 1, 1, 255)` without looking at the return value. For a
-Laplacian that is not FIT_FLOAT, `FreeImage_Paste` refuses (`CopyPaste.cpp:663-667`)
-and the solver runs on an all-zero image, returning a plausible-looking result derived
-from nothing. `fmg_mglin`'s `BOOL` return at `:490` is discarded too.
+`FreeImage_Paste(I, Laplacian, 1, 1, 255)` (`:498`) without looking at the return
+value. For a Laplacian that is not FIT_FLOAT, `FreeImage_Paste` refuses
+(`CopyPaste.cpp:663-667`) and the solver runs on the all-zero square it just
+allocated:
+
+```
+33: FIT_FLOAT  Laplacian -> 0x55a09b692880  8x8 range [1e-06 .. 1]
+33: 8-bit     Laplacian -> 0x55a09b692530  8x8 type=6 range [0 .. 0]   <-- derived from nothing
+33: 24-bit    Laplacian -> 0x55a09b692880
+```
+
+The caller gets a non-NULL FIT_FLOAT bitmap of exactly the right dimensions, with no
+diagnostic, containing the solution to an equation it never posed.
+
+Three results are discarded, not one: `FreeImage_Paste` at `:498`, `fmg_mglin`'s
+`BOOL` at `:501` — it returns FALSE from its `catch(int)` at `:449`, which is how a
+grid-size or allocation failure is reported — and `FreeImage_Copy` at `:504`, whose
+NULL would go straight into `NormalizeY`. (That last one survives: `NormalizeY`
+reaches `FreeImage_GetWidth(NULL)`, which is 0, and every loop is zero-trip. It is
+unchecked rather than unsafe.)
+
+One `if` on the image type at the top, and three tested return values, is the fix.
 
 ---
 
 # JPEGTransform.cpp
 
-## 31. An in-place transform never truncates the file — BY INSPECTION, upstream
+## 31. An in-place transform never truncates the file — CONFIRMED (second pass), upstream
 
 `JPEGTransform.cpp:333-335`:
 
@@ -1343,17 +1808,65 @@ if(src_handle == dst_handle) {
 }
 ```
 
-`FreeImage_JPEGTransform(file, file, …)` opens one `FILE*` in `"r+b"`
-(`:397-400`), rewinds it and writes the transformed stream over the original. A
-transform that trims partial edge MCUs produces a shorter file, and the tail of the
-old one is left in place after `EOI`. Decoders stop at `EOI`, so the image still
-loads, but the file carries bytes of the previous image and its size is wrong.
+`FreeImage_JPEGTransform(file, file, …)` opens one `FILE*` in `"r+b"` (`:398`),
+rewinds it and writes the transformed stream over the original. `transfoptions.trim`
+is set unconditionally at `:225`, so a transform that cannot carry a partial edge MCU
+drops it and produces a shorter stream — and nothing shortens the file.
 
-## 32. `getMemIO` does not validate `src_stream` — BY INSPECTION, upstream
+`TestAPI/JPEG/data/fi_jpeg_odd.jpg`, each transform run twice: once into its own file,
+once in place. The in-place file is compared against both:
 
-`JPEGTransform.cpp:587-609` checks `dst_stream` (and refuses a read-only user buffer)
-but passes `src_stream` straight through to `*src_handle`. `FreeImage_JPEGTransform*
-FromMemory(NULL, …)` reaches the memory `read_proc` with a NULL handle.
+```
+31: ROTATE_90   ok=1/1  source 726 B, transform wants 688 B, in-place file is 726 B
+31:   first 688 bytes match the separate output; 38 extra bytes, byte-identical to the old file
+31: ROTATE_180  ok=1/1  source 726 B, transform wants 674 B, in-place file is 726 B
+31:   first 674 bytes match the separate output; 52 extra bytes, byte-identical to the old file
+31: TRANSVERSE  ok=1/1  source 726 B, transform wants 673 B, in-place file is 726 B
+31:   first 673 bytes match the separate output; 53 extra bytes, byte-identical to the old file
+31: ROTATE_90   ok=1/1  source 44606 B, transform wants 46049 B, in-place file is 46049 B
+31:   first 46049 bytes match the separate output; 0 extra bytes, not from the old file
+```
+
+38 to 53 bytes of the previous image are left after `EOI` and the function returns
+TRUE. Decoders stop at `EOI` so the image still loads; the file size is wrong, the tail
+is a fragment of the pre-transform entropy-coded data, and anything that hashes or
+transmits the file carries it. When the transform *grows* the file — the last row,
+`exif.jpg`, whose markers are re-emitted larger — there is no residue, which is why
+this only shows up on images with partial edge MCUs.
+
+A truncation after `jpeg_finish_compress` is the fix, which means the in-place path
+needs the end position and a `FreeImageIO` that can express "truncate here" — for the
+`FILE*` path that is `ftruncate`/`_chsize`. Failing that, write to a temporary and
+rename.
+
+## 32. `getMemIO` does not validate `src_stream` — NOT A DEFECT (second pass), upstream
+
+`JPEGTransform.cpp:588-610` checks `dst_stream` (and refuses a read-only user buffer)
+but passes `src_stream` straight through to `*src_handle`. The first pass noted that
+`FreeImage_JPEGTransform*FromMemory(NULL, …)` reaches the memory `read_proc` with a
+NULL handle. It does, and nothing happens:
+
+```
+32: JPEGTransformCombinedFromMemory(src=NULL, dst=0x6147311f4220) ...
+[FI] Empty input file
+32: -> 0
+32: JPEGTransformCombinedFromMemory(src=NULL, dst=NULL) ...
+[FI] Empty input file
+32: -> 0
+32: JPEGTransformCombinedFromMemory(src=valid, dst=NULL) ...
+32: -> 1  crop rect 1 0 17 33
+```
+
+All four memory procs guard their handle — `_MemoryReadProc` (`FreeImageIO.cpp:86`),
+`_MemoryWriteProc` (`:123`), `_MemorySeekProc` (`:193`) and `_MemoryTellProc`
+(`:234`) each open with `if (!handle) return …`. A NULL source therefore reads zero
+bytes, libjpeg reports "Empty input file" through the installed error handler, and the
+transform returns FALSE. A NULL destination is not an error at all: `:152` reads
+`onlyReturnCropRect = (dst_io == NULL) || (dst_handle == NULL)`, which is the
+documented crop-rect-only mode, and it works.
+
+The asymmetry is a style wart — the function validates one argument and not the
+other — not a defect. Nothing here is worth changing.
 
 ## Note on `ls_jpeg_error_exit` — upstream, shared with PluginJPEG
 
@@ -1424,6 +1937,35 @@ repository.
 | `AD`, `AF8`, `AF24`, `AF32` | 6, 21 |
 | `AE` | 23c |
 
+The second pass added a separate driver, `.claude/audit/toolkit/tk2.c`, built by
+`.claude/audit/toolkit/build2.sh` against both trees (`tk2_stock`, `tk2_asan`) and run
+the same way, with `allocator_may_return_null=1` throughout because two of its probes
+make `malloc` refuse:
+
+| probe | finding |
+|---|---|
+| `26` | 26a/26b — the window size overflows, `malloc` refuses, the weight loop writes through NULL |
+| `26b` | 26c — the window bounds overflow, `Weights[INT_MAX]` |
+| `27` | 27, 1-bit and 4-bit, plus the vertical filter's copy of the same expression |
+| `28`, `28b` | 28 over a sparse `MAP_NORESERVE` mapping, 1-bit and 4-bit |
+| `28p` | 28 with a real 4.25 GiB `FreeImage_Allocate` — no internal entry point |
+| `29` | 29 |
+| `30` | 30, shrinking and overflowing |
+| `30c` | 30 on a 4-bit source, which takes the Copy+Paste branch and returns NULL |
+| `31` | 31, three transforms in place and into a separate file |
+| `32` | 32, NULL source, NULL destination, and a valid source with no destination |
+| `33` | 33, with a FIT_FLOAT control |
+| `35` | 35 |
+| `36` | 36, all 256 alphas, plus the `AllocateEx` path |
+| `37` | 37 |
+| `38` | 38, four source depths × `max_pixel_size` 99, 100, 101 |
+| `39` | 39, with a 24-bit control |
+| `R`, `Rinf`, `Rnan` | 41 — each under `alarm(3)`, because two of them do not return |
+
+and a separate instrumented build for finding 34: `.claude/audit/toolkit/s34/` plus
+`sweep34.c`, built by `build34.sh`, which patches the four gap-fill loops in a scratch
+copy of `ClassicRotate.cpp` to record the worst `iOffset / dst_extent` ratio.
+
 ### The same probes on an ordinary build
 
 `.claude/audit/stock2/libfreeimage.a` is a plain `-O2` build of the same sources
@@ -1488,7 +2030,9 @@ outside this audit's scope.
 
 **`FreeImage_EnlargeCanvas` currently returns NULL for a collapsing rectangle** —
 see finding 30. It is defended by a check in `Source/FreeImage/BitmapAccess.cpp`, not
-by one of its own.
+by one of its own. *That defence covers only the collapsing direction: the second pass
+made the same expression wrap upwards instead and got a segfault. Finding 30 is now
+CONFIRMED.*
 
 **Not bugs, checked and dismissed:** the `0xff7f >>` idiom and the `?:`-with-assignment
 in `Flip.cpp` and `CopyPaste.cpp`; the `transparent_table` indexing in
