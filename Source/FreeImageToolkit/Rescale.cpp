@@ -211,10 +211,18 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 	int width	= FreeImage_GetWidth(dib);
 	int height = FreeImage_GetHeight(dib);
 
-	if(max_pixel_size == 0) max_pixel_size = 1;
-
-	if((width < max_pixel_size) && (height < max_pixel_size)) {
-		// image is smaller than the requested thumbnail
+	// <= , not < .  An image whose larger dimension is exactly max_pixel_size
+	// already fits the thumbnail, but the < sent it to FreeImage_Rescale at a
+	// ratio of 1.0 instead of cloning it - and the rescaler picks the
+	// destination bit depth for itself.  A palettised or 16-bit source came back
+	// converted (1 -> 8, 4 -> 24, 16 -> 24) where the same image one pixel
+	// narrower came back untouched, so the caller's pixel format depended on
+	// whether its image was max_pixel_size or max_pixel_size - 1 wide.
+	//
+	// (The "max_pixel_size == 0" line that stood here could never be true: the
+	// <= 0 test above has already returned.)
+	if((width <= max_pixel_size) && (height <= max_pixel_size)) {
+		// image is no larger than the requested thumbnail
 		return FreeImage_Clone(dib);
 	}
 
