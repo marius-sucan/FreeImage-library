@@ -635,10 +635,14 @@ FreeImage_AdjustColors(FIBITMAP *dib, double brightness, double contrast, double
 		return FALSE;
 	}
 
-	if (FreeImage_GetAdjustColorsLookupTable(LUT, brightness, contrast, gamma, invert)) {
-		return FreeImage_AdjustCurve(dib, LUT, FICC_RGB);
+	if (FreeImage_GetAdjustColorsLookupTable(LUT, brightness, contrast, gamma, invert) == 0) {
+		// That function returns the number of adjustments it folded into the table,
+		// which is zero when every argument has its default value.  The table is
+		// then the identity: there is nothing to do, and nothing went wrong either,
+		// so reporting FALSE here contradicted the documented "TRUE on success".
+		return TRUE;
 	}
-	return FALSE;
+	return FreeImage_AdjustCurve(dib, LUT, FICC_RGB);
 }
 
 /** @brief Applies color mapping for one or several colors on a 1-, 4- or 8-bit
