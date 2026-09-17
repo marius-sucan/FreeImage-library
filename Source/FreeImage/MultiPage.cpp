@@ -120,6 +120,12 @@ struct MULTIBITMAPHEADER {
 	{
 		SetDefaultIO(&io);
 	}
+
+	~MULTIBITMAPHEADER() {
+		for (std::map<int, FIBITMAP *>::iterator i = page_metadata.begin(); i != page_metadata.end(); ++i) {
+			FreeImage_Unload(i->second);
+		}
+	}
 	
 	PluginNode *node;
 	FREE_IMAGE_FORMAT fif;
@@ -140,6 +146,15 @@ struct MULTIBITMAPHEADER {
 	// FreeImage_CloseMultiBitmap() reports rather than claiming a success it did
 	// not achieve.
 	BOOL failed;
+	// FIMD_ANIMATION as it stood when each cached page went in, kept by cache block
+	// number. A page is stored in the cache encoded in cache_fif, and what that format
+	// cannot hold it cannot give back: libwebp deletes the ANMF chunk of a one-frame
+	// animation whose frame fills the canvas (see MuxCleanup in muxedit.c), taking the
+	// frame's duration and position with it, so a frame appended with a duration came
+	// back out of the cache without one. Keeping the tags here rather than trusting the
+	// round trip makes every format behave alike, whatever its single-image writer can
+	// carry. The carriers are 1x1 bitmaps: only their metadata is wanted.
+	std::map<int, FIBITMAP *> page_metadata;
 	// Decoder state belonging to the plugin, opened by the first
 	// FreeImage_LockPage() call and kept until FreeImage_CloseMultiBitmap().
 	// It used to be opened and closed around every single page request, which
@@ -297,6 +312,72 @@ FreeImage_FindPage(MULTIBITMAPHEADER *header, int position, int *file_page) {
 	return header->m_blocks.end();
 }
 
+// Forget the animation tags kept for a cache block, because the block is going away
+// or is about to hold a different page.
+static void
+FreeImage_ForgetPageMetadata(MULTIBITMAPHEADER *header, int ref) {
+	std::map<int, FIBITMAP *>::iterator i = header->page_metadata.find(ref);
+
+	if (i != header->page_metadata.end()) {
+		FreeImage_Unload(i->second);
+		header->page_metadata.erase(i);
+	}
+}
+
+// Copy the FIMD_ANIMATION tags from one bitmap to another, one tag at a time.
+// FreeImage_CloneMetadata() cannot be used for this: it copies every model *except*
+// FIMD_ANIMATION, on the grounds that one bitmap's frame timing does not belong to a
+// copy of it - which is right for a clone and exactly wrong here, where the copy is
+// standing in for the same page.
+static unsigned
+FreeImage_CopyAnimationTags(FIBITMAP *dst, FIBITMAP *src) {
+	FITAG *tag = NULL;
+	FIMETADATA *mdhandle = FreeImage_FindFirstMetadata(FIMD_ANIMATION, src, &tag);
+	unsigned count = 0;
+
+	if (mdhandle != NULL) {
+		do {
+			if (FreeImage_SetMetadata(FIMD_ANIMATION, dst, FreeImage_GetTagKey(tag), tag)) {
+				count++;
+			}
+		} while (FreeImage_FindNextMetadata(mdhandle, &tag));
+		FreeImage_FindCloseMetadata(mdhandle);
+	}
+
+	return count;
+}
+
+// Keep this page's animation tags alongside the block that holds its pixels.
+static void
+FreeImage_RememberPageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib) {
+	FreeImage_ForgetPageMetadata(header, ref);
+
+	if (FreeImage_GetMetadataCount(FIMD_ANIMATION, dib) == 0) {
+		return;
+	}
+
+	FIBITMAP *carrier = FreeImage_Allocate(1, 1, 1, 0, 0, 0);
+
+	if (carrier == NULL) {
+		return;
+	}
+	if (FreeImage_CopyAnimationTags(carrier, dib) > 0) {
+		header->page_metadata[ref] = carrier;
+	} else {
+		FreeImage_Unload(carrier);
+	}
+}
+
+// Put them back on the page that has just come out of the cache.
+static void
+FreeImage_RestorePageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib) {
+	std::map<int, FIBITMAP *>::const_iterator i = header->page_metadata.find(ref);
+
+	if (i != header->page_metadata.end()) {
+		FreeImage_CopyAnimationTags(dib, i->second);
+	}
+}
+
 // Read one page back out of the cache, where FreeImage_SavePageToBlock() or
 // FreeImage_UnlockPage() put it, encoded in cache_fif.
 static FIBITMAP *
@@ -325,6 +406,10 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	}
 
 	free(compressed_data);
+
+	if (dib != NULL) {
+		FreeImage_RestorePageMetadata(header, block.getReference(), dib);
+	}
 
 	return dib;
 }
@@ -910,6 +995,8 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 		return res;
 	}
 
+	FreeImage_RememberPageMetadata(header, ref, data);
+
 	res = PageBlock(BLOCK_REFERENCE, ref, compressed_size);
 
 	return res;
@@ -1054,6 +1141,7 @@ FreeImage_DeletePageEx(FIMULTIBITMAP *bitmap, int page) {
 				break;
 
 			case BLOCK_REFERENCE :
+				FreeImage_ForgetPageMetadata(header, i->getReference());
 				header->m_cachefile.deleteFile(i->getReference());
 				header->m_blocks.erase(i);
 				break;
@@ -1217,6 +1305,7 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				// write the data to the cache
 
 				if (i->m_type == BLOCK_REFERENCE) {
+					FreeImage_ForgetPageMetadata(header, i->getReference());
 					header->m_cachefile.deleteFile(i->getReference());
 				}
 
@@ -1234,6 +1323,8 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					header->locked_pages.erase(page);
 					return;
 				}
+
+				FreeImage_RememberPageMetadata(header, iPage, page);
 
 				*i = PageBlock(BLOCK_REFERENCE, iPage, compressed_size);
 

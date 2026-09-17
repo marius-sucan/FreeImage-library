@@ -65,6 +65,14 @@ struct GIFinfo {
 	std::vector<size_t> comment_extension_offsets;
 	std::vector<size_t> graphic_control_extension_offsets;
 	std::vector<size_t> image_descriptor_offsets;
+	//the canvas and the loop count belong to the file and are attached to every
+	//frame, so they are worked out once here rather than re-read for each page:
+	//finding the loop count means walking the application extensions, and doing
+	//that per frame would be quadratic in a file that carries a lot of them
+	BOOL canvas_cached;
+	WORD canvas_width;
+	WORD canvas_height;
+	LONG loop_count;
 	//only really used when writing
 	long lsd_offset;			// stream offset of the header written by Open(); the Logical Screen Descriptor follows it
 	BOOL lsd_written;			// TRUE once page 0 has written the Logical Screen Descriptor
@@ -108,6 +116,7 @@ struct GIFinfo {
 	} playback;
 
 	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
+		canvas_cached(FALSE), canvas_width(0), canvas_height(0), loop_count(1),
 		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0)
 	{
 	}
@@ -1184,9 +1193,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			io->read_proc(&b, 1, 1, handle);
 		}
 
-		if( page == 0 ) {
-			size_t idx;
-
+		// The canvas and the loop count describe the file rather than any one frame,
+		// and every frame is drawn on that canvas - so every frame is told about them,
+		// not just the first. Attaching them to page 0 alone is enough to describe an
+		// animation and not enough to edit one: deleting the first page would take the
+		// only record of the canvas with it, and the file written back would shrink to
+		// whatever the surviving frames happen to cover. PluginAPNG.cpp and
+		// PluginWebP.cpp attach them to every frame for the same reason.
+		if( !info->canvas_cached ) {
 			//Logical Screen Descriptor
 			io->seek_proc(handle, 6, SEEK_SET);
 			WORD logicalwidth, logicalheight;
@@ -1196,31 +1210,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			SwapShort(&logicalwidth);
 			SwapShort(&logicalheight);
 #endif
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
-
-			//Global Color Table
-			if( info->global_color_table_offset != 0 ) {
-				RGBQUAD globalpalette[256];
-				io->seek_proc(handle, (long)info->global_color_table_offset, SEEK_SET);
-				int i = 0;
-				while( i < info->global_color_table_size ) {
-					io->read_proc(&globalpalette[i].rgbRed, 1, 1, handle);
-					io->read_proc(&globalpalette[i].rgbGreen, 1, 1, handle);
-					io->read_proc(&globalpalette[i].rgbBlue, 1, 1, handle);
-					globalpalette[i].rgbReserved = 0;
-					i++;
-				}
-				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "GlobalPalette", ANIMTAG_GLOBALPALETTE, FIDT_PALETTE, info->global_color_table_size, info->global_color_table_size * 4, globalpalette);
-				//background color
-				if( info->background_color < info->global_color_table_size ) {
-					FreeImage_SetBackgroundColor(dib, &globalpalette[info->background_color]);
-				}
-			}
 
 			//Application Extension
 			LONG loop = 1; //If no AE with a loop count is found, the default must be 1
-			for( idx = 0; idx < info->application_extension_offsets.size(); idx++ ) {
+			for( size_t idx = 0; idx < info->application_extension_offsets.size(); idx++ ) {
 				io->seek_proc(handle, (long)info->application_extension_offsets[idx], SEEK_SET);
 				io->read_proc(&b, 1, 1, handle);
 				if( b == 11 ) { //All AEs start with an 11 byte sub-block to determine what type of AE it is
@@ -1241,7 +1234,45 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 			}
+
+			info->canvas_width = logicalwidth;
+			info->canvas_height = logicalheight;
+			info->loop_count = loop;
+			info->canvas_cached = TRUE;
+		}
+		{
+			WORD logicalwidth = info->canvas_width;
+			WORD logicalheight = info->canvas_height;
+			LONG loop = info->loop_count;
+			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
+			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
 			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
+		}
+
+		//The global palette and the comments below belong to the file too, but they
+		//stay with page 0: the palette can be a kilobyte per frame, and a writer that
+		//no longer has it can emit local palettes instead.
+		if( page == 0 ) {
+			size_t idx;
+
+			//Global Color Table
+			if( info->global_color_table_offset != 0 ) {
+				RGBQUAD globalpalette[256];
+				io->seek_proc(handle, (long)info->global_color_table_offset, SEEK_SET);
+				int i = 0;
+				while( i < info->global_color_table_size ) {
+					io->read_proc(&globalpalette[i].rgbRed, 1, 1, handle);
+					io->read_proc(&globalpalette[i].rgbGreen, 1, 1, handle);
+					io->read_proc(&globalpalette[i].rgbBlue, 1, 1, handle);
+					globalpalette[i].rgbReserved = 0;
+					i++;
+				}
+				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "GlobalPalette", ANIMTAG_GLOBALPALETTE, FIDT_PALETTE, info->global_color_table_size, info->global_color_table_size * 4, globalpalette);
+				//background color
+				if( info->background_color < info->global_color_table_size ) {
+					FreeImage_SetBackgroundColor(dib, &globalpalette[info->background_color]);
+				}
+			}
 
 			//Comment Extension
 			for( idx = 0; idx < info->comment_extension_offsets.size(); idx++ ) {

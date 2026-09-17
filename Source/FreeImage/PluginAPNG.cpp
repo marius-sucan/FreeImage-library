@@ -847,7 +847,14 @@ SetFrameMetadata(FIBITMAP *dib, const APNGinfo *info, int page) {
 	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
 	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
-	if(page == 0) {
+	// The canvas and the loop count describe the file rather than any one frame, and
+	// every frame is drawn on that canvas - so every frame is told about them, not
+	// just the first. Attaching them to page 0 alone is enough to describe an
+	// animation and not enough to edit one: deleting the first page would take the
+	// only record of the canvas with it, and the file written back would shrink to
+	// whatever the surviving frames happen to cover. PluginGIF.cpp and PluginWebP.cpp
+	// do the same.
+	{
 		WORD logicalwidth = (WORD)MIN(info->canvas_width, (DWORD)0xFFFF);
 		WORD logicalheight = (WORD)MIN(info->canvas_height, (DWORD)0xFFFF);
 		LONG loop = (LONG)info->num_plays;

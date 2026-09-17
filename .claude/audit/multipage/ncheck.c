@@ -322,12 +322,90 @@ int main(int argc, char **argv) {
 		printf("\n");
 	}
 
-	if (!strcmp(cmd, "canvas")) {
-		/* The canvas of an animation is declared by its first page alone (LogicalWidth
-		   /LogicalHeight), which is how GIF does it too. So what happens to the canvas
-		   when the first page is deleted? */
+	if (!strcmp(cmd, "iso2")) {
+		/* One cache round trip for a frame that carries FrameTime but no canvas tags -
+		   which is what a page other than the first looks like. */
+		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
+		const int bpp = argc > 3 ? atoi(argv[3]) : 24;
+		const int withcanvas = argc > 4 ? atoi(argv[4]) : 0;
+		const int sflags = (fif == FIF_WEBP) ? WEBP_LOSSLESS : 0;
+		FIBITMAP *d = page(60, 16, 16, bpp);
+		FIMEMORY *hmem;
+		FIBITMAP *back;
+
+		set_anim(d, "FrameTime", 200, FIDT_LONG);
+		if (withcanvas) {
+			set_anim(d, "LogicalWidth", 40, FIDT_SHORT);
+			set_anim(d, "LogicalHeight", 40, FIDT_SHORT);
+		}
+		hmem = FreeImage_OpenMemory(NULL, 0);
+		if (!FreeImage_SaveToMemory(fif, d, hmem, sflags)) {
+			printf("    %-5s SaveToMemory failed\n", FreeImage_GetFormatFromFIF(fif));
+		} else {
+			BYTE *bytes = NULL; DWORD size = 0;
+			FreeImage_AcquireMemory(hmem, &bytes, &size);
+			FreeImage_SeekMemory(hmem, 0, SEEK_SET);
+			back = FreeImage_LoadFromMemory(fif, hmem, 0);
+			printf("    %-5s canvas tags %s: %u bytes, FrameTime 200 -> %ld  LogicalWidth -> %ld\n",
+			       FreeImage_GetFormatFromFIF(fif), withcanvas ? "set  " : "unset",
+			       (unsigned)size, get_anim(back, "FrameTime"), get_anim(back, "LogicalWidth"));
+			if (back) FreeImage_Unload(back);
+		}
+		FreeImage_CloseMemory(hmem);
+		FreeImage_Unload(d);
+		printf("\n");
+	}
+
+	if (!strcmp(cmd, "tagsper")) {
+		/* The file-level animation tags - the canvas and the loop count - should reach
+		   every page, for every animation format. The per-frame tags should too. The
+		   global palette is deliberately page 0 only: it can be a kilobyte a frame. */
 		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
 		const char *fn = argv[3];
+		const int bpp = argc > 4 ? atoi(argv[4]) : 24;
+		const int sflags = (fif == FIF_WEBP) ? WEBP_LOSSLESS : 0;
+		FIMULTIBITMAP *m;
+		int k, n;
+
+		m = FreeImage_OpenMultiBitmap(fif, fn, TRUE, FALSE, TRUE, 0);
+		if (!m) { printf("    %-5s open failed\n", FreeImage_GetFormatFromFIF(fif)); goto tagsdone; }
+		for (k = 0; k < 3; k++) {
+			FIBITMAP *d = page((k + 1) * 60, 16, 16, bpp);
+			if (k == 0) {
+				set_anim(d, "LogicalWidth", 40, FIDT_SHORT);
+				set_anim(d, "LogicalHeight", 40, FIDT_SHORT);
+				set_anim(d, "Loop", 7, FIDT_LONG);
+			}
+			set_anim(d, "FrameTime", (LONG)(100 * (k + 1)), FIDT_LONG);
+			FreeImage_AppendPage(m, d);
+			FreeImage_Unload(d);
+		}
+		FreeImage_CloseMultiBitmap(m, sflags);
+
+		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, TRUE, TRUE, 0);
+		if (!m) { printf("    %-5s reopen failed\n", FreeImage_GetFormatFromFIF(fif)); goto tagsdone; }
+		n = FreeImage_GetPageCount(m);
+		for (k = 0; k < n; k++) {
+			FIBITMAP *d = FreeImage_LockPage(m, k);
+			printf("    %-5s page %d: LogicalWidth=%ld LogicalHeight=%ld Loop=%ld FrameTime=%ld\n",
+			       FreeImage_GetFormatFromFIF(fif), k,
+			       get_anim(d, "LogicalWidth"), get_anim(d, "LogicalHeight"),
+			       get_anim(d, "Loop"), get_anim(d, "FrameTime"));
+			if (d) FreeImage_UnlockPage(m, d, FALSE);
+		}
+		FreeImage_CloseMultiBitmap(m, 0);
+	tagsdone:
+		printf("\n");
+	}
+
+	if (!strcmp(cmd, "canvas")) {
+		/* The canvas of an animation is a property of the file, and the loader has to
+		   put it somewhere. If it goes on page 0 alone, deleting page 0 takes the only
+		   record of it with it. Same test for every animation format. */
+		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
+		const char *fn = argv[3];
+		const int bpp = argc > 4 ? atoi(argv[4]) : 24;
+		const int sflags = (fif == FIF_WEBP) ? WEBP_LOSSLESS : 0;
 		FIMULTIBITMAP *m;
 		int k;
 
@@ -335,7 +413,7 @@ int main(int argc, char **argv) {
 		if (!m) { printf("    open failed\n"); goto canvasdone; }
 		for (k = 0; k < 3; k++) {
 			/* 16x16 frames near the top left of a 64x48 canvas */
-			FIBITMAP *d = page((k + 1) * 60, 16, 16, 24);
+			FIBITMAP *d = page((k + 1) * 60, 16, 16, bpp);
 			if (k == 0) {
 				set_anim(d, "LogicalWidth", 64, FIDT_SHORT);
 				set_anim(d, "LogicalHeight", 48, FIDT_SHORT);
@@ -347,7 +425,7 @@ int main(int argc, char **argv) {
 			FreeImage_AppendPage(m, d);
 			FreeImage_Unload(d);
 		}
-		FreeImage_CloseMultiBitmap(m, WEBP_LOSSLESS);
+		FreeImage_CloseMultiBitmap(m, sflags);
 
 		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, TRUE, TRUE, 0);
 		if (m) {
@@ -363,7 +441,7 @@ int main(int argc, char **argv) {
 		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, FALSE, TRUE, 0);
 		if (m) {
 			FreeImage_DeletePage(m, 0);
-			FreeImage_CloseMultiBitmap(m, WEBP_LOSSLESS);
+			FreeImage_CloseMultiBitmap(m, sflags);
 		}
 		m = FreeImage_OpenMultiBitmap(fif, fn, FALSE, TRUE, TRUE, 0);
 		if (m) {
