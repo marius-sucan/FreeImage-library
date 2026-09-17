@@ -74,11 +74,24 @@ FreeImage_Invert(FIBITMAP *src) {
 						pal[i].rgbBlue	= 255 - pal[i].rgbBlue;
 					}
 				} else {
+					// FreeImage_GetLine() rounds up to a whole byte, so at 1 and 4 bpp
+					// the bits past the last pixel of a row are not necessarily this
+					// image's.  In a FreeImage_CreateView() result they are the backing
+					// image's next pixels - FreeImage_CreateView only constrains 'left'
+					// to a byte boundary, never 'right' - and inverting the whole byte
+					// inverted them too.  Do the whole bytes, then the pixels left in the
+					// final one under a mask: inverting bits under a mask is an XOR.
+					const unsigned whole = CalculateWholeRowBytes(width, bpp);
+					const BYTE tail = CalculateRowTailMask(width, bpp);
+
 					for(y = 0; y < height; y++) {
 						BYTE *bits = FreeImage_GetScanLine(src, y);
 
-						for (x = 0; x < FreeImage_GetLine(src); x++) {
+						for (x = 0; x < whole; x++) {
 							bits[x] = ~bits[x];
+						}
+						if (tail) {
+							bits[whole] ^= tail;
 						}
 					}
 				}

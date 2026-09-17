@@ -301,6 +301,49 @@ CalculatePitch(const unsigned line) {
 	return (line + 3) & ~3;
 }
 
+/**
+Number of *whole* bytes occupied by 'width' pixels of depth 'bitdepth'.
+CalculateLine() rounds up to a whole byte, so at 1 and 4 bits per pixel the bits
+past the last pixel of a row share their byte with whatever comes next.  In an
+ordinary bitmap that is scanline padding and belongs to nobody; in a
+FreeImage_CreateView() result it is the backing image's next pixels, and writing
+it corrupts them.  Code that modifies a row a byte at a time stops here and
+finishes under CalculateRowTailMask().
+@see CalculateRowTailMask, CopyRowPixels
+*/
+inline unsigned
+CalculateWholeRowBytes(const unsigned width, const unsigned bitdepth) {
+	return (unsigned)( ((unsigned long long)width * bitdepth) / 8 );
+}
+
+/**
+Mask of the bits that belong to this row inside the byte CalculateWholeRowBytes()
+stops at, or 0 when the row ends on a byte boundary. Always 0 above 4 bpp.
+@see CalculateWholeRowBytes
+*/
+inline BYTE
+CalculateRowTailMask(const unsigned width, const unsigned bitdepth) {
+	const unsigned remainder = (unsigned)( ((unsigned long long)width * bitdepth) % 8 );
+	return remainder ? (BYTE)(0xFF << (8 - remainder)) : (BYTE)0;
+}
+
+/**
+Copy 'width' pixels from one row to another, leaving any bits of the final byte
+that lie past the last pixel exactly as they were in the destination.
+@see CalculateRowTailMask
+*/
+inline void
+CopyRowPixels(BYTE *dst, const BYTE *src, const unsigned width, const unsigned bitdepth) {
+	const unsigned whole = CalculateWholeRowBytes(width, bitdepth);
+	const BYTE tail = CalculateRowTailMask(width, bitdepth);
+	if (whole) {
+		memcpy(dst, src, whole);
+	}
+	if (tail) {
+		dst[whole] = (BYTE)((dst[whole] & ~tail) | (src[whole] & tail));
+	}
+}
+
 inline unsigned
 CalculateUsedPaletteEntries(const unsigned bit_count) {
 	if ((bit_count >= 1) && (bit_count <= 8)) {
