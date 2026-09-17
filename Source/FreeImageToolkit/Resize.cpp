@@ -663,6 +663,15 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   case 8:
                   {
                      // transparently convert the 1-bit non-transparent greyscale image to 8 bpp
+                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
+                     // walk below then started at the byte holding the rectangle's first pixel
+                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
+                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
+                     // was given - and none beyond its right edge, the width having come along
+                     // with the offset.  Keep the remainder and add it to the sample index: the
+                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
+                     // is (left+width-1)/8.
+                     const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      if (src_pal) {
                         // we have got a palette
@@ -681,7 +690,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               for (INT64 i = iLeft; i < iRight; i++) {
                                  // scan between boundaries
                                  // accumulate weighted effect of each neighboring pixel
-                                 const INT64 pixel = (src_bits[i >> 3] & (0x80 >> (i & 0x07))) != 0;
+                                 const INT64 isrc = i + src_bit_offset;
+                                 const INT64 pixel = (src_bits[isrc >> 3] & (0x80 >> (isrc & 0x07))) != 0;
                                  value += (weightsTable.getWeight(x, i - iLeft) * (double)*(BYTE *)&src_pal[pixel]);
                               }
 
@@ -706,7 +716,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               for (INT64 i = iLeft; i < iRight; i++) {
                                  // scan between boundaries
                                  // accumulate weighted effect of each neighboring pixel
-                                 const INT64 pixel = (src_bits[i >> 3] & (0x80 >> (i & 0x07))) != 0;
+                                 const INT64 isrc = i + src_bit_offset;
+                                 const INT64 pixel = (src_bits[isrc >> 3] & (0x80 >> (isrc & 0x07))) != 0;
                                  value += (weightsTable.getWeight(x, i - iLeft) * (double)pixel);
                               }
                               value *= 0xFF;
@@ -722,6 +733,15 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   case 24:
                   {
                      // transparently convert the non-transparent 1-bit image to 24 bpp
+                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
+                     // walk below then started at the byte holding the rectangle's first pixel
+                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
+                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
+                     // was given - and none beyond its right edge, the width having come along
+                     // with the offset.  Keep the remainder and add it to the sample index: the
+                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
+                     // is (left+width-1)/8.
+                     const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      if (src_pal) {
                         // we have got a palette
@@ -741,7 +761,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                                  // scan between boundaries
                                  // accumulate weighted effect of each neighboring pixel
                                  const double weight = weightsTable.getWeight(x, i - iLeft);
-                                 const INT64 pixel = (src_bits[i >> 3] & (0x80 >> (i & 0x07))) != 0;
+                                 const INT64 isrc = i + src_bit_offset;
+                                 const INT64 pixel = (src_bits[isrc >> 3] & (0x80 >> (isrc & 0x07))) != 0;
                                  const BYTE * const entry = (BYTE *)&src_pal[pixel];
                                  r += (weight * (double)entry[FI_RGBA_RED]);
                                  g += (weight * (double)entry[FI_RGBA_GREEN]);
@@ -772,7 +793,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               for (INT64 i = iLeft; i < iRight; i++) {
                                  // scan between boundaries
                                  // accumulate weighted effect of each neighboring pixel
-                                 const INT64 pixel = (src_bits[i >> 3] & (0x80 >> (i & 0x07))) != 0;
+                                 const INT64 isrc = i + src_bit_offset;
+                                 const INT64 pixel = (src_bits[isrc >> 3] & (0x80 >> (isrc & 0x07))) != 0;
                                  value += (weightsTable.getWeight(x, i - iLeft) * (double)pixel);
                               }
                               value *= 0xFF;
@@ -793,6 +815,15 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the transparent 1-bit image to 32 bpp; 
                      // we always have got a palette here
+                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
+                     // walk below then started at the byte holding the rectangle's first pixel
+                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
+                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
+                     // was given - and none beyond its right edge, the width having come along
+                     // with the offset.  Keep the remainder and add it to the sample index: the
+                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
+                     // is (left+width-1)/8.
+                     const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      #pragma omp parallel for schedule(dynamic) default(shared)
                      for (INT64 y = 0; y < height; y++) {
@@ -810,7 +841,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
                               const double weight = weightsTable.getWeight(x, i - iLeft);
-                              const INT64 pixel = (src_bits[i >> 3] & (0x80 >> (i & 0x07))) != 0;
+                              const INT64 isrc = i + src_bit_offset;
+                              const INT64 pixel = (src_bits[isrc >> 3] & (0x80 >> (isrc & 0x07))) != 0;
                               const BYTE * const entry = (BYTE *)&src_pal[pixel];
                               r += (weight * (double)entry[FI_RGBA_RED]);
                               g += (weight * (double)entry[FI_RGBA_GREEN]);
@@ -839,6 +871,9 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the non-transparent 4-bit greyscale image to 8 bpp; 
                      // we always have got a palette for 4-bit images
+                     // the same for 4-bit, where the remainder is one nibble: an odd left
+                     // rescaled the columns of the even one below it
+                     const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
                      for (INT64 y = 0; y < height; y++) {
@@ -855,7 +890,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                            for (INT64 i = iLeft; i < iRight; i++) {
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
-                              const INT64 pixel = i & 0x01 ? src_bits[i >> 1] & 0x0F : src_bits[i >> 1] >> 4;
+                              const INT64 isrc = i + src_nibble_offset;
+                              const INT64 pixel = isrc & 0x01 ? src_bits[isrc >> 1] & 0x0F : src_bits[isrc >> 1] >> 4;
                               value += (weightsTable.getWeight(x, i - iLeft) * (double)*(BYTE *)&src_pal[pixel]);
                            }
 
@@ -870,6 +906,9 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the non-transparent 4-bit image to 24 bpp; 
                      // we always have got a palette for 4-bit images
+                     // the same for 4-bit, where the remainder is one nibble: an odd left
+                     // rescaled the columns of the even one below it
+                     const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
                      for (INT64 y = 0; y < height; y++) {
@@ -887,7 +926,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
                               const double weight = weightsTable.getWeight(x, i - iLeft);
-                              const INT64 pixel = i & 0x01 ? src_bits[i >> 1] & 0x0F : src_bits[i >> 1] >> 4;
+                              const INT64 isrc = i + src_nibble_offset;
+                              const INT64 pixel = isrc & 0x01 ? src_bits[isrc >> 1] & 0x0F : src_bits[isrc >> 1] >> 4;
                               const BYTE * const entry = (BYTE *)&src_pal[pixel];
                               r += (weight * (double)entry[FI_RGBA_RED]);
                               g += (weight * (double)entry[FI_RGBA_GREEN]);
@@ -908,6 +948,9 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the transparent 4-bit image to 32 bpp; 
                      // we always have got a palette for 4-bit images
+                     // the same for 4-bit, where the remainder is one nibble: an odd left
+                     // rescaled the columns of the even one below it
+                     const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
                      for (INT64 y = 0; y < height; y++) {
@@ -925,7 +968,8 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
                               const double weight = weightsTable.getWeight(x, i - iLeft);
-                              const INT64 pixel = i & 0x01 ? src_bits[i >> 1] & 0x0F : src_bits[i >> 1] >> 4;
+                              const INT64 isrc = i + src_nibble_offset;
+                              const INT64 pixel = isrc & 0x01 ? src_bits[isrc >> 1] & 0x0F : src_bits[isrc >> 1] >> 4;
                               const BYTE * const entry = (BYTE *)&src_pal[pixel];
                               r += (weight * (double)entry[FI_RGBA_RED]);
                               g += (weight * (double)entry[FI_RGBA_GREEN]);
@@ -1453,6 +1497,10 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
                const BYTE * const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 3);
+               // src_base is rounded down to a byte; the columns below are counted from
+               // the rectangle's left edge, so they have to carry the three bits that
+               // rounding dropped
+               const INT64 src_bit_offset = src_offset_x & 0x07;
 
                switch(FreeImage_GetBPP(dst)) {
                   case 8:
@@ -1464,8 +1512,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         for (INT64 x = 0; x < width; x++) {
                            // work on column x in dst
                            BYTE *dst_bits = dst_base + x;
-                           const INT64 index = x >> 3;
-                           const INT64 mask = 0x80 >> (x & 0x07);
+                           const INT64 index = (x + src_bit_offset) >> 3;
+                           const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
                            for (INT64 y = 0; y < dst_height; y++) {
@@ -1497,8 +1545,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         for (INT64 x = 0; x < width; x++) {
                            // work on column x in dst
                            BYTE *dst_bits = dst_base + x;
-                           const INT64 index = x >> 3;
-                           const INT64 mask = 0x80 >> (x & 0x07);
+                           const INT64 index = (x + src_bit_offset) >> 3;
+                           const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
                            for (INT64 y = 0; y < dst_height; y++) {
@@ -1534,8 +1582,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         for (INT64 x = 0; x < width; x++) {
                            // work on column x in dst
                            BYTE *dst_bits = dst_base + x * 3;
-                           const INT64 index = x >> 3;
-                           const INT64 mask = 0x80 >> (x & 0x07);
+                           const INT64 index = (x + src_bit_offset) >> 3;
+                           const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
                            for (INT64 y = 0; y < dst_height; y++) {
@@ -1570,8 +1618,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         for (INT64 x = 0; x < width; x++) {
                            // work on column x in dst
                            BYTE *dst_bits = dst_base + x * 3;
-                           const INT64 index = x >> 3;
-                           const INT64 mask = 0x80 >> (x & 0x07);
+                           const INT64 index = (x + src_bit_offset) >> 3;
+                           const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
                            for (INT64 y = 0; y < dst_height; y++) {
@@ -1609,8 +1657,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      for (INT64 x = 0; x < width; x++) {
                         // work on column x in dst
                         BYTE *dst_bits = dst_base + x * 4;
-                        const INT64 index = x >> 3;
-                        const INT64 mask = 0x80 >> (x & 0x07);
+                        const INT64 index = (x + src_bit_offset) >> 3;
+                        const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                         // scale each column
                         for (INT64 y = 0; y < dst_height; y++) {
@@ -1651,6 +1699,8 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
                const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 1);
+               // and the nibble that rounding dropped here
+               const INT64 src_nibble_offset = src_offset_x & 0x01;
 
                switch(FreeImage_GetBPP(dst)) {
                   case 8:
@@ -1661,7 +1711,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      for (INT64 x = 0; x < width; x++) {
                         // work on column x in dst
                         BYTE *dst_bits = dst_base + x;
-                        const INT64 index = x >> 1;
+                        const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
                         for (INT64 y = 0; y < dst_height; y++) {
@@ -1674,7 +1724,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            for (INT64 i = 0; i < iLimit; i++) {
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
-                              const INT64 pixel = x & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
+                              const INT64 pixel = (x + src_nibble_offset) & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
                               value += (weightsTable.getWeight(y, i) * (double)*(BYTE *)&src_pal[pixel]);
                               src_bits += src_pitch;
                            }
@@ -1695,7 +1745,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      for (INT64 x = 0; x < width; x++) {
                         // work on column x in dst
                         BYTE *dst_bits = dst_base + x * 3;
-                        const INT64 index = x >> 1;
+                        const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
                         for (INT64 y = 0; y < dst_height; y++) {
@@ -1709,7 +1759,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
                               const double weight = weightsTable.getWeight(y, i);
-                              const INT64 pixel = x & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
+                              const INT64 pixel = (x + src_nibble_offset) & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
                               const BYTE *const entry = (BYTE *)&src_pal[pixel];
                               r += (weight * (double)entry[FI_RGBA_RED]);
                               g += (weight * (double)entry[FI_RGBA_GREEN]);
@@ -1735,7 +1785,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      for (INT64 x = 0; x < width; x++) {
                         // work on column x in dst
                         BYTE *dst_bits = dst_base + x * 4;
-                        const INT64 index = x >> 1;
+                        const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
                         for (INT64 y = 0; y < dst_height; y++) {
@@ -1749,7 +1799,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                               // scan between boundaries
                               // accumulate weighted effect of each neighboring pixel
                               const double weight = weightsTable.getWeight(y, i);
-                              const INT64 pixel = x & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
+                              const INT64 pixel = (x + src_nibble_offset) & 0x01 ? *src_bits & 0x0F : *src_bits >> 4;
                               const BYTE *const entry = (BYTE *)&src_pal[pixel];
                               r += (weight * (double)entry[FI_RGBA_RED]);
                               g += (weight * (double)entry[FI_RGBA_GREEN]);
