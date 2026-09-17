@@ -42,7 +42,10 @@ IsVisualGreyscaleImage(FIBITMAP *dib) {
 			unsigned ncolors = FreeImage_GetColorsUsed(dib);
 			RGBQUAD *rgb = FreeImage_GetPalette(dib);
 			for (unsigned i = 0; i< ncolors; i++) {
-				if ((rgb->rgbRed != rgb->rgbGreen) || (rgb->rgbRed != rgb->rgbBlue)) {
+				// rgb[i], not rgb: the loop tested entry 0 ncolors times, so any
+				// palette whose first entry happened to be grey was reported as a
+				// greyscale one whatever the other entries held
+				if ((rgb[i].rgbRed != rgb[i].rgbGreen) || (rgb[i].rgbRed != rgb[i].rgbBlue)) {
 					return FALSE;
 				}
 			}
