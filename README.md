@@ -10,13 +10,13 @@ The library comes in two versions: a binary DLL distribution that can be linked 
 Workspace files for Microsoft Visual Studio provided, as well as makefiles for Linux, Mac OS X and other systems.
 
 --------
-This is a clone of https://sourceforge.net/p/freeimage/svn/ .
+This was initially a clone of https://sourceforge.net/p/freeimage/svn/ .
 
 FreeImage is currently sporadically maintained by Hervé Drolon on SourceForge. It is licensed under the GNU General Public License, version 2.0 (GPLv2) or version 3.0 (GPLv3), and the FreeImage Public License (FIPL). More details on the project homepage: https://freeimage.sourceforge.io/ .
 
 --------
 
-This branch is used to compile the FreeImage.DLL used in Quick Picto Viewer. It brings the following changes:
+This branch of the repository is used to compile the FreeImage.DLL used in Quick Picto Viewer. It brings the following changes:
 
 Fixes:
 
