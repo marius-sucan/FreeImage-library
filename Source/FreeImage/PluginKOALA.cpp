@@ -143,17 +143,28 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		unsigned char load_address[2];  // highbit, lowbit
 
-		io->read_proc(&load_address, 1, 2, handle);
+		if (io->read_proc(&load_address, 1, 2, handle) != 2) {
+			return NULL;
+		}
 
 		// if the load address is correct, skip it. otherwise ignore the load address
+		//
+		// koala_t is 10001 bytes, has no initialiser, and every one of them becomes
+		// a pixel below.  None of these reads was checked, so a file shorter than
+		// that handed the caller an image made of the process's own stack - a
+		// two-byte .koa was enough, and it decoded differently every time.
 
 		if ((load_address[0] != 0x00) || (load_address[1] != 0x60)) {
 			((BYTE *)&image)[0] = load_address[0];
 			((BYTE *)&image)[1] = load_address[1];
 
-			io->read_proc((BYTE *)&image + 2, 1, 10001 - 2, handle);
+			if (io->read_proc((BYTE *)&image + 2, 1, 10001 - 2, handle) != 10001 - 2) {
+				return NULL;
+			}
 		} else {
-			io->read_proc(&image, 1, 10001, handle);
+			if (io->read_proc(&image, 1, 10001, handle) != 10001) {
+				return NULL;
+			}
 		}		
 
 		// build DIB in memory
@@ -190,7 +201,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 					switch (pixel) {
 						case 0: // Background
-							found_color = image.background;
+							// every other branch takes a nibble; this took the whole byte,
+							// and the (found_color << 4) | found_color below then packed
+							// two different palette indices into one 4-bpp byte for what
+							// is one colour - a background of 0x35 came out as 0x75
+							found_color = image.background & 0x0f;
 							break;
 							
 						case 1: // Colour 1
