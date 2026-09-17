@@ -1789,8 +1789,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				const unsigned Bpc = dibBpp / chCount;
 				const unsigned srcBpp = bitspersample * samplesperpixel / 8;
 
-				assert(Bpc <= 2); //< CMYK is only BYTE or SHORT 
-				
+				// CMYK is only BYTE or SHORT, and the copy loops below index by Bpc.
+				// bitspersample and samplesperpixel come out of the file, so this used
+				// to be an assert() that a crafted TIFF could trip - taking the host
+				// process down in any build without NDEBUG, and in a build with one,
+				// letting the loops run with a stride they were not written for.
+				// Refuse the image instead.
+				if (Bpc > 2) {
+					FreeImage_Unload(alpha);
+					throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
+				}
+
 				// In the tiff file the lines are save from up to down 
 				// In a DIB the lines must be saved from down to up
 

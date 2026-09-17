@@ -543,8 +543,13 @@ ReadPropVariant(WORD tag_id, const DPKPROPVARIANT & varSrc, FIBITMAP *dib) {
 				break;
 
 			default:
-				assert(FALSE); // This case is not handled
-				break;
+				// An Exif value type this switch does not handle. The type comes out
+				// of the file, so the assert(FALSE) that used to stand here let a
+				// malformed JXR abort the host process in any build without NDEBUG.
+				// Drop the tag and tell the caller instead; the remaining tags are
+				// read independently of this one.
+				FreeImage_DeleteTag(tag);
+				return FALSE;
 		}
 		// get the tag desctiption
 		const char *description = s.getTagDescription(TagLib::EXIF_MAIN, tag_id);

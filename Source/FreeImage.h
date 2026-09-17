@@ -880,6 +880,12 @@ DLL_API int DLL_CALLCONV FreeImage_GetPageCount(FIMULTIBITMAP *bitmap);
 DLL_API void DLL_CALLCONV FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data);
 DLL_API void DLL_CALLCONV FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data);
 DLL_API void DLL_CALLCONV FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page);
+// The three above return void and so cannot report that the page was not added or
+// removed - a locked page, a read-only bitmap, a format that cannot encode the image
+// or hold more than one page. These do the same work and say whether it happened.
+DLL_API BOOL DLL_CALLCONV FreeImage_AppendPageEx(FIMULTIBITMAP *bitmap, FIBITMAP *data);
+DLL_API BOOL DLL_CALLCONV FreeImage_InsertPageEx(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data);
+DLL_API BOOL DLL_CALLCONV FreeImage_DeletePageEx(FIMULTIBITMAP *bitmap, int page);
 DLL_API FIBITMAP * DLL_CALLCONV FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page);
 DLL_API void DLL_CALLCONV FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *data, BOOL changed);
 DLL_API BOOL DLL_CALLCONV FreeImage_MovePage(FIMULTIBITMAP *bitmap, int target, int source);

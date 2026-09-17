@@ -2076,9 +2076,11 @@ FIBITMAP* psdParser::Load(FreeImageIO *io, fi_handle handle, int s_format_id, in
 			psd_read_exif_profile(Bitmap, _exif1._Data, _exif1._Size);
 			psd_read_exif_profile_raw(Bitmap, _exif1._Data, _exif1._Size);
 		} else if(NULL != _exif3._Data) {
-			// I have not found any files with this resource.
-			// Assume that we only want one Exif resource.
-			assert(false);
+			// The original author had not found a file with this resource and left an
+			// assert(false) here to say so. That is not a guard - the two lines below
+			// handle the case perfectly well - and since no makefile but Makefile.mingw
+			// defines NDEBUG, it aborted the whole process on a file this parser can
+			// read. Assume that we only want one Exif resource.
 			psd_read_exif_profile(Bitmap, _exif3._Data, _exif3._Size);
 			psd_read_exif_profile_raw(Bitmap, _exif3._Data, _exif3._Size);
 		}

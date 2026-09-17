@@ -298,7 +298,11 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 	if(state) {
 		return state->header.idCount;
 	}
-	return 1;
+	// no state means Open() failed, so there is no page here to count. This used to
+	// answer 1, and it is the only one of the seven multi-page plugins that did:
+	// a file that is not an icon was reported as holding a page that then would not
+	// load, which is also what stopped FreeImage_OpenMultiBitmap() noticing.
+	return 0;
 }
 
 // ----------------------------------------------------------
