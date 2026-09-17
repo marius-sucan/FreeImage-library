@@ -29,6 +29,11 @@ Every entry is also marked **upstream** or **local**:
 **40 findings.** Twelve of the fourteen files carry at least one (`Resize.h` and
 `Filters.h` are clean); finding 40 is in `Source/Utilities.h` and is reported here
 because `ClassicRotate.cpp` is what reaches it.
+
+> **25 of the 26 confirmed findings are now fixed**, in 25 commits
+> (`28287d1`..`9081915`). Each entry below carries the commit that fixed it. The one
+> exception is finding 25, a documented limitation rather than a defect — see
+> "Fixing pass" below for why, and for what the fixes were verified against.
 **26 are CONFIRMED**, each reproduced here; 14 are BY INSPECTION.
 **36 are upstream 3.18.0 defects; 4 are local.**
 
@@ -102,11 +107,91 @@ The five I would fix first:
 Finding 40 is in `Source/Utilities.h`; it is listed under `ClassicRotate.cpp` because
 that is the file that reaches it and the file a fix would have to be tested against.
 
+## Fixing pass
+
+*Added 2026-09-17, after the report above was written and pushed as `38e5afb`.*
+
+**25 of the 26 confirmed findings are fixed**, in 25 commits — one per finding,
+`28287d1`..`9081915` on `qpv`. Each heading below carries the commit that fixed it, and
+each commit message carries the before/after measurement. Eleven source files changed —
+ten of the fourteen in this directory (`Resize.cpp`, `Rescale.cpp`, `Background.cpp`,
+`CopyPaste.cpp`, `Colors.cpp`, `Channels.cpp`, `Flip.cpp`, `BSplineRotate.cpp`,
+`ClassicRotate.cpp`, `MultigridPoissonSolver.cpp`) plus `Source/Utilities.h` — and four
+language wrappers.
+
+The 14 **BY INSPECTION** findings are not touched: they were the ones that could not be
+driven from the public API here, so there is nothing to measure a fix against. They keep
+their entries below.
+
+**Finding 25 was deliberately not fixed.** `FreeImage_Rotate` refuses 4-bit and 16-bit
+images, and that is what its own documentation says it does — "Rotates a 1-, 8-, 24- or
+32-bit image" (`ClassicRotate.cpp:746`). Unlike every other confirmed finding it is
+neither a crash, nor memory corruption, nor silently wrong output: the caller gets NULL
+and can convert first. Making it work is new code, not a fix — 4 bpp needs its own
+nibble-level permutation in all three of `Rotate90`/`Rotate180`/`Rotate270` (the generic
+path computes `bytespp = GetLine / GetWidth`, which is 0 at 4 bpp), and 16 bpp needs the
+source masks propagated into `FreeImage_AllocateT` in the same three places or the
+rotated image loses its 555/565 identity. That is a feature request; it is left open.
+
+### Two adjacent defects found while fixing
+
+Both are described in the report under the finding whose fix exposed them, and both are
+in the commit that fixes it:
+
+* `FreeImage_RescaleRawBits` silently did nothing when the source rectangle already had
+  the destination size: `scale()`'s early exit hands back a freshly allocated bitmap
+  rather than writing through the header wrapped around `dst_bits`, and the function
+  returned 1 with the caller's buffer untouched (`c6f6e12`, finding 4e).
+* `FillBackgroundBitmap` entered its alpha-blending block on `FI_COLOR_IS_RGBA_COLOR`
+  alone, although `FI_COLOR_ALPHA_IS_INDEX` — which `FreeImage_AllocateExT` sets itself
+  on the way in — says the same byte is a palette index. The blend overwrote the index
+  with 0xFF, so `FreeImage_AllocateEx(w, h, 8, &grey, FI_COLOR_IS_RGBA_COLOR)` filled
+  with white (`e567527`, finding 21).
+
+### How the fixes were verified
+
+* `.claude/audit/toolkit/tk.c` grew to 40 named probes. Every one was run before its
+  fix and after it, and the before/after lines are quoted in the commit messages. The
+  whole set runs clean under ASan + UBSan + LeakSanitizer; the only sanitizer output
+  left anywhere is one pre-existing UBSan report inside `Source/LibJPEG/jdhuff.c:529`,
+  which probe `Z` reaches by loading a JPEG and which is outside this directory.
+* `.claude/audit/toolkit/bench.c` is a 2,281-case regression matrix: 23 source images
+  (every bit depth and image type, plus the three palette shapes that used to crash or
+  come out wrong)
+  through rescale at six filters in five shapes, `RescaleRect` with offsets, rotate at
+  twelve angles, flip, copy/paste/view, fill/allocate/enlarge with five colour options,
+  invert/gamma/brightness/contrast/curve/histogram/colour-and-index mapping, channel
+  extraction and insertion, composite, premultiply, the Poisson solver and two tone
+  mappers. Each signature covers dimensions, type, bit depth, masks, colour type,
+  transparency, palette and pixels.
+* After every fix the matrix was re-run and diffed by key (`cmp.py` — `sort`/`join` are
+  unusable here, they collate `.90` and `.-90` together). **Every commit's diff is
+  either empty or exactly the rows that finding describes**, and the commit message
+  names them.
+* The whole pass was also measured end to end: `Source/` at `bb98084` was restored into
+  a second build tree (`.claude/audit/stock_ref`) and the *current* matrix run against
+  it. It does not finish — it segfaults 224 rows in, on the first 4-bit
+  identity-palette rescale, which is finding 7. Of the 224 rows it does produce, 13
+  differ from the fixed build: `rescale.truecolor.1white` (finding 10) and the twelve
+  `rescale.up.1mid.*` / `rescale.vonly.1mid.*` over all six filters (finding 8). That no
+  before/after total can be quoted for the rest is itself the result: the matrix already
+  steers around the inputs that crash the unfixed library, and it still cannot get past
+  the fourth source image.
+* The OpenMP sweep — probe `Q` at `OMP_NUM_THREADS` = 1, 2, 4, 8 and 16 — is still
+  byte-identical, and so is the whole 2,281-case matrix at 8 threads versus 1.
+* Every changed `.cpp` was compiled with `-Wall -Wextra` against its pre-fix self: **no
+  new warning class or count anywhere**, and two disappear — 14 `-Wswitch` in
+  `Channels.cpp` and 2 `-Wconversion-null` in `Rescale.cpp`. All 91 translation units
+  under `Source/FreeImage`, `Source/FreeImageToolkit`, `Source/Metadata` and
+  `Source/FreeImageLib` still compile after the `Utilities.h` change.
+* `AssignPixel`'s constant-size `memcpy` costs nothing: `objdump` of the rebuilt `-O3`
+  `ClassicRotate.o` contains no call to `memcpy` at all.
+
 ---
 
 # Resize.cpp / Rescale.cpp / Resize.h
 
-## 1. `wordspp` and `floatspp` divide by the rectangle width, not the image width — CONFIRMED, upstream
+## 1. `wordspp` and `floatspp` divide by the rectangle width, not the image width — CONFIRMED, upstream  **Fixed in `1505c3f`.**
 
 `Resize.cpp:1142`, `:1176`, `:1214`, `:1256` (horizontalFilter) and `:1968`, `:2009`,
 `:2055`, `:2105` (verticalFilter):
@@ -161,7 +246,7 @@ WRITE of size 2 at 0x7917be3e06d0 thread T0
 The fix is `FreeImage_GetWidth(src)` in all eight places — that is what the quantity
 means, and it is what `Colors.cpp:113` already uses for the same computation.
 
-## 2. `CWeightsTable` reads `Weights[-1]` when the rectangle is empty — CONFIRMED, upstream
+## 2. `CWeightsTable` reads `Weights[-1]` when the rectangle is empty — CONFIRMED, upstream  **Fixed in `71aa1b2`.**
 
 `Resize.cpp:205-216`:
 
@@ -216,7 +301,7 @@ Three things are wrong and all three should be fixed: `FreeImage_RescaleRect` an
 should test `iTrailing >= 0` as its loop condition rather than inferring it from
 `Right == Left`; and `Right` should not be a type on which `--` can wrap past `Left`.
 
-## 3. `scale()` no longer checks that it allocated a destination — CONFIRMED, **local** (`2bdea22`)
+## 3. `scale()` no longer checks that it allocated a destination — CONFIRMED, **local** (`2bdea22`)  **Fixed in `28287d1`.**
 
 `Resize.cpp:336-345`:
 
@@ -263,7 +348,7 @@ AddressSanitizer:DEADLYSIGNAL
 A 100000×100000 destination is 30 GB, so this is the ordinary out-of-memory path of a
 public function, not a contrived one. Restoring the three deleted lines fixes it.
 
-## 4. `FreeImage_RescaleRawBits` — four defects in 65 lines — CONFIRMED, **local** (`2bdea22`)
+## 4. `FreeImage_RescaleRawBits` — four defects in 65 lines — CONFIRMED, **local** (`2bdea22`)  **Fixed in `c6f6e12`.**
 
 `Rescale.cpp:96-162`.
 
@@ -322,7 +407,7 @@ Two smaller notes on the same function: the RGBA masks are passed as
 555 or 565 (it is always treated as 555 by `IS_FORMAT_RGB565`); and the empty
 rectangle of finding 2 is reachable here too.
 
-## 7. A 4-bit image with an identity palette dereferences a NULL palette — CONFIRMED, upstream
+## 7. A 4-bit image with an identity palette dereferences a NULL palette — CONFIRMED, upstream  **Fixed in `402d7fd`.**
 
 `GetExtendedColorType` (`Resize.cpp:68-91`) classifies `pal[i].rgbBlue == i` as
 greyscale, so `color_type` stays `FIC_MINISBLACK` and `scale()` never sets `src_pal`
@@ -347,7 +432,7 @@ greyscale ramp the 8-bit branches assume, so either it should be reported as
 `FIC_PALETTE`, or the 4-bit filter branches need the same `if (src_pal)` split the
 1-bit and 8-bit branches already have.
 
-## 8. `verticalFilter` multiplies an already-scaled palette value by 255 — CONFIRMED, upstream
+## 8. `verticalFilter` multiplies an already-scaled palette value by 255 — CONFIRMED, upstream  **Fixed in `622124a`.**
 
 `Resize.cpp:1316-1343`, the 1-bit source → 8-bit destination branch **that has a
 palette**:
@@ -387,7 +472,7 @@ The downscale (`FreeImage_Rescale(dib, 2, 2, …)`, the *xy* path) is right: 128
 average of 64 and 192. The upscale (`8, 8`, the *yx* path, which runs `verticalFilter`
 first) is 255. Deleting line 1340 fixes it.
 
-## 9. The 16-bit 565 horizontal offset is halved — CONFIRMED, upstream
+## 9. The 16-bit 565 horizontal offset is halved — CONFIRMED, upstream  **Fixed in `055eba2`.**
 
 `Resize.cpp:995`:
 
@@ -425,7 +510,7 @@ FIT_UINT16, FIT_RGB16, FIT_RGBA16 and the float types. There the correct express
 `src_offset_x * wordspp` (which is what `verticalFilter:1974` uses), and the bug is
 masked by finding 1, which crashes first.
 
-## 10. `FI_RESCALE_TRUE_COLOR` inverts a FIC_MINISWHITE source — CONFIRMED, upstream
+## 10. `FI_RESCALE_TRUE_COLOR` inverts a FIC_MINISWHITE source — CONFIRMED, upstream  **Fixed in `52e2ca7`.**
 
 `scale()` only repairs the MINISWHITE convention when the destination is palettised,
 `Resize.cpp:345-350`:
@@ -505,7 +590,7 @@ that hides the intent.
 
 # Background.cpp
 
-## 6. `FillBackgroundBitmap` keeps a pointer to a dead stack object — CONFIRMED, upstream
+## 6. `FillBackgroundBitmap` keeps a pointer to a dead stack object — CONFIRMED, upstream  **Fixed in `34fd6c0`.**
 
 `Background.cpp:253-274`:
 
@@ -555,7 +640,7 @@ the kind of bug that changes behaviour when the compiler inlines differently or 
 optimiser reuses the frame. Moving `bgcolor` and `blend` to the top of the function
 fixes it, and costs nothing.
 
-## 13. `IsVisualGreyscaleImage` examines palette entry 0 `ncolors` times — CONFIRMED, upstream
+## 13. `IsVisualGreyscaleImage` examines palette entry 0 `ncolors` times — CONFIRMED, upstream  **Fixed in `f661d62`.**
 
 `Background.cpp:42-49`:
 
@@ -585,7 +670,7 @@ AG: palette[0] grey     -> FillBackground(red) picks index 0 (index 1 is pure re
 The only difference between the two runs is whether entry 0 happens to be grey. Fix:
 `rgb[i]`, or `rgb++` in the loop body.
 
-## 14. 4-bit `FillBackground` tests the wrong parity and misses the last column — CONFIRMED, upstream
+## 14. 4-bit `FillBackground` tests the wrong parity and misses the last column — CONFIRMED, upstream  **Fixed in `4065a7f`.**
 
 `Background.cpp:302-310`:
 
@@ -624,7 +709,7 @@ scanline's alignment padding, so it is not a memory error, but it is not image d
 either. `if (width & 1)` is the whole fix. (The 1-bit case immediately above,
 `:286-299`, gets the same question right: it tests `width & 7`.)
 
-## 21. `AllocateExT`'s 8-bit case leaves its substitute colour uninitialised — CONFIRMED, upstream
+## 21. `AllocateExT`'s 8-bit case leaves its substitute colour uninitialised — CONFIRMED, upstream  **Fixed in `e567527`.**
 
 `Background.cpp:603-620`:
 
@@ -666,7 +751,7 @@ without filling anything (`:243-246`); and the blended colour always comes back 
 implicit `FI_COLOR_ALPHA_IS_INDEX` that `:628` added — returns verbatim, so the fill
 uses palette index 255 rather than the requested grey.
 
-## 23. `FreeImage_FillBackground`'s new fourth parameter — CONFIRMED, **local** (`5112d61`)
+## 23. `FreeImage_FillBackground`'s new fourth parameter — CONFIRMED, **local** (`5112d61`)  **Fixed in `9081915`.**
 
 The signature became
 
@@ -711,7 +796,7 @@ A fully transparent fill is unrequestable, and 256 quietly means 0. A `BYTE` par
 with a separate `BOOL` would say what is meant; failing that, the range needs
 documenting and clamping.
 
-## 24. `FreeImage_AllocateExT` uses a bitmap it has not checked — CONFIRMED, upstream
+## 24. `FreeImage_AllocateExT` uses a bitmap it has not checked — CONFIRMED, upstream  **Fixed in `7388685`.**
 
 `Background.cpp:521-528`:
 
@@ -775,7 +860,7 @@ is already written.
 
 # CopyPaste.cpp
 
-## 12. `Combine4` never shifts the source nibbles for an odd x — CONFIRMED, upstream
+## 12. `Combine4` never shifts the source nibbles for an odd x — CONFIRMED, upstream  **Fixed in `120a452`.**
 
 `CopyPaste.cpp:139-184`. `dst_bits` is positioned at byte `x >> 1`, the row is copied
 straight across with `memcpy`, and the only concession to a half-byte destination
@@ -812,7 +897,7 @@ An even border is fine; an odd one loses two pixels of a four-pixel image. The f
 to shift the whole buffer by one nibble when `bOddStart`, i.e. to build the output row
 as `(buffer[i] >> 4) | (buffer[i+1] << 4)`, and to write `src_line + 1` bytes.
 
-## 18. `FreeImage_Paste` takes the 16-bit format from the destination only — CONFIRMED, upstream
+## 18. `FreeImage_Paste` takes the 16-bit format from the destination only — CONFIRMED, upstream  **Fixed in `fb11ade`.**
 
 `CopyPaste.cpp:677-682` derives `isRGB565` from `dst`'s masks, and `:685-686` skips
 conversion whenever the two bit depths are equal:
@@ -863,7 +948,7 @@ is correct. Not reproduced: a 4 GiB 1-bit bitmap is 34 gigapixels.
 
 # Flip.cpp
 
-## 11. 4-bit `FreeImage_FlipHorizontal` reverses bytes, including the pad nibble — CONFIRMED, upstream
+## 11. 4-bit `FreeImage_FlipHorizontal` reverses bytes, including the pad nibble — CONFIRMED, upstream  **Fixed in `8dd1c58`.**
 
 `Flip.cpp:65-76`:
 
@@ -908,7 +993,7 @@ intended in C++ (it would not in C). `FreeImage_FlipVertical`'s switch to copyin
 
 # ClassicRotate.cpp
 
-## 17. The skew filters add 0.5 to float samples — CONFIRMED, upstream
+## 17. The skew filters add 0.5 to float samples — CONFIRMED, upstream  **Fixed in `5d670e6`.**
 
 `ClassicRotate.cpp:96-98` (and `:233-235` in `VerticalSkewT`):
 
@@ -957,7 +1042,12 @@ handle it, and `AssignPixel` names it in the `case 2` comment, but neither
 `HorizontalSkew`/`VerticalSkew` (`:161-165`, `:300-304`) nor `FreeImage_Rotate`'s
 switch (`:892-897`) lists it.
 
-## 40. `AssignPixel` does unaligned 16- and 32-bit accesses — CONFIRMED, upstream
+**Left unfixed**, alone among the confirmed findings — see "Fixing pass" above. It is
+the only one that is neither a crash, nor memory corruption, nor silently wrong output,
+and the refusal is what the function's own documentation describes. Supporting these
+depths is new code rather than a repair.
+
+## 40. `AssignPixel` does unaligned 16- and 32-bit accesses — CONFIRMED, upstream  **Fixed in `4506d9a`.**
 
 `Source/Utilities.h:333-348` — outside this directory, but `ClassicRotate.cpp` is its
 main caller and is where UBSan reports it:
@@ -996,7 +1086,7 @@ function is not actually 64-bit clean, which is what the commit set out to make 
 
 # Colors.cpp
 
-## 15. `FreeImage_ApplyPaletteIndexMapping` does nothing for 1-bit images — CONFIRMED, upstream
+## 15. `FreeImage_ApplyPaletteIndexMapping` does nothing for 1-bit images — CONFIRMED, upstream  **Fixed in `f8bed84`.**
 
 `Colors.cpp:886-889`:
 
@@ -1019,7 +1109,7 @@ P: 1-bit SwapPaletteIndices changed 0 pixels; row = 0 1 0 1 0 1 0 1   (expected 
 The return value at least reports 0, so a caller that checks it is not misled — but it
 is reported the same way as "the colour was not present", which is not the same thing.
 
-## 19. `FreeImage_Invert` destroys the alpha channel — CONFIRMED, upstream
+## 19. `FreeImage_Invert` destroys the alpha channel — CONFIRMED, upstream  **Fixed in `8464e74`.**
 
 `Colors.cpp:93-103` computes `bytespp` from the line length and inverts every byte of
 every pixel; `:113-122` does the same in `WORD` units. For 32-bit FIT_BITMAP and
@@ -1036,7 +1126,7 @@ An opaque image becomes fully transparent. Whether that is the intended reading 
 the documentation says nothing about it. FIT_RGBF/RGBAF are rejected outright
 (`:125-128`), so there is no float precedent to be consistent with.
 
-## 20. `FreeImage_AdjustColors` reports failure when there is nothing to do — CONFIRMED, upstream
+## 20. `FreeImage_AdjustColors` reports failure when there is nothing to do — CONFIRMED, upstream  **Fixed in `dff3559`.**
 
 `Colors.cpp:626-629`:
 
@@ -1077,7 +1167,7 @@ does; the `|=` into a `BYTE` truncates to the same result. The 4-bit `skip_last`
 
 # Channels.cpp
 
-## 22. `Get`/`SetComplexChannel` succeed for channels they do not implement — CONFIRMED, upstream
+## 22. `Get`/`SetComplexChannel` succeed for channels they do not implement — CONFIRMED, upstream  **Fixed in `afd7861`.**
 
 `FreeImage_GetComplexChannel` (`Channels.cpp:362-434`) allocates the FIT_DOUBLE result
 *before* the `switch (channel)`, and the switch has no `default`. A request for, say,
@@ -1133,7 +1223,7 @@ never dereferenced (`:137` guards the read). This build did not flag it; it cost
 
 # BSplineRotate.cpp
 
-## 16. `FreeImage_RotateEx` dispatches on bit depth alone — CONFIRMED, upstream
+## 16. `FreeImage_RotateEx` dispatches on bit depth alone — CONFIRMED, upstream  **Fixed in `32be4a9`.**
 
 `BSplineRotate.cpp:659-722`:
 
@@ -1187,7 +1277,7 @@ is BY INSPECTION: nothing on this machine could hold both it and the `double` ar
 
 # MultigridPoissonSolver.cpp
 
-## 5. A 2×2 input indexes the grid array at −1 — CONFIRMED, upstream
+## 5. A 2×2 input indexes the grid array at −1 — CONFIRMED, upstream  **Fixed in `e68d76f`.**
 
 `MultigridPoissonSolver.cpp:330-357`:
 
