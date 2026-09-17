@@ -92,16 +92,25 @@ static int mkfile(FREE_IMAGE_FORMAT fif, const char *fn, int n, int bpp) {
    cache and LoadFromMemory on its way out. Does a frame's FIMD_ANIMATION survive
    that trip? If it does not, building an animation with AppendPage loses the frame
    timings, which is the whole point of an animation. */
-static int n12(FREE_IMAGE_FORMAT fif, const char *fn, int bpp) {
+static int n12(FREE_IMAGE_FORMAT fif, const char *fn, int bpp, int even_offsets) {
 	/* every FIMD_ANIMATION tag the GIF and APNG writers understand for a frame */
 	static const char *keys[] = { "FrameTime", "FrameLeft", "FrameTop", "DisposalMethod" };
 	static const FREE_IMAGE_MDTYPE types[] = { FIDT_LONG, FIDT_SHORT, FIDT_SHORT, FIDT_BYTE };
-	static const LONG vals[4][3] = {
+	static const LONG odd[4][3] = {
 		{ 120, 340, 560 },   /* FrameTime      */
 		{ 0, 3, 5 },         /* FrameLeft      */
 		{ 0, 2, 4 },         /* FrameTop       */
 		{ 1, 2, 1 }          /* DisposalMethod */
 	};
+	/* WebP stores frame offsets in even pixels only (the mux snaps with offset &= ~1),
+	   so an odd offset is not a faithful round trip to ask for */
+	static const LONG even[4][3] = {
+		{ 120, 340, 560 },
+		{ 0, 4, 8 },
+		{ 0, 2, 4 },
+		{ 1, 2, 1 }
+	};
+	const LONG (*vals)[3] = even_offsets ? even : odd;
 	const unsigned nkeys = sizeof(keys) / sizeof(keys[0]);
 	FIMULTIBITMAP *m;
 	unsigned t;
@@ -190,10 +199,13 @@ static int n5(FREE_IMAGE_FORMAT fif, const char *fn, int bpp) {
    FreeImage_SavePageToBlock() and FreeImage_UnlockPage() do to every page:
    SaveToMemory(cache_fif, dib, hmem, 0) on the way in, LoadFromMemory on the way
    out. Nothing else is involved. */
-static int n12_isolate(FREE_IMAGE_FORMAT fif, int bpp) {
+static int n12_isolate(FREE_IMAGE_FORMAT fif, int bpp, int even_offsets) {
 	static const char *keys[] = { "FrameTime", "FrameLeft", "FrameTop", "DisposalMethod" };
 	static const FREE_IMAGE_MDTYPE types[] = { FIDT_LONG, FIDT_SHORT, FIDT_SHORT, FIDT_BYTE };
-	static const LONG vals[] = { 340, 3, 2, 2 };
+	/* WebP snaps odd frame offsets to even, so ask it for an even one */
+	static const LONG odd[] = { 340, 3, 2, 2 };
+	static const LONG even[] = { 340, 4, 2, 2 };
+	const LONG *vals = even_offsets ? even : odd;
 	const unsigned nkeys = sizeof(keys) / sizeof(keys[0]);
 	FIBITMAP *d = page(60, 16, 16, bpp);
 	FIMEMORY *hmem;
@@ -242,11 +254,13 @@ int main(int argc, char **argv) {
 
 	if (!strcmp(cmd, "all") || !strcmp(cmd, "n12")) {
 		printf("N12 - does a frame's FIMD_ANIMATION survive the cache round trip?\n");
-		n12(FIF_GIF,  "n12.gif", 8);
-		n12(FIF_APNG, "n12.png", 8);
+		n12(FIF_GIF,  "n12.gif", 8, 0);
+		n12(FIF_APNG, "n12.png", 8, 0);
+		n12(FIF_WEBP, "n12.webp", 24, 1);
 		printf("  isolating the cache round trip on its own:\n");
-		n12_isolate(FIF_GIF, 8);
-		n12_isolate(FIF_APNG, 8);
+		n12_isolate(FIF_GIF, 8, 0);
+		n12_isolate(FIF_APNG, 8, 0);
+		n12_isolate(FIF_WEBP, 24, 1);   /* WebP has no palette, and wants even offsets */
 		printf("\n");
 	}
 
@@ -304,6 +318,52 @@ int main(int argc, char **argv) {
 				       " (the other six plugins return 0 here)\n", FreeImage_GetPageCount(m));
 				FreeImage_CloseMultiBitmap(m, 0);
 			}
+		}
+		printf("\n");
+	}
+
+	if (!strcmp(cmd, "anim")) {
+		/* Walk an animation with the multi-page API and report what each frame says,
+		   then rewrite it through the API and report again. Used with webpanim.py,
+		   whose files come from a different encoder entirely. */
+		FREE_IMAGE_FORMAT fif = (FREE_IMAGE_FORMAT)atoi(argv[2]);
+		const char *in = argv[3];
+		const char *out = argc > 4 ? argv[4] : NULL;
+		FIMULTIBITMAP *m;
+		int k, n;
+
+		m = FreeImage_OpenMultiBitmap(fif, in, FALSE, TRUE, TRUE, 0);
+		if (!m) { printf("    open %s failed\n", in); n = -1; }
+		if (m) {
+		n = FreeImage_GetPageCount(m);
+		printf("    %s: %d frame(s)\n", in, n);
+		for (k = 0; k < n; k++) {
+			FIBITMAP *d = FreeImage_LockPage(m, k);
+			printf("      frame %d: %ux%u time=%ld left=%ld top=%ld disposal=%ld blend=%ld",
+			       k, d ? FreeImage_GetWidth(d) : 0, d ? FreeImage_GetHeight(d) : 0,
+			       get_anim(d, "FrameTime"), get_anim(d, "FrameLeft"), get_anim(d, "FrameTop"),
+			       get_anim(d, "DisposalMethod"), get_anim(d, "BlendMethod"));
+			if (k == 0) {
+				printf(" canvas=%ldx%ld loop=%ld",
+				       get_anim(d, "LogicalWidth"), get_anim(d, "LogicalHeight"), get_anim(d, "Loop"));
+			}
+			printf("\n");
+			if (d) FreeImage_UnlockPage(m, d, FALSE);
+		}
+		if (out != NULL) {
+			/* rewrite it, frame for frame, through SaveMultiBitmapToHandle */
+			FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+			BYTE *bytes = NULL;
+			DWORD size = 0;
+			int rc = FreeImage_SaveMultiBitmapToMemory(fif, m, mem, WEBP_LOSSLESS);
+			FILE *f;
+			FreeImage_AcquireMemory(mem, &bytes, &size);
+			f = fopen(out, "wb");
+			if (f) { fwrite(bytes, 1, size, f); fclose(f); }
+			printf("    rewrote -> %s (%u bytes, save=%d)\n", out, (unsigned)size, rc);
+			FreeImage_CloseMemory(mem);
+		}
+		FreeImage_CloseMultiBitmap(m, 0);
 		}
 		printf("\n");
 	}

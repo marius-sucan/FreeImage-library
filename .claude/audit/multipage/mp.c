@@ -12,6 +12,7 @@ static void msg(FREE_IMAGE_FORMAT fif, const char *m) {
 /* page filled with byte value v; 8-bit greyscale-palette by default,
    24-bit grey when FI_BPP=24 (WebP and friends reject palettes) */
 static int g_bpp = 8;
+static int g_saveflags = 0;   /* flags handed to FreeImage_CloseMultiBitmap (FI_SAVEFLAGS) */
 
 static FIBITMAP *page(int v, int w, int h) {
 	FIBITMAP *d = FreeImage_Allocate(w, h, g_bpp, 0, 0, 0);
@@ -70,7 +71,7 @@ static int mk(FREE_IMAGE_FORMAT fif, const char *fn, int n) {
 		FreeImage_Unload(d);
 	}
 	printf("  mk: %s pages=%d -> %s\n", FreeImage_GetFormatFromFIF(fif), FreeImage_GetPageCount(m), fn);
-	return FreeImage_CloseMultiBitmap(m, 0) ? 0 : 1;
+	return FreeImage_CloseMultiBitmap(m, g_saveflags) ? 0 : 1;
 }
 
 /* print the page count and the first pixel of every page */
@@ -93,6 +94,7 @@ int main(int argc, char **argv) {
 	const char *cmd = argc > 1 ? argv[1] : "";
 	const char *bpp = getenv("FI_BPP");
 	if (bpp) g_bpp = atoi(bpp);
+	{ const char *sf = getenv("FI_SAVEFLAGS"); if (sf) g_saveflags = (int)strtol(sf, NULL, 0); }
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(msg);
 
@@ -110,7 +112,7 @@ int main(int argc, char **argv) {
 		m = FreeImage_OpenMultiBitmap(fif, argv[3], FALSE, FALSE, TRUE, 0);
 		printf("  MovePage(target=%d, source=%d) -> %d\n", target, source,
 		       FreeImage_MovePage(m, target, source));
-		FreeImage_CloseMultiBitmap(m, 0);
+		FreeImage_CloseMultiBitmap(m, g_saveflags);
 		dump(fif, argv[3], "after   ");
 
 	} else if (!strcmp(cmd, "lockdel")) {
@@ -129,7 +131,7 @@ int main(int argc, char **argv) {
 			printf("    LockPage(%d) -> value %d %s\n", k, firstpix(d), d ? "" : "(NULL)");
 			if (d) FreeImage_UnlockPage(m, d, FALSE);
 		}
-		FreeImage_CloseMultiBitmap(m, 0);
+		FreeImage_CloseMultiBitmap(m, g_saveflags);
 		dump(fif, argv[3], "on disk ");
 
 	} else if (!strcmp(cmd, "unlockedit")) {
@@ -150,7 +152,7 @@ int main(int argc, char **argv) {
 				memset(FreeImage_GetScanLine(d, y), 200, FreeImage_GetLine(d));
 			FreeImage_UnlockPage(m, d, TRUE);
 		}
-		FreeImage_CloseMultiBitmap(m, 0);
+		FreeImage_CloseMultiBitmap(m, g_saveflags);
 		dump(fif, argv[3], "on disk ");
 
 	} else if (!strcmp(cmd, "nonmp")) {
@@ -194,7 +196,7 @@ int main(int argc, char **argv) {
 		FreeImage_DeletePage(m, atoi(argv[4]));
 		printf("  survived; GetPageCount=%d\n", FreeImage_GetPageCount(m));
 		fflush(stdout);
-		FreeImage_CloseMultiBitmap(m, 0);
+		FreeImage_CloseMultiBitmap(m, g_saveflags);
 		dump(fif, argv[3], "on disk ");
 
 	} else if (!strcmp(cmd, "locknegpage")) {
@@ -340,7 +342,7 @@ int main(int argc, char **argv) {
 		FreeImage_InsertPage(m, at, d);
 		FreeImage_Unload(d);
 		printf("  count after=%d\n", FreeImage_GetPageCount(m));
-		FreeImage_CloseMultiBitmap(m, 0);
+		FreeImage_CloseMultiBitmap(m, g_saveflags);
 		dump(fif, argv[3], "after  ");
 
 	} else if (!strcmp(cmd, "openmodes")) {
@@ -412,7 +414,7 @@ int main(int argc, char **argv) {
 			if (p) FreeImage_UnlockPage(m, p, FALSE);
 		}
 		printf("]  %s\n", bad ? "*** LockPage DISAGREES WITH THE MODEL ***" : "matches");
-		printf("  close=%d\n", FreeImage_CloseMultiBitmap(m, 0));
+		printf("  close=%d\n", FreeImage_CloseMultiBitmap(m, g_saveflags));
 		dump(fif, argv[3], "on disk");
 
 	} else if (!strcmp(cmd, "matrix")) {

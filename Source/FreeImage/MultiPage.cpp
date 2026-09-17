@@ -329,6 +329,22 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	return dib;
 }
 
+// Flags for the round trip every page makes through the cache, which is stored in
+// cache_fif - the file's own format. A format with a lossy default has to be told to
+// use its lossless mode here: the cache is scratch space, and a page that went into it
+// lossily would be decoded and encoded again on the way to the file, carrying two
+// generations of loss into a document the caller only saved once. WebP is the only
+// multi-page format this applies to; the others have nothing lossy to turn off.
+static int
+FreeImage_GetCacheFlags(FREE_IMAGE_FORMAT fif) {
+	switch (fif) {
+		case FIF_WEBP:
+			return WEBP_LOSSLESS;
+		default:
+			return 0;
+	}
+}
+
 // Can this plugin serve the multi-bitmap the caller is asking for? A format with no
 // loader cannot produce a single page of an existing file, and one with no writer can
 // never be turned into a file at all: FreeImage_OpenMultiBitmap(FIF_AVIF, f, TRUE, ...)
@@ -861,7 +877,7 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 		return res;
 	}
 	// save the file to memory
-	if(!FreeImage_SaveToMemory(header->cache_fif, data, hmem, 0)) {
+	if(!FreeImage_SaveToMemory(header->cache_fif, data, hmem, FreeImage_GetCacheFlags(header->cache_fif))) {
 		FreeImage_CloseMemory(hmem);
 		return res;
 	}
@@ -1182,7 +1198,7 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				FIMEMORY *hmem = FreeImage_OpenMemory();
 
 				if ((hmem == NULL)
-					|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, 0)
+					|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, FreeImage_GetCacheFlags(header->cache_fif))
 					|| !FreeImage_AcquireMemory(hmem, &compressed_data, &compressed_size)
 					|| (compressed_data == NULL) || (compressed_size == 0)
 					|| (compressed_size > (DWORD)0x7FFFFFFF)) {   /* see FreeImage_SavePageToBlock */
