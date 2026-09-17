@@ -132,16 +132,24 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 	if (bIsRLE) {
 		// run-length encoded read
 
-		while (length--) {
+		while (written < length) {
 			if (count == 0) {
 				if (*ReadPos >= PCX_IO_BUF_SIZE - 1 ) {
+					unsigned got;
+
 					if (*ReadPos == PCX_IO_BUF_SIZE - 1) {
 						// we still have one BYTE, copy it to the start pos
 						*ReadBuf = ReadBuf[PCX_IO_BUF_SIZE - 1];
-						io->read_proc(ReadBuf + 1, 1, PCX_IO_BUF_SIZE - 1, handle);
+						got = io->read_proc(ReadBuf + 1, 1, PCX_IO_BUF_SIZE - 1, handle);
+						// whatever the stream could not supply is not pixel data.  The
+						// result of these two reads used to be discarded, so the tail of
+						// a truncated file decoded as the previous refill - and on the
+						// first refill, as the uninitialised heap this buffer comes from.
+						memset(ReadBuf + 1 + got, 0, PCX_IO_BUF_SIZE - 1 - got);
 					} else {
 						// read the complete buffer
-						io->read_proc(ReadBuf, 1, PCX_IO_BUF_SIZE, handle);
+						got = io->read_proc(ReadBuf, 1, PCX_IO_BUF_SIZE, handle);
+						memset(ReadBuf + got, 0, PCX_IO_BUF_SIZE - got);
 					}
 
 					*ReadPos = 0;
@@ -152,6 +160,16 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 				if ((value & 0xC0) == 0xC0) {
 					count = value & 0x3F;
 					value = *(ReadBuf + (*ReadPos)++);
+
+					// A repeat count of zero is no pixels, not 256 of them.  count is a
+					// BYTE, so the decrement below turned 0 into 255: one 0xC0 byte
+					// replaced the rest of a row with copies of one value and shifted
+					// every row after it.  The PCX specification gives the count as
+					// 1..63, and netpbm's pcxtoppm and ImageMagick's coders/pcx.c both
+					// emit nothing for 0.
+					if (count == 0) {
+						continue;
+					}
 				} else {
 					count = 1;
 				}
