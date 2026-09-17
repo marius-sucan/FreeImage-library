@@ -3,6 +3,12 @@
 Range reviewed: `215257a..d883162` (29 code commits + 3 `AUDIT.md` commits), branch `qpv`.
 Reviewed 2026-09-16. **No files were modified by this review.**
 
+Section G, added later the same day, covers the 21 commits that fix AUDIT.md's
+second-pass findings (`6083928..350b9f0`) — only the six of them that had to
+choose between readings of a malformed file, plus the two stream-relative seek
+fixes. Two residual entries in section D, D4 and D9, are closed by that range
+and say so.
+
 The question this report answers is narrower than "are the fixes correct": it is
 *does each change still accept, and still decode identically, every file the
 format's specification allows — and does it reject what the specification
@@ -653,7 +659,7 @@ back negated. So: invert on write when
 `FreeImage_GetColorType(dib) == FIC_MINISBLACK`, and leave `FIC_MINISWHITE`
 alone.
 
-## D4. RAS — a 32-bit surface with an odd width consumes a phantom pad byte
+## D4. RAS — a 32-bit surface with an odd width consumes a phantom pad byte — **fixed, `7c56d90`**
 
 `PluginRAS.cpp:379-385`. `fill` is derived from `linelength % 2` where
 `linelength = header.width`, but a 32-bit row is `width * 4` bytes, which is
@@ -670,6 +676,12 @@ r01: 20 30 ff 20 | 20 30 ff 21 | 20 30 30 22      <- shifted by 1
 This sits inside the `linelength`/`fill` block that `ffa77c9` rewrote, so it is
 worth folding into the same area: `fill` should be computed from the row's byte
 length, not from the pixel count.
+
+Done in `7c56d90`: `linelength` now holds what its name says — `width * depth/8`,
+or `(width + 7) / 8` at 1 bpp — and `fill` follows from its parity. The file
+above decodes to `0d 0e 0f 0c | 11 12 13 10 | 15 16 17 14`. Controls checked at
+the other depths and parities: 24 bpp odd width, 8 bpp odd width (which does
+carry a pad byte, and still consumes it), 32 bpp even width, 1 bpp width 5.
 
 ## D5. ICO — `biHeight` is not required to be even
 
@@ -711,13 +723,19 @@ the packet in the stream and misaligning everything after it. `8b585c7` fixed
 exactly this asymmetry in the PBM branch and left the ILBM one as it was. The
 loop is bounded by `src_size` so it terminates, but the decode is wrong.
 
-## D9. RAS — `RMT_RAW` allocates a file-controlled size unchecked
+## D9. RAS — `RMT_RAW` allocates a file-controlled size unchecked — **fixed, `dcdb5d1`**
 
 `PluginRAS.cpp:362-364`: `malloc(header.maplength)` with no NULL check, then
 `read_proc` through the result. `ras_maplength` is a 32-bit file field, so this
 is a 4 GiB allocation request followed by a NULL dereference. Adjacent to the
 colormap code `c1f2f66` changed but in a different `case`. (The block reads the
 colormap purely to skip it; a `seek_proc` would be both safer and faster.)
+
+Done in `dcdb5d1`, by the second half of that parenthesis: the allocation is gone
+and the plugin seeks past the colormap, in steps that fit a `long` on a 32-bit
+build. A 34-byte file's largest request drops from 4294967295 bytes to the 4096
+the library itself asks for. The other three `malloc`s in the same plugin are
+checked in the same commit.
 
 ## D10. DDS — dead variable
 
@@ -756,11 +774,14 @@ fix A1 and this at once.
    1-bpp save works, and it makes every 1-bpp PSD the library writes a negative.
 4. **DDS negative `delta` (D2)** — one comparison; the `DDSD_PITCH` with
    `dwPitchOrLinearSize = 0` case is common enough to matter.
-5. **RAS 32-bit odd-width `fill` (D4)** — compute the pad from the row's byte
-   length. Same block as `ffa77c9`.
+5. ~~**RAS 32-bit odd-width `fill` (D4)**~~ — **done, `7c56d90`**.
 6. Lower priority: D5 (ICO even height), D8 (ILBM literal consumption),
-   D9 (`RMT_RAW` malloc), D10 (dead variable), D7 (PICT `rowBytes` fallback),
-   D6 (PSD resource 1046), D11, D12.
+   ~~D9 (`RMT_RAW` malloc)~~ — **done, `dcdb5d1`** — D10 (dead variable),
+   D7 (PICT `rowBytes` fallback), D6 (PSD resource 1046), D11, D12.
+
+D4 and D9 are the only two the second-pass range closed. D1, D2, D3, D5, D6, D7,
+D8, D10, D11 and D12 stand exactly as written above — none of the 21 fixes went
+near them, and D1's measurement was re-run unchanged.
 
 # F. Reproducing
 
@@ -775,3 +796,94 @@ diff <(join baseline.txt) <(join now.txt)   # joined by filename
 ```
 
 against `.claude/audit/baseline.txt`, which is the pre-fix record.
+
+---
+
+# G. Addendum: the second pass's 21 fixes, `6083928..350b9f0`
+
+This report reviewed `215257a..d883162`. The 21 commits that followed fix
+AUDIT.md's second-pass findings, and six of them had to choose between readings
+of a malformed file that the format does not settle. Recorded here for the same
+reason as everything above: a decode decision is a conformance decision.
+
+Each was checked the same way — the reproducer, its well-formed control, and the
+72-file valid corpus, which is byte-identical across all 21 commits.
+
+## G1. RAS `7c56d90` — the pad byte follows the row, so the row's length decides it
+
+D4, above.
+
+## G2. SGI `b598bf4` — an opcode with a zero run length is skipped
+
+The SGI RLE opcode `0x80` gives a run of no pixels. Two readings are defensible:
+the format's own (`pixel = count & 0x7f; if (!pixel) break;` — end of scanline)
+and PackBits' (a no-op; FreeImage's PICT decoder already comments "Special case:
+repeat value of 0. Apple says ignore."). The old code produced neither — the
+counter went to -1 and every later byte of the stream came out as a literal
+pixel.
+
+Skip was taken. This decoder reaches every row through the RLE offset table and
+writes exactly `width` pixels per row, so "end of scanline" would leave the rest
+of the row with no defined content — trading a decode bug for a disclosure. And
+the loop that fetches the opcode already skipped a bare `0x00`, the other value
+whose low seven bits are zero, so skipping is what the code was already doing for
+half the cases. A row encoded `0x82 11 22 | 0x80 | 0x82 33 44` now decodes to
+`11 22 33 44`, identical to the same row written as one literal run.
+
+## G3. PCX `0b2c4d2` — a run length of zero emits nothing
+
+The PCX repeat count is 1..63 and the format has no meaning for 0. `count` was a
+`BYTE` and `count--` made it 255, so one `0xC0` byte replaced a row with 256
+copies of one value. netpbm's `pcxtoppm` uses `while (count-- > 0)` on an `int`
+and ImageMagick's `coders/pcx.c` the same: both emit nothing. So does FreeImage
+now, and the reproducer decodes byte for byte the same as a control carrying no
+`0xC0` packet.
+
+Skipping a packet means the decode must be able to make progress without writing,
+which needs the same commit's other half: the two buffer refills discarded their
+result, so a truncated file went on decoding the previous refill — and on the
+first one, the uninitialised heap the buffer is `malloc`'d from. What the stream
+cannot supply is zeroed, which makes a truncated PCX decode the same way twice
+and makes the loop provably terminate.
+
+## G4. ICO `b522371` — 2 bpp leaves the whitelist
+
+The CVE-2020-24292 bit-depth whitelist admitted 2, which
+`FreeImage_AllocateBitmap` has no case for and rounds up to 8 — so the bitmap was
+8 bpp while `line` and `pitch` had been computed for 2, and a quarter of the rows
+were ever written. Windows icons are 1, 4, 8, 16, 24 or 32 bpp; 2 is not a depth
+the format defines, and it is off the list rather than added to the allocator.
+
+## G5. PNM `5f2f20a` — an ASCII sample is held to `maxval`
+
+The PNM formats require every sample to be `<= maxval`. Nothing enforced it, and
+the scaling that follows is `255 * level` in an `int` and
+`65535 * (double)level` cast to a `WORD` — overflow and an out-of-range float
+conversion respectively, both undefined. Samples are clamped to the declared
+`maxval` at the one place they are read. Conforming files are unaffected: ASCII
+greymaps and pixmaps at `maxval` 255 and 65535 decode to the same bytes as
+before.
+
+## G6. KOALA `b527e6e` — a short file is refused, not zero-filled
+
+`koala_t` is 10001 bytes and every one of them becomes a pixel. A file that does
+not carry a whole image was decoded from the stack; it is refused now rather than
+padded, because a KOALA file has exactly one length and a shorter one is not a
+picture of anything. (The same commit masks `image.background` to a nibble, as
+every other branch of the colour switch does: a background byte of `0x35` was
+packed as `0x75`, two different palette indices for one colour.)
+
+## G7. Stream-relative seeks — PCX `9e64484`, ICO `350b9f0`
+
+Not a format choice but a container one. An image's internal offsets — a PCX's
+palette and header lengths, an ICO's directory position and each
+`dwImageOffset` — count from the start of the image, not of the file it is
+embedded in. Both plugins seeked to them absolutely, so neither was readable
+through a handle positioned inside a larger stream. Both now add the position the
+load started at. Verified by decoding the same files at stream offset 0 and 64
+and comparing the pixels.
+
+One case is deliberately left: PCX's `seek_proc(handle, -769L, SEEK_END)`. "The
+last 769 bytes of the file" is the format's own definition of where an 8-bpp PCX
+keeps its palette, not an assumption the plugin makes, and an embedded PCX with
+data after it gives no way to work out where the palette really is.
