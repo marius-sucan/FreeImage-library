@@ -533,6 +533,11 @@ FIBITMAP * DLL_CALLCONV
 FreeImage_AllocateExT(FREE_IMAGE_TYPE type, int width, int height, int bpp, const void *color, int options, const RGBQUAD *palette, unsigned red_mask, unsigned green_mask, unsigned blue_mask) {
 
 	FIBITMAP *bitmap = FreeImage_AllocateT(type, width, height, bpp, red_mask, green_mask, blue_mask);
+	if (!bitmap) {
+		// the palette branch below runs before the colour branch's own NULL test,
+		// and memcpy may not be handed a null destination even with a length of 0
+		return NULL;
+	}
 	
 	if (!color) {
 		if ((palette) && (type == FIT_BITMAP) && (bpp <= 8)) {
