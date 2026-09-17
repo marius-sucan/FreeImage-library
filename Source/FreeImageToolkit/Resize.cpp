@@ -1018,7 +1018,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   #pragma omp parallel for schedule(dynamic) default(shared)
                   for (INT64 y = 0; y < height; y++) {
                      // scale each row
-                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x / sizeof(WORD);
+                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
                      BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
 
                      for (INT64 x = 0; x < dst_width; x++) {
@@ -1169,7 +1169,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x / sizeof(WORD);
+            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
             WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
 
             for (INT64 x = 0; x < dst_width; x++) {
@@ -1203,7 +1203,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x / sizeof(WORD);
+            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
             WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
 
             for (INT64 x = 0; x < dst_width; x++) {
@@ -1241,7 +1241,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
          #pragma omp parallel for schedule(dynamic) default(shared)
          for (INT64 y = 0; y < height; y++) {
             // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x / sizeof(WORD);
+            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
             WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
 
             for (INT64 x = 0; x < dst_width; x++) {
@@ -1283,7 +1283,7 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
          #pragma omp parallel for schedule(dynamic) default(shared)
          for(INT64 y = 0; y < height; y++) {
             // scale each row
-            const float *src_bits = (float*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x / sizeof(float);
+            const float *src_bits = (float*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * floatspp;
             float *dst_bits = (float*)FreeImage_GetScanLine(dst, y);
 
             for(INT64 x = 0; x < dst_width; x++) {
