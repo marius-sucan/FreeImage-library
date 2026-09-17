@@ -647,7 +647,7 @@ gcc -shared -fPIC -o renamefail.so renamefail.c -ldl
 | `cachefuzz` (separate binary) | C1, N1, N2, N4, N11, N14 — drives `CacheFile` directly under ASan |
 | `ncheck n5 / n8 / n10 / n12 / n15` | N5, N8, N10, N12, N15 |
 | `ncheck n7prep` then `ncheck n7edit` under `renamefail.so` | N7 — makes `rename()` fail on demand |
-| `mkpsd_exif3.py` + `ncheck n16 exif3.psd 20` | N16 — a PSD that aborts the unfixed library |
+| `mp mk 20 base.psd 1`, then `mkpsd_exif3.py base.psd exif3.psd`, then `ncheck n16 exif3.psd 20` | N16 — a PSD that aborts the unfixed library |
 | `cachestress <n>` | C1/N11 through the public API (`FI_MEMCACHE=1` for the memory cache) |
 | `savelock <fif> <file>` | N5 |
 | `wrongfif <fif> <file>` | N10 |
