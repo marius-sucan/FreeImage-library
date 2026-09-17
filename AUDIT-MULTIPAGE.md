@@ -24,7 +24,8 @@ local ones are M10 and N5, both called out as such.
 
 > **Status: every reproduced finding is fixed.**
 > M1–M9, M11 in `d79f90e`; M12, N6 in `28178b1`; C1, C2, N1, N2, N11, N14 in `e669ea6`;
-> N3, N7, N8, N10, N15, N16 in `6267d80`; **M10 in `a48037f` and `de6aa23`**.
+> N3, N7, N8, N10, N15, N16 in `6267d80`; **M10 in `a48037f` and `de6aa23`**, with
+> GIF and APNG brought into line in `14550e7`.
 > N4 and N13 turned out to have been fixed already, and **N5 and N12 are not defects** —
 > see §5.3. See §5.
 
@@ -70,10 +71,16 @@ quality the pixels move, as they would for any lossy save.
   the plugin never emits `FIMD_ANIMATION`. A multi-image HEIC is a burst/collection,
   not a sequence. TIFF and ICO are multi-image but have no time dimension.
 - **`FIMD_ANIMATION` is emitted by exactly 4 plugins:** GIF, APNG, WebP, AVIF.
-- **Where the canvas lives:** GIF and APNG attach `LogicalWidth`/`LogicalHeight`/`Loop`
-  to page 0 alone, so deleting the first page of an animation discards the only record
-  of its canvas. WebP attaches them to every frame (`de6aa23`) precisely so that
-  editing a document does not shrink it. GIF and APNG still have this limitation.
+- **Where the canvas lives:** all three attach `LogicalWidth`/`LogicalHeight`/`Loop` to
+  **every** frame (`de6aa23` for WebP, `14550e7` for GIF and APNG). The canvas is stored
+  once per file in each format — GIF's Logical Screen Descriptor, APNG's `IHDR`, WebP's
+  `VP8X` — and nothing per-frame is written to any file; this is only about which
+  in-memory pages the loader hands that one value to. Page 0 alone is enough to
+  *describe* an animation and not enough to *edit* one: deleting the first page used to
+  discard the only record of the canvas, and GIF and APNG both shrank a 64×48 animation
+  to 20×20. GIF's **global palette** and comments deliberately stay on page 0 — a
+  palette can be a kilobyte per frame, and a writer that has lost it can emit local
+  palettes instead.
 
 ## 1.4 The trap: MNG is an animation format this API cannot reach
 
@@ -644,7 +651,17 @@ Three things were not obvious:
   own format, so a page was encoded lossily into the cache and lossily again into the
   file. The cache now uses `WEBP_LOSSLESS`; WebP is the only multi-page format with
   anything lossy to turn off.
-- **The canvas has to travel with every frame.** See §1.3.
+- **The canvas has to travel with every frame.** See §1.3. GIF and APNG were changed
+  to match in `14550e7`, so the three animation plugins now follow one convention.
+- **The cache has to carry a page's `FIMD_ANIMATION` itself** (`14550e7`). libwebp
+  deletes the ANMF chunk of a one-frame animation whose frame fills the canvas
+  (`MuxCleanup`, `muxedit.c:560`), taking the duration and offsets with it — so a frame
+  appended with a duration but no declared canvas came back out of the cache without
+  one (durations 100/200/300 in, 100/0/0 out, confirmed in the file by Pillow). There
+  is no WebP-side fix for that, so `MultiPage.cpp` now keeps each cached page's
+  animation tags beside its cache block, which makes the cache independent of what any
+  single-image writer can store. Note that `FreeImage_CloneMetadata` cannot be used for
+  this: it copies every model *except* `FIMD_ANIMATION` (`BitmapAccess.cpp:1313`).
 
 Two format constraints are worth knowing rather than fixing: WebP stores frame offsets
 in even pixels only (the mux snaps with `offset &= ~1`, so the writer rounds too), and
@@ -695,7 +712,9 @@ gcc -shared -fPIC -o renamefail.so renamefail.c -ldl
 | `cachefuzz` (separate binary) | C1, N1, N2, N4, N11, N14 — drives `CacheFile` directly under ASan |
 | `ncheck n5 / n8 / n10 / n12 / n15` | N5, N8, N10, N12, N15 |
 | `webpanim.py make`, then `ncheck anim 35 <in> [out]` | M10 — walks an animation, rewrites it, and reads it back composited; `webpanim.py show` checks the result with Pillow |
-| `ncheck canvas 35 c.webp` | M10 — the canvas after the page that declared it is deleted |
+| `ncheck canvas <fif> <file> [bpp]` | the canvas after the page that declared it is deleted — 25/8 for GIF, 39/8 for APNG, 35/24 for WebP |
+| `ncheck tagsper <fif> <file> [bpp]` | which animation tags each page carries, for comparing the three plugins |
+| `ncheck iso2 <fif> [bpp] [canvas]` | one cache round trip for a frame with or without canvas tags |
 | `ncheck n7prep` then `ncheck n7edit` under `renamefail.so` | N7 — makes `rename()` fail on demand |
 | `mp mk 20 base.psd 1`, then `mkpsd_exif3.py base.psd exif3.psd`, then `ncheck n16 exif3.psd 20` | N16 — a PSD that aborts the unfixed library |
 | `cachestress <n>` | C1/N11 through the public API (`FI_MEMCACHE=1` for the memory cache) |
