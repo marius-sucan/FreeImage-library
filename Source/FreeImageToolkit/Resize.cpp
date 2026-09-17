@@ -369,7 +369,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	// provide the source image's palette to the rescaler for
 	// FIC_PALETTE type images (this includes palletized greyscale
 	// images with an unordered palette as well as transparent images)
-	if (color_type == FIC_PALETTE) {
+	//
+	// A FIC_MINISWHITE source normally carries its inversion in the destination's
+	// own palette, built a few lines below - but only an 8-bit destination has a
+	// palette to carry it.  With FI_RESCALE_TRUE_COLOR the destination is 24-bit,
+	// nothing inverted it, and the filters emitted the raw index as a grey level,
+	// which for MINISWHITE is exactly backwards.  Hand them the palette instead.
+	if ((color_type == FIC_PALETTE) || ((color_type == FIC_MINISWHITE) && (dst_bpp != 8))) {
 		if (dst_bpp == 32) {
 			// a 32-bit destination image signals transparency, so
 			// create an RGBA palette from the source palette
