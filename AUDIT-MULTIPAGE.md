@@ -17,14 +17,14 @@ this build.
 | `Source/FreeImage/CacheFile.cpp` | one local hunk (an `fread` return check); **the rest verbatim upstream** |
 | `Source/CacheFile.h` | verbatim upstream |
 
-28 findings below: **13 reproduced** (M1–M11, C1, C2) and **15 by inspection**
+29 findings below: **14 reproduced** (M1–M12, C1, C2) and **15 by inspection**
 (N1–N16, less N9, which reproduced and was promoted to M11).
-**26 of the 28 are upstream 3.18.0 defects**, not regressions of this fork. The two
+**27 of the 29 are upstream 3.18.0 defects**, not regressions of this fork. The two
 local ones are M10 and N5, both called out as such.
 
-> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`. M10 (WebP) is left open by
-> decision — it belongs to `PluginWebP.cpp`, not to this API. C1, C2 and N1–N16 are
-> open. See §5.
+> **Status:** M1–M9 and M11 are **fixed** in `d79f90e`; M12 and N6 in `28178b1`.
+> M10 (WebP) is left open by decision — it belongs to `PluginWebP.cpp`, not to this
+> API. C1, C2 and the remaining N findings are open. See §5.
 
 ---
 
@@ -307,6 +307,28 @@ then falls through `if (page > 0)` into `push_front`. Inserting at the end is a 
 by design (that is what `AppendPage` is for) — but because the function returns `void`,
 a caller that passes a stale count loses the page with no indication at all. Upstream.
 
+## M12 — `OpenMultiBitmap` accepts a format it can never write — **REPRODUCED**
+
+`OpenMultiBitmap` checks only that a plugin node exists for the `fif`. It never asks
+whether that plugin can read, or — for `create_new` — whether it can write anything at
+all. `FreeImage_LoadFromHandle` requires `load_proc` and `FreeImage_SaveToHandle`
+requires `save_proc`; this entry point asks neither.
+
+So a brand new multi-bitmap can be opened in any of the 15 read-only formats. It
+returns an ordinary-looking handle, and nothing can ever come of it:
+
+```
+$ ./mp openmodes
+  FIF      mode                     OpenMultiBitmap
+  AVIF     create_new               ACCEPTED       <-- AVIF has no writer at all
+  HEIF     create_new               ACCEPTED
+  RAW      create_new               ACCEPTED
+  DDS      create_new               ACCEPTED
+```
+
+An invalid or unregistered `fif` (including `FIF_UNKNOWN`) already returns NULL — the
+`m_plugin_map` lookup fails — so that half was never broken. Upstream.
+
 ## C1 — CacheFile: block 0 is both a valid block and the end-of-chain marker — **REPRODUCED**
 
 `Block::next == 0` means "end of chain" (`CacheFile.cpp:221`, `:278`), but
@@ -432,6 +454,8 @@ same collision applies across processes and to any two formats sharing a stem
 | M9 | **fixed** (behaviour change) | Dropped operations are reported through `FreeImage_OutputMessageProc` and recorded, and `CloseMultiBitmap` returns `FALSE` instead of `TRUE`. |
 | M10 | **open by decision** | WebP's `Save` ignores `page`. The fix belongs in `PluginWebP.cpp` — either build an animation across the `page` calls, or set `pagecount_proc = NULL` for writing. |
 | M11 | **fixed** | `InsertPage` rejects a negative position instead of silently inserting at the front, and says so when asked to insert at or past the end. |
+| M12 | **fixed** (`28178b1`) | `OpenMultiBitmap` requires a `load_proc` to open an existing file and a `save_proc` for `create_new`, so a new multi-bitmap can no longer be opened in a format that has no writer. `OpenMultiBitmapFromHandle`/`LoadMultiBitmapFromMemory` require the loader only. |
+| N6 | **fixed** (`28178b1`) | `UnlockPage` now checks that the page really was encoded into the cache before replacing the block, instead of writing a reference to block 0 of length 0. |
 | C1, C2 | **open** | Both are in `CacheFile.cpp`, which this commit does not touch. |
 | N1–N16 | **open** | |
 
@@ -487,6 +511,7 @@ gcc -g -O0 -o mp mp.c -I../../../Dist ../../../Dist/libfreeimage.a \
 | `negpage <fif> <file> <page>` | M5, M6 |
 | `locknegpage <fif> <file> <page>` | M7 |
 | `nonmp <fif> <file> <n>` | M8, M9 |
+| `openmodes` | M12 — the (format, mode) accept/refuse matrix |
 | `blockzero [dim]` | C1 (`FI_NODEL=1`, `FI_DEL01=1` are the controls) |
 | `cachename [n]` | C2 |
 | `cachestress <n>` | N11 (`FI_MEMCACHE=1` to compare against the memory cache) |
