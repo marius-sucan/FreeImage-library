@@ -91,11 +91,21 @@ FreeImage_Invert(FIBITMAP *src) {
 			{
 				// Calculate the number of bytes per pixel (3 for 24-bit or 4 for 32-bit)
 				const unsigned bytespp = FreeImage_GetLine(src) / width;
+				// The alpha channel is a mask, not colour, and inverting it turned an
+				// opaque image fully transparent.  The other two inversions this
+				// library offers already leave it alone: the palette branch above
+				// does not touch rgbReserved, and FreeImage_AdjustColors(.., TRUE)
+				// goes through FreeImage_AdjustCurve with FICC_RGB.  A caller who
+				// does want the alpha inverted can ask for it with
+				// FreeImage_AdjustCurve(dib, LUT, FICC_ALPHA).
+				// FI_RGBA_ALPHA is 3 in both colour orders, so the first three bytes
+				// are the colour ones either way.
+				const unsigned samples = (bytespp == 4) ? 3 : bytespp;
 
 				for(y = 0; y < height; y++) {
 					BYTE *bits = FreeImage_GetScanLine(src, y);
 					for(x = 0; x < width; x++) {
-						for(k = 0; k < bytespp; k++) {
+						for(k = 0; k < samples; k++) {
 							bits[k] = ~bits[k];
 						}
 						bits += bytespp;
@@ -111,11 +121,13 @@ FreeImage_Invert(FIBITMAP *src) {
 	else if((image_type == FIT_UINT16) || (image_type == FIT_RGB16) || (image_type == FIT_RGBA16)) {
 		// Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
 		const unsigned wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
+		// FIT_RGBA16's fourth sample is its alpha channel; see the 32-bit case above
+		const unsigned samples = (wordspp == 4) ? 3 : wordspp;
 
 		for(y = 0; y < height; y++) {
 			WORD *bits = (WORD*)FreeImage_GetScanLine(src, y);
 			for(x = 0; x < width; x++) {
-				for(k = 0; k < wordspp; k++) {
+				for(k = 0; k < samples; k++) {
 					bits[k] = ~bits[k];
 				}
 				bits += wordspp;
