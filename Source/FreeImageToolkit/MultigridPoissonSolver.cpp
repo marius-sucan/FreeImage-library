@@ -338,6 +338,12 @@ static BOOL fmg_mglin(FIBITMAP *U, int n, int ncycle) {
 			FreeImage_OutputMessageProc(FIF_UNKNOWN, "Multigrid algorithm: ng = %d while NGMAX = %d, increase NGMAX.", ng, NGMAX);
 			throw(1);
 		}
+		if (ng < 2) {
+			// the coarsest grid is index 0 and the first restriction target is
+			// ng - 2, so a single level (n = 3) would index the grid arrays at -1
+			FreeImage_OutputMessageProc(FIF_UNKNOWN, "Multigrid algorithm: n = %d is too small, at least 5 is needed.", n);
+			throw(1);
+		}
 		// allocate grid arrays
 		{
 			_CREATE_ARRAY_GRID_(IRHO, ng);
@@ -478,6 +484,11 @@ FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	}
 	// size must be of the form 2^j + 1 for some integer j
 	size = 1 + (1 << size);
+	if(size < 5) {
+		// fmg_mglin needs at least two grid levels, and one pixel of boundary is
+		// added on every side below, so the smallest usable square is 5x5
+		size = 5;
+	}
 
 	// allocate a temporary square image I
 	FIBITMAP *I = FreeImage_AllocateT(FIT_FLOAT, size, size);
