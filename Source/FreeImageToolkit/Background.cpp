@@ -224,6 +224,14 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	}
 	
 	const RGBQUAD *color_intl = color;
+	// bgcolor and blend are used only inside the alpha-blending block below, but
+	// color_intl is made to point at blend there and is read from that block all
+	// the way to the end of the function - through GetPaletteIndex for a
+	// palettised image and through the 16-, 24- and 32-bit cases of the scanline
+	// switch.  Declaring them inside the block left color_intl pointing at a dead
+	// stack object (AddressSanitizer: stack-use-after-scope).
+	RGBQUAD bgcolor;
+	RGBQUAD blend;
 	unsigned bpp = FreeImage_GetBPP(dib);
 	unsigned width = FreeImage_GetWidth(dib);
 	unsigned height = FreeImage_GetHeight(dib);
@@ -256,7 +264,6 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 			// faster to draw opaque with an alpha blended color.
 			// So, first get the color from the first pixel in the
 			// image (bottom-left pixel).
-			RGBQUAD bgcolor;
 			if (bpp == 8) {
 				bgcolor = FreeImage_GetPalette(dib)[*src_bits];
 			} else {	
@@ -265,7 +272,6 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 				bgcolor.rgbRed = src_bits[FI_RGBA_RED];
 				bgcolor.rgbReserved = 0xFF;
 			}
-			RGBQUAD blend;
 			GetAlphaBlendedColor(&bgcolor, color_intl, &blend);
 			color_intl = &blend;
 		}
