@@ -166,6 +166,17 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 	// scale factor
 	const double dScale = double(uDstSize) / double(uSrcSize);
 
+	m_WeightTable = NULL;
+	m_WindowSize = 0;
+	m_LineLength = 0;
+	m_bValid = FALSE;
+
+	if((uDstSize == 0) || (uSrcSize == 0)) {
+		// no destination pixels to weight, or nothing to weight them against;
+		// dScale below would be zero or infinite
+		return;
+	}
+
 	if(dScale < 1.0) {
 		// minification
 		dWidth = dFilterWidth / dScale; 
@@ -179,15 +190,40 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 	// allocate a new line contributions structure
 	//
 	// window size is the number of sampled pixels
-	m_WindowSize = 2 * (int)ceil(dWidth) + 1; 
+	//
+	// 2 * ceil(dWidth) + 1 was computed in int, and dWidth is the filter width
+	// divided by the caller's scale factor: a Lanczos3 minification down to one
+	// pixel makes it 3 * uSrcSize, so the int overflows once the source line is
+	// wider than about 358 million samples - a 45 MB 1-bit bitmap.  The wrapped
+	// value asked malloc for tens of gigabytes; malloc refused, and the weight
+	// loop below wrote through the NULL it had stored.  No window can usefully
+	// be wider than the source line anyway, since iLeft is clamped to 0 and
+	// iRight to uSrcSize, so cap it there and keep the arithmetic in double.
+	const double dWindow = 2.0 * ceil(dWidth) + 1.0;
+	m_WindowSize = (dWindow >= (double)uSrcSize) ? uSrcSize : (unsigned)dWindow;
+	if(m_WindowSize == 0) {
+		m_WindowSize = 1;
+	}
 	// length of dst line (no. of rows / cols) 
 	m_LineLength = uDstSize; 
 
 	 // allocate list of contributions 
-	m_WeightTable = (Contribution*)malloc(m_LineLength * sizeof(Contribution));
+	//
+	// calloc rather than malloc: it refuses a product that would overflow, which
+	// m_LineLength * sizeof(Contribution) does on a 32-bit size_t, and it leaves
+	// the Weights pointers NULL so that the destructor can run over a partly
+	// built table.
+	m_WeightTable = (Contribution*)calloc(m_LineLength, sizeof(Contribution));
+	if(!m_WeightTable) {
+		m_LineLength = 0;
+		return;
+	}
 	for(unsigned u = 0; u < m_LineLength; u++) {
 		// allocate contributions for every pixel
 		m_WeightTable[u].Weights = (double*)malloc(m_WindowSize * sizeof(double));
+		if(!m_WeightTable[u].Weights) {
+			return;
+		}
 	}
 
 	// offset for discrete to continuous coordinate conversion
@@ -200,8 +236,21 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 		const double dCenter = (double)u / dScale + dOffset;
 
 		// find the significant edge points that affect the pixel
-		const int iLeft = MAX(0, (int)(dCenter - dWidth + 0.5));
-		const int iRight = MIN((int)(dCenter + dWidth + 0.5), int(uSrcSize));
+		//
+		// dCenter and dWidth are both driven by the caller's ratio and are not
+		// bounded by anything, so converting them to int is not value-preserving.
+		// Out of range the conversion yields INT_MIN on x86, which made iRight
+		// negative; iTrailing = iRight - iLeft - 1 then wrapped the other way to
+		// INT_MAX and the trailing-zero trim below read Weights[2147483647].
+		// Clamp in double, where the whole range is representable, and convert
+		// afterwards.  For values that were in range this is the same answer:
+		// both casts truncate towards zero on operands that are already positive.
+		const double dLeft = dCenter - dWidth + 0.5;
+		const double dRight = dCenter + dWidth + 0.5;
+		const int iLeft = (dLeft <= 0.0) ? 0
+				: ((dLeft >= (double)uSrcSize) ? (int)uSrcSize : (int)dLeft);
+		const int iRight = (dRight <= 0.0) ? 0
+				: ((dRight >= (double)uSrcSize) ? (int)uSrcSize : (int)dRight);
 
 		m_WeightTable[u].Left = iLeft; 
 		m_WeightTable[u].Right = iRight;
@@ -237,15 +286,19 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 		}
 
 	} // next dst pixel
+
+	m_bValid = TRUE;
 }
 
 CWeightsTable::~CWeightsTable() {
-	for(unsigned u = 0; u < m_LineLength; u++) {
-		// free contributions for every pixel
-		free(m_WeightTable[u].Weights);
+	if(m_WeightTable) {
+		for(unsigned u = 0; u < m_LineLength; u++) {
+			// free contributions for every pixel
+			free(m_WeightTable[u].Weights);
+		}
+		// free list of pixels contributions
+		free(m_WeightTable);
 	}
-	// free list of pixels contributions
-	free(m_WeightTable);
 }
 
 // --------------------------------------------------------------------------
@@ -464,7 +517,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 			}
 
 			// scale source image horizontally into temporary (or destination) image
-			horizontalFilter(src, src_height, src_width, src_offset_x, src_offset_y, src_pal, tmp, dst_width);
+			if (!horizontalFilter(src, src_height, src_width, src_offset_x, src_offset_y, src_pal, tmp, dst_width)) {
+				if (tmp != dst) {
+					FreeImage_Unload(tmp);
+				}
+				FreeImage_Unload(dst);
+				return NULL;
+			}
 
 			// set x and y offsets to zero for the second filter method
 			// invocation (the temporary image only contains the portion of
@@ -487,7 +546,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 		if (src_height != dst_height) {
 			// source and destination heights are different so, scale
 			// temporary (or source) image vertically into destination image
-			verticalFilter(tmp, dst_width, src_height, src_offset_x, src_offset_y, src_pal, dst, dst_height);
+			if (!verticalFilter(tmp, dst_width, src_height, src_offset_x, src_offset_y, src_pal, dst, dst_height)) {
+				if (tmp != src && tmp != dst) {
+					FreeImage_Unload(tmp);
+				}
+				FreeImage_Unload(dst);
+				return NULL;
+			}
 		}
 
 		// free temporary image, if not pointing to either src or dst
@@ -530,7 +595,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 			}
 
 			// scale source image vertically into temporary (or destination) image
-			verticalFilter(src, src_width, src_height, src_offset_x, src_offset_y, src_pal, tmp, dst_height);
+			if (!verticalFilter(src, src_width, src_height, src_offset_x, src_offset_y, src_pal, tmp, dst_height)) {
+				if (tmp != dst) {
+					FreeImage_Unload(tmp);
+				}
+				FreeImage_Unload(dst);
+				return NULL;
+			}
 
 			// set x and y offsets to zero for the second filter method
 			// invocation (the temporary image only contains the portion of
@@ -554,7 +625,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 		if (src_width != dst_width) {
 			// source and destination heights are different so, scale
 			// temporary (or source) image horizontally into destination image
-			horizontalFilter(tmp, dst_height, src_width, src_offset_x, src_offset_y, src_pal, dst, dst_width);
+			if (!horizontalFilter(tmp, dst_height, src_width, src_offset_x, src_offset_y, src_pal, dst, dst_width)) {
+				if (tmp != src && tmp != dst) {
+					FreeImage_Unload(tmp);
+				}
+				FreeImage_Unload(dst);
+				return NULL;
+			}
 		}
 
 		// free temporary image, if not pointing to either src or dst
@@ -566,10 +643,14 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	return dst;
 } 
 
-void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsigned src_width, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_width) {
+BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsigned src_width, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_width) {
 
    // allocate and calculate the contributions
    CWeightsTable weightsTable(m_pFilter, dst_width, src_width);
+   if(!weightsTable.isValid()) {
+      // every loop below indexes the table without testing it
+      return FALSE;
+   }
 
    // step through rows
    switch(FreeImage_GetImageType(src)) {
@@ -1346,13 +1427,19 @@ void CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       }
       break;
    }
+
+   return TRUE;
 }
 
 /// Performs vertical image filtering
-void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned src_height, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_height) {
+BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned src_height, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_height) {
 
    // allocate and calculate the contributions
    CWeightsTable weightsTable(m_pFilter, dst_height, src_height);
+   if(!weightsTable.isValid()) {
+      // every loop below indexes the table without testing it
+      return FALSE;
+   }
 
    // step through columns
    switch(FreeImage_GetImageType(src)) {
@@ -2203,4 +2290,6 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       }
       break;
    }
+
+   return TRUE;
 }

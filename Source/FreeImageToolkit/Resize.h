@@ -52,6 +52,8 @@ private:
 	unsigned m_WindowSize;
 	/// Length of line (no. of rows / cols) 
 	unsigned m_LineLength;
+	/// Whether every allocation the constructor made succeeded
+	BOOL m_bValid;
 
 public:
 	/** 
@@ -68,6 +70,17 @@ public:
 	Destroy the weights table
 	*/
 	~CWeightsTable();
+
+	/**
+	Whether the table was built<br>
+	The constructor allocates one array of weights per destination pixel and has
+	no way of its own to report a failure.  A caller that does not test this
+	reads and writes through whatever malloc returned, NULL included.
+	@return Returns TRUE if the table is complete and usable
+	*/
+	BOOL isValid() const {
+		return m_bValid;
+	}
 
 	/** Retrieve a filter weight, given source and destination positions
 	@param dst_pos Pixel position in destination line buffer
@@ -172,8 +185,9 @@ private:
 	@param src_pal
 	@param dst Destination image
 	@param dst_width Destination image width
+	@return Returns TRUE on success, FALSE if the weights table could not be built
 	*/
-	void horizontalFilter(FIBITMAP * const src, const unsigned height, const unsigned src_width,
+	BOOL horizontalFilter(FIBITMAP * const src, const unsigned height, const unsigned src_width,
 			const unsigned src_offset_x, const unsigned src_offset_y, const RGBQUAD * const src_pal,
 			FIBITMAP * const dst, const unsigned dst_width);
 
@@ -187,8 +201,9 @@ private:
 	@param src_pal
 	@param dst Destination image
 	@param dst_height Destination image height
+	@return Returns TRUE on success, FALSE if the weights table could not be built
 	*/
-	void verticalFilter(FIBITMAP * const src, const unsigned width, const unsigned src_height,
+	BOOL verticalFilter(FIBITMAP * const src, const unsigned width, const unsigned src_height,
 			const unsigned src_offset_x, const unsigned src_offset_y, const RGBQUAD * const src_pal,
 			FIBITMAP * const dst, const unsigned dst_height);
 };
