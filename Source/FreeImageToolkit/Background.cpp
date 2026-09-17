@@ -295,8 +295,13 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 		return FALSE;
 	}
 
-   if (applyAlpha==0)
-   	applyAlpha = 0xFF;
+   // applyAlpha is an int here but is stored in a BYTE below, so 256 would have
+   // meant a fully transparent fill and 511 an opaque one.  Zero keeps its
+   // documented meaning - use the default, which is the alpha-blending path
+   // above and an opaque alpha in the 32-bit scanline.
+   if ((applyAlpha <= 0) || (applyAlpha > 0xFF)) {
+      applyAlpha = 0xFF;
+   }
 	
 	// first, build the first scanline (line 0)
 	switch (bpp) {

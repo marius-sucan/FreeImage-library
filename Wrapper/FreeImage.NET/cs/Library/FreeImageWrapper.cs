@@ -4529,7 +4529,7 @@ namespace FreeImageAPI
 			{
 				T[] buffer = new T[] { color };
 				handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-				return FillBackground(dib, handle.AddrOfPinnedObject(), options);
+				return FillBackground(dib, handle.AddrOfPinnedObject(), options, 0);
 			}
 			finally
 			{

@@ -2193,10 +2193,11 @@ Private Declare Function FreeImage_PreMultiplyWithAlphaInt Lib "FreeImage.dll" A
            ByVal Bitmap As Long) As Long
 
 ' background filling functions
-Public Declare Function FreeImage_FillBackground Lib "FreeImage.dll" Alias "_FreeImage_FillBackground@12" ( _
+Public Declare Function FreeImage_FillBackground Lib "FreeImage.dll" Alias "_FreeImage_FillBackground@16" ( _
            ByVal Bitmap As Long, _
            ByRef Color As Any, _
-  Optional ByVal Options As FREE_IMAGE_COLOR_OPTIONS = FI_COLOR_IS_RGB_COLOR) As Long
+  Optional ByVal Options As FREE_IMAGE_COLOR_OPTIONS = FI_COLOR_IS_RGB_COLOR, _
+  Optional ByVal ApplyAlpha As Long = 0) As Long
 
 Public Declare Function FreeImage_EnlargeCanvas Lib "FreeImage.dll" Alias "_FreeImage_EnlargeCanvas@28" ( _
            ByVal Bitmap As Long, _

@@ -2362,7 +2362,7 @@ namespace FreeImageAPI
 		public static extern uint SwapPaletteIndices(FIBITMAP dib, ref byte index_a, ref byte index_b);
 
 		[DllImport(FreeImageLibrary, EntryPoint = "FreeImage_FillBackground")]
-		internal static extern bool FillBackground(FIBITMAP dib, IntPtr color, FREE_IMAGE_COLOR_OPTIONS options);
+		internal static extern bool FillBackground(FIBITMAP dib, IntPtr color, FREE_IMAGE_COLOR_OPTIONS options, int applyAlpha);
 
 		#endregion
 	}

@@ -1627,8 +1627,8 @@ function FreeImage_PreMultiplyWithAlpha(dib: PFIBITMAP): LongBool; {$IFDEF MSWIN
 
 // background filling routines
 function FreeImage_FillBackground(dib: PFIBITMAP; color: Pointer;
-  options: Integer = 0): LongBool; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
-  external FIDLL {$IFDEF WIN32}name '_FreeImage_FillBackground@12'{$ENDIF}
+  options: Integer = 0; applyAlpha: Integer = 0): LongBool; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
+  external FIDLL {$IFDEF WIN32}name '_FreeImage_FillBackground@16'{$ENDIF}
   {$IFDEF MACOS}name '_FreeImage_FillBackground'{$ENDIF};
 function FreeImage_EnlargeCanvas(src: PFIBITMAP; left, top, right, bottom: Integer;
   color: Pointer; options: Integer = 0): PFIBITMAP; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
