@@ -1389,7 +1389,9 @@ void CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                                  value += (weightsTable.getWeight(y, i) * (double)*(BYTE *)&src_pal[pixel]);
                                  src_bits += src_pitch;
                               }
-                              value *= 0xFF;
+                              // no *= 0xFF here: value is a weighted average of
+                              // palette bytes and is already 0..255.  The three
+                              // branches that do scale by 255 average *bits*.
 
                               // clamp and place result in destination pixel
                               *dst_bits = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
