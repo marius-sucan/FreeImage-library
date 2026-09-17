@@ -1,0 +1,436 @@
+# Multi-page API audit
+
+`FreeImage_OpenMultiBitmap`, `InsertPage`, `AppendPage`, `DeletePage`, `MovePage`,
+`LockPage`, `UnlockPage`, `CloseMultiBitmap` — and what they actually write for each
+supported format.
+
+Audited 2026-09-17 on branch `worktree-multipage-audit` (from `qpv` @ `b8cc59d`).
+Rig: `.claude/audit/multipage/mp.c`, built against `Dist/libfreeimage.a` from a stock
+`make`. Every finding marked **REPRODUCED** has a command under it that shows it on
+this build.
+
+## Provenance up front
+
+| File | State vs. FreeImage 3.18.0 |
+|---|---|
+| `Source/FreeImage/MultiPage.cpp` | one local commit (`f3ed0f7`, decoder reuse) + `auto_ptr`→`unique_ptr`; **everything else verbatim upstream** |
+| `Source/FreeImage/CacheFile.cpp` | one local hunk (an `fread` return check); **the rest verbatim upstream** |
+| `Source/CacheFile.h` | verbatim upstream |
+
+28 findings below: **13 reproduced** (M1–M11, C1, C2) and **15 by inspection**
+(N1–N16, less N9, which reproduced and was promoted to M11).
+**26 of the 28 are upstream 3.18.0 defects**, not regressions of this fork. The two
+local ones are M10 and N5, both called out as such.
+
+---
+
+# 1. Format matrix
+
+## 1.1 All registered formats (from the built library, `mp matrix`)
+
+40 formats, `FIF_BMP`=0 … `FIF_APNG`=39. Every one of them can be read.
+
+**Load + save (25):** BMP, ICO, JPEG, JNG, PBM, PBMRAW, PGM, PGMRAW, PPM, PPMRAW, PNG,
+TARGA, TIFF, WBMP, PSD, XPM, GIF, HDR, EXR, J2K, JP2, PFM, WebP, JPEG-XR, APNG.
+
+**Read-only — no `save_proc` at all (15):** KOALA, IFF/LBM, MNG, PCD, PCX, RAS, CUT,
+XBM, DDS, G3 (FAXG3), SGI, PICT, RAW, **AVIF**, **HEIF**.
+
+## 1.2 Which formats the multi-page API actually understands
+
+A plugin joins the multi-page API by setting `pagecount_proc`. Exactly **7** do:
+
+| Format | FIF | Multipage read | Multipage save | Animation | Notes |
+|---|---|---|---|---|---|
+| **TIFF** | 18 | yes | **yes** | no | the reference implementation; pages are IFDs |
+| **ICO** | 1 | yes | **yes** | no | pages are icon directory entries |
+| **GIF** | 25 | yes | **yes** | **read + write** | `GIF_PLAYBACK` composites frames |
+| **APNG** | 39 | yes | **yes** | **read + write** | `APNG_PLAYBACK`; local plugin |
+| **WebP** | 35 | yes | **BROKEN — M10** | **read only** (`WEBP_PLAYBACK`) | `Save` ignores `page` |
+| **AVIF** | 37 | yes | n/a (read-only fif) | **read only** | counts sequence frames |
+| **HEIF** | 38 | yes | n/a (read-only fif) | no | counts *top-level images*, not frames |
+
+Verified round-trips (3 pages in → 3 pages back, values intact):
+TIFF, GIF, ICO, APNG. WebP fails (M10).
+
+## 1.3 Animation
+
+- **Read + write:** GIF, APNG. Both carry `FIMD_ANIMATION` metadata
+  (`FrameTime`, `Loop`, disposal/blend) and both have a `_PLAYBACK` load flag.
+- **Read only:** WebP (`WEBP_PLAYBACK`, added locally), AVIF (sets `FrameTime`/`Loop`).
+- **Not animation:** HEIF — its `PageCount` returns the number of top-level images, and
+  the plugin never emits `FIMD_ANIMATION`. A multi-image HEIC is a burst/collection,
+  not a sequence. TIFF and ICO are multi-image but have no time dimension.
+- **`FIMD_ANIMATION` is emitted by exactly 4 plugins:** GIF, APNG, WebP, AVIF.
+
+## 1.4 The trap: MNG is an animation format this API cannot reach
+
+**MNG** is an animation container, and it sets `open_proc`/`close_proc`, but it leaves
+`pagecount_proc = NULL`. It is therefore *not* a multi-page format as far as this API
+is concerned: `OpenMultiBitmap(FIF_MNG, …)` reports 1 page. MNG is additionally
+read-only. Anyone expecting to walk MNG frames through `LockPage` gets a single image
+and no error.
+
+(**JNG** also has `pagecount_proc = NULL`, but that is correct rather than a gap — JNG
+is "JPEG Network Graphics", a *single* JPEG-compressed image with PNG-style alpha in a
+PNG-style wrapper, not a sequence. The plugin has no notion of frames at all.)
+
+---
+
+# 2. Confirmed findings (reproduced on this build)
+
+Ordered by severity. All repro commands run from `.claude/audit/multipage/`.
+
+## M1 — `LockPage` indexes the *file*, not the page list — **REPRODUCED**
+
+`MultiPage.cpp:736` passes the caller's `page` straight to `load_proc`. It never
+consults `header->m_blocks`, which is the only thing that knows about pages you
+deleted, inserted or moved in this session.
+
+After deleting page 0 of a 3-page TIFF (values 20/40/60), the live document is
+[40, 60] — but `LockPage(0)` hands back the **deleted** page:
+
+```
+$ ./mp lockdel 18 t1.tif 0
+  after DeletePage(0): GetPageCount=2
+    LockPage(0) -> value 20        <-- the deleted page
+    LockPage(1) -> value 40
+  on disk : pages=2  values=[40 60]   <-- what was really saved
+```
+
+A `BLOCK_REFERENCE` page (anything appended or edited this session) can never be
+locked at all — there is no file offset for it. Upstream.
+
+## M2 — `UnlockPage(changed=TRUE)` writes the edit to the wrong page — **REPRODUCED**
+
+The other half of M1, and the damaging half. `UnlockPage` maps the locked page back
+through `FreeImage_FindBlock(bitmap, header->locked_pages[page])` (`:768`) — a *file*
+index used as a *logical* index. So the edit is committed to a different page than the
+one the caller was handed.
+
+Delete page 0, lock page 0 (which M1 gives you as the old page 0), paint it 200:
+
+```
+$ ./mp unlockedit 18 t2.tif 0 0
+  DeletePage(0); LockPage(0) -> value 20; overwrite with 200
+  on disk : pages=2  values=[200 60]
+```
+
+The surviving page 40 has been **silently destroyed** and replaced. No error is
+reported anywhere. Upstream.
+
+## M3 — `MovePage(target, source)` moves the wrong page — **REPRODUCED**
+
+`MultiPage.cpp:813-817` does `block_source = FindBlock(target)`,
+`block_target = FindBlock(source)`, then inserts a copy of *block_source* before
+*block_target* and erases the original. The net effect is **"move the page at index
+`target` to immediately before index `source`"** — the two parameters are used the
+opposite way round from their names.
+
+(FreeImage.h carries no doc comment for these functions and this repo ships no manual,
+so the only statement of intent is the FreeImage 3.18.0 reference manual, "Multipage
+functions", which describes `FreeImage_MovePage` as moving the *source* page to the
+position of the *target* page. The reproduced behaviour below is the opposite; it
+stands on its own regardless of how the manual is read.)
+
+```
+$ ./mp move 18 t3.tif 0 2
+  before  : pages=4  values=[20 40 60 80]
+  MovePage(target=0, source=2) -> 1
+  after   : pages=4  values=[40 20 60 80]
+```
+
+Documented behaviour would put page 2 (value 60) at position 0 → `[60 20 40 80]`.
+Actual behaviour moved page 0. It returns `TRUE`, so callers cannot detect it.
+Upstream.
+
+## M4 — Saving to a read-only format calls a NULL pointer — **REPRODUCED (SIGSEGV)**
+
+`FreeImage_SaveMultiBitmapToHandle` (`:428` and `:456`) calls
+`node->m_plugin->save_proc(...)` without ever checking it is non-NULL. For any of the
+15 read-only formats that is a call through a null function pointer.
+
+```
+$ ./mp savefif 37
+  FIFSupportsWriting(AVIF) = 0
+  SaveMultiBitmapToMemory(AVIF, 3-page TIFF) ...
+  Segmentation fault
+```
+
+```
+#0  0x0000000000000000 in ?? ()
+#1  FreeImage_SaveMultiBitmapToHandle ()
+#2  FreeImage_SaveMultiBitmapToMemory ()
+```
+
+Reproduced for AVIF (37), HEIF (38) and RAW (34); the same applies to the other 12.
+Note `FreeImage_FIFSupportsWriting` returns the correct answer (0) two lines away —
+the information needed to refuse is already there and simply is not consulted.
+Upstream.
+
+## M5 — `DeletePage` past the end aborts the process — **REPRODUCED (SIGABRT)**
+
+`FreeImage_FindBlock` ends in `assert(false)` (`MultiPage.cpp:227`) when the position
+is not found. Of the seven GNU-toolchain makefiles only `Makefile.mingw` defines
+`NDEBUG` — `Makefile.gnu` (which builds the Linux `.so`/`.a` used here), `.osx`,
+`.solaris`, `.cygwin`, `.iphone` and `.fip` do not. So on those platforms **asserts
+are live in the release build** and an out-of-range page number takes down the host
+process rather than returning an error. (MinGW, and MSVC Release configurations by
+convention, get a silent no-op instead — which is its own problem.)
+
+```
+$ ./mp negpage 18 n2.tif 99
+  pages=3; calling DeletePage(99)
+mp: Source/FreeImage/MultiPage.cpp:227: ... Assertion `false' failed.
+Aborted (core dumped)
+```
+
+`DeletePage` bounds-checks nothing; it only tests `GetPageCount(bitmap) > 1`. Upstream.
+
+## M6 — `DeletePage` with a negative index corrupts the block list — **REPRODUCED**
+
+With `page = -1`, `FindBlock` computes `item = start + (-1 - prev_count)` and splits the
+run into blocks with negative extents. `PageBlock::getPageCount()` then returns a
+negative page count for one of them, so the totals stop matching the file.
+
+```
+$ ./mp negpage 18 n1.tif -1
+  pages=3; calling DeletePage(-1)
+  survived; GetPageCount=2
+  on disk : pages=3  values=[20 40 60]
+```
+
+`GetPageCount` reports **2**; the file that `CloseMultiBitmap` then writes has **3**
+pages. The in-memory model and the output permanently disagree. Upstream.
+
+## M7 — `LockPage(bitmap, -1)` returns page 0 instead of NULL — **REPRODUCED**
+
+`-1` is the plugins' internal "not a page, save/load as a single image" sentinel.
+`LockPage` forwards it unchecked, so TIFF skips its `TIFFSetDirectory` and serves
+directory 0:
+
+```
+$ ./mp locknegpage 18 n3.tif -1
+  LockPage(-1)... -> non-NULL (value 20)
+```
+
+Other negative values are safe — APNG, AVIF, GIF, HEIF and WebP all test `page < 0` in
+`Load`, and `-5` returns NULL everywhere (checked on ICO/TIFF/GIF/APNG). Only the
+exact value `-1` leaks through. Upstream.
+
+## M8 — Single-image formats are accepted and silently concatenated — **REPRODUCED**
+
+`OpenMultiBitmap` never asks whether the format supports multiple pages (there is no
+`FreeImage_FIFSupportsMultiPage` in the public API at all). With `create_new=TRUE` any
+format is accepted, `AppendPage` works, and `CloseMultiBitmap` calls the single-image
+`save_proc` once per page against one handle:
+
+```
+$ ./mp nonmp 0 nm.bmp 3
+  nonmp BMP: accepted, GetPageCount=3, Close=1
+    output 4002 bytes; re-read: pages seen = 1
+```
+
+Same for JPEG, PNG, TARGA and PSD. The output is N complete files glued together;
+every reader sees only the first. **`CloseMultiBitmap` returns success.** Upstream.
+
+## M9 — `AppendPage` fails silently and `Close` still reports success — **REPRODUCED**
+
+`AppendPage`/`InsertPage`/`DeletePage` return `void`. When the cache round-trip cannot
+encode the page, the append is dropped on the floor:
+
+```
+$ ./mp nonmp 29 nm.exr 3
+  [FI] EXR: Cannot save: invalid data type. ...   (x3)
+  nonmp EXR: accepted, GetPageCount=0, Close=1
+```
+
+Three appends, zero pages, **no output file at all**, and `CloseMultiBitmap` returns
+`TRUE`. Same with HDR. `changed` is never set, so `Close` has nothing to write and
+calls that a success. Upstream.
+
+## M10 — WebP multi-page save produces concatenated files — **REPRODUCED — LOCAL**
+
+`PluginWebP.cpp`'s `Save` (`:845`) never reads its `page` argument. It calls
+`WebPMuxSetImage` (which *replaces* the mux's single image), `WebPMuxAssemble`, and
+writes a **complete WebP file** to the stream — once per page.
+
+```
+$ FI_BPP=24 ./mp mk 35 w3.webp 3
+  mk: WebP pages=3 -> w3.webp
+  readback: pages=1  values=[20]
+
+$ grep -aob RIFF w3.webp
+0:RIFF
+44:RIFF
+88:RIFF
+```
+
+Three RIFF containers in one file; readers see page 1 and the rest is trailing garbage.
+
+**This one is local.** Upstream 3.18.0 has `plugin->pagecount_proc = NULL` for WebP, so
+the format was never offered to this API. The animated-WebP reading work (`ed09abe`)
+set `pagecount_proc = PageCount` to expose frames for *reading* and thereby also
+advertised a multi-page *write* path that does not exist.
+
+## M11 — `InsertPage` accepts a negative index and no-ops at the end — **REPRODUCED**
+
+Placement itself is correct for valid indices (0, 1, 2 on a 3-page document all land
+where they should). The two edges are not:
+
+```
+$ ./mp insert 18 i.tif -1
+  before : pages=3  values=[20 40 60]
+  InsertPage(page=-1, value 199); count before=3
+  count after=4
+  after  : pages=4  values=[199 20 40 60]     <-- silently inserted at the front
+
+$ ./mp insert 18 i.tif 3
+  InsertPage(page=3, value 199); count before=3
+  count after=3
+  after  : pages=3  values=[20 40 60]          <-- silently discarded
+```
+
+`MultiPage.cpp:654` rejects `page >= GetPageCount` but not negatives, and `page < 0`
+then falls through `if (page > 0)` into `push_front`. Inserting at the end is a no-op
+by design (that is what `AppendPage` is for) — but because the function returns `void`,
+a caller that passes a stale count loses the page with no indication at all. Upstream.
+
+## C1 — CacheFile: block 0 is both a valid block and the end-of-chain marker — **REPRODUCED**
+
+`Block::next == 0` means "end of chain" (`CacheFile.cpp:221`, `:278`), but
+`allocateBlock` hands out `m_page_count++` starting at **0**, so 0 is also a perfectly
+ordinary block number. While block 0 is the *head* of a chain this is harmless. Once
+it is freed and re-allocated as a *continuation*, `readFile` stops at it and the tail
+of the page is never copied back.
+
+Three-way controlled experiment — the only variable is the order of two deletes, which
+decides whether block 0 is re-used as a head or as a continuation:
+
+```
+$ FI_NODEL=1 ./mp blockzero 200        # A: no deletes, free list empty
+  pages=4, close=1
+    page 3: ok  200x200 checksum=3800015765  expected=3800015765  MATCH
+
+$ FI_DEL01=1 ./mp blockzero 200        # B: free list [0,1] -> 0 becomes the HEAD
+  pages=2, close=1
+    page 1: ok  200x200 checksum=3800015765  expected=3800015765  MATCH
+
+$ ./mp blockzero 200                   # TEST: free list [1,0] -> 0 is a CONTINUATION
+  [FI] TIFF: Error while opening TIFF: data is invalid
+  pages=2, close=0 *** SAVE FAILED ***
+  bz.tif NEVER CREATED - the whole multibitmap was lost
+```
+
+The truncated blob fails `FreeImage_LoadFromMemory`, `save_proc` gets a NULL `dib`, and
+`CloseMultiBitmap` returns FALSE. Because `Close` does `remove(spool_name)` on failure,
+the damage is never confined to the one bad page: with `create_new=TRUE` (above) **the
+output file is never created and every page is lost**; in an edit session
+(`create_new=FALSE`) the original file is left untouched, so **every change made in the
+session is discarded**. Either way the caller loses the whole document, and the only
+signal is the `FALSE` return.
+
+Trigger recipe: any session that deletes pages and then appends a page large enough to
+need more than one 64 KB cache block, with the freed block 0 not at the head of the
+free list. Upstream.
+
+## C2 — Cache and spool filenames collide on the stem — **REPRODUCED**
+
+`ReplaceExtension` builds the cache name by swapping the extension, so the cache for
+`x.tif` and for `x.tiff` is the *same* `x.ficache`, opened `"w+b"` (truncating) by
+both. The spool file `x.fispool` collides the same way.
+
+```
+$ ./mp cachename 40
+    cache file: coll.ficache          <-- one file, two open multibitmaps
+  opened coll.tif and coll.tiff, both rw, cache on DISK
+  [FI] TIFF: Error while opening TIFF: data is invalid
+  appended 40 pages to each; close tif=0 close tiff=1
+  coll.tif   pages=-1 (expect 40) unreadable=0 corrupt=0
+  coll.tiff  pages=40 (expect 40) unreadable=0 corrupt=0
+```
+
+`coll.tif` loses **all 40 pages** and is never created. `.tif`/`.tiff` in one directory
+is an ordinary situation. It only bites once the 32-block memory cache overflows and
+blocks are really written to disk, which is why small documents appear to work. The
+same collision applies across processes and to any two formats sharing a stem
+(`a.tif`/`a.gif`). Upstream.
+
+---
+
+# 3. By inspection (not reproduced — no repro built, or not reachable from the public API)
+
+| # | Where | Issue |
+|---|---|---|
+| N1 | `CacheFile.cpp:212-214` | `readFile` does not check `lockBlock` for NULL before `block->next`. `lockBlock` returns NULL when the nr is absent from `m_page_map` or the `fread` fails — both mean a null deref. C1 is the reachable instance of a broken chain. |
+| N2 | `CacheFile.cpp:97,149` | `old_block->nr * BLOCK_SIZE` is `unsigned * int` → **32-bit** arithmetic. It wraps at 2³²/65528 ≈ 65545 blocks ≈ **4.29 GB** of cache, after which reads and writes land at the wrong offset. |
+| N3 | `CacheFile.cpp:230` | `writeFile(BYTE*, int size)` is fed a `DWORD compressed_size`. A cached page above 2 GiB becomes negative, `size > 0` fails, and the function returns 0 — which is also a valid block number. |
+| N4 | `CacheFile.cpp:260` | `writeFile` returns `0` for failure, and `0` is the legitimate nr of the first block ever allocated. `SavePageToBlock` cannot tell the two apart (and does not check). Same root cause as C1: **0 is overloaded**. |
+| N5 | `MultiPage.cpp:497` | *(local)* `read_data` now lives for the life of the multibitmap, while the public `SaveMultiBitmapToHandle`/`ToMemory` open a *second* decoder on the same handle. `CloseMultiBitmap` sequences this correctly; the public entry points do not. **I tried to break this on TIFF and GIF and could not** (`./mp savelock 18` / `25` both return correct data), so it is a latent ordering hazard, not a demonstrated bug. |
+| N6 | `MultiPage.cpp:776-790` | `UnlockPage` ignores the return of `FreeImage_OpenMemory`, `FreeImage_SaveToMemory` and `FreeImage_AcquireMemory`. On failure it writes `PageBlock(BLOCK_REFERENCE, 0, 0)` — reference to block 0, size 0. `FreeImage_SavePageToBlock` checks all three; the two paths are inconsistent. |
+| N7 | `MultiPage.cpp:536-537` | `remove(m_filename)` then `rename(spool, m_filename)`. If the rename fails the original is already gone. POSIX `rename` replaces atomically and needs no `remove`. |
+| N8 | `MultiPage.cpp:634,650,675` | `AppendPage`, `InsertPage` and `DeletePage` return `void`, so "the page was locked", "the cache is full" and "this format cannot encode that bitmap" are all indistinguishable from success (M9). |
+| N10 | `MultiPage.cpp:257` | `OpenMultiBitmap` never calls `FreeImage_ValidateFIF`. Opening a GIF as `FIF_TIFF` succeeds, returns a non-NULL handle with `GetPageCount()==0`, and with `read_only=FALSE` will happily overwrite the file on close. (Confirmed no crash: `./mp wrongfif 18 real.gif`.) |
+| N11 | `CacheFile.cpp:183-201` | `deleteBlock` erases the `m_page_map` entry but leaves the `Block` in `m_page_cache_mem`. A later `cleanupMemCache` can flush that stale block to disk at an offset now owned by a *different* block. Ordering (LRU flushes the stale one first) makes this hard to hit — **my 60-page disk-cache stress with deletes and re-appends found no corruption**, so this is a latent hazard only. |
+| N12 | `MultiPage.cpp:613,778` | The cache round-trips every page through `SaveToMemory(cache_fif, …, 0)` — the file's own format at default flags. For lossy formats (WebP, JXR, JPEG) that is a full generation of loss *before* the final save; for all formats it silently drops whatever the single-page writer cannot carry (e.g. `FIMD_ANIMATION`). |
+| N13 | `MultiPage.cpp:425` | `SaveMultiBitmapToHandle` calls `load_proc` without the NULL check `LockPage` applies, and passes the resulting `dib` to `save_proc` without checking it either. |
+| N14 | `CacheFile.cpp:232` | `nr_blocks_required = 1 + (size / BLOCK_SIZE)` allocates one block too many when `size` is an exact multiple of `BLOCK_SIZE`. Wasteful, not incorrect. |
+| N15 | `PluginICO.cpp:295` | ICO's `PageCount` returns **1** for `data == NULL`; the other six return 0. After a failed `open_proc` an ICO multibitmap claims one page that cannot be loaded. |
+| N16 | `Makefile.gnu:39,69` | Only `Makefile.mingw` defines `NDEBUG`; `Makefile.gnu`, `.osx`, `.solaris`, `.cygwin`, `.iphone` and `.fip` do not, so every `assert` in the library is live in those release builds. This is what turns M5 from a bad return value into a process abort. |
+
+---
+
+# 4. Ranked fixes
+
+1. **M4** — one NULL check on `save_proc`; turns a SIGSEGV into `FALSE`. Trivial.
+2. **M5/M6/M7** — bounds-check `page` in `DeletePage`, `LockPage`, `InsertPage` and
+   return failure instead of asserting. Also define `NDEBUG` (N16).
+3. **C1/N4** — make `allocateBlock` start at 1 (or use `-1`/`~0u` as the chain
+   terminator) so 0 stops meaning two things. Small, and it removes a whole-document
+   loss.
+4. **C2** — derive the cache/spool name from the *full* filename plus the pid, or use
+   `mkstemp`.
+5. **M1/M2** — make `LockPage`/`UnlockPage` go through `m_blocks` like every other
+   entry point. This is the deepest change and the one that fixes silent data loss.
+6. **M8/M10** — refuse `OpenMultiBitmap` when `pagecount_proc == NULL`, and either
+   teach `PluginWebP`'s `Save` to build an animation across `page` calls or set
+   `pagecount_proc = NULL` again for writing. Add a public
+   `FreeImage_FIFSupportsMultiPage`.
+7. **M3** — cannot be fixed without breaking callers who compensated for it; document
+   the real behaviour, or add a correctly-named replacement.
+8. **M9/N8** — give the three `void` mutators a `BOOL` return (or an
+   `..._Ex` variant).
+
+---
+
+# 5. Rig
+
+`.claude/audit/multipage/mp.c` — single binary, one subcommand per finding.
+
+```
+gcc -g -O0 -o mp mp.c -I../../../Dist ../../../Dist/libfreeimage.a \
+    -lstdc++ -lm -lpthread -fopenmp
+```
+
+| Subcommand | Finding |
+|---|---|
+| `matrix` | §1.1 read/write capability straight from the library |
+| `mk <fif> <file> <n>` | round-trip check (`FI_BPP=24` for WebP), M10 |
+| `lockdel <fif> <file> <delpage>` | M1 |
+| `unlockedit <fif> <file> <del> <lock>` | M2 |
+| `move <fif> <file> <target> <source>` | M3 |
+| `insert <fif> <file> <at>` | M11 |
+| `savefif <dstfif>` | M4 |
+| `negpage <fif> <file> <page>` | M5, M6 |
+| `locknegpage <fif> <file> <page>` | M7 |
+| `nonmp <fif> <file> <n>` | M8, M9 |
+| `blockzero [dim]` | C1 (`FI_NODEL=1`, `FI_DEL01=1` are the controls) |
+| `cachename [n]` | C2 |
+| `cachestress <n>` | N11 (`FI_MEMCACHE=1` to compare against the memory cache) |
+| `savelock <fif> <file>` | N5 |
+| `wrongfif <fif> <file>` | N10 |
+
+Note when reading the harness: GCC evaluates function arguments right-to-left, so
+`printf("%d %d", GetPageCount(m), CloseMultiBitmap(m))` closes the bitmap before
+counting it. Two early "crashes" in this audit were that mistake in the rig, not
+FreeImage — the calls are sequenced explicitly now.
