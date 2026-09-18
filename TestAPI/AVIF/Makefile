@@ -38,7 +38,7 @@ clean-bin:
 	rm -f $(TESTS) decode-asan narrowio-asan narrowio-step
 
 clean: clean-bin
-	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_avif_*.png
+	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_avif_*
 
 .PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step
 

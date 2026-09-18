@@ -47,6 +47,9 @@ static const Expected EXPECTED[] = {
     {"colors-animated-8bpc.avif",                   5,  150,  150, FIT_BITMAP, 24,     0,  0, 0,   33,  1, 0xc5df0a8a8f4c5913ULL},
     {"colors-animated-8bpc-alpha-exif-xmp.avif",    5,  150,  150, FIT_BITMAP, 32,     0,  9, 1,  167,  0, 0x74d8a883f5163043ULL},
     {"colors-animated-12bpc-keyframes-0-2-3.avif",  5,   64,   64, FIT_RGBA16, 64,     0,  0, 0, 1000,  0, 0xab529faec3d54383ULL},
+    /* the same pixels as colors-animated-8bpc.avif, retimed so that no two frames last
+     * the same time and no frame lasts a whole number of milliseconds (see data/retime.py) */
+    {"colors-animated-8bpc-variable-delays.avifs",  5,  150,  150, FIT_BITMAP, 24,     0,  0, 0,    7,  1, 0xc5df0a8a8f4c5913ULL},
     {"paris_icc_exif_xmp.avif",                     1,  403,  302, FIT_BITMAP, 24,   596,  9, 1,   -1, -1, 0x2ad7a668c73089dfULL},
     {"sofa_grid1x5_420.avif",                       1, 1024,  770, FIT_BITMAP, 24,     0,  0, 0,   -1, -1, 0x7701ca0843b52fc3ULL},
     {"seine_hdr_rec2020.avif",                      1,  400,  300, FIT_RGB16,  48,     0,  4, 1,   -1, -1, 0x580a626c78e36b5aULL},
@@ -162,6 +165,125 @@ static FIBITMAP *load_from_memory(const char *path, unsigned long long *sum, int
     fclose(f); free(buf);
     if (d && sum) *sum = sum_pixels(d);
     return d;
+}
+
+/* --- FIMD_ANIMATION ------------------------------------------------------- */
+
+/* One animation tag, insisting on the type the convention gives it: a tag of the wrong
+ * type is not the tag a GIF, APNG or WebP writer reads back. */
+static int anim_tag(FIBITMAP *d, const char *key, FREE_IMAGE_MDTYPE type, long *value) {
+    FITAG *tag = NULL;
+    if (!FreeImage_GetMetadata(FIMD_ANIMATION, d, key, &tag) || !tag) return 0;
+    if (FreeImage_GetTagType(tag) != type || FreeImage_GetTagCount(tag) != 1) return 0;
+    switch (type) {
+        case FIDT_BYTE:  *value = *(const BYTE *)FreeImage_GetTagValue(tag); return 1;
+        case FIDT_SHORT: *value = *(const WORD *)FreeImage_GetTagValue(tag); return 1;
+        case FIDT_LONG:  *value = *(const LONG *)FreeImage_GetTagValue(tag); return 1;
+        default: return 0;
+    }
+}
+
+static int any_anim_tag(FIBITMAP *d) {
+    static const char *keys[] = {"FrameTime", "FrameLeft", "FrameTop", "DisposalMethod",
+                                 "BlendMethod", "LogicalWidth", "LogicalHeight", "Loop"};
+    FITAG *tag = NULL;
+    size_t i;
+    for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+        if (FreeImage_GetMetadata(FIMD_ANIMATION, d, keys[i], &tag) && tag) return 1;
+    return 0;
+}
+
+/* Every page of a sequence describes its frame the way GIF, APNG and WebP describe
+ * theirs: its own duration, where it sits on the canvas, how the canvas is treated, and
+ * the canvas and loop count of the file. An AVIF frame is the whole canvas, so the
+ * position is 0,0, the disposal is 1 (leave) and the blend is 1 (source); what differs
+ * from page to page is the duration. A still image is not an animation and says nothing.
+ * 'expected_times' is the per-page duration in milliseconds, or NULL to take page 0's
+ * from the table and leave the rest unchecked. */
+static void check_anim_tags(const Expected *o, const char *path, const long *expected_times) {
+    FIMULTIBITMAP *mb;
+    int pages, p;
+    long first_loop = -1, v;
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, TRUE, TRUE, 0);
+    if (!mb) { fail(o->file, "OpenMultiBitmap returned NULL"); return; }
+    pages = FreeImage_GetPageCount(mb);
+    for (p = 0; p < pages; p++) {
+        FIBITMAP *pg = FreeImage_LockPage(mb, p);
+        if (!pg) { fail(o->file, "a page failed to load"); break; }
+
+        if (o->pages <= 1) {
+            if (any_anim_tag(pg)) fail(o->file, "a still image carries animation tags");
+            FreeImage_UnlockPage(mb, pg, FALSE);
+            continue;
+        }
+
+        if (!anim_tag(pg, "FrameTime", FIDT_LONG, &v)) fail(o->file, "a page has no FrameTime");
+        else if (expected_times && v != expected_times[p]) fail(o->file, "a frame's duration");
+        else if (!expected_times && p == 0 && v != o->frametime) fail(o->file, "page 0's duration");
+
+        if (!anim_tag(pg, "FrameLeft", FIDT_SHORT, &v) || v != 0) fail(o->file, "FrameLeft");
+        if (!anim_tag(pg, "FrameTop", FIDT_SHORT, &v) || v != 0) fail(o->file, "FrameTop");
+        if (!anim_tag(pg, "DisposalMethod", FIDT_BYTE, &v) || v != 1) fail(o->file, "DisposalMethod");
+        if (!anim_tag(pg, "BlendMethod", FIDT_BYTE, &v) || v != 1) fail(o->file, "BlendMethod");
+        if (!anim_tag(pg, "LogicalWidth", FIDT_SHORT, &v) || v != (long)FreeImage_GetWidth(pg))
+            fail(o->file, "LogicalWidth is not the canvas");
+        if (!anim_tag(pg, "LogicalHeight", FIDT_SHORT, &v) || v != (long)FreeImage_GetHeight(pg))
+            fail(o->file, "LogicalHeight is not the canvas");
+        if (!anim_tag(pg, "Loop", FIDT_LONG, &v)) fail(o->file, "a page has no Loop");
+        else if (p == 0) first_loop = v;
+        else if (v != first_loop) fail(o->file, "Loop differs between pages");
+
+        FreeImage_UnlockPage(mb, pg, FALSE);
+    }
+    FreeImage_CloseMultiBitmap(mb, 0);
+    if (o->pages > 1)
+        printf("    {\"%s\", tags -> %d page(s) with FrameTime/FrameLeft/FrameTop/Disposal/Blend"
+               " + canvas %dx%d and Loop %ld}\n", o->file, pages, o->width, o->height, first_loop);
+}
+
+/* The tags exist so that another animated format can be written from these pages. Build
+ * an animated WebP out of the AVIF's frames through the page API and read the durations
+ * back: what survives the round trip is what the WebP writer found in FIMD_ANIMATION. */
+static void check_webp_roundtrip(const char *file, const long *times, int n) {
+    char path[512];
+    const char *out = tmppath("fi_avif_anim.webp");
+    FIMULTIBITMAP *src, *dst;
+    int p, pages;
+    long v;
+
+    snprintf(path, sizeof(path), "data/%s", file);
+    src = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, TRUE, TRUE, 0);
+    dst = FreeImage_OpenMultiBitmap(FIF_WEBP, out, TRUE, FALSE, TRUE, 0);
+    if (!src || !dst) { fail(file, "could not open the animation or the WebP to write"); return; }
+    pages = FreeImage_GetPageCount(src);
+    for (p = 0; p < pages; p++) {
+        FIBITMAP *pg = FreeImage_LockPage(src, p);
+        if (!pg) { fail(file, "a page failed to load"); break; }
+        FreeImage_AppendPage(dst, pg);
+        FreeImage_UnlockPage(src, pg, FALSE);
+    }
+    FreeImage_CloseMultiBitmap(src, 0);
+    if (!FreeImage_CloseMultiBitmap(dst, 0)) { fail(file, "writing the WebP animation failed"); return; }
+
+    dst = FreeImage_OpenMultiBitmap(FIF_WEBP, out, FALSE, TRUE, TRUE, 0);
+    if (!dst) { fail(file, "the WebP animation could not be reopened"); return; }
+    if (FreeImage_GetPageCount(dst) != n) fail(file, "the WebP animation has the wrong frame count");
+    else for (p = 0; p < n; p++) {
+        FIBITMAP *pg = FreeImage_LockPage(dst, p);
+        if (!pg) { fail(file, "a WebP frame failed to load"); break; }
+        if (!anim_tag(pg, "FrameTime", FIDT_LONG, &v) || v != times[p])
+            fail(file, "a frame's duration did not survive AVIF -> WebP");
+        /* and the frame is still a replacement rather than something blended onto what
+         * came before: without a BlendMethod tag to read, the WebP writer blends */
+        if (!anim_tag(pg, "BlendMethod", FIDT_BYTE, &v) || v != 1)
+            fail(file, "the frames are blended in the WebP, not replaced");
+        if (!anim_tag(pg, "DisposalMethod", FIDT_BYTE, &v) || v != 1)
+            fail(file, "a frame's disposal did not survive AVIF -> WebP");
+        FreeImage_UnlockPage(dst, pg, FALSE);
+    }
+    FreeImage_CloseMultiBitmap(dst, 0);
+    printf("    {\"%s\", AVIF -> WebP -> %d frame(s), durations, disposal and blend intact}\n", file, n);
 }
 
 /* --- AVIF_PLAYBACK -------------------------------------------------------- */
@@ -379,6 +501,7 @@ static void run(const Expected *e) {
     }
     o.pages = pages;
     check_playback(&o, path);
+    check_anim_tags(&o, path, NULL);
     FreeImage_Unload(d);
 
     printf("    {\"%s\", %d, %d, %d, %s, %d, %d, %d, %d, %ld, %ld, 0x%llxULL},\n",
@@ -411,6 +534,21 @@ int main(int argc, char **argv) {
     if (FreeImage_GetFIFFromFilename("x.avifs") != FIF_AVIF) fail("plugin", "GetFIFFromFilename(.avifs)");
     if (FreeImage_GetFileType("../sample.png", 0) == FIF_AVIF) fail("plugin", "a PNG was detected as AVIF");
     check_readwrite_close("colors-animated-8bpc.avif");
+    {
+        /* 200, 600, 1000, 1200 and 2000 ticks of a 30000 Hz timescale: 6.67, 20, 33.33,
+         * 40 and 66.67 ms, none of them a whole millisecond but the second and fourth */
+        static const long times[] = {7, 20, 33, 40, 67};
+        const char *name = "colors-animated-8bpc-variable-delays.avifs";
+        size_t k;
+        for (k = 0; k < NEXPECTED && strcmp(EXPECTED[k].file, name) != 0; k++) { }
+        if (k == NEXPECTED) fail("EXPECTED", "the variable-delay entry is missing");
+        else {
+            char path[512];
+            snprintf(path, sizeof(path), "data/%s", name);
+            check_anim_tags(&EXPECTED[k], path, times);
+            check_webp_roundtrip(name, times, 5);
+        }
+    }
     printf("--- observed (paste into EXPECTED after checking) ---\n");
     for (i = 0; i < NEXPECTED; i++) run(&EXPECTED[i]);
     printf("--- %d failure(s) ---\n", g_failures);

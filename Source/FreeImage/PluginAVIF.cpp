@@ -22,8 +22,10 @@
 // What this plugin does
 // ---------------------
 // - Loads still AVIF images and AVIF image sequences ('avis'); a sequence opens as
-//   a multi-page bitmap, one page per frame, with the GIF-style "FrameTime" and
-//   "Loop" tags in FIMD_ANIMATION.
+//   a multi-page bitmap, one page per frame, and every page carries the FIMD_ANIMATION
+//   tags GIF, APNG and WebP give theirs: "FrameTime" (that frame's own duration, in
+//   milliseconds), "Loop", the canvas in "LogicalWidth"/"LogicalHeight", and where the
+//   frame sits on it.
 // - AVIF_PLAYBACK hands a sequence over the way a player wants it: every frame comes
 //   back as a 32-bit image whatever the file's depth, so one loop can walk an AVIF
 //   animation and a GIF, APNG or WebP one. Nothing is composited - an AVIF frame is
@@ -330,20 +332,26 @@ AllocateOutput(BOOL header_only, const AVIFOutput *out, unsigned width, unsigned
 //   Metadata
 // ----------------------------------------------------------
 
+/**
+Attach one FIMD_ANIMATION tag with the key, id and type the GIF, APNG and WebP plugins
+give it, so that a caller reads an AVIF animation with the code it already has for those.
+*/
 static BOOL
-SetMetadataLong(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, WORD id, LONG value) {
+SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
+	BOOL bResult = FALSE;
 	FITAG *tag = FreeImage_CreateTag();
-	if(!tag) {
-		return FALSE;
+	if(tag) {
+		FreeImage_SetTagKey(tag, key);
+		FreeImage_SetTagID(tag, id);
+		FreeImage_SetTagType(tag, type);
+		FreeImage_SetTagCount(tag, count);
+		FreeImage_SetTagLength(tag, length);
+		FreeImage_SetTagValue(tag, value);
+		TagLib& s = TagLib::instance();
+		FreeImage_SetTagDescription(tag, s.getTagDescription(TagLib::ANIMATION, id));
+		bResult = FreeImage_SetMetadata(FIMD_ANIMATION, dib, key, tag);
+		FreeImage_DeleteTag(tag);
 	}
-	FreeImage_SetTagKey(tag, key);
-	FreeImage_SetTagID(tag, id);
-	FreeImage_SetTagType(tag, FIDT_LONG);
-	FreeImage_SetTagCount(tag, 1);
-	FreeImage_SetTagLength(tag, 4);
-	FreeImage_SetTagValue(tag, &value);
-	const BOOL bResult = FreeImage_SetMetadata(model, dib, key, tag);
-	FreeImage_DeleteTag(tag);
 	return bResult;
 }
 
@@ -405,27 +413,78 @@ AttachMetadata(FIBITMAP *dib, const avifImage *image) {
 }
 
 /**
-For image sequences: the frame duration and the loop count, with the meaning the
-GIF plugin gives them ("FrameTime" in milliseconds; "Loop" counts plays, 0 = forever).
+A frame's duration in milliseconds, rounded to the nearest one.
+
+ISO/IEC 14496-12 keeps it in media timescale ticks - 1001 ticks of a 30000 Hz timescale
+for an NTSC rate - and "FrameTime" is a LONG of milliseconds, so the tick is where the
+exact value stops. The division is done in integers: going through libavif's double
+first only adds a rounding that nothing gets back. Neither product can overflow, a
+sample delta and a timescale both being 32-bit fields (ISO/IEC 14496-12, 8.6.1.2 and
+8.4.2.2).
+*/
+static LONG
+FrameTimeMs(const avifImageTiming *timing) {
+	if(timing->timescale == 0) {
+		return 0;
+	}
+	const uint64_t scale = timing->timescale;
+	const uint64_t whole = timing->durationInTimescales / scale;
+	const uint64_t rem = timing->durationInTimescales % scale;
+	const uint64_t ms = whole * 1000 + (rem * 1000 + scale / 2) / scale;
+	return (ms > (uint64_t)LONG_MAX) ? LONG_MAX : (LONG)ms;
+}
+
+/**
+Describe a frame of an image sequence with the tags GIF, APNG and WebP use, so that one
+caller can walk any of the four: "FrameTime" in milliseconds, "Loop" counting plays
+(0 = forever), the canvas in "LogicalWidth"/"LogicalHeight", and the frame's place on it.
+'dib' has to be the finished page: the canvas is its size, after the transforms.
+
+An AVIF frame is the whole canvas. Every sample of a track decodes to the track's
+dimensions, libavif scaling the tile to them if it has to, and the frame replaces what
+was on screen rather than being drawn over it - so the position is 0,0, the disposal is
+GIF's 1 (leave the canvas alone, the next frame covers all of it anyway) and the blend
+is 1 (no blending, the source wins). Constants, but written all the same: a caller
+converting an AVIF animation to GIF, APNG or WebP through the page API reads exactly
+these tags, and so does this library's own WebP writer.
 */
 static void
 AttachAnimation(FIBITMAP *dib, avifDecoder *decoder, int page) {
 	if(decoder->imageCount <= 1) {
+		// a still image has no frame to describe
 		return;
 	}
+
 	avifImageTiming timing;
 	if(avifDecoderNthImageTiming(decoder, (uint32_t)page, &timing) == AVIF_RESULT_OK) {
-		double ms = timing.duration * 1000.0 + 0.5;
-		if(ms < 0) {
-			ms = 0;
-		} else if(ms > (double)LONG_MAX) {
-			ms = (double)LONG_MAX;
-		}
-		SetMetadataLong(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, (LONG)ms);
+		const LONG frametime = FrameTimeMs(&timing);
+		SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &frametime);
 	}
+
+	const WORD left = 0;
+	const WORD top = 0;
+	const BYTE disposal = 1;
+	const BYTE blend = 1;
+	SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
+	SetAnimTag(dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &top);
+	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
+
+	// The canvas and the loop count belong to the file rather than to any one frame, and
+	// every frame is drawn on that canvas - so every frame is told about them, not just
+	// the first: deleting page 0 of an animation would otherwise take the only copy of
+	// the canvas with it. Both are SHORTs, as GIF's Logical Screen Descriptor is, so a
+	// track larger than 65535 saturates, the same thing the APNG plugin does with its
+	// own 32-bit canvas.
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const WORD logicalwidth = (WORD)((width > 0xFFFF) ? 0xFFFF : width);
+	const WORD logicalheight = (WORD)((height > 0xFFFF) ? 0xFFFF : height);
 	// libavif counts extra repetitions ('n' means n + 1 plays), negative = infinite or unknown
 	const LONG loop = (decoder->repetitionCount < 0) ? 0 : (LONG)decoder->repetitionCount + 1;
-	SetMetadataLong(FIMD_ANIMATION, dib, "Loop", ANIMTAG_LOOP, loop);
+	SetAnimTag(dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
+	SetAnimTag(dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
+	SetAnimTag(dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
 }
 
 // ----------------------------------------------------------

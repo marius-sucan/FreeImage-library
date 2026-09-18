@@ -1,6 +1,6 @@
 # Test images
 
-All files but four come from libavif's test corpus (`tests/data/` of
+All files but five come from libavif's test corpus (`tests/data/` of
 https://github.com/AOMediaCodec/libavif at v1.4.2), where each of them is listed
 with "License: same as libavif", i.e. the BSD 2-Clause license in
 `Source/LibAVIF/LICENSE`. libavif's `tests/data/README.md` describes their
@@ -11,6 +11,17 @@ is what link-u's cavif encoder writes and what upstream libavif refuses as
 "Multiple Box[ipma] with a given pair of values of version and flags"; the
 bundled libavif is patched to accept it, and the file must decode to exactly the
 pixels of its source.
+
+`colors-animated-8bpc-variable-delays.avifs` is derived from
+`colors-animated-8bpc.avif` with `retime.py` (same license): the same five
+frames, retimed so that no two of them last the same time and only two last a
+whole number of milliseconds - 200, 600, 1000, 1200 and 2000 ticks of a 30000 Hz
+timescale, i.e. 6.67, 20, 33.33, 40 and 66.67 ms. Every sequence in libavif's
+corpus has a single `stts` entry, so without this one nothing exercises a
+per-frame duration, nor the rounding of a tick into the millisecond `FrameTime`
+tag. The new timescale is chosen so the track lasts exactly as long as it did,
+which leaves `tkhd`, `mvhd` and `elst` correct; the pixels are untouched, so it
+must decode to exactly the pixels of its source.
 
 The other three come from **libheif** (`tests/data/` of
 https://github.com/strukturag/libheif at v1.23.4, LGPL-3.0, the license in
@@ -44,6 +55,7 @@ In short:
 | `colors-animated-8bpc.avif` | 8-bit image sequence |
 | `colors-animated-8bpc-alpha-exif-xmp.avif` | 8-bit sequence with alpha, Exif and XMP |
 | `colors-animated-12bpc-keyframes-0-2-3.avif` | 12-bit sequence with non-keyframe frames |
+| `colors-animated-8bpc-variable-delays.avifs` | the same frames retimed: a different duration per frame, none of them a whole millisecond (and the `.avifs` extension) |
 | `paris_icc_exif_xmp.avif` | ICC profile, Exif and XMP on a photo |
 | `sofa_grid1x5_420.avif` | 1x5 grid image, 4:2:0 |
 | `seine_hdr_rec2020.avif` | 10-bit HDR (PQ, Rec. 2020) still |

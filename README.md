@@ -47,7 +47,7 @@ Changes:
 - FreeImage_CloseMultiBitmap() returns FALSE when the document was opened by name with read_only=0 in a format that has no writer, such as AVIF or HEIF. Its pages can still be read - this is how an AVIF animation is played - but nothing can be saved back to the file, and the close no longer says otherwise;
 - added FreeImage_RescaleRawBits();
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
-- added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4; AVIF image sequences open as multi-page bitmaps, and the new AVIF_PLAYBACK flag plays one: every frame comes back as 32bpp, whatever the file's depth;
+- added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4; AVIF image sequences open as multi-page bitmaps, every frame carrying the same FIMD_ANIMATION tags GIF, APNG and WebP frames carry (its own duration, the canvas, the loop count), and the new AVIF_PLAYBACK flag plays one: every frame comes back as 32bpp, whatever the file's depth;
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - updated LibRaw library to version 0.22.2, from 0.21.1;
