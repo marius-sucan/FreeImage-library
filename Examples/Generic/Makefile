@@ -20,7 +20,8 @@ DEFS      = -DFREEIMAGE_LIB
 LIB       = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
 # every example that is a program of its own
-PROGRAMS = BatchLoad \
+PROGRAMS = AnimationDelays \
+           BatchLoad \
            CloneMultiPage \
            CreateAlpha \
            FIFImportExport \
