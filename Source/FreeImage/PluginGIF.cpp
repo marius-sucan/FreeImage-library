@@ -589,6 +589,11 @@ SupportsExportType(FREE_IMAGE_TYPE type) {
 	return (type == FIT_BITMAP) ? TRUE : FALSE;
 }
 
+static BOOL DLL_CALLCONV
+SupportsNoPixels() {
+	return TRUE;
+}
+
 // ----------------------------------------------------------
 
 static void *DLL_CALLCONV 
@@ -871,6 +876,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		BYTE packed, b;
 		WORD w;
 
+		//FIF_LOAD_NOPIXELS. Everything a page says about itself - the rectangle it
+		//covers, its palette, how long it lasts, how it is disposed of, the canvas it
+		//belongs to - is read from positions this plugin recorded while parsing the
+		//file, and none of it needs the image data. A header-only load reads all of it
+		//and leaves the LZW stream where it lies, which is the whole cost of a GIF.
+		const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
+
 		//playback pages to generate what the user would see for this frame
 		if( (flags & GIF_PLAYBACK) == GIF_PLAYBACK ) {
 			//Logical Screen Descriptor
@@ -882,6 +894,30 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			SwapShort(&logicalwidth);
 			SwapShort(&logicalheight);
 #endif
+
+			//A header-only playback page is the canvas a frame would be drawn on, with
+			//nothing drawn on it. The one tag a composited page carries is the frame's
+			//delay, and that is in this frame's own Graphic Control Extension - so
+			//neither this frame nor any of the frames before it has to be decoded to
+			//answer, which is what playback would otherwise cost.
+			if( header_only ) {
+				dib = FreeImage_AllocateHeader(TRUE, logicalwidth, logicalheight, 32);
+				if( dib == NULL ) {
+					throw FI_MSG_ERROR_DIB_MEMORY;
+				}
+				if( info->graphic_control_extension_offsets[page] != 0 ) {
+					io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
+					io->read_proc(&packed, 1, 1, handle);
+					io->read_proc(&w, 2, 1, handle);
+#ifdef FREEIMAGE_BIGENDIAN
+					SwapShort(&w);
+#endif
+					delay_time = w * 10; //convert cs to ms
+				}
+				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+				return dib;
+			}
+
 			//set the background color with 0 alpha
 			RGBQUAD background;
 			if( info->global_color_table_offset != 0 && info->background_color < info->global_color_table_size ) {
@@ -1102,7 +1138,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				else if( info->global_color_table_size <= 16 ) bpp = 4;
 			}
 		}
-		dib = FreeImage_Allocate(width, height, bpp);
+		dib = FreeImage_AllocateHeader(header_only, width, height, bpp);
 		if( dib == NULL ) {
 			throw FI_MSG_ERROR_DIB_MEMORY;
 		}
@@ -1148,49 +1184,59 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 		}
 
-		//LZW Minimum Code Size
-		io->read_proc(&b, 1, 1, handle);
-		StringTable *stringtable = new(std::nothrow) StringTable;
-		stringtable->Initialize(b);
-
-		//Image Data Sub-blocks
-		int x = 0, xpos = 0, y = 0, shift = 8 - bpp, mask = (1 << bpp) - 1, interlacepass = 0;
-		BYTE *scanline = FreeImage_GetScanLine(dib, height - 1);
-		BYTE buf[4096];
-		io->read_proc(&b, 1, 1, handle);
-		while( b ) {
-			io->read_proc(stringtable->FillInputBuffer(b), b, 1, handle);
-			int size = sizeof(buf);
-			while( stringtable->Decompress(buf, &size) ) {
-				for( int i = 0; i < size; i++ ) {
-					scanline[xpos] |= (buf[i] & mask) << shift;
-					if( shift > 0 ) {
-						shift -= bpp;
-					} else {
-						xpos++;
-						shift = 8 - bpp;
-					}
-					if( ++x >= width ) {
-						if( interlaced ) {
-							y += g_GifInterlaceIncrement[interlacepass];
-							if( y >= height && ++interlacepass < GIF_INTERLACE_PASSES ) {
-								y = g_GifInterlaceOffset[interlacepass];
-							} 						
-						} else {
-							y++;
-						}
-						if( y >= height ) {
-							stringtable->Done();
-							break;
-						}
-						x = xpos = 0;
-						shift = 8 - bpp;
-						scanline = FreeImage_GetScanLine(dib, height - y - 1);
-					}
-				}
-				size = sizeof(buf);
-			}
+		//The pixels - the one part of a page that costs anything to read. A header-only
+		//load stops here: the frame's own description is on the bitmap already, and the
+		//rest of it below is reached by seeking rather than by decoding.
+		if( !header_only ) {
+			//LZW Minimum Code Size
 			io->read_proc(&b, 1, 1, handle);
+			StringTable *stringtable = new(std::nothrow) StringTable;
+			if( stringtable == NULL ) {
+				throw FI_MSG_ERROR_MEMORY;
+			}
+			stringtable->Initialize(b);
+
+			//Image Data Sub-blocks
+			int x = 0, xpos = 0, y = 0, shift = 8 - bpp, mask = (1 << bpp) - 1, interlacepass = 0;
+			BYTE *scanline = FreeImage_GetScanLine(dib, height - 1);
+			BYTE buf[4096];
+			io->read_proc(&b, 1, 1, handle);
+			while( b ) {
+				io->read_proc(stringtable->FillInputBuffer(b), b, 1, handle);
+				int size = sizeof(buf);
+				while( stringtable->Decompress(buf, &size) ) {
+					for( int i = 0; i < size; i++ ) {
+						scanline[xpos] |= (buf[i] & mask) << shift;
+						if( shift > 0 ) {
+							shift -= bpp;
+						} else {
+							xpos++;
+							shift = 8 - bpp;
+						}
+						if( ++x >= width ) {
+							if( interlaced ) {
+								y += g_GifInterlaceIncrement[interlacepass];
+								if( y >= height && ++interlacepass < GIF_INTERLACE_PASSES ) {
+									y = g_GifInterlaceOffset[interlacepass];
+								} 						
+							} else {
+								y++;
+							}
+							if( y >= height ) {
+								stringtable->Done();
+								break;
+							}
+							x = xpos = 0;
+							shift = 8 - bpp;
+							scanline = FreeImage_GetScanLine(dib, height - y - 1);
+						}
+					}
+					size = sizeof(buf);
+				}
+				io->read_proc(&b, 1, 1, handle);
+			}
+
+			delete stringtable;
 		}
 
 		// The canvas and the loop count describe the file rather than any one frame,
@@ -1318,8 +1364,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
 		b = (BYTE)disposal_method;
 		FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &b);
-
-		delete stringtable;
 
 	} catch (const char *msg) {
 		if( dib != NULL ) {
@@ -1682,4 +1726,5 @@ InitGIF(Plugin *plugin, int format_id) {
 	plugin->supports_export_bpp_proc = SupportsExportDepth;
 	plugin->supports_export_type_proc = SupportsExportType;
 	plugin->supports_icc_profiles_proc = NULL;
+	plugin->supports_no_pixels_proc = SupportsNoPixels;
 }
