@@ -1245,7 +1245,19 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 			header->read_data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
 		}
 
-		if ((header->read_data != NULL) && (header->node->m_plugin->load_proc != NULL)) {
+		// NULL is what a plugin with nothing to carry from one page to the next
+		// returns, and it is what FreeImage_Open() returns for a plugin with no
+		// open_proc at all - PNG, JPEG, BMP and TARGA all leave it NULL, and JNG's
+		// is a stub that returns NULL. None of that is a failure, so a plugin's
+		// load_proc has always been called with whatever came back, NULL included:
+		// FreeImage_LoadFromHandle() still does exactly that, which is why every
+		// plugin already copes with a NULL data pointer.
+		//
+		// Requiring a non-NULL read_data here therefore made every single-image
+		// format unlockable through this API - FreeImage_LockPage(0) returned NULL
+		// for a document whose FreeImage_GetPageCount() had just said 1.
+
+		if (header->node->m_plugin->load_proc != NULL) {
 			dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, header->load_flags, header->read_data);
 		}
 	}
