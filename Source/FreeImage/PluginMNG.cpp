@@ -70,6 +70,7 @@ References
 
 #include "../Metadata/FreeImageTag.h"
 
+#include <algorithm>
 #include <new>
 #include <vector>
 
@@ -500,28 +501,65 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 The DEFI placement in force while the stream is walked.
 */
 struct MNGObjectState {
+	WORD id;
 	LONG x, y;
 	BOOL do_not_show;
 	BOOL has_clip;
 	LONG clip_left, clip_right, clip_top, clip_bottom;
 
-	MNGObjectState() : x(0), y(0), do_not_show(FALSE), has_clip(FALSE),
+	MNGObjectState() : id(0), x(0), y(0), do_not_show(FALSE), has_clip(FALSE),
 		clip_left(0), clip_right(0), clip_top(0), clip_bottom(0) {
 	}
 };
 
 /**
+An image defined with a nonzero DEFI object id, kept so that a later SHOW chunk
+can display it again.  This is how a MNG-LC file reuses an image without the
+stored object buffers of full MNG: the image is defined once, usually with
+do_not_show set, and shown whenever it is wanted.
+*/
+struct MNGObject {
+	WORD id;
+	MNGFrame frame;			//! where its bytes are, and how big it is
+	BOOL do_not_show;
+
+	MNGObject() : id(0), do_not_show(FALSE) {
+	}
+};
+
+/**
+Where a SHOW chunk using show_mode 6 or 7 has got to in its range.  Those modes
+step through the objects one per chunk, so the place has to be kept somewhere,
+and it is kept per range: a file stepping through two ranges keeps a place in
+each.
+*/
+struct MNGShowCursor {
+	WORD low, high;
+	size_t next;
+};
+
+/** A file cannot name more layers than this without something being wrong. */
+#define MNG_MAX_FRAMES	65536
+
+/**
 Parse a DEFI chunk (MNG 1.0, 4.2.1), which is 2, 3, 4, 12 or 28 bytes: an
 object id, then do_not_show, then the concrete flag, then a location, then
 clipping boundaries.  "If any field is omitted, all subsequent fields must
-also be omitted" - and an omitted field is not a field set to zero, so a
-2-byte DEFI leaves the location where the last one put it.
+also be omitted", and only the fields that are present are applied here.
+
+What an omitted field means depends on the object id, which is why the caller
+chooses what this starts from: the spec's default values "are also used to fill
+any fields that were omitted from the DEFI chunk, when an object with the same
+object_id has not been previously defined".  For an id that has been defined,
+the attributes it already has stand, so a 2-byte DEFI naming it leaves its
+location where the last one put it.
 */
 static void
 ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
 	if(length < 2) {
 		return;
 	}
+	state->id = GetWORD(&payload[0]);
 	if(length >= 3) {
 		state->do_not_show = (payload[2] != 0) ? TRUE : FALSE;
 	}
@@ -628,6 +666,68 @@ ApplyFramingModes(MNGinfo *info) {
 	}
 }
 
+/**
+Record a layer: an image's bytes together with the timing in force when it is
+drawn.  Both an embedded image and a SHOW chunk that displays a stored object
+come through here, because the spec counts both as layers - its list of what
+"generates a layer" names decoding an IHDR-IEND sequence and decoding a SHOW
+chunk side by side.
+@return FALSE when the file has named more layers than can be believed
+*/
+static BOOL
+AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
+		 int subframe, BOOL *first_image) {
+	if(info->frames.size() >= MNG_MAX_FRAMES) {
+		return FALSE;
+	}
+
+	frame.delay_ticks = framing.current_delay;
+	frame.framing_mode = framing.framing_mode;
+	frame.subframe = subframe;
+	frame.do_not_show = FALSE;
+
+	// Whose clipping wins: DEFI's is the object's own and is already on the
+	// frame, FRAM's is the layer's, and the layer's is the one a viewer applies.
+	if(framing.has_clip) {
+		frame.has_clip = TRUE;
+		frame.clip_left = framing.clip_left;
+		frame.clip_right = framing.clip_right;
+		frame.clip_top = framing.clip_top;
+		frame.clip_bottom = framing.clip_bottom;
+	}
+
+	// "Regardless of the framing mode, encoders must insert a background layer
+	// ... ahead of the first image layer in the datastream", and modes 3 and 4
+	// insert more of them: 3 before every foreground layer, 4 before the first
+	// of each subframe.
+	frame.restore_background = FALSE;
+	if(*first_image) {
+		frame.restore_background = TRUE;
+	} else if(framing.framing_mode == 3) {
+		frame.restore_background = TRUE;
+	} else if(framing.framing_mode == 4) {
+		frame.restore_background = info->frames.empty() ? TRUE :
+			(info->frames.back().subframe != subframe) ? TRUE : FALSE;
+	}
+	*first_image = FALSE;
+
+	info->frames.push_back(frame);
+	return TRUE;
+}
+
+/**
+Find a stored object by its id.
+*/
+static MNGObject *
+FindObject(std::vector<MNGObject>& objects, WORD id) {
+	for(size_t i = 0; i < objects.size(); i++) {
+		if(objects[i].id == id) {
+			return &objects[i];
+		}
+	}
+	return NULL;
+}
+
 // ==========================================================
 // Building the index
 // ==========================================================
@@ -647,6 +747,13 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	MNGFramingState framing;
 	MNGObjectState object;
 	MNGGlobals globals;
+
+	// The attribute sets DEFI has defined, by object id, and the images stored
+	// under those ids. They are kept apart because a DEFI can name an id before
+	// any image has been stored under it.
+	std::vector<MNGObjectState> defined;
+	std::vector<MNGObject> objects;
+	std::vector<MNGShowCursor> cursors;
 
 	// `globals` is only copied into the list when an image actually needs it, so a
 	// file that redefines its palette between every frame costs one snapshot per
@@ -726,22 +833,9 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 					}
 				}
 
-				frame.delay_ticks = framing.current_delay;
 				frame.x = object.x;
 				frame.y = object.y;
-				frame.do_not_show = object.do_not_show;
-				frame.framing_mode = framing.framing_mode;
-				frame.subframe = subframe;
-
-				// Whose clipping wins: DEFI's is the object's own, FRAM's is the
-				// layer's, and the layer's is the one a viewer applies.
-				if(framing.has_clip) {
-					frame.has_clip = TRUE;
-					frame.clip_left = framing.clip_left;
-					frame.clip_right = framing.clip_right;
-					frame.clip_top = framing.clip_top;
-					frame.clip_bottom = framing.clip_bottom;
-				} else if(object.has_clip) {
+				if(object.has_clip) {
 					frame.has_clip = TRUE;
 					frame.clip_left = object.clip_left;
 					frame.clip_right = object.clip_right;
@@ -749,28 +843,43 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 					frame.clip_bottom = object.clip_bottom;
 				}
 
-				// "Regardless of the framing mode, encoders must insert a background
-				// layer ... ahead of the first image layer in the datastream", and
-				// modes 3 and 4 insert more of them.
-				if(first_image) {
-					frame.restore_background = TRUE;
-				} else if(framing.framing_mode == 3) {
-					frame.restore_background = TRUE;
-				} else if(framing.framing_mode == 4) {
-					frame.restore_background = info->frames.empty() ? TRUE :
-						(info->frames.back().subframe != subframe) ? TRUE : FALSE;
-				}
-				first_image = FALSE;
-
 				if(globals_index == (size_t)-1) {
 					info->globals.push_back(globals);
 					globals_index = info->globals.size() - 1;
 				}
 				frame.globals = globals_index;
 
-				info->frames.push_back(frame);
-				if(have_outer_loop && (loop_depth > 0)) {
-					outer_loop_last = info->frames.size();
+				// An image defined with an object id is kept, so that a later SHOW
+				// chunk can display it: that is how a MNG-LC file reuses an image
+				// without the stored object buffers of full MNG.
+				if(object.id != 0) {
+					MNGObject *stored = FindObject(objects, object.id);
+					if(!stored) {
+						if(objects.size() < MNG_MAX_FRAMES) {
+							objects.push_back(MNGObject());
+							stored = &objects.back();
+							stored->id = object.id;
+						}
+					}
+					if(stored) {
+						stored->frame = frame;
+						stored->do_not_show = object.do_not_show;
+					}
+				}
+
+				// A page is a layer that is drawn. An object defined "not
+				// potentially visible" draws nothing here and becomes a page when
+				// a SHOW chunk displays it - the same reason PluginAPNG.cpp does
+				// not make a page of a default image that is not a frame.
+				if(!object.do_not_show) {
+					if(!AddLayer(info, frame, framing, subframe, &first_image)) {
+						FreeImage_OutputMessageProc(s_format_id,
+							"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
+						break;
+					}
+					if(have_outer_loop && (loop_depth > 0)) {
+						outer_loop_last = info->frames.size();
+					}
 				}
 			}
 
@@ -782,7 +891,8 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		const BOOL want_payload =
 			(type == CHUNK_MHDR) || (type == CHUNK_FRAM) || (type == CHUNK_DEFI) ||
 			(type == CHUNK_BACK) || (type == CHUNK_LOOP) || (type == CHUNK_ENDL) ||
-			(type == CHUNK_TERM) || (type == CHUNK_PLTE) || (type == CHUNK_tRNS) ||
+			(type == CHUNK_TERM) || (type == CHUNK_SHOW) || (type == CHUNK_PLTE) ||
+			(type == CHUNK_tRNS) ||
 			(type == CHUNK_gAMA) || (type == CHUNK_cHRM) || (type == CHUNK_sRGB) ||
 			(type == CHUNK_iCCP) || (type == CHUNK_pHYs) || (type == CHUNK_bKGD);
 
@@ -798,6 +908,40 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			}
 		}
 		const BYTE *data = payload.empty() ? NULL : &payload[0];
+
+		// Check the CRC of the chunks that steer this parser - the timing, the
+		// placement, the palette.  The embedded images check their own, through
+		// libpng, and are skipped whole here; but a corrupt FRAM is not caught by
+		// anything downstream, and quietly playing an animation at a delay that
+		// was never written is worse than saying the file is damaged.
+		//
+		// A chunk that fails is dropped rather than taken as the end of the file.
+		// The images are the part worth having and they carry their own CRCs, so
+		// one flipped bit in a FRAM should cost the timing it describes, not every
+		// picture after it. If the damage was in the length rather than the
+		// payload, the walk desynchronises and the bounds checks above end it.
+		if(want_payload) {
+			BYTE type_bytes[5];
+			PutDWORD(type_bytes, type);
+			type_bytes[4] = '\0';
+
+			DWORD crc = FreeImage_ZLibCRC32(0, type_bytes, 4);
+			if(length > 0) {
+				crc = FreeImage_ZLibCRC32(crc, &payload[0], length);
+			}
+
+			std::vector<BYTE> crc_bytes;
+			if(!ReadBytesAt(io, handle, payload_start + (long)length, 4, crc_bytes)) {
+				break;
+			}
+			if(crc != GetDWORD(&crc_bytes[0])) {
+				FreeImage_OutputMessageProc(s_format_id,
+					"MNG: the %s chunk has a bad CRC and is ignored - the file is damaged",
+					(const char*)type_bytes);
+				io->seek_proc(handle, next_chunk, SEEK_SET);
+				continue;
+			}
+		}
 
 		if(type == CHUNK_MHDR) {
 			if(length >= 28) {
@@ -827,7 +971,137 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			subframe++;
 			ParseFRAM(data, length, &framing);
 		} else if(type == CHUNK_DEFI) {
-			ParseDEFI(data, length, &object);
+			// The defaults fill the fields a DEFI omits, but only for an id that
+			// has not been defined before; for one that has, its own attributes
+			// stand and the chunk changes just the fields it carries.
+			if(length >= 2) {
+				const WORD id = GetWORD(&data[0]);
+				MNGObjectState state;
+				state.clip_right = (LONG)info->canvas_width;
+				state.clip_bottom = (LONG)info->canvas_height;
+
+				size_t slot = defined.size();
+				for(size_t i = 0; i < defined.size(); i++) {
+					if(defined[i].id == id) {
+						state = defined[i];
+						slot = i;
+						break;
+					}
+				}
+				state.id = id;
+				ParseDEFI(data, length, &state);
+
+				if(slot < defined.size()) {
+					defined[slot] = state;
+				} else if(defined.size() < MNG_MAX_FRAMES) {
+					defined.push_back(state);
+				}
+				object = state;
+			}
+		} else if(type == CHUNK_SHOW) {
+			// SHOW displays objects defined earlier. Its layers are this plugin's
+			// pages, which is what lets a MNG-LC file that defines its images once
+			// and shows them repeatedly read as the animation it is.
+			//
+			//   first_image, last_image  2 bytes each, both omittable
+			//   show_mode                1 byte: 0 and 2 display, 4 and 6 display
+			//                            after changing visibility, 1, 3, 5 and 7
+			//                            only change it
+			WORD first_id = 1, last_id = 0xFFFF;
+			BYTE show_mode = 0;
+			if(length >= 2) {
+				first_id = GetWORD(&data[0]);
+				last_id = first_id;
+			}
+			if(length >= 4) {
+				last_id = GetWORD(&data[2]);
+			}
+			if(length >= 5) {
+				show_mode = data[4];
+			}
+
+			const WORD low = MIN(first_id, last_id);
+			const WORD high = MAX(first_id, last_id);
+
+			// the objects the chunk names, in the order it names them - "in
+			// reverse order if last_image < first_image"
+			std::vector<size_t> range;
+			for(size_t i = 0; i < objects.size(); i++) {
+				if((objects[i].id >= low) && (objects[i].id <= high)) {
+					range.push_back(i);
+				}
+			}
+			if(last_id < first_id) {
+				std::reverse(range.begin(), range.end());
+			}
+
+			if((show_mode == 6) || (show_mode == 7)) {
+				// "Step through the images in the given range, making the next
+				// image potentially visible and display it. Set do_not_show=1 for
+				// all other images in the range. Jump to the beginning of the
+				// range when reaching the end. Perform one step for each SHOW
+				// chunk." The cursor is per range, so a file stepping through two
+				// ranges keeps a place in each.
+				size_t slot = cursors.size();
+				for(size_t i = 0; i < cursors.size(); i++) {
+					if((cursors[i].low == low) && (cursors[i].high == high)) {
+						slot = i;
+						break;
+					}
+				}
+				if(slot == cursors.size()) {
+					MNGShowCursor cursor;
+					cursor.low = low;
+					cursor.high = high;
+					cursor.next = 0;
+					cursors.push_back(cursor);
+				}
+
+				if(!range.empty()) {
+					const size_t chosen = cursors[slot].next % range.size();
+					for(size_t i = 0; i < range.size(); i++) {
+						objects[range[i]].do_not_show = (i == chosen) ? FALSE : TRUE;
+					}
+					cursors[slot].next = chosen + 1;
+
+					if(show_mode == 6) {
+						if(!AddLayer(info, objects[range[chosen]].frame, framing,
+									 subframe, &first_image)) {
+							FreeImage_OutputMessageProc(s_format_id,
+								"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
+							break;
+						}
+						if(have_outer_loop && (loop_depth > 0)) {
+							outer_loop_last = info->frames.size();
+						}
+					}
+				}
+			} else {
+				// modes 3 and 5 change visibility without displaying, and 1 hides
+				const BOOL displays = (show_mode == 0) || (show_mode == 2) || (show_mode == 4);
+
+				for(size_t i = 0; i < range.size(); i++) {
+					MNGObject& stored = objects[range[i]];
+					switch(show_mode) {
+						case 0:
+						case 3: stored.do_not_show = FALSE; break;
+						case 1: stored.do_not_show = TRUE; break;
+						case 4:
+						case 5: stored.do_not_show = stored.do_not_show ? FALSE : TRUE; break;
+						default: break;	// 2 displays without changing the flag
+					}
+					if(displays && !stored.do_not_show) {
+						if(!AddLayer(info, stored.frame, framing, subframe, &first_image)) {
+							FreeImage_OutputMessageProc(s_format_id,
+								"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
+							break;
+						}
+						if(have_outer_loop && (loop_depth > 0)) {
+							outer_loop_last = info->frames.size();
+						}
+					}
+				}
+			}
 		} else if(type == CHUNK_BACK) {
 			ParseBACK(data, length, info);
 		} else if(type == CHUNK_TERM) {
@@ -868,9 +1142,12 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 				loop_depth--;
 			}
 		} else if(type == CHUNK_SEEK) {
-			// SEEK restores the state saved at the last SAVE; with no object buffers
-			// to restore, resetting the placement is the part that matters here
+			// "The object attributes for all existing unfrozen objects except for
+			// object 0 become undefined when a SEEK chunk is encountered." The
+			// images themselves survive it - only what is known about where they go.
 			object = MNGObjectState();
+			defined.clear();
+			cursors.clear();
 		} else if((type == CHUNK_PAST) || (type == CHUNK_MAGN) || (type == CHUNK_CLON) ||
 				  (type == CHUNK_DISC) || (type == CHUNK_MOVE) || (type == CHUNK_CLIP)) {
 			// object-buffer chunks: they edit images this plugin does not keep
@@ -918,6 +1195,23 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	} else if(have_outer_loop && (outer_loop_first == 0) && (outer_loop_last == info->frames.size())
 			  && !info->frames.empty()) {
 		info->loop_count = (outer_loop_count >= MNG_INFINITE_ITERATIONS) ? 0 : (LONG)outer_loop_count;
+	}
+
+	// A file whose every image is defined "not potentially visible" and never
+	// shown has no layers at all. As an animation there is nothing to see, but
+	// the images are still in there, and refusing the file outright would make
+	// them unreachable - so they are handed over in the order they were defined.
+	if(info->frames.empty() && !objects.empty()) {
+		for(size_t i = 0; i < objects.size(); i++) {
+			MNGFrame frame = objects[i].frame;
+			frame.delay_ticks = 0;
+			frame.do_not_show = FALSE;
+			frame.restore_background = (i == 0) ? TRUE : FALSE;
+			info->frames.push_back(frame);
+		}
+		FreeImage_OutputMessageProc(s_format_id,
+			"MNG: no image in this file is ever displayed; its %d stored image(s) are "
+			"read in the order they were defined", (int)info->frames.size());
 	}
 
 	ApplyFramingModes(info);
