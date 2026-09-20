@@ -8,6 +8,11 @@
 ; Change log:
 ; =============================
 ;
+; 20 September 2026 - v2.0
+; - implemented FreeImage_GetFrameTime() and FreeImage_GetFrameDelays(): the
+;   timeline of an animation, read without decoding any of its frames
+; - implemented FreeImage_GetMetadata() and FreeImage_GetTagValue()
+;
 ; 07 December 2024 - v1.9
 ; - implemented more functions ; FreeImage_AllocateEx() and FreeImage_FillBackground()
 ;
@@ -840,7 +845,7 @@ FreeImage_SaveToMemory(FIF, hImage, hMemory, Flags) { ; 0:BMP 2:JPG 13:PNG 18:TI
 
 ; === Metadata functions ===
 ; 26 functions available in the FreeImage Library
-; 17 functions implemented; 9 missing.
+; 19 functions implemented; 7 missing.
 
 FreeImage_CreateTag() {
 ; Returns a new FITAG object. This object must be destroyed with a call to
@@ -873,6 +878,18 @@ FreeImage_GetTagCount(fiTag) {
 
 FreeImage_GetTagType(fiTag) {
    Return DllCall(getFIMfunc("GetTagType"), "uptr", fiTag)
+}
+
+FreeImage_GetTagValue(fiTag) {
+; Returns a pointer to the value of the tag. The value belongs to the tag,
+; so do not free it and do not use it once the tag is gone.
+; Read it with NumGet() according to FreeImage_GetTagType(); a FIDT_LONG (4)
+; holds a single 32-bit unsigned integer:
+;    pValue := FreeImage_GetTagValue(fiTag)
+;    value := NumGet(pValue+0, 0, "UInt")
+; The function returns 0 when the tag carries no value.
+
+   Return DllCall(getFIMfunc("GetTagValue"), "uptr", fiTag, "uptr")
 }
 
 FreeImage_GetTagDescription(fiTag) {
@@ -982,6 +999,126 @@ FreeImage_CloneMetadata(srcImg, destImg) {
 FreeImage_GetMetadataCount(metaModel, hImage) {
 ; Returns the number of tags contained in the metadata model attached to the input hImage.
    Return DllCall(getFIMfunc("GetMetadataCount"), "int", metaModel, "uptr", hImage)
+}
+
+FreeImage_GetMetadata(hImage, metaModel, key, ByRef fiTag) {
+; Retrieves a single tag by its key from the given metadata model.
+; See FreeImage_SetMetadata() for what the metaModel values mean.
+; On success, fiTag receives the FITAG. It belongs to hImage, so do not delete
+; it, and do not use it after the image was unloaded or the page unlocked.
+; What is in it is read with FreeImage_GetTagType() and FreeImage_GetTagValue().
+; The function returns TRUE when the tag was found and returns FALSE otherwise.
+
+   fiTag := 0
+   Return DllCall(getFIMfunc("GetMetadata"), "int", metaModel, "uptr", hImage, "astr", key, "uptr*", fiTag)
+}
+
+
+; === Animation helpers ===
+; Not FreeImage API functions, but the two things a player wants from an
+; animation before it wants any of its pictures.
+
+FreeImage_GetFrameTime(hImage) {
+; How long this frame of an animation stays on screen, in milliseconds.
+;
+; GIF, APNG, animated WebP and AVIF image sequences all describe a frame with
+; the same FIMD_ANIMATION tags, and the one that says how long the frame lasts
+; is "FrameTime". Only WebP stores it in milliseconds - GIF holds hundredths of
+; a second, APNG and AVIF each a rational number of seconds - but every plugin
+; converts, so this one function reads all four formats.
+;
+; The tag arrives with the page, and the page does not have to carry any pixels
+; for it to; that is what FreeImage_GetFrameDelays() below relies on.
+;
+; It returns 0 when the page declares no duration: a still image, or a page of
+; a format that is paged but not animated - a multi-page TIFF, the several
+; pictures in a HEIF file.
+
+   Static FIMD_ANIMATION := 9
+        , FIDT_LONG := 4
+
+   If (!FreeImage_GetMetadata(hImage, FIMD_ANIMATION, "FrameTime", fiTag) || !fiTag)
+      Return 0
+
+   ; the type is checked rather than assumed, so a file that stores something
+   ; else under that key cannot be read as a number
+   pValue := FreeImage_GetTagValue(fiTag)
+   If (!pValue || FreeImage_GetTagType(fiTag)!=FIDT_LONG)
+      Return 0
+
+   Return NumGet(pValue+0, 0, "UInt")
+}
+
+FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
+; The duration of every frame of an animation, and nothing else: the timeline a
+; player needs to say how long the thing runs, to draw a scrubber, or to decide
+; which frame belongs to a moment. None of that wants pixels, and this decodes
+; none of them.
+;
+; delaysArray is filled with one duration in milliseconds per frame, indexed by
+; the frame number FreeImage_LockPage() takes - so the first frame is at index
+; 0 and delaysArray.Length() is not the number of frames; use the returned
+; count for that. totalTime receives how long one pass of the animation lasts.
+;
+; The function returns the number of frames, or -1 when the file could not be
+; read. A still image is a single page, so an ordinary .gif returns 1.
+;
+; Three decisions are what make the walk cheap:
+;   1. One session for the whole file. FreeImage_OpenMultiBitmap() opens the
+;      decoder once and every FreeImage_LockPage() reuses it. Loading frames
+;      one at a time instead re-parses the file from the beginning each time -
+;      for a GIF, a scan of every block in it.
+;   2. FIF_LOAD_NOPIXELS. A plugin that acts on the flag returns a bitmap that
+;      is a header and its metadata with no pixel buffer behind it: nothing was
+;      decoded and nothing the size of an image was allocated. Plugins that do
+;      not act on it ignore it, so it is always safe to pass, and
+;      FreeImage_FIFSupportsNoPixels() says which ones will. All four animated
+;      formats do.
+;   3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK and
+;      AVIF_PLAYBACK ask for the canvas a viewer would show at this frame,
+;      which is a 32-bit allocation and a composite on top of the decoding.
+;      It buys nothing here: the animation tags describe the frame as the file
+;      stores it and are on the page either way.
+;
+; The file is opened by its ANSI name, as FreeImage_OpenMultiBitmap() does, so
+; a path the local code page cannot spell is not found and -1 comes back.
+
+   Static FIF_LOAD_NOPIXELS := 0x8000
+
+   delaysArray := [] , totalTime := 0
+   FIF := FreeImage_GetFileType(ImgPath)
+   If (FIF=-1 || !FreeImage_FIFSupportsReading(FIF))
+      Return -1
+
+   ; create_new=0 : the file exists, do not create one
+   ; read_only=1  : nothing here can write back over it
+   ; keep_cache=1 : a read-only session changes nothing, so the cache it keeps
+   ;                in memory stays empty; this only avoids creating the
+   ;                temporary file at all
+   hMultiImg := FreeImage_OpenMultiBitmap(ImgPath, FIF, 0, 1, 1, FIF_LOAD_NOPIXELS)
+   If !hMultiImg
+      Return -1
+
+   frameCount := FreeImage_GetPageCount(hMultiImg)
+   Loop, % frameCount
+   {
+      frameIndex := A_Index - 1
+      ; the page: a header carrying this frame's metadata, with no pixels
+      ; behind it. It belongs to the multi-page bitmap until it is unlocked,
+      ; so do not use FreeImage_UnLoad() on it
+      hImage := FreeImage_LockPage(hMultiImg, frameIndex)
+
+      ; a damaged frame: the rest of the file may still be readable
+      thisDelay := hImage ? FreeImage_GetFrameTime(hImage) : 0
+      delaysArray[frameIndex] := thisDelay
+      totalTime += thisDelay
+
+      If hImage
+         FreeImage_UnlockPage(hMultiImg, hImage, 0) ; 0: nothing was changed
+   }
+
+   FreeImage_CloseMultiBitmap(hMultiImg, 0)
+   Return frameCount
 }
 
 
