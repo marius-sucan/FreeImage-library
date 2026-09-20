@@ -47,6 +47,31 @@ to the tag names.  Each frame carries FrameTime (milliseconds), FrameLeft,
 FrameTop, DisposalMethod and BlendMethod, and every page also carries
 LogicalWidth, LogicalHeight and Loop.
 
+Writing is the same trick backwards.  Save() takes one page at a time, encodes
+it with the PNG writer and keeps the bytes; Close() assembles the file, because
+MHDR has to state a canvas that is not known until the last frame has said how
+big it is and where it goes.  The tick is a millisecond - ticks_per_second is
+1000 - so a FrameTime written in milliseconds is read back as exactly itself,
+and every frame is preceded by a FRAM that states its delay outright rather than
+leaning on the specification's default of one tick.  What the format can hold is
+therefore what PNG can hold: a palette stays a palette, 1-bit stays 1-bit,
+16-bit channels stay 16-bit.  The save flags are the PNG writer's own -
+PNG_Z_BEST_SPEED, PNG_INTERLACED and the rest - since it is the PNG writer that
+encodes every frame.
+
+A single image is written as a one-frame MNG rather than as the bare PNG a MNG
+datastream is also allowed to be.  That is not a stylistic choice: the page
+cache round-trips every appended page through this plugin's own writer and
+reader, and a file without the MNG signature would not get past Validate() on
+the way back, so FreeImage_AppendPage() would break.
+
+Three things do not survive a round trip, because MNG has nowhere to put them.
+The last frame's DisposalMethod: a frame's disposal is carried by whether the
+frame after it is drawn on a fresh background, and the last frame has no frame
+after it.  GIF_DISPOSAL_PREVIOUS, which needs the stored object buffers of full
+MNG, and which is written as "leave the canvas alone".  And BlendMethod, since
+a MNG layer is always composited over what is beneath it.
+
 What is covered.  MNG-VLC and MNG-LC in full: MHDR, the embedded PNG/JNG/BASI
 images, global PLTE and tRNS and the other global ancillary chunks, FRAM with
 its framing modes and its interframe delays, DEFI placement and clipping, BACK,
@@ -61,7 +86,14 @@ declares them in the MHDR simplicity profile, says so once through
 FreeImage_OutputMessageProc and then reads as the images it does contain.
 That is the whole difference between this and libmng, and it is a deliberate
 one: silently returning a delta frame as though it were a whole picture would
-be worse than saying it cannot be done.
+be worse than saying it cannot be done.  Nothing written here uses them either,
+so a file this produces never trips its own warning.
+
+The writer's one structural limit is that Close() is where the file is built and
+Close() returns void: a page that turns out to be unwritable once the assembly
+has started can only be reported, not refused.  Everything that can be refused
+is therefore refused in Save(), while FreeImage_Save() still has a FALSE to
+return and a half-written file to remove.
 
 References
   http://www.libpng.org/pub/mng/spec/    MNG 1.0, and the chunk layouts below
@@ -89,6 +121,8 @@ static int s_format_id;
 
 #define MNG_SIGNATURE_SIZE 8	// size of the signature
 
+/** MNG signature, which every file this writes begins with */
+static const BYTE g_mng_signature[8] = { 138, 77, 78, 71, 13, 10, 26, 10 };
 /** PNG signature, prefixed to an embedded IHDR..IEND to make it a file again */
 static const BYTE g_png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 /** JNG signature, likewise for an embedded JHDR..IEND */
@@ -192,6 +226,12 @@ GetWORD(const BYTE *p) {
 }
 
 static inline void
+PutWORD(BYTE *p, WORD value) {
+	p[0] = (BYTE)(value >> 8);
+	p[1] = (BYTE)(value);
+}
+
+static inline void
 PutDWORD(BYTE *p, DWORD value) {
 	p[0] = (BYTE)(value >> 24);
 	p[1] = (BYTE)(value >> 16);
@@ -250,6 +290,29 @@ struct MNGFrame {
 };
 
 /**
+One frame on its way out: the PNG datastream that carries it, and when and where
+it is drawn.
+
+The pixels are kept as the bytes FIF_PNG produced for them rather than as a
+bitmap, because that is what finally goes in the file and because encoding them
+once, as each page arrives, is cheaper than holding every page as a bitmap until
+the end.  MHDR has to state the canvas and the file cannot be written until every
+frame's size and placement is known, so something has to be held either way.
+*/
+struct MNGOutFrame {
+	std::vector<BYTE> png;	//! IHDR..IEND, with the signature already trimmed
+	DWORD width, height;
+	LONG x, y;
+	DWORD delay_ms;
+	BYTE disposal;			//! in GIF's numbering, as FIMD_ANIMATION states it
+	BOOL has_alpha;
+
+	MNGOutFrame() : width(0), height(0), x(0), y(0), delay_ms(0),
+		disposal(GIF_DISPOSAL_LEAVE), has_alpha(FALSE) {
+	}
+};
+
+/**
 What Open() hands to the other entry points.
 */
 struct MNGinfo {
@@ -278,12 +341,26 @@ struct MNGinfo {
 	FIBITMAP *canvas;
 	int canvas_page;			//! the frame `canvas` shows, -1 when there is none
 
+	// ---------- writing ----------
+
+	std::vector<MNGOutFrame> out_frames;
+	int out_flags;				//! the save flags the first page arrived with
+	DWORD out_canvas_width;		//! from LogicalWidth/LogicalHeight, grown to fit
+	DWORD out_canvas_height;
+	LONG out_loop;				//! plays: 1 is once, 0 is forever
+	BOOL out_has_background;
+	RGBQUAD out_background;
+
 	MNGinfo() : read(FALSE), has_mhdr(FALSE), canvas_width(0), canvas_height(0),
 		ticks_per_second(0), nominal_layer_count(0), nominal_frame_count(0),
 		nominal_play_time(0), simplicity(0), loop_count(1), has_background(FALSE),
-		complex_features(FALSE), warned(FALSE), canvas(NULL), canvas_page(-1) {
+		complex_features(FALSE), warned(FALSE), canvas(NULL), canvas_page(-1),
+		out_flags(0), out_canvas_width(0), out_canvas_height(0), out_loop(1),
+		out_has_background(FALSE) {
 		background.rgbRed = background.rgbGreen = background.rgbBlue = 0;
 		background.rgbReserved = 255;
+		out_background.rgbRed = out_background.rgbGreen = out_background.rgbBlue = 0;
+		out_background.rgbReserved = 255;
 	}
 
 	~MNGinfo() {
@@ -1815,6 +1892,242 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
 }
 
 // ==========================================================
+// Writing
+// ==========================================================
+
+/**
+Read one FIMD_ANIMATION tag of a known type.
+*/
+static BOOL
+GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, FITAG **tag) {
+	if(FreeImage_GetMetadata(FIMD_ANIMATION, dib, key, tag) && *tag) {
+		if((FreeImage_GetTagType(*tag) == type) && FreeImage_GetTagValue(*tag)) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/**
+Encode a page as the PNG datastream a MNG embeds: everything the PNG writer
+produced except its 8-byte signature.
+
+Going through FIF_PNG is what keeps the writer honest about depth.  A palette
+stays a palette, 1-bit stays 1-bit, 16-bit channels stay 16-bit, and the
+transparency table, the ICC profile and the text chunks travel with the frame -
+none of which would survive a writer of its own that flattened everything to
+RGBA first.
+*/
+static BOOL
+EncodeFrame(FIBITMAP *dib, int flags, std::vector<BYTE>& out) {
+	FIMEMORY *hmem = FreeImage_OpenMemory(NULL, 0);
+	if(!hmem) {
+		return FALSE;
+	}
+
+	BOOL bResult = FreeImage_SaveToMemory(FIF_PNG, dib, hmem, flags);
+	if(bResult) {
+		BYTE *data = NULL;
+		DWORD size = 0;
+		if(FreeImage_AcquireMemory(hmem, &data, &size) && data && (size > 8)) {
+			try {
+				out.assign(data + 8, data + size);
+			} catch(std::bad_alloc&) {
+				bResult = FALSE;
+			}
+		} else {
+			bResult = FALSE;
+		}
+	}
+
+	FreeImage_CloseMemory(hmem);
+	return bResult;
+}
+
+/**
+Write one chunk to the output: length, type, payload, CRC.
+*/
+static BOOL
+WriteChunk(FreeImageIO *io, fi_handle handle, DWORD type, const BYTE *data, DWORD length) {
+	BYTE header[8];
+	PutDWORD(&header[0], length);
+	PutDWORD(&header[4], type);
+
+	DWORD crc = FreeImage_ZLibCRC32(0, &header[4], 4);
+	if(length > 0) {
+		crc = FreeImage_ZLibCRC32(crc, (BYTE*)data, length);
+	}
+
+	BYTE crc_bytes[4];
+	PutDWORD(crc_bytes, crc);
+
+	if(io->write_proc(header, 1, 8, handle) != 8) {
+		return FALSE;
+	}
+	if((length > 0) && (io->write_proc((void*)data, 1, length, handle) != length)) {
+		return FALSE;
+	}
+	return (io->write_proc(crc_bytes, 1, 4, handle) == 4);
+}
+
+/**
+Assemble the file: a signature, a header, the frames with the chunks that time
+and place them, and MEND.
+
+The tick is a millisecond - ticks_per_second is 1000 - so a FrameTime in
+milliseconds is written and read back as exactly itself, with no rounding
+anywhere.  Every frame is preceded by a FRAM that states its delay outright
+rather than leaning on the specification's default of one tick, and by a DEFI
+when it is not where the frame before it was.
+
+The framing mode carries the disposal: mode 3 has the background drawn ahead of
+each layer, which is what a frame disposing to the background asks of the frame
+after it, and mode 1 leaves the canvas alone.  Both associate the delay with
+every layer, so one FRAM per frame gives each its own.
+*/
+static BOOL
+WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
+	const size_t count = info->out_frames.size();
+	if(count == 0) {
+		return TRUE;	// nothing was ever saved; an empty file is not a MNG
+	}
+
+	// The canvas has to hold every frame: a LogicalWidth smaller than the pictures
+	// placed on it would describe a file whose own frames hang off the edge.
+	DWORD canvas_width = info->out_canvas_width;
+	DWORD canvas_height = info->out_canvas_height;
+	BOOL has_alpha = FALSE;
+	DWORD play_time = 0;
+
+	for(size_t i = 0; i < count; i++) {
+		const MNGOutFrame& frame = info->out_frames[i];
+		const LONG right = frame.x + (LONG)frame.width;
+		const LONG bottom = frame.y + (LONG)frame.height;
+		if((right > 0) && ((DWORD)right > canvas_width)) {
+			canvas_width = (DWORD)right;
+		}
+		if((bottom > 0) && ((DWORD)bottom > canvas_height)) {
+			canvas_height = (DWORD)bottom;
+		}
+		if(frame.has_alpha) {
+			has_alpha = TRUE;
+		}
+		play_time += frame.delay_ms;
+	}
+	if(!canvas_width || !canvas_height) {
+		return FALSE;
+	}
+
+	// bit 0: the profile means something; bit 1: simple MNG features - FRAM, DEFI,
+	// BACK and TERM are all in here; bit 3: transparency.  Never bit 2 or bit 5,
+	// which would claim the complex features and the delta images this does not
+	// write, and which the reader would rightly complain about.
+	DWORD simplicity = MNG_PROFILE_VALID | MNG_PROFILE_SIMPLE;
+	if(has_alpha) {
+		simplicity |= MNG_PROFILE_TRANSPARENCY;
+	}
+
+	// One background layer ahead of the first frame, and one more before every
+	// frame that asked for the canvas to be cleared first.
+	DWORD layers = (DWORD)count + 1;
+	for(size_t i = 1; i < count; i++) {
+		if(info->out_frames[i - 1].disposal == GIF_DISPOSAL_BACKGROUND) {
+			layers++;
+		}
+	}
+
+	if(io->write_proc((void*)g_mng_signature, 1, 8, handle) != 8) {
+		return FALSE;
+	}
+
+	{
+		BYTE mhdr[28];
+		PutDWORD(&mhdr[0], canvas_width);
+		PutDWORD(&mhdr[4], canvas_height);
+		PutDWORD(&mhdr[8], 1000);			// a tick is a millisecond
+		PutDWORD(&mhdr[12], layers);
+		PutDWORD(&mhdr[16], (DWORD)count);
+		PutDWORD(&mhdr[20], play_time);
+		PutDWORD(&mhdr[24], simplicity);
+		if(!WriteChunk(io, handle, CHUNK_MHDR, mhdr, 28)) {
+			return FALSE;
+		}
+	}
+
+	// TERM says what to do at MEND. One play is what a file with no TERM already
+	// means, so only a different answer is worth writing.
+	if(info->out_loop != 1) {
+		BYTE term[10];
+		term[0] = 3;						// repeat the datastream
+		term[1] = 0;						// then show the last frame
+		PutDWORD(&term[2], 0);				// no delay before repeating
+		PutDWORD(&term[6], (info->out_loop <= 0) ? MNG_INFINITE_ITERATIONS
+												 : (DWORD)info->out_loop);
+		if(!WriteChunk(io, handle, CHUNK_TERM, term, 10)) {
+			return FALSE;
+		}
+	}
+
+	if(info->out_has_background) {
+		BYTE back[7];
+		// the chunk's samples are 16 bit; FreeImage's are 8
+		back[0] = info->out_background.rgbRed;   back[1] = info->out_background.rgbRed;
+		back[2] = info->out_background.rgbGreen; back[3] = info->out_background.rgbGreen;
+		back[4] = info->out_background.rgbBlue;  back[5] = info->out_background.rgbBlue;
+		back[6] = 1;						// the colour is mandatory
+		if(!WriteChunk(io, handle, CHUNK_BACK, back, 7)) {
+			return FALSE;
+		}
+	}
+
+	LONG placed_x = 0, placed_y = 0;
+	BOOL placed = FALSE;
+
+	for(size_t i = 0; i < count; i++) {
+		const MNGOutFrame& frame = info->out_frames[i];
+
+		const BYTE framing_mode =
+			((i > 0) && (info->out_frames[i - 1].disposal == GIF_DISPOSAL_BACKGROUND)) ? 3 : 1;
+
+		{
+			BYTE fram[10];
+			fram[0] = framing_mode;
+			fram[1] = 0;					// the subframe is nameless: just the separator
+			fram[2] = 2;					// change the delay, and the default with it
+			fram[3] = 0;					// no change to the timeout
+			fram[4] = 0;					// no change to the clipping boundaries
+			fram[5] = 0;					// no change to the sync id list
+			PutDWORD(&fram[6], frame.delay_ms);
+			if(!WriteChunk(io, handle, CHUNK_FRAM, fram, 10)) {
+				return FALSE;
+			}
+		}
+
+		if(!placed || (frame.x != placed_x) || (frame.y != placed_y)) {
+			BYTE defi[12];
+			PutWORD(&defi[0], 0);			// object 0: not kept after it is drawn
+			defi[2] = 0;					// potentially visible
+			defi[3] = 0;					// abstract: nothing deltas against it
+			PutDWORD(&defi[4], (DWORD)frame.x);
+			PutDWORD(&defi[8], (DWORD)frame.y);
+			if(!WriteChunk(io, handle, CHUNK_DEFI, defi, 12)) {
+				return FALSE;
+			}
+			placed_x = frame.x;
+			placed_y = frame.y;
+			placed = TRUE;
+		}
+
+		const DWORD size = (DWORD)frame.png.size();
+		if(io->write_proc((void*)&frame.png[0], 1, size, handle) != size) {
+			return FALSE;
+		}
+	}
+
+	return WriteChunk(io, handle, CHUNK_MEND, NULL, 0);
+}
+
+// ==========================================================
 // Plugin Implementation
 // ==========================================================
 
@@ -1845,22 +2158,35 @@ MimeType() {
 
 static BOOL DLL_CALLCONV
 Validate(FreeImageIO *io, fi_handle handle) {
-	BYTE mng_signature[8] = { 138, 77, 78, 71, 13, 10, 26, 10 };
 	BYTE signature[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
 	io->read_proc(&signature, 1, MNG_SIGNATURE_SIZE, handle);
 
-	return (memcmp(mng_signature, signature, MNG_SIGNATURE_SIZE) == 0) ? TRUE : FALSE;
+	return (memcmp(g_mng_signature, signature, MNG_SIGNATURE_SIZE) == 0) ? TRUE : FALSE;
 }
 
+// Every frame is written by the PNG encoder, so what a MNG can hold here is
+// exactly what PNG can hold - palettes, 1- and 4-bit images and 16-bit channels
+// included. These are PluginPNG.cpp's own lists.
 static BOOL DLL_CALLCONV
 SupportsExportDepth(int depth) {
-	return FALSE;
+	return (
+			(depth == 1) ||
+			(depth == 4) ||
+			(depth == 8) ||
+			(depth == 24) ||
+			(depth == 32)
+		);
 }
 
 static BOOL DLL_CALLCONV
 SupportsExportType(FREE_IMAGE_TYPE type) {
-	return FALSE;
+	return (
+		(type == FIT_BITMAP) ||
+		(type == FIT_UINT16) ||
+		(type == FIT_RGB16) ||
+		(type == FIT_RGBA16)
+	);
 }
 
 static BOOL DLL_CALLCONV
@@ -1878,16 +2204,21 @@ SupportsNoPixels() {
 
 static void * DLL_CALLCONV
 Open(FreeImageIO *io, fi_handle handle, BOOL read) {
-	if(!read) {
-		// there is no MNG writer: FreeImage_Save() and the save at
-		// FreeImage_CloseMultiBitmap() both report that for themselves
-		return NULL;
-	}
-
 	MNGinfo *info = new(std::nothrow) MNGinfo;
 	if(!info) {
 		return NULL;
 	}
+
+	if(!read) {
+		// Nothing is read or written here. A write session is handed an empty
+		// stream - FreeImage_SaveToMemory() opens one, FreeImage_OpenMultiBitmap()
+		// with create_new truncates one - so there is nothing to validate and
+		// nowhere to seek to. The pages arrive through Save(), and the file is
+		// assembled in Close().
+		info->read = FALSE;
+		return info;
+	}
+
 	info->read = TRUE;
 
 	io->seek_proc(handle, 0, SEEK_SET);
@@ -1907,9 +2238,26 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 static void DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	MNGinfo *info = (MNGinfo*)data;
-	if(info) {
-		delete info;
+	if(!info) {
+		return;
 	}
+
+	// The file is written here rather than as the pages arrive: MHDR states the
+	// canvas, and the canvas is not known until the last frame has said how big it
+	// is and where it goes. A document opened for writing and never given a page
+	// leaves the stream alone, as PluginAPNG.cpp does - there is no such thing as
+	// a MNG of nothing.
+	if(!info->read && !info->out_frames.empty()) {
+		try {
+			if(!WriteMNG(io, handle, info)) {
+				FreeImage_OutputMessageProc(s_format_id, "Failed to write the output file");
+			}
+		} catch(std::bad_alloc&) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		}
+	}
+
+	delete info;
 }
 
 static int DLL_CALLCONV
@@ -1951,6 +2299,111 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 }
 
 
+static BOOL DLL_CALLCONV
+Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
+	MNGinfo *info = (MNGinfo*)data;
+	if(!info || !dib || info->read) {
+		return FALSE;
+	}
+
+	// What cannot be written is refused here, where there is still something to
+	// return FALSE to. The file itself is only assembled in Close(), which returns
+	// void - so a page accepted now and found impossible then would leave
+	// FreeImage_Save() answering TRUE over a file it would otherwise have removed.
+	{
+		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+		if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) ||
+		   ((image_type == FIT_BITMAP) && !SupportsExportDepth(FreeImage_GetBPP(dib)))) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+			return FALSE;
+		}
+	}
+
+	try {
+		std::vector<BYTE> png;
+
+		if(!EncodeFrame(dib, flags, png)) {
+			FreeImage_OutputMessageProc(s_format_id, "Failed to compress a frame");
+			return FALSE;
+		}
+
+		if(info->out_frames.size() >= MNG_MAX_FRAMES) {
+			FreeImage_OutputMessageProc(s_format_id,
+				"MNG: refusing to write more than %d frames", MNG_MAX_FRAMES);
+			return FALSE;
+		}
+
+		const BOOL is_first = info->out_frames.empty();
+
+		info->out_frames.push_back(MNGOutFrame());
+		MNGOutFrame& frame = info->out_frames.back();
+		frame.png.swap(png);	// the bytes move into the list rather than being copied
+
+		frame.width = FreeImage_GetWidth(dib);
+		frame.height = FreeImage_GetHeight(dib);
+		frame.has_alpha = (FreeImage_GetBPP(dib) == 32) || FreeImage_IsTransparent(dib);
+
+		// The delay a page does not state.  Every page that has been through
+		// FreeImage_AppendPage() states one, because the cache writes it out as a
+		// MNG and reads it back, and this reader tags every page it returns - so
+		// this default is reached only by a page handed straight to
+		// FreeImage_Save() or FreeImage_SaveMultiBitmap*() without tags.  A tenth
+		// of a second is what PluginAPNG.cpp uses for the same case, and an
+		// animation whose frames all lasted no time at all would be one nobody
+		// could watch.
+		frame.delay_ms = 100;
+
+		FITAG *tag = NULL;
+		if(GetAnimTag(dib, "FrameTime", FIDT_LONG, &tag)) {
+			const LONG delay = *(LONG*)FreeImage_GetTagValue(tag);
+			frame.delay_ms = (delay > 0) ? (DWORD)delay : 0;
+		}
+		if(GetAnimTag(dib, "FrameLeft", FIDT_SHORT, &tag)) {
+			frame.x = *(WORD*)FreeImage_GetTagValue(tag);
+		}
+		if(GetAnimTag(dib, "FrameTop", FIDT_SHORT, &tag)) {
+			frame.y = *(WORD*)FreeImage_GetTagValue(tag);
+		}
+		if(GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &tag)) {
+			// GIF_DISPOSAL_PREVIOUS has no counterpart without stored object
+			// buffers, so it is written as "leave the canvas alone"
+			const BYTE disposal = *(BYTE*)FreeImage_GetTagValue(tag);
+			frame.disposal = (disposal == GIF_DISPOSAL_BACKGROUND) ? GIF_DISPOSAL_BACKGROUND
+																   : GIF_DISPOSAL_LEAVE;
+		}
+
+		// The canvas and the loop count describe the file, not a frame, and every
+		// page carries them; the first page settles them.
+		if(is_first) {
+			info->out_flags = flags;
+
+			if(GetAnimTag(dib, "LogicalWidth", FIDT_SHORT, &tag)) {
+				info->out_canvas_width = *(WORD*)FreeImage_GetTagValue(tag);
+			}
+			if(GetAnimTag(dib, "LogicalHeight", FIDT_SHORT, &tag)) {
+				info->out_canvas_height = *(WORD*)FreeImage_GetTagValue(tag);
+			}
+			if(GetAnimTag(dib, "Loop", FIDT_LONG, &tag)) {
+				const LONG loop = *(LONG*)FreeImage_GetTagValue(tag);
+				info->out_loop = (loop > 0) ? loop : 0;
+			}
+
+			RGBQUAD background;
+			if(FreeImage_GetBackgroundColor(dib, &background)) {
+				info->out_background = background;
+				info->out_has_background = TRUE;
+			}
+		}
+
+		return TRUE;
+
+	} catch(std::bad_alloc&) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		return FALSE;
+	}
+}
+
+
 // ==========================================================
 //   Init
 // ==========================================================
@@ -1968,7 +2421,7 @@ InitMNG(Plugin *plugin, int format_id) {
 	plugin->pagecount_proc = PageCount;
 	plugin->pagecapability_proc = NULL;
 	plugin->load_proc = Load;
-	plugin->save_proc = NULL;
+	plugin->save_proc = Save;
 	plugin->validate_proc = Validate;
 	plugin->mime_proc = MimeType;
 	plugin->supports_export_bpp_proc = SupportsExportDepth;

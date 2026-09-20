@@ -22,7 +22,7 @@
 # GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
 include ../../Makefile.openmp
 
-TESTS   = decode robust
+TESTS   = decode regress robust
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)

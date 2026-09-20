@@ -1,12 +1,12 @@
 # MNG tests
 
-Two standalone programs covering `Source/FreeImage/PluginMNG.cpp`. Each prints
+Three standalone programs covering `Source/FreeImage/PluginMNG.cpp`. Each prints
 a report and exits non-zero on failure.
 
 ```
 make -f Makefile.gnu dist      # from the repository root, first
 cd TestAPI/MNG
-make run                       # build and run both
+make run                       # build and run all three
 make asan-run                  # and again with AddressSanitizer
 ```
 
@@ -15,15 +15,20 @@ Scratch files go to `$MNG_TEST_TMP`, or the current directory.
 ## There is no data directory
 
 Every other suite here keeps a corpus of files some encoder produced, and is
-careful never to regenerate it. This one cannot: MNG has no writer, in this
-library or in much else that is still maintained, so there is nothing to make a
-corpus with and nothing a regenerated one could be compared against.
+careful never to regenerate it, so that the corpus can disagree with the code.
+This one has no such corpus, and could not usefully have one. There is a MNG
+writer here now, but a corpus made with it would be the code under test marking
+its own homework; and there is no second MNG encoder still maintained anywhere
+to get an independent one from.
 
 So the tests build their datastreams themselves, from the chunk layouts in the
 specification, and `mngbuild.h` holds the builders. That turns out to be the
 better arrangement for a container format: the file each test needs is written
 in the test, next to the expectation it exists to check, and a reader can see
-both at once.
+both at once. `decode` and `robust` never touch the writer, which is what keeps
+them honest about the reader; `regress` is the one that exercises both ends
+against each other, and it checks them against values a caller supplied rather
+than against anything either end produced.
 
 The frames inside those files are made with FreeImage's own PNG writer and
 stripped of their 8-byte signature, which is exactly what a MNG encoder does
@@ -65,6 +70,37 @@ from the plugin:
 - **A canvas the file cannot justify.** MHDR may ask for 65535x65535 next to a
   single 16x16 image; composing that is seventeen gigabytes, so it is refused,
   and the images stay readable without `MNG_PLAYBACK`.
+
+## regress
+
+The writer, through the API a caller uses to build a MNG: `FreeImage_Save` for a
+single image, and `FreeImage_OpenMultiBitmap` with `create_new` plus
+`AppendPage`/`InsertPage`/`DeletePage`/`MovePage` for an animation.
+
+- **What went in comes back.** Every depth and type MNG exports - 1, 4, 8, 24
+  and 32 bit, `FIT_UINT16`, `FIT_RGB16`, `FIT_RGBA16` - written and read again
+  and compared pixel for pixel, through the palette where there is one, so a
+  palette that did not survive fails rather than passing by luck. Widths that
+  end mid-byte are included, and row padding is not compared, because the bits
+  past the last pixel belong to nobody.
+- **A single image is written as a one-frame MNG**, not as the bare PNG a MNG
+  datastream is also allowed to be - otherwise `FreeImage_GetFileType()` would
+  call the result a PNG, and the page cache could not read its own writing back.
+- **The metadata survives exactly**: delays, placement, disposal, loop count
+  (1, 5 and 0 for forever) and the canvas. The tick is a millisecond, so there
+  is nothing to round.
+- **Editing.** Delete, insert and move, then reopen and check the order - and
+  that a page which moved took its own delay with it. `FreeImage_UnlockPage`
+  with `changed = TRUE` reaches the file and leaves its neighbours alone.
+- **The whole page API over a memory stream**, and the PNG writer's save flags.
+- **What is refused** is refused in `Save()`, where there is still a FALSE to
+  return: a type MNG cannot hold, and a bitmap with no pixels.
+
+Three things are deliberately lossy and are *not* asserted, because MNG has
+nowhere to put them: the **last** frame's DisposalMethod (a frame's disposal is
+carried by whether the frame after it starts on a fresh background, and the last
+frame has none), `GIF_DISPOSAL_PREVIOUS` (it needs the stored object buffers of
+full MNG), and BlendMethod (a MNG layer is always composited over).
 
 ## robust
 

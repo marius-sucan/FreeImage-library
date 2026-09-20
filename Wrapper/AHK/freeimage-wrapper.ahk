@@ -731,7 +731,7 @@ relevant I/O image format identifiers.
    FIF_ICO      = 1,
    FIF_TIFF     = 18,
    FIF_GIF      = 25,
-   FIF_MNG      = 6,  (read-only: a MNG animation opens as a multi-page bitmap, one page per frame; pass MNG_PLAYBACK=2 in flags for composited frames)
+   FIF_MNG      = 6,  (a MNG animation opens as a multi-page bitmap, one page per frame, and can be written the same way; pass MNG_PLAYBACK=2 in flags for composited frames)
    FIF_WEBP     = 35,
    FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps; pass AVIF_PLAYBACK=2 in flags to get every frame as 32bpp)
    FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first)
