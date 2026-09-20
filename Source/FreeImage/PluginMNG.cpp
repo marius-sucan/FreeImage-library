@@ -150,6 +150,23 @@ for a bogus length is cheaper than discovering it later. */
 /** The spec caps iteration counts at 2^31-1, which means "forever". */
 #define MNG_INFINITE_ITERATIONS	0x7FFFFFFF
 
+/**
+The largest canvas this will compose, in pixels: 2^28, which is a gigabyte at
+the 32 bits a composed frame is kept in.
+
+MHDR's frame_width and frame_height are whatever the file says, up to 2^31-1
+each, and nothing else in the file has to agree with them. A 200-byte MNG
+holding one 16x16 image can therefore ask for a 65535x65535 canvas, and
+composing it means seventeen gigabytes - which Linux will happily hand out and
+then kill the process for touching. FreeImage's own limit is only that the size
+fits in a size_t, so it does not catch this.
+
+The images themselves are not affected: their sizes come from their own headers
+and are bounded by the PNG and JNG readers. A file whose canvas is refused
+still reads page by page without MNG_PLAYBACK.
+*/
+#define MNG_MAX_CANVAS_PIXELS	((UINT64)1 << 28)
+
 // ----------------------------------------------------------
 //   Reading big-endian values out of a chunk
 // ----------------------------------------------------------
@@ -1463,6 +1480,16 @@ CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	}
 
 	const BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
+
+	// BASI says how big its fill is, and nothing else in the file has to agree,
+	// so the same bound the canvas gets applies here
+	if(!header_only &&
+	   ((UINT64)frame.width * (UINT64)frame.height > MNG_MAX_CANVAS_PIXELS)) {
+		FreeImage_OutputMessageProc(s_format_id,
+			"MNG: refusing to fill a %ux%u BASI image", frame.width, frame.height);
+		return NULL;
+	}
+
 	FIBITMAP *dib = FreeImage_AllocateHeader(header_only, (int)frame.width, (int)frame.height, 32,
 		FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 	if(!dib) {
@@ -1642,10 +1669,18 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 	if(!width || !height) {
 		return NULL;
 	}
-
+	// a header-only load allocates no pixels, so the size it reports costs
+	// nothing and is simply what the file says
 	if((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) {
 		return FreeImage_AllocateHeader(TRUE, (int)width, (int)height, 32,
 			FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	}
+
+	if((UINT64)width * (UINT64)height > MNG_MAX_CANVAS_PIXELS) {
+		FreeImage_OutputMessageProc(s_format_id,
+			"MNG: refusing to compose a %ux%u canvas - read the pages without "
+			"MNG_PLAYBACK to get the images themselves", width, height);
+		return NULL;
 	}
 
 	// Walking the animation in order costs one frame of work per frame; jumping
