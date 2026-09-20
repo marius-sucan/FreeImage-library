@@ -482,24 +482,38 @@ FreeImage_CanHoldAnotherPage(FIMULTIBITMAP *bitmap) {
 	return TRUE;
 }
 
+// The decoder a read-only session keeps for the life of the multi-bitmap. It is
+// opened on first use and closed in FreeImage_CloseMultiBitmap().
+//
+// Counting the pages and reading them used to open the plugin separately, so
+// every document was parsed twice over: once by FreeImage_InternalGetPageCount()
+// here, which then threw its decoder away, and again by the first
+// FreeImage_LockPage(). For a format whose open_proc indexes the whole file -
+// MNG walks every chunk, GIF every block - that is the file read end to end for
+// nothing, and any message the plugin emits while parsing is emitted twice.
+static void *
+FreeImage_GetReadData(MULTIBITMAPHEADER *header) {
+	if ((header->read_data == NULL) && (header->handle != NULL)) {
+		header->io.seek_proc(header->handle, 0, SEEK_SET);
+		header->read_data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
+	}
+	return header->read_data;
+}
+
 int DLL_CALLCONV
-FreeImage_InternalGetPageCount(FIMULTIBITMAP *bitmap) {	
+FreeImage_InternalGetPageCount(FIMULTIBITMAP *bitmap) {
 	if (bitmap) {
 		if (((MULTIBITMAPHEADER *)bitmap->data)->handle) {
 			MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
-			
-			header->io.seek_proc(header->handle, 0, SEEK_SET);
-			
-			void *data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
-			
+
+			void *data = FreeImage_GetReadData(header);
+
 			int page_count = (header->node->m_plugin->pagecount_proc != NULL) ? header->node->m_plugin->pagecount_proc(&header->io, header->handle, data) : 1;
-			
-			FreeImage_Close(header->node, &header->io, header->handle, data);
-			
+
 			return page_count;
 		}
 	}
-	
+
 	return 0;
 }
 
@@ -1237,13 +1251,10 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 		// plugin had worked out about the pages it had already decoded. Closed
 		// in FreeImage_CloseMultiBitmap().
 
-		if (header->read_data == NULL) {
-			if (header->handle == NULL) {
-				return NULL;
-			}
-			header->io.seek_proc(header->handle, 0, SEEK_SET);
-			header->read_data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
+		if (header->handle == NULL) {
+			return NULL;
 		}
+		FreeImage_GetReadData(header);
 
 		// NULL is what a plugin with nothing to carry from one page to the next
 		// returns, and it is what FreeImage_Open() returns for a plugin with no
