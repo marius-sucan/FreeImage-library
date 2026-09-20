@@ -849,10 +849,12 @@ static void test_absurd_canvas(void) {
 	}
 	FreeImage_CloseMultiBitmap(mb, 0);
 
-	/* composing it must be refused rather than attempted */
+	/* composing it must be refused rather than attempted. Opening must still
+	   work: the canvas is only consulted when a frame is composed, and a file
+	   that cannot be opened at all is one whose images have been lost with it. */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
 	if (!mb) {
-		ok("MNG_PLAYBACK refuses the file outright");
+		fail("MNG_PLAYBACK refused to open the file; only the composing should fail");
 		return;
 	}
 	dib = FreeImage_LockPage(mb, 0);

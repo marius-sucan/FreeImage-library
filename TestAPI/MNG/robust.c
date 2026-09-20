@@ -88,18 +88,29 @@ static void survive(const char *path, const char *what) {
 	ok("%s", what);
 }
 
-/** A complete, valid file, to cut up in the tests below. */
+/**
+ * A complete, valid file, to cut up in the tests below.
+ *
+ * It carries one of every chunk that steers the parser - MHDR, TERM, BACK,
+ * FRAM, DEFI, LOOP and ENDL - so that the truncation and CRC tests below reach
+ * all of them rather than only the two a minimal file would have.
+ */
 static void build_good(Buf *mng) {
 	int i;
 	static const BYTE COLOUR[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 } };
 
 	buf_init(mng);
 	mng_signature(mng);
-	mng_mhdr(mng, W, H, 100, 3, 3, 0, 3);
+	mng_mhdr(mng, 64, 64, 100, 3, 3, 0, 3);
+	mng_term(mng, 3, 4);
+	mng_back(mng, 0x2020, 0x4040, 0x8080, 1);
 	mng_fram(mng, 1, 2, 10);
+	mng_loop(mng, 0, 2);
 	for (i = 0; i < 3; i++) {
+		mng_defi(mng, 0, 0, 0, i * 8, i * 8);
 		mng_image(mng, W, H, COLOUR[i][0], COLOUR[i][1], COLOUR[i][2], 24);
 	}
+	mng_endl(mng, 0);
 	mng_mend(mng);
 }
 
@@ -413,6 +424,10 @@ static void test_bad_crc(void) {
 			path = write_file("mng_badcrc.mng", &good);
 			snprintf(what, sizeof(what), "a %s with a bad CRC", types[t]);
 			survive(path, what);
+		} else {
+			/* a silently skipped case is a test that reports a check it never
+			   ran, so say so instead */
+			fail("build_good() carries no %s to damage", types[t]);
 		}
 		buf_free(&good);
 	}

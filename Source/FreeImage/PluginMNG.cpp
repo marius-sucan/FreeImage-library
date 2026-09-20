@@ -35,12 +35,17 @@ transparency chunk and ICC profile those two already understand therefore works
 here for free, and nothing in MNGHelper.cpp had to change: PluginJNG.cpp still
 reaches it by exactly the route it always did.
 
-One page per embedded image, as GIF, APNG and WebP do.  MNG_PLAYBACK = 2 asks
-for the canvas a viewer would show at that frame instead of the rectangle the
-file stores, mirroring GIF_PLAYBACK and APNG_PLAYBACK down to the tag names.
-Each frame carries FrameTime (milliseconds), FrameLeft, FrameTop,
-DisposalMethod and BlendMethod, and every page also carries LogicalWidth,
-LogicalHeight and Loop.
+One page per layer that is drawn, which for the ordinary file is one per
+embedded image, as GIF, APNG and WebP do.  The two differ only where a file
+uses objects: an image DEFI declares "not potentially visible" draws nothing
+where it is defined and becomes a page each time a SHOW chunk displays it, so
+two stored images shown three times between them are three pages.
+
+MNG_PLAYBACK = 2 asks for the canvas a viewer would show at that frame instead
+of the rectangle the file stores, mirroring GIF_PLAYBACK and APNG_PLAYBACK down
+to the tag names.  Each frame carries FrameTime (milliseconds), FrameLeft,
+FrameTop, DisposalMethod and BlendMethod, and every page also carries
+LogicalWidth, LogicalHeight and Loop.
 
 What is covered.  MNG-VLC and MNG-LC in full: MHDR, the embedded PNG/JNG/BASI
 images, global PLTE and tRNS and the other global ancillary chunks, FRAM with
