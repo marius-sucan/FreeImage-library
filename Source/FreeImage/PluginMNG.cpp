@@ -1,5 +1,5 @@
 // ==========================================================
-// MNG loader
+// MNG loader and writer
 //
 // Design and implementation by
 // - Herve Drolon (drolon@infonie.fr)
@@ -2012,7 +2012,10 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		if(frame.has_alpha) {
 			has_alpha = TRUE;
 		}
-		play_time += frame.delay_ms;
+		// nominal_play_time is informative, and the spec caps the nominal counts at
+		// 2^31-1; a long enough animation of long enough frames would otherwise wrap
+		play_time = (frame.delay_ms > MNG_INFINITE_ITERATIONS - play_time)
+			? MNG_INFINITE_ITERATIONS : play_time + frame.delay_ms;
 	}
 	if(!canvas_width || !canvas_height) {
 		return FALSE;
@@ -2080,8 +2083,9 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 	}
 
+	// With no DEFI at all an image goes at the origin, so the first frame only needs
+	// one if it goes somewhere else.
 	LONG placed_x = 0, placed_y = 0;
-	BOOL placed = FALSE;
 
 	for(size_t i = 0; i < count; i++) {
 		const MNGOutFrame& frame = info->out_frames[i];
@@ -2103,7 +2107,7 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			}
 		}
 
-		if(!placed || (frame.x != placed_x) || (frame.y != placed_y)) {
+		if((frame.x != placed_x) || (frame.y != placed_y)) {
 			BYTE defi[12];
 			PutWORD(&defi[0], 0);			// object 0: not kept after it is drawn
 			defi[2] = 0;					// potentially visible
@@ -2115,7 +2119,6 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			}
 			placed_x = frame.x;
 			placed_y = frame.y;
-			placed = TRUE;
 		}
 
 		const DWORD size = (DWORD)frame.png.size();

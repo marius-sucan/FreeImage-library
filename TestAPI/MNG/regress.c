@@ -1133,12 +1133,22 @@ static void test_unlock_changed(void) {
 				 want_red, want_green, want_blue);
 			bad = 1;
 		}
+		/* The edited page went through the cache, which keeps its FIMD_ANIMATION
+		   aside and puts it back before this writer sees the page - the one place
+		   MultiPage.cpp's metadata carrier and the MNG writer meet. The repaint
+		   must not have cost the page its timing. */
+		if (anim_tag(dib, "FrameTime", -1) != 111) {
+			fail("page %d is %ld ms after the edit, expected the 111 it had before",
+				 i, anim_tag(dib, "FrameTime", -1));
+			bad = 1;
+		}
 		FreeImage_UnlockPage(mb, dib, FALSE);
 	}
 	FreeImage_CloseMultiBitmap(mb, 0);
 
 	if (!bad) {
-		ok("a page unlocked as changed reaches the file, and its neighbours do not move");
+		ok("a page unlocked as changed reaches the file with its timing, and its "
+		   "neighbours do not move");
 	}
 }
 
