@@ -731,6 +731,7 @@ relevant I/O image format identifiers.
    FIF_ICO      = 1,
    FIF_TIFF     = 18,
    FIF_GIF      = 25,
+   FIF_MNG      = 6,  (read-only: a MNG animation opens as a multi-page bitmap, one page per frame; pass MNG_PLAYBACK=2 in flags for composited frames)
    FIF_WEBP     = 35,
    FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps; pass AVIF_PLAYBACK=2 in flags to get every frame as 32bpp)
    FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first)
@@ -1072,13 +1073,13 @@ FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
 ;      is a header and its metadata with no pixel buffer behind it: nothing was
 ;      decoded and nothing the size of an image was allocated. Plugins that do
 ;      not act on it ignore it, so it is always safe to pass, and
-;      FreeImage_FIFSupportsNoPixels() says which ones will. All four animated
-;      formats do.
-;   3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK and
-;      AVIF_PLAYBACK ask for the canvas a viewer would show at this frame,
-;      which is a 32-bit allocation and a composite on top of the decoding.
-;      It buys nothing here: the animation tags describe the frame as the file
-;      stores it and are on the page either way.
+;      FreeImage_FIFSupportsNoPixels() says which ones will. Every animated
+;      format here does.
+;   3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK,
+;      AVIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer would show
+;      at this frame, which is a 32-bit allocation and a composite on top of
+;      the decoding. It buys nothing here: the animation tags describe the
+;      frame as the file stores it and are on the page either way.
 ;
 ; The file is opened by its ANSI name, as FreeImage_OpenMultiBitmap() does, so
 ; a path the local code page cannot spell is not found and -1 comes back.

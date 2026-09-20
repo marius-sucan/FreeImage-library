@@ -44,19 +44,19 @@
 //     is a header and its metadata with no pixel buffer behind it: nothing was
 //     decoded and nothing the size of an image was allocated. Plugins that do
 //     not act on it ignore it, so it is always safe to pass, and
-//     FreeImage_FIFSupportsNoPixels() says which ones will. All four animated
-//     formats do, and the figures printed at the end are what the flag is
+//     FreeImage_FIFSupportsNoPixels() says which ones will. Every animated
+//     format here does, and the figures printed at the end are what the flag is
 //     worth on the file it was given.
 //
-//  3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK and
-//     AVIF_PLAYBACK ask for the canvas a viewer would show at this frame,
-//     which is a 32-bit allocation and a composite on top of the decoding.
-//     It buys nothing here: the animation tags describe the frame as the file
-//     stores it and are on the page either way.
+//  3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK,
+//     AVIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer would show at
+//     this frame, which is a 32-bit allocation and a composite on top of the
+//     decoding. It buys nothing here: the animation tags describe the frame as
+//     the file stores it and are on the page either way.
 //
-// With the pixels gone, so is the one ordering rule playback imposes. The GIF
-// and APNG plugins remember the canvas they last drew, so under a playback flag
-// asking for the next frame is cheap while asking for an earlier one replays
+// With the pixels gone, so is the one ordering rule playback imposes. The GIF,
+// APNG and MNG plugins remember the canvas they last drew, so under a playback
+// flag asking for the next frame is cheap while asking for an earlier one replays
 // the animation from the beginning. Nothing is composited here, so the delays
 // can be read in any order; this walks them forwards only because that is the
 // natural way to fill an array.
@@ -231,6 +231,8 @@ PlaybackFlag(FREE_IMAGE_FORMAT fif) {
 			return WEBP_PLAYBACK;
 		case FIF_AVIF:
 			return AVIF_PLAYBACK;
+		case FIF_MNG:
+			return MNG_PLAYBACK;
 		default:
 			return 0;
 	}
