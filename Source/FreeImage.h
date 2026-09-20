@@ -716,6 +716,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define KOALA_DEFAULT       0
 #define LBM_DEFAULT         0
 #define MNG_DEFAULT         0
+#define MNG_PLAYBACK		2		//! 'Play' the MNG to generate each frame (as 32bpp) instead of returning raw frame data when loading
 #define PCD_DEFAULT         0
 #define PCD_BASE            1		//! load the bitmap sized 768 x 512
 #define PCD_BASEDIV4        2		//! load the bitmap sized 384 x 256
