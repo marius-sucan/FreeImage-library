@@ -7,11 +7,11 @@ no offset anywhere needs fixing. Usage:
     miniexif.py src dst
 
 The box is a bit-packed header followed by the chunks, so adding the block means setting
-exif_flag, inserting the two size fields that flag brings with it (large_metadata_flag,
-which is only present when there is metadata at all, and exif_data_size), re-padding to
-the byte boundary and appending the Exif bytes after the main item data - the order the
-chunks are stored in. The field layout is ISO/IEC 23008-12 Annex O, as parsed by
-Source/LibHEIF/libheif/mini.cc.
+exif_flag, inserting the three fields that flag brings with it (large_metadata_flag, which
+is present only when the box carries metadata at all, then exif_xmp_compressed_flag and
+exif_data_size), re-padding to the byte boundary and appending the Exif bytes after the
+main item data - the order the chunks are stored in. The field layout is ISO/IEC 23008-12
+Annex O, as parsed by Source/LibHEIF/libheif/mini.cc.
 """
 import struct
 import sys
