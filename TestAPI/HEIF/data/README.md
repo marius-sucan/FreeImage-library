@@ -42,6 +42,16 @@ Three sources, all redistributable with their notices:
   file adds a six-tag block in that form; the pixels and every other field are
   untouched, so it must decode to the same picture as its source, and the script
   explains the rewrite.
+- **written here** for the image-sequence test (`sequence`): the `seq-*` files. The
+  pictures are synthetic (a moving gradient with a block whose width counts the frame),
+  encoded by an HEVC encoder that is not the one reading them - libheif 1.23.3 with
+  x265 4.2, as the pillow-heif 1.7.0 wheel ships them - through `mkseq.c` and
+  `mkthumb.c`, and four of them are rewritten from those by `seqcraft.py`.
+  `mkseqdata.sh` records every parameter. Each file was checked against ffmpeg 8's
+  decoder (through PyAV) before its checksum was pinned: same frame count, order and
+  durations, and the same pictures in luma to within the rounding of the colour
+  conversion. They must not be regenerated casually: another libheif or x265 writes
+  other bytes.
 
 | file | what it exercises |
 |---|---|
@@ -63,3 +73,14 @@ Three sources, all redistributable with their notices:
 | `L_*`, `LA_8`, `RGB_*`, `RGBA_*` | monochrome, monochrome + alpha, RGB and RGBA at 8, 10 and 12 bits |
 | `L_xmp.heif` | XMP on a monochrome image |
 | `zPug_3.heic` | three top-level images (three pages), each with a thumbnail |
+| `seq-vardelay.heics` | an image sequence with five different frame durations (7, 20, 33, 40, 67 ms) and no edit list: `FrameTime` and `Loop` = 1 |
+| `seq-bframes.heics` | B-frames: decoded in another order than shown (a `ctts` box); loops forever |
+| `seq-alpha.heics` | an auxiliary alpha track (`auxv`, referenced with `auxl`) |
+| `seq-10bit.heics` | 10 bits a sample (FIT_RGB16), played three times |
+| `seq-mono.heics` | monochrome (8-bit greyscale pages), all intra |
+| `seq-crop.heics`, `seq-odd.heics` | 64 x 48 and 33 x 17 frames that x265 codes as 64 x 64: the sample entry holds the real size, and the pages must be cropped to it |
+| `seq-icc.heics` | `seq-vardelay.heics` with an ICC profile in its sample entry's `colr` box |
+| `seq-thumbfirst.heic` | a thumbnail track written before the main one, with the lower track ID: the pages are the main track's |
+| `seq-with-still.heic`, `seq-with-still-heic.heic` | a still image and a sequence in one file; major brand `hevc` gives the frames, `heic` the still image |
+| `seq-corrupt.heics` | `seq-alpha.heics` whose SPS is a reserved NAL unit type: no frame decodes, and libheif alone would keep pushing samples for as long as the looping track's edit list repeats it |
+| `seq-frames-limit.heics` | a few bytes of `stts`, `stsz` and `stsc` claiming 2,592,001 frames: refused before libheif builds its per-sample tables |

@@ -18,6 +18,13 @@
  *    absolute positions, so every one of them has to be translated.
  *
  * Both loads must produce exactly the pixels of a plain FreeImage_Load.
+ *
+ * A third check does the same for an image sequence. Its frames are read backwards through
+ * the capped FreeImageIO - libheif decodes a track forwards only, so every page is a fresh
+ * parse of the file followed by the frames up to it - and every page must equal the same page
+ * of a plain session. A multi-page session always starts at offset 0 (FreeImage_GetReadData
+ * in MultiPage.cpp rewinds the handle), so the junk is checked with FreeImage_LoadFromHandle,
+ * which reads the first frame from where the handle stands.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,6 +33,7 @@
 #include "FreeImage.h"
 
 #define SAMPLE "data/rainbow-451x461.heic"
+#define SEQUENCE "data/seq-bframes.heics"
 #define JUNK 777
 
 static long g_cap = LONG_MAX;
@@ -109,6 +117,52 @@ int main(int argc, char **argv) {
         printf("offset stream (%d bytes of junk first): load -> %s\n", JUNK, d ? "ok" : "FAILED");
         if (!d) failures++;
         else { if (sum_pixels(d) != want) { printf("    pixels differ\n"); failures++; } else printf("    pixels -> exact\n"); FreeImage_Unload(d); }
+        remove(path);
+    }
+
+    /* 3. an image sequence through the capped I/O, read backwards; its first frame behind the junk */
+    {
+        const char *path = tmppath("fi_heif_offset_seq.bin");
+        FILE *out, *in; BYTE buf[4096]; size_t n;
+        unsigned long long sums[16];
+        FIMULTIBITMAP *plain = FreeImage_OpenMultiBitmap(FIF_HEIF, SEQUENCE, FALSE, TRUE, TRUE, 0);
+        FIMULTIBITMAP *mb;
+        int pages = plain ? FreeImage_GetPageCount(plain) : 0, p, exact = 0;
+        if (pages > 16) pages = 16;
+        for (p = 0; p < pages; p++) {
+            FIBITMAP *pg = FreeImage_LockPage(plain, p);
+            sums[p] = pg ? sum_pixels(pg) : 0;
+            if (pg) FreeImage_UnlockPage(plain, pg, FALSE);
+        }
+        if (plain) FreeImage_CloseMultiBitmap(plain, 0);
+
+        if (argc > 1) g_cap = atol(argv[1]);
+        g_refused_seeks = g_refused_tells = g_steps = 0;
+        f = fopen(SEQUENCE, "rb");
+        mb = FreeImage_OpenMultiBitmapFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);
+        for (p = pages - 1; mb && p >= 0; p--) {
+            FIBITMAP *pg = FreeImage_LockPage(mb, p);
+            if (pg && sum_pixels(pg) == sums[p]) exact++;
+            if (pg) FreeImage_UnlockPage(mb, pg, FALSE);
+        }
+        if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+        fclose(f);
+        printf("sequence, capped I/O, backwards: %d of %d pages exact, refused %d absolute seeks and %d tells, %d forward steps\n",
+               exact, pages, g_refused_seeks, g_refused_tells, g_steps);
+        if (pages != 10 || exact != pages) failures++;
+        if (g_cap < LONG_MAX && (g_refused_tells == 0 || g_steps == 0)) { printf("    the cap was never hit: nothing was exercised\n"); failures++; }
+
+        out = fopen(path, "wb"); in = fopen(SEQUENCE, "rb");
+        for (n = 0; n < JUNK; n++) fputc((int)(n * 7), out);
+        while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+        fclose(in); fclose(out);
+        f = fopen(path, "rb");
+        fseek(f, JUNK, SEEK_SET);
+        d = FreeImage_LoadFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);
+        fclose(f);
+        printf("sequence behind %d bytes of junk: first frame -> %s\n", JUNK, !d ? "FAILED" : (sum_pixels(d) == sums[0] ? "exact" : "DIFFERENT"));
+        if (!d || sum_pixels(d) != sums[0]) failures++;
+        if (d) FreeImage_Unload(d);
         remove(path);
     }
 

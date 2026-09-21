@@ -734,7 +734,7 @@ relevant I/O image format identifiers.
    FIF_MNG      = 6,  (a MNG animation opens as a multi-page bitmap, one page per frame, and can be written the same way; pass MNG_PLAYBACK=2 in flags for composited frames)
    FIF_WEBP     = 35,
    FIF_AVIF     = 37, (read-only: AVIF image sequences open as multi-page bitmaps; pass AVIF_PLAYBACK=2 in flags to get every frame as 32bpp)
-   FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first)
+   FIF_HEIF     = 38, (read-only: HEIC files with several top-level images open as multi-page bitmaps, the primary image first; HEIF image sequences - animated HEIC - open one page per frame; pass HEIF_PLAYBACK=2 in flags to get every frame as 32bpp)
    FIF_APNG     = 39, (animated PNG: one page per frame, read and written; pass APNG_PLAYBACK=2 in flags for composited frames)
 */
 
@@ -1022,11 +1022,11 @@ FreeImage_GetMetadata(hImage, metaModel, key, ByRef fiTag) {
 FreeImage_GetFrameTime(hImage) {
 ; How long this frame of an animation stays on screen, in milliseconds.
 ;
-; GIF, APNG, animated WebP and AVIF image sequences all describe a frame with
-; the same FIMD_ANIMATION tags, and the one that says how long the frame lasts
-; is "FrameTime". Only WebP stores it in milliseconds - GIF holds hundredths of
-; a second, APNG and AVIF each a rational number of seconds - but every plugin
-; converts, so this one function reads all four formats.
+; GIF, APNG, MNG, animated WebP, and AVIF and HEIF image sequences all describe
+; a frame with the same FIMD_ANIMATION tags, and the one that says how long the
+; frame lasts is "FrameTime". Only WebP stores it in milliseconds - GIF holds
+; hundredths of a second, APNG, MNG, AVIF and HEIF each a rational number of
+; seconds - but every plugin converts, so this one function reads all six formats.
 ;
 ; The tag arrives with the page, and the page does not have to carry any pixels
 ; for it to; that is what FreeImage_GetFrameDelays() below relies on.
@@ -1076,9 +1076,9 @@ FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
 ;      FreeImage_FIFSupportsNoPixels() says which ones will. Every animated
 ;      format here does.
 ;   3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK,
-;      AVIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer would show
-;      at this frame, which is a 32-bit allocation and a composite on top of
-;      the decoding. It buys nothing here: the animation tags describe the
+;      AVIF_PLAYBACK, HEIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer
+;      would show at this frame, which is a 32-bit allocation and a composite on
+;      top of the decoding. It buys nothing here: the animation tags describe the
 ;      frame as the file stores it and are on the page either way.
 ;
 ; The file is opened by its ANSI name, as FreeImage_OpenMultiBitmap() does, so

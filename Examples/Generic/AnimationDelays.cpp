@@ -24,12 +24,12 @@
 // which frame belongs to a moment. None of that wants pixels, and this shows
 // how to get it without paying for any.
 //
-// Every animated format the library reads - GIF, APNG, animated WebP and AVIF
-// image sequences - describes a frame with the same FIMD_ANIMATION tags, and
-// the one that says how long the frame lasts is "FrameTime": a FIDT_LONG of
-// milliseconds. Only WebP stores it that way - GIF holds hundredths of a
-// second, APNG and AVIF each a rational number of seconds - but every plugin
-// converts, so one loop reads all four formats.
+// Every animated format the library reads - GIF, APNG, MNG, animated WebP, and
+// AVIF and HEIF image sequences - describes a frame with the same FIMD_ANIMATION
+// tags, and the one that says how long the frame lasts is "FrameTime": a
+// FIDT_LONG of milliseconds. Only WebP stores it that way - GIF holds hundredths
+// of a second, APNG, MNG, AVIF and HEIF each a rational number of seconds - but
+// every plugin converts, so one loop reads all six formats.
 //
 // Tags arrive with the page, and the page does not have to carry any pixels
 // for them to. Three decisions, all made before the loop starts, are what make
@@ -49,10 +49,10 @@
 //     worth on the file it was given.
 //
 //  3. No playback flag. GIF_PLAYBACK, APNG_PLAYBACK, WEBP_PLAYBACK,
-//     AVIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer would show at
-//     this frame, which is a 32-bit allocation and a composite on top of the
-//     decoding. It buys nothing here: the animation tags describe the frame as
-//     the file stores it and are on the page either way.
+//     AVIF_PLAYBACK, HEIF_PLAYBACK and MNG_PLAYBACK ask for the canvas a viewer
+//     would show at this frame, which is a 32-bit allocation and a composite on
+//     top of the decoding. It buys nothing here: the animation tags describe the
+//     frame as the file stores it and are on the page either way.
 //
 // With the pixels gone, so is the one ordering rule playback imposes. The GIF,
 // APNG and MNG plugins remember the canvas they last drew, so under a playback
@@ -178,7 +178,8 @@ GetFrameDelays(const char *filename, long *delays, int max_frames) {
 	//         so this only avoids creating the file at all.
 	// FIF_LOAD_NOPIXELS : the flags every FreeImage_LockPage() below will use.
 	//         Note what is *not* here - GIF_PLAYBACK, APNG_PLAYBACK,
-	//         WEBP_PLAYBACK, AVIF_PLAYBACK - which is what keeps this cheap.
+	//         WEBP_PLAYBACK, AVIF_PLAYBACK, HEIF_PLAYBACK, MNG_PLAYBACK - which
+	//         is what keeps this cheap.
 	FIMULTIBITMAP *animation = FreeImage_OpenMultiBitmap(fif, filename, FALSE, TRUE, TRUE, FIF_LOAD_NOPIXELS);
 
 	if (animation == NULL) {
@@ -231,6 +232,8 @@ PlaybackFlag(FREE_IMAGE_FORMAT fif) {
 			return WEBP_PLAYBACK;
 		case FIF_AVIF:
 			return AVIF_PLAYBACK;
+		case FIF_HEIF:
+			return HEIF_PLAYBACK;
 		case FIF_MNG:
 			return MNG_PLAYBACK;
 		default:
@@ -347,7 +350,7 @@ main(int argc, char *argv[]) {
 	static long delays[MAX_FRAMES];
 
 	if (argc < 2) {
-		printf("usage : AnimationDelays <animation>   (an animated GIF, APNG, WebP or AVIF)\n");
+		printf("usage : AnimationDelays <animation>   (an animated GIF, APNG, MNG, WebP, AVIF or HEIF)\n");
 		return 1;
 	}
 

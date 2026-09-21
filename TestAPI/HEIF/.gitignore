@@ -1,8 +1,10 @@
 # built by this directory's Makefile
 decode
 narrowio
+sequence
 decode-asan
 narrowio-asan
+sequence-asan
 narrowio-step
 asan-obj/
 step-obj/

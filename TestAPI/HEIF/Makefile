@@ -17,7 +17,7 @@ include ../../Makefile.openmp
 # the per-library compiler flags of the two HEIF libraries (C++17/20, SIMD, defines)
 include ../../Makefile.heif
 
-TESTS   = decode narrowio
+TESTS   = decode narrowio sequence
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
@@ -40,10 +40,10 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) decode-asan narrowio-asan narrowio-step
+	rm -f $(TESTS) decode-asan narrowio-asan sequence-asan narrowio-step
 
 clean: clean-bin
-	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_heif_*.png fi_heif_*.bin
+	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_heif_*.png fi_heif_*.bin fi_heif_*.webp
 
 .PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step
 
@@ -73,7 +73,8 @@ asan-lib: libfreeimage-asan.a
 asan-run: libfreeimage-asan.a
 	gcc $(CFLAGS) -fsanitize=address $(INC) decode.c -o decode-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	gcc $(CFLAGS) -fsanitize=address $(INC) narrowio.c -o narrowio-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
-	./decode-asan && ./narrowio-asan
+	gcc $(CFLAGS) -fsanitize=address $(INC) sequence.c -o sequence-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+	./decode-asan && ./narrowio-asan && ./sequence-asan
 
 # --- stepped seek -----------------------------------------------------------
 # HEIF_SeekTo reaches offsets beyond FI_HEIF_SEEK_STEP_MAX by rewinding and
