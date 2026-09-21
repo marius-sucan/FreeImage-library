@@ -645,7 +645,7 @@ AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 		return;
 	}
 	const size_t size = heif_image_handle_get_metadata_size(handle, id);
-	// 4 bytes of offset, then at least a TIFF header
+	// at least a TIFF header; the 4 bytes of offset in front of it are not always there (see below)
 	if((size <= 8) || (size > (size_t)UINT_MAX)) {
 		return;
 	}
@@ -655,11 +655,19 @@ AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 	}
 	const heif_error error = heif_image_handle_get_metadata(handle, id, data);
 	if(error.code == heif_error_Ok) {
-		// ISO/IEC 23008-12 A.2.1: exif_tiff_header_offset, big-endian, counted from the end of the field
+		// ISO/IEC 23008-12 A.2.1: exif_tiff_header_offset, big-endian, counted from the end of the
+		// field. That field is not always there: a block stored in a MinimizedImageBox - the compact
+		// header of a 'mif3' file, which holds the Exif payload from its TIFF header on - is handed
+		// over as it stands, and libheif neither adds the field when reading such a file nor strips
+		// it when writing one (Source/LibHEIF/libheif/mini.cc), so a 'mini' block may come either
+		// way. Telling them apart needs no guessing: the first four bytes of a block without the
+		// field are the TIFF header itself, and "II*\0" / "MM\0*" read as an offset of at least
+		// 0x49492A00, far past the end of any Exif block. An offset that does not point inside the
+		// block is therefore not an offset, and the block begins at its first byte.
 		const uint32_t offset = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | (uint32_t)data[3];
-		size_t start = 4;
+		size_t start = 0;
 		if(offset < size - 4) {
-			start += offset;
+			start = 4 + offset;
 		}
 		const size_t tiff = start + FindTiffHeader(data + start, size - start);
 		if(tiff < size) {

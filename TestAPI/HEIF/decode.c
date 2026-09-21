@@ -2,7 +2,7 @@
  * FreeImage 3 - HEIF regression test
  *
  * Loads every file of the corpus in data/ (libheif's test images and fuzzing
- * corpus, pillow-heif's synthetic images, and four files derived from one of
+ * corpus, pillow-heif's synthetic images, and six files derived from three of
  * libheif's, see data/README.md) and checks what the plugin is responsible for:
  * format detection (an AVIF is left to the AVIF plugin; HEVC, JPEG and uncompressed
  * payloads decode, while a HEIF whose codec FreeImage cannot decode - AVC or VVC -
@@ -64,6 +64,11 @@ static const Expected EXPECTED[] = {
     {"colors-with-alpha-thumbnail.heic",FIF_HEIF, 1,   72,   72, FIT_BITMAP, 32,   0,  0, 0,  64,  64, 0xcbc3046549fe9d83ULL},
     {"hevc32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x845e97485c2b2315ULL},
     {"hevc32-mini.heif",                FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
+    /* the same file with an Exif block added (data/miniexif.py): a MinimizedImageBox stores
+     * one from its TIFF header on, without the exif_tiff_header_offset that an Exif item of a
+     * regular file starts with, and the plugin has to read it all the same - hence the same
+     * picture as above, and six tags. */
+    {"hevc32-mini-exif.heif",           FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  6, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
     {"avif32.heif",                     FIF_AVIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
     /* The same 32x32 image in five codecs. HEVC and JPEG decode (JPEG through the
      * bundled LibJPEG), the zlib-compressed uncompressed 'unci' image through the

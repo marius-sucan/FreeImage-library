@@ -34,6 +34,14 @@ Three sources, all redistributable with their notices:
   box size and the `iloc` extent length are adjusted, nothing else moves. It must
   therefore decode back to `unci32.heif`'s picture to within one level, which is
   the rounding of the two colour conversions.
+- **derived here** from libheif's `hevc32-mini.heif` (same license):
+  `hevc32-mini-exif.heif`, written by `miniexif.py`. Its source carries no
+  metadata, and nothing else in the corpus holds an Exif block inside a
+  MinimizedImageBox - the one place a block is stored without the four bytes of
+  `exif_tiff_header_offset` that ISO/IEC 23008-12 A.2.1 puts in front of it. This
+  file adds a six-tag block in that form; the pixels and every other field are
+  untouched, so it must decode to the same picture as its source, and the script
+  explains the rewrite.
 
 | file | what it exercises |
 |---|---|
@@ -46,6 +54,7 @@ Three sources, all redistributable with their notices:
 | `colors-*.heic` | 8-bit RGB / RGBA, with and without a thumbnail |
 | `hevc32.heif` | HEVC item behind a generic 'mif1' brand list |
 | `hevc32-mini.heif` | the compact 'mini' box layout (brand 'mif3') |
+| `hevc32-mini-exif.heif` | the same layout carrying an Exif block, which a 'mini' box stores from the TIFF header on, with no `exif_tiff_header_offset` in front of it |
 | `avif32.heif` | an AV1 payload: the AVIF plugin's file, not this one's |
 | `jpeg32.heif`, `unci32.heif` | JPEG and (zlib-compressed) uncompressed payloads: decoded through the bundled LibJPEG and ZLib |
 | `avc32.heif` | an AVC payload: detected as HEIF, refused with a message (no H.264 decoder is bundled) |
