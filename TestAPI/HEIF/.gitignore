@@ -2,9 +2,11 @@
 decode
 narrowio
 sequence
+thirdparty
 decode-asan
 narrowio-asan
 sequence-asan
+thirdparty-asan
 narrowio-step
 asan-obj/
 step-obj/
@@ -14,3 +16,7 @@ libfreeimage-narrowstep.a
 fi_heif_*
 # run logs
 *.log
+# third-party samples, downloaded by fetch_samples.sh and not redistributed (samples/README.md)
+samples/nokia/
+samples/mpeg/
+*.part

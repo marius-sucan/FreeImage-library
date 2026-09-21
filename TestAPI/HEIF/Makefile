@@ -8,6 +8,12 @@
 #   make narrowio-step
 #                   run narrowio against a plugin built with a 4 KB seek step, which
 #                   exercises the stepped seek that only Win64's 32-bit 'long' reaches
+#   make thirdparty-run
+#                   download the third-party samples into samples/ (fetch_samples.sh,
+#                   see samples/README.md) and run 'thirdparty' on them; not part of
+#                   'make run', which needs nothing but this directory
+#   make thirdparty-asan-run
+#                   the same against the AddressSanitizer copy of the library
 #
 # Scratch files go to $HEIF_TEST_TMP, or the current directory.
 
@@ -40,12 +46,26 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) decode-asan narrowio-asan sequence-asan narrowio-step
+	rm -f $(TESTS) decode-asan narrowio-asan sequence-asan narrowio-step thirdparty thirdparty-asan
 
 clean: clean-bin
 	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_heif_*.png fi_heif_*.bin fi_heif_*.webp
 
-.PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step
+.PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step thirdparty-run thirdparty-asan-run
+
+# --- third-party samples -----------------------------------------------------
+# Files other encoders wrote, which the repository does not carry (samples/README.md).
+thirdparty: thirdparty.c ../../Dist/libfreeimage.a
+	gcc $(CFLAGS) $(INC) thirdparty.c -o $@ $(LIB)
+
+thirdparty-run: thirdparty
+	sh fetch_samples.sh
+	./thirdparty
+
+thirdparty-asan-run: libfreeimage-asan.a
+	sh fetch_samples.sh
+	gcc $(CFLAGS) -fsanitize=address $(INC) thirdparty.c -o thirdparty-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+	./thirdparty-asan
 
 # --- AddressSanitizer -------------------------------------------------------
 # Only the HEIF plugin, libheif and libde265 are instrumented; the rest of the
