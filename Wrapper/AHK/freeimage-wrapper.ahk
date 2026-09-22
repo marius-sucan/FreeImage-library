@@ -69,7 +69,7 @@ FreeImage_FoxInit(isInit:=1, bonusPath:=0, DllName:="FreeImage.dll") {
    If (isInit=1)
       hFIDll := DllCall("LoadLibraryW", "WStr", DllPath, "UPtr")
    Else
-      DllCall("FreeLibrary", "UInt", hFIDll)
+      DllCall("FreeLibrary", "UPtr", hFIDll)
 
    ; ToolTip, % lastDllName "|" DllPath "`n" hFIDll "|" FreeImage_GetVersion() , , , 2
    If (isInit=1 && !hFIDll)
@@ -156,8 +156,8 @@ GeneralW_StrToGBK(inStr) {
 }
 
 ; === General functions ===
-FreeImage_Initialise() {
-   Return DllCall(getFIMfunc("Initialise"), "Int", 0, "Int", 0)
+FreeImage_Initialise(localPluginsOnly:=0) {
+   Return DllCall(getFIMfunc("Initialise"), "Int", localPluginsOnly)
 }
 
 FreeImage_DeInitialise() {
@@ -187,6 +187,7 @@ FreeImage_Allocate(width, height, bpp:=32, imageType:=1, red_mask:=0xFF000000, g
 
 FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:=1, red_mask:=0xFF000000, green_mask:=0x00FF0000, blue_mask:=0x0000FF00, hPalette:=0) {
 ; function useful to create a new / empty bitmap
+   pColor := 0
    If (RGBArray!="")
    {
       RGBA := StrSplit(RGBArray, ",")
@@ -195,9 +196,10 @@ FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:
       NumPut(RGBA[2], RGBQUAD, 1, "UChar")
       NumPut(RGBA[1], RGBQUAD, 2, "UChar")
       NumPut(RGBA[4], RGBQUAD, 3, "UChar")
-   } else RGBQUAD := 0
+      pColor := &RGBQUAD
+   }
 
-   Return DllCall(getFIMfunc("AllocateEx"), "Int", width, "Int", height, "Int", bpp, "UInt", &RGBQUAD, "Int", options, "uint", hPalette, "uint", red_mask, "uint", green_mask, "uint", blue_mask, "UPtr")
+   Return DllCall(getFIMfunc("AllocateEx"), "Int", width, "Int", height, "Int", bpp, "UPtr", pColor, "Int", options, "UPtr", hPalette, "uint", red_mask, "uint", green_mask, "uint", blue_mask, "UPtr")
 }
 
 FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
@@ -344,7 +346,7 @@ FreeImage_GetMemorySize(hImage) {
 }
 
 FreeImage_GetPalette(hImage) {
-   Return DllCall(getFIMfunc("GetPalette"), "UPtr", hImage)
+   Return DllCall(getFIMfunc("GetPalette"), "UPtr", hImage, "UPtr")
 }
 
 FreeImage_GetDPIresolution(hImage, ByRef dpiX, ByRef dpiY) {
@@ -416,6 +418,22 @@ FIMcolorTypeNames(modus, indexu:=0) {
    Return packedu
 }
 
+FIMcolorPointer(color, ByRef buf) {
+; "R,G,B[,A]" becomes an RGBQUAD in buf; any other value is taken as a pointer, blank as NULL
+   If (color="")
+      Return 0
+   If !InStr(color, ",")
+      Return color
+
+   RGBA := StrSplit(color, ",")
+   VarSetCapacity(buf, 4, 0)
+   NumPut(RGBA[3], buf, 0, "UChar")
+   NumPut(RGBA[2], buf, 1, "UChar")
+   NumPut(RGBA[1], buf, 2, "UChar")
+   NumPut(RGBA[4], buf, 3, "UChar")
+   Return &buf
+}
+
 FreeImage_GetRedMask(hImage) {
    Return DllCall(getFIMfunc("GetRedMask"), "UPtr", hImage, "uint")
 }
@@ -433,12 +451,13 @@ FreeImage_GetTransparencyCount(hImage) {
 }
 
 FreeImage_GetTransparencyTable(hImage) {
-   Return DllCall(getFIMfunc("GetTransparencyTable"), "UPtr", hImage)
+   Return DllCall(getFIMfunc("GetTransparencyTable"), "UPtr", hImage, "UPtr")
 }
 
 FreeImage_SetTransparencyTable(hImage, hTransTable, count:=256) {
-   Return DllCall(getFIMfunc("SetTransparencyTable"), "UPtr", hImage, "UintP", hTransTable, "Uint", count)
-} ; Untested
+; hTransTable - pointer to [count] alpha bytes
+   Return DllCall(getFIMfunc("SetTransparencyTable"), "UPtr", hImage, "UPtr", hTransTable, "Int", count)
+}
 
 FreeImage_SetTransparent(hImage, isEnabled) {
    Return DllCall(getFIMfunc("SetTransparent"), "UPtr", hImage, "Int", isEnabled)
@@ -466,7 +485,7 @@ FreeImage_HasBackgroundColor(hImage) {
 
 FreeImage_GetBackgroundColor(hImage) {
    VarSetCapacity(RGBQUAD, 4, 0)
-   RetValue := DllCall(getFIMfunc("GetBackgroundColor"), "UPtr", hImage, "UInt", &RGBQUAD)
+   RetValue := DllCall(getFIMfunc("GetBackgroundColor"), "UPtr", hImage, "UPtr", &RGBQUAD)
    If RetValue
       return NumGet(RGBQUAD, 2, "Uchar") "," NumGet(RGBQUAD, 1, "Uchar") "," NumGet(RGBQUAD, 0, "Uchar") "," NumGet(RGBQUAD, 3, "Uchar")
    else
@@ -474,6 +493,8 @@ FreeImage_GetBackgroundColor(hImage) {
 }
 
 FreeImage_SetBackgroundColor(hImage, RGBArray:="255,255,255,0") {
+; a blank RGBArray removes the background color
+   pColor := 0
    If (RGBArray!="")
    {
       RGBA := StrSplit(RGBArray, ",")
@@ -482,8 +503,9 @@ FreeImage_SetBackgroundColor(hImage, RGBArray:="255,255,255,0") {
       NumPut(RGBA[2], RGBQUAD, 1, "UChar")
       NumPut(RGBA[1], RGBQUAD, 2, "UChar")
       NumPut(RGBA[4], RGBQUAD, 3, "UChar")
-   } else RGBQUAD := 0
-   Return DllCall(getFIMfunc("SetBackgroundColor"), "UPtr", hImage, "UInt", &RGBQUAD)
+      pColor := &RGBQUAD
+   }
+   Return DllCall(getFIMfunc("SetBackgroundColor"), "UPtr", hImage, "UPtr", pColor)
 }
 
 FreeImage_FillBackground(hImage, RGBArray:="255,255,255,0", options:=1, applyAlpha:=0) {
@@ -494,6 +516,7 @@ FreeImage_FillBackground(hImage, RGBArray:="255,255,255,0", options:=1, applyAlp
 ;   FI_COLOR_FIND_EQUAL_COLOR = 2   // For palettized images: lookup equal RGB color from palette
 ;   FI_COLOR_ALPHA_IS_INDEX   = 4   // The color's rgbReserved member (alpha) contains the palette index to be used
 
+   pColor := 0
    If (RGBArray!="")
    {
       RGBA := StrSplit(RGBArray, ",")
@@ -502,10 +525,11 @@ FreeImage_FillBackground(hImage, RGBArray:="255,255,255,0", options:=1, applyAlp
       NumPut(RGBA[2], RGBQUAD, 1, "UChar")
       NumPut(RGBA[1], RGBQUAD, 2, "UChar")
       NumPut(RGBA[4], RGBQUAD, 3, "UChar")
+      pColor := &RGBQUAD
       If (applyAlpha=-1)
          applyAlpha := RGBA[4]
-   } else RGBQUAD := 0
-   Return DllCall(getFIMfunc("FillBackground"), "UPtr", hImage, "UInt", &RGBQUAD, "Int", options, "Int", applyAlpha)
+   }
+   Return DllCall(getFIMfunc("FillBackground"), "UPtr", hImage, "UPtr", pColor, "Int", options, "Int", applyAlpha)
 }
 
 ; === File type functions ===
@@ -561,7 +585,7 @@ FreeImage_GetFIFFromFilename(ImgPath) {
 }
 
 FreeImage_Validate(ImgPath, FifFormat) {
-   Return DllCall(getFIMfunc("ValidateU"), "Int", FifFormat, "WStr", ImgPath, "Int", 0)
+   Return DllCall(getFIMfunc("ValidateU"), "Int", FifFormat, "WStr", ImgPath)
 }
 
 ; === Pixel access functions ===
@@ -588,7 +612,7 @@ FreeImage_GetScanLine(hImage, iScanline) { ; Base 0
 FreeImage_GetPixelIndex(hImage, xPos, yPos) {
 ; It works only with 1, 4 and 8 bit images.
    VarSetCapacity(IndexNum, 1, 0)
-   RetValue := DllCall(getFIMfunc("GetPixelIndex"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "Uint", &IndexNum)
+   RetValue := DllCall(getFIMfunc("GetPixelIndex"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "UPtr", &IndexNum)
    If RetValue
       return NumGet(IndexNum, 0, "Uchar")
    else
@@ -599,13 +623,13 @@ FreeImage_SetPixelIndex(hImage, xPos, yPos, nIndex) {
 ; It works only with 1, 4 and 8 bit images.
    VarSetCapacity(IndexNum, 1, 0)
    NumPut(nIndex, IndexNum, 0, "Uchar")
-   Return DllCall(getFIMfunc("SetPixelIndex"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "Uint", &IndexNum)
+   Return DllCall(getFIMfunc("SetPixelIndex"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "UPtr", &IndexNum)
 }
 
 FreeImage_GetPixelColor(hImage, xPos, yPos, format:=0) {
 ; It works only with 16, 24 and 32 bit images.
    VarSetCapacity(RGBQUAD, 4, 0)
-   RetValue := DllCall(getFIMfunc("GetPixelColor") , "UPtr", hImage, "Uint", xPos, "Uint", yPos, "Uint", &RGBQUAD)
+   RetValue := DllCall(getFIMfunc("GetPixelColor") , "UPtr", hImage, "Uint", xPos, "Uint", yPos, "UPtr", &RGBQUAD)
    If RetValue
    {
       R := NumGet(RGBQUAD, 2, "Uchar")
@@ -643,7 +667,7 @@ FreeImage_SetPixelColor(hImage, xPos, yPos, RGBArray:="255,255,255,0") {
    NumPut(RGBA[2], RGBQUAD, 1, "UChar")
    NumPut(RGBA[1], RGBQUAD, 2, "UChar")
    NumPut(RGBA[4], RGBQUAD, 3, "UChar")
-   Return DllCall(getFIMfunc("SetPixelColor"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "Uint", &RGBQUAD)
+   Return DllCall(getFIMfunc("SetPixelColor"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "UPtr", &RGBQUAD)
 }
 
 ; === Conversion functions ===
@@ -693,7 +717,7 @@ FreeImage_ConvertTo24Bits(hImage) {
 
 FreeImage_ConvertToRawBits(pBits, hImage, scan_width, BPP, redMASK, greenMASK, blueMASK, topDown:=1) {
    ; thanks to TheArkive for the help
-   r := DllCall(getFIMfunc("ConvertToRawBits"), "UPtr", pBits, "uint", hImage, "Int", scan_width, "Int", BPP, "uInt", redMASK, "uInt", greenMASK, "uInt", blueMASK, "Int", topDown)
+   r := DllCall(getFIMfunc("ConvertToRawBits"), "UPtr", pBits, "UPtr", hImage, "Int", scan_width, "Int", BPP, "uInt", redMASK, "uInt", greenMASK, "uInt", blueMASK, "Int", topDown)
    Return r
 }
 
@@ -781,7 +805,7 @@ FreeImage_TmoDrago(hImage, gamma, exposure) {
 ; missing functions: CreateICCProfile and DestroyICCProfile.
 
 FreeImage_GetICCProfile(hImage) {
-   Return DllCall(getFIMfunc("GetICCProfile"), "UPtr", hImage) ; returns a pointer to it
+   Return DllCall(getFIMfunc("GetICCProfile"), "UPtr", hImage, "UPtr") ; returns a pointer to it
 }
 
 ; === Plugin functions ===
@@ -865,8 +889,8 @@ FreeImage_DeletePage(hFIMULTIBITMAP, PageNumber) {
 }
 
 FreeImage_DeletePageEx(hFIMULTIBITMAP, PageNumber) {
-   ; Returns TRUE when the page was inserted.
-   Return DllCall(getFIMfunc("DeletePage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "Int")
+   ; Returns TRUE when the page was deleted.
+   Return DllCall(getFIMfunc("DeletePageEx"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "Int")
 }
 
 FreeImage_MovePage(hFIMULTIBITMAP, Target, PageNumber) {
@@ -898,17 +922,18 @@ FreeImage_UnlockPage(hFIMULTIBITMAP, hImage, changed) {
 ; missing functions: LoadFromMemory, ReadMemory, WriteMemory,
 ; LoadMultiBitmapFromMemory and SaveMultiBitmapFromMemory.
 
-FreeImage_OpenMemory(hMemory, size) {
-   Return DllCall(getFIMfunc("OpenMemory"), "Int", hMemory, "Int", size, "UPtr")
-} ; untested
+FreeImage_OpenMemory(pData:=0, size:=0) {
+; pData=0 opens an empty stream to write to; otherwise the stream reads [size] bytes at pData
+   Return DllCall(getFIMfunc("OpenMemory"), "UPtr", pData, "UInt", size, "UPtr")
+}
 
 FreeImage_CloseMemory(hMemory) {
-   Return DllCall(getFIMfunc("CloseMemory"), "Int", hMemory)
-} ; untested
+   Return DllCall(getFIMfunc("CloseMemory"), "UPtr", hMemory)
+}
 
 FreeImage_TellMemory(hMemory) {
-   Return DllCall(getFIMfunc("TellMemory"), "Int", hMemory)
-} ; untested
+   Return DllCall(getFIMfunc("TellMemory"), "UPtr", hMemory)
+}
 
 FreeImage_SeekMemory(hMemory, offset, origin) {
    ; Moves the memory pointer to a specified location. A description of parameters follows:
@@ -920,21 +945,19 @@ FreeImage_SeekMemory(hMemory, offset, origin) {
          ; 2 - SEEK_END - End of file.
    ; The function returns TRUE if successful, returns FALSE otherwise
 
-   Return DllCall(getFIMfunc("SeekMemory"), "Int", hMemory, "Int", offset, "Int", origin)
-} ; untested
+   Return DllCall(getFIMfunc("SeekMemory"), "UPtr", hMemory, "Int", offset, "Int", origin)
+}
 
 FreeImage_AcquireMemory(hMemory, ByRef BufAdr, ByRef BufSize) {
-   DataAddr := 0 , DataSizeAddr := 0
-   bSucess := DllCall(getFIMfunc("AcquireMemory"), "Int", hMemory, "Uint*", DataAddr, "Uint*", DataSizeAddr)
-   BufAdr := NumGet(DataAddr, 0, "uint")
-   BufSize := NumGet(DataSizeAddr, 0, "uint")
-   Return bSucess
-} ; untested
+; BufAdr receives a pointer owned by the stream, valid until it is closed or written to
+   BufAdr := 0, BufSize := 0
+   Return DllCall(getFIMfunc("AcquireMemory"), "UPtr", hMemory, "UPtr*", BufAdr, "UInt*", BufSize)
+}
 
-FreeImage_SaveToMemory(FIF, hImage, hMemory, Flags) {
+FreeImage_SaveToMemory(FIF, hImage, hMemory, Flags:=0) {
 ; 0:BMP 2:JPG 13:PNG 18:TIF 25:GIF
-   Return DllCall(getFIMfunc("SaveToMemory"), "Int", FIF, "UPtr", hImage, "Int", hMemory, "Int", Flags)
-} ; untested
+   Return DllCall(getFIMfunc("SaveToMemory"), "Int", FIF, "UPtr", hImage, "UPtr", hMemory, "Int", Flags)
+}
 
 ; === Compression functions ===
 ; none implemented
@@ -1081,7 +1104,7 @@ Metadata models [metaModel] supported by FreeImage
    Return DllCall(getFIMfunc("SetMetadata"), "Int", metaModel, "UPtr", hImage, "astr", key, "UPtr", fiTag)
 }
 
-FreeImage_CloneMetadata(srcImg, destImg) {
+FreeImage_CloneMetadata(destImg, srcImg) {
 ; Copy all metadata contained in src into dst, with the exception of FIMD_ANIMATION
 ; metadata (these metadata are not copied because this may cause problems when saving to
 ; GIF). When a src metadata model already exists in dst, the dst metadata model is first erased
@@ -1092,7 +1115,7 @@ FreeImage_CloneMetadata(srcImg, destImg) {
 ; The function returns TRUE on success and returns FALSE otherwise (e.g. when src or dst
 ; are invalid).
 
-   Return DllCall(getFIMfunc("CloneMetadata"), "UPtr", srcImg, "UPtr", destImg)
+   Return DllCall(getFIMfunc("CloneMetadata"), "UPtr", destImg, "UPtr", srcImg)
 }
 
 FreeImage_GetMetadataCount(metaModel, hImage) {
@@ -1169,10 +1192,11 @@ FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
 ; 34 functions available in the FreeImage Library
 ; only 15 implemented
 
-FreeImage_Rotate(hImage, angle) {
-   ; missing color parameter
+FreeImage_Rotate(hImage, angle, bkColor:="") {
+   ; bkColor - "R,G,B,A" for 24/32-bit images, else a pointer to a pixel of the image type; blank is black
    ; returns a new hImage
-   Return DllCall(getFIMfunc("Rotate"), "UPtr", hImage, "Double", angle, "UPtr")
+   pColor := FIMcolorPointer(bkColor, colorBuf)
+   Return DllCall(getFIMfunc("Rotate"), "UPtr", hImage, "Double", angle, "UPtr", pColor, "UPtr")
 }
 
 FreeImage_FlipHorizontal(hImage) {
@@ -1231,7 +1255,7 @@ FreeImage_MakeThumbnail(hImage, squareSize, convert:=1) {
 ; 4 = FILTER_CATMULLROM; Catmull-Rom spline, Overhauser spline
 ; 5 = FILTER_LANCZOS3;   Lanczos-windowed sinc filter
 
-   Return DllCall(getFIMfunc("MakeThumbnail"), "UPtr", hImage, "Int", squareSize, "Int", convert)
+   Return DllCall(getFIMfunc("MakeThumbnail"), "UPtr", hImage, "Int", squareSize, "Int", convert, "UPtr")
 }
 
 FreeImage_AdjustColors(hImage, bright, contrast, gamma, invert) {
@@ -1282,8 +1306,8 @@ FreeImage_Composite(hImage, useFileBkg:=0, RGBArray:="255,255,255", hImageBkg:=0
    NumPut(RGBA[2], RGBQUAD, 1, "UChar")
    NumPut(RGBA[1], RGBQUAD, 2, "UChar")
    NumPut(RGBA[4], RGBQUAD, 3, "UChar")
-   Return DllCall(getFIMfunc("Composite"), "UPtr", hImage, "Int", useFileBkg, "Uint", &RGBQUAD, "UPtr", hImageBkg, "UPtr")
-} ; untested
+   Return DllCall(getFIMfunc("Composite"), "UPtr", hImage, "Int", useFileBkg, "UPtr", &RGBQUAD, "UPtr", hImageBkg, "UPtr")
+}
 
 FreeImage_PreMultiplyWithAlpha(hImage) {
 ; Return value: 1 -- succes; 0 -- fail
@@ -1295,23 +1319,25 @@ FreeImage_Invert(hImage) {
    Return DllCall(getFIMfunc("Invert"), "UPtr", hImage)
 }
 
-FreeImage_JPEGTransform(SrcImPath, DstImPath, ImgOperation) {
+FreeImage_JPEGTransform(SrcImPath, DstImPath, ImgOperation, perfect:=0) {
 ; ImgOperation parameter options:
 ; 0 = NONE                1 = Flip Horizontally
 ; 2 = Flip Vertically     3 = Transpose
 ; 4 = Transverse          5 = Rotate 90
 ; 6 = Rotate 180          7 = Rotate -90 [270]
+; perfect=1 fails when the image size is not a multiple of the MCU size; 0 trims the partial edge blocks
 ; Return value: 1 -- succes; 0 -- fail
-   Return DllCall(getFIMfunc("JPEGTransformU"), "WStr", SrcImPath, "WStr", DstImPath, "Int", ImgOperation)
+   Return DllCall(getFIMfunc("JPEGTransformU"), "WStr", SrcImPath, "WStr", DstImPath, "Int", ImgOperation, "Int", perfect)
 }
 
 FreeImage_JPEGCrop(SrcImgPath, DstImgPath, x1, y1, x2, y2) {
 ; Return value: 1 -- succes; 0 -- fail
-   Return DllCall(getFIMfunc("JPEGCropU"), "WStr", SrcImgPath, "WStr", DstImgPath, "Int*", x1, "Int*", y1, "Int*", x2, "Int*", y2)
+   Return DllCall(getFIMfunc("JPEGCropU"), "WStr", SrcImgPath, "WStr", DstImgPath, "Int", x1, "Int", y1, "Int", x2, "Int", y2)
 }
 
-FreeImage_JPEGTransformCombined(SrcImgPath, DstImgPath, ImgOperation, x1, y1, x2, y2) {
-   Return DllCall(getFIMfunc("JPEGTransformCombinedU"), "WStr", SrcImgPath, "WStr", DstImgPath, "Int*", ImgOperation, "Int*", x1, "Int*", y1, "Int*", x2, "Int*", y2)
+FreeImage_JPEGTransformCombined(SrcImgPath, DstImgPath, ImgOperation, ByRef x1, ByRef y1, ByRef x2, ByRef y2, perfect:=0) {
+; x1, y1, x2, y2 receive the crop rectangle applied, aligned to the MCU grid; a blank DstImgPath only computes it
+   Return DllCall(getFIMfunc("JPEGTransformCombinedU"), "WStr", SrcImgPath, (DstImgPath="") ? "UPtr" : "WStr", (DstImgPath="") ? 0 : DstImgPath, "Int", ImgOperation, "Int*", x1, "Int*", y1, "Int*", x2, "Int*", y2, "Int", perfect)
 }
 
 ; === Other functions ===
@@ -1352,8 +1378,8 @@ getFIMfunc(funct) {
    Static fList0 := "|CreateTag|DeInitialise|GetCopyrightMessage|GetFIFCount|GetVersion|IsLittleEndian|"
         , fList4 := "|Clone|CloneTag|CloseMemory|ConvertTo16Bits555|ConvertTo16Bits565|ConvertTo24Bits|ConvertTo32Bits|ConvertTo4Bits|ConvertTo8Bits|ConvertToFloat|ConvertToGreyscale|ConvertToRGB16|ConvertToRGBA16|ConvertToRGBAF|ConvertToRGBF|ConvertToUINT16|DeleteTag|DestroyICCProfile|FIFSupportsICCProfiles|FIFSupportsNoPixels|FIFSupportsReading|FIFSupportsWriting|FindCloseMetadata|FlipHorizontal|FlipVertical|GetBits|GetBlueMask|GetBPP|GetColorsUsed|GetColorType|GetDIBSize|GetDotsPerMeterX|GetDotsPerMeterY|GetFIFDescription|GetFIFExtensionList|GetFIFFromFilename|GetFIFFromFilenameU|GetFIFFromFormat|GetFIFFromMime|GetFIFMimeType|GetFIFRegExpr|GetFormatFromFIF|GetGreenMask|GetHeight|GetICCProfile|GetImageType|GetInfo|GetInfoHeader|GetLine|GetMemorySize|GetPageCount|GetPalette|GetPitch|GetRedMask|GetTagCount|GetTagDescription|GetTagID|GetTagKey|GetTagLength|GetTagType|GetTagValue|GetThumbnail|GetTransparencyCount|GetTransparencyTable|GetTransparentIndex|GetWidth|HasBackgroundColor|HasPixels|HasRGBMasks|Initialise|Invert|IsPluginEnabled|IsTransparent|PreMultiplyWithAlpha|SetOutputMessage|SetOutputMessageStdCall|TellMemory|Unload|"
         , fList8 := "|AppendPage|AppendPageEx|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|DeletePageEx|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
-        , fList12 := "|AcquireMemory|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|InsertPageEx|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
-        , fList16 := "|Composite|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
+        , fList12 := "|AcquireMemory|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|InsertPageEx|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
+        , fList16 := "|Composite|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|FillBackground|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
         , fList20 := "|ApplyPaletteIndexMapping|ColorQuantizeEx|Copy|CreateView|Paste|RegisterExternalPlugin|RegisterLocalPlugin|SaveMultiBitmapToHandle|SaveToHandle|TmoDrago03|TmoFattal02|TmoReinhard05|"
         , fList24 := "|Allocate|ApplyColorMapping|ConvertLine1To32MapTransparency|ConvertLine4To32MapTransparency|ConvertLine8To32MapTransparency|JPEGCrop|JPEGCropU|OpenMultiBitmap|OpenMultiBitmapU|ToneMapping|"
         , fList28 := "|AllocateHeader|AllocateT|EnlargeCanvas|"
@@ -1390,6 +1416,8 @@ getFIMfunc(funct) {
          fSuffix := "@44"
       Else If (funct="RotateEx")
          fSuffix := "@48"
+      Else If (funct="RescaleRawBits")
+         fSuffix := "@60"
    }
 
    funct := FreeImage_FoxInit("lastDllName") "\" fPrefix funct fSuffix
