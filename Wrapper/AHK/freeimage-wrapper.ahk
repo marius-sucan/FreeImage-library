@@ -10,7 +10,7 @@
 ;
 ; 22 September 2026 - v2.00
 ; - implemented all the remaining functions, except the ANSI variants
-; - bug fixes: FreeImage_Rotate(), the JPEG transforms, FreeImage_DeletePageEx(), the memory stream functions, and pointers truncated on x64
+; - bug fixes: FreeImage_Rotate(), the JPEG transforms, FreeImage_DeletePageEx(), FreeImage_SimpleGetPageCount(), the memory stream functions, and pointers truncated on x64
 ; - FreeImage_OpenMultiBitmap() takes Unicode paths; added FreeImage_GetFrameDelays() and the *PageEx() functions
 ; - AVIF, HEIF and APNG in FreeImage_GetFileType()
 ;
@@ -1141,10 +1141,8 @@ FreeImage_GetPageCount(hFIMULTIBITMAP) {
 }
 
 FreeImage_SimpleGetPageCount(hImage) {
-   r := DllCall(getFIMfunc("FreeImage_GetPageCount"), "UPtr", hImage)
-   If !r
-      r := 1
-   Return r
+; a FIBITMAP is one page; FreeImage_GetPageCount() is for a FIMULTIBITMAP
+   Return hImage ? 1 : 0
 }
 
 FreeImage_AppendPage(hFIMULTIBITMAP, hImage) {
