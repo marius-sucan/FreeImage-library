@@ -122,6 +122,17 @@ struct MULTIBITMAPHEADER {
 	}
 
 	~MULTIBITMAPHEADER() {
+		// Counting the pages opens the decoder the whole session reads with (see
+		// FreeImage_GetReadData()), and FreeImage_CloseMultiBitmap() closes it. An
+		// open that gives up after the count - no page to read, no cache file, a
+		// std::bad_alloc - never gets that far, and used to leave it open: a whole
+		// libtiff handle for a TIFF. Every one of those destroys the header, so this
+		// is where the decoder goes. The plugin's close_proc is handed the file
+		// handle, so a header that still holds a decoder must be destroyed while
+		// the file is open.
+		if (read_data != NULL) {
+			FreeImage_Close(node, &io, handle, read_data);
+		}
 		for (std::map<int, FIBITMAP *>::iterator i = page_metadata.begin(); i != page_metadata.end(); ++i) {
 			FreeImage_Unload(i->second);
 		}
@@ -618,6 +629,9 @@ FreeImage_OpenMultiBitmapByName(FREE_IMAGE_FORMAT fif, const FIFileName& filenam
 				if (!create_new && (header->page_count <= 0)) {
 					FreeImage_OutputMessageProc(fif, "%s: \"%s\" holds no page this plugin can read",
 						FreeImage_GetFormatFromFIF(fif), filename.display());
+					// the header closes the decoder the pages were counted with, and
+					// needs the file still open to do it
+					header.reset();
 					if (handle) {
 						fclose(handle);
 					}
@@ -637,7 +651,8 @@ FreeImage_OpenMultiBitmapByName(FREE_IMAGE_FORMAT fif, const FIFileName& filenam
 					MakeCompanionName(cache_name, filename, header.get(), "ficache");
 					
 					if (!header->m_cachefile.open(cache_name, keep_cache_in_memory)) {
-						// an error occured ...
+						// an error occured ... the header goes first, as above
+						header.reset();
 						if(handle){
 						  fclose(handle);
 						}
@@ -1570,10 +1585,19 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 							return NULL;
 						}
 
-						// allocate a continueus block to describe the bitmap
+						// allocate a continueus block to describe the bitmap. Nothing else after
+						// the count can throw, and this function has no try of its own, so a
+						// std::bad_alloc here used to escape to the caller - leaking the header
+						// and the decoder the count had opened
 
-						header->m_blocks.push_back(PageBlock(BLOCK_CONTINUEUS, 0, header->page_count - 1));
-						
+						try {
+							header->m_blocks.push_back(PageBlock(BLOCK_CONTINUEUS, 0, header->page_count - 1));
+						} catch (std::bad_alloc &) {
+							delete header;
+							delete bitmap;
+							return NULL;
+						}
+
 						// no need to open cache - it is in-memory by default
 
 						return bitmap;
