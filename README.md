@@ -37,7 +37,6 @@ Fixes:
 - fixed the RAW plugin's datastream returning the wrong byte on a big-endian machine. LibRaw_freeimage_datastream::get_char() read one byte into an int and returned the int;
 - fixed the G3 plugin hanging on a damaged fax file;
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
-- fixed FreeImage_LockPage() returning NULL for every single-image format - PNG, JPEG, BMP, TARGA - opened with FreeImage_OpenMultiBitmap(), although FreeImage_GetPageCount() had just reported one page;
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
 - and many other fixes
@@ -47,19 +46,20 @@ Changes:
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - FreeImage_CloseMultiBitmap() returns FALSE when the document was opened by name with read_only=0 in a format that has no writer, such as AVIF or HEIF;
+- added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
+- added FreeImage_AppendPageEx(), FreeImage_InsertPageEx(), FreeImage_RemovePageEx(), which return TRUE or FALSE;
 - added FreeImage_RescaleRawBits();
-- added FreeImage_OpenMultiBitmapU(), which works like FreeImage_LoadU(): it is FreeImage_OpenMultiBitmap() with a const wchar_t *filename, for multi-page files whose names the ANSI code page cannot spell. The page cache, and the spool file FreeImage_CloseMultiBitmap() rewrites the document in, are created beside the file under the wide name as well, so edits are saved back to it too. Windows only, like the other ...U functions: elsewhere it returns NULL;
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
-- added animated HEIC/HEIF reading (HEIF image sequences, extensions heics/heifs as well): FreeImage_OpenMultiBitmap() gives one page per frame with the frame delays, canvas and loop count as FIMD_ANIMATION metadata, like GIF, APNG, WebP and AVIF; pass HEIF_PLAYBACK=2 to get every frame as 32bpp, and FIF_LOAD_NOPIXELS reads the timeline without decoding a frame. A file holding both still images and a sequence opens as whatever its major brand says it is. libheif only decodes a sequence forwards, so reading one backwards starts it over from the first frame each time. libheif itself is not modified: the frame count and delays are read from the file, because libheif reports no count and attaches the wrong delay to each frame, and a read budget keeps a damaged frame in a looping animation from spinning libheif's decoder forever;
+- added animated HEIC/HEIF reading (HEIF image sequences);
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
-- added full support for MNG animations (FIF_MNG=6): the reader used to stop at the first embedded image, so a MNG of any length was a still picture. It now opens with FreeImage_OpenMultiBitmap() one page per frame, like GIF, APNG and WebP, with the frame delays, placement, background and loop count as FIMD_ANIMATION metadata; pass MNG_PLAYBACK=2 for the composited canvas, and FIF_LOAD_NOPIXELS works. MNG-VLC and MNG-LC are covered in full - MHDR, FRAM with its framing modes, DEFI, BACK, LOOP/ENDL, TERM, SHOW, BASI, global PLTE and tRNS, and embedded JNG frames. The delta images of full MNG (DHDR and the object-buffer chunks) are skipped and reported rather than rendered. Writing works as well: FreeImage_Save() writes a one-frame MNG, and FreeImage_OpenMultiBitmap() with create_new, AppendPage/InsertPage/DeletePage/MovePage and FreeImage_CloseMultiBitmap() build an animation, with the delays, placement, disposal, loop count and canvas written into the container and read back unchanged. Each frame is encoded by the PNG writer, so palettes, 1- and 4-bit images and 16-bit channels all survive, and the save flags are PNG's own;
+- added full support for MNG animations (FIF_MNG=6), reader and write;
 - updated LibRaw library to version 0.22.2, from 0.21.1;
 - updated LibJPEG library to version 10, from the 9d of January 2020;
 - updated LibTIFF library to version 4.7.2, from 4.6.0 release of September 2023;
 - updated ZLib library to version 1.3.2, from the 1.2.13 of October 2022;
-- updated OpenEXR library to version 3.3.14, from version 2.2.0. OpenEXR no longer uses ZLib for EXR data since 3.2. ZIP and DWA compression modes use libdeflate, bundled as Source/LibDeflate 1.18 with its symbols hidden;
+- updated OpenEXR library to version 3.3.14, from version 2.2.0. OpenEXR no longer uses ZLib for EXR data since 3.2. ZIP and DWA compression modes use libdeflate;
 - updated OpenJPEG library to version 2.5.4, from a March 2014 trunk snapshot labelled 2.0.0;
 
 Bugs or limitations identified:
