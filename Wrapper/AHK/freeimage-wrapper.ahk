@@ -1140,11 +1140,6 @@ FreeImage_GetPageCount(hFIMULTIBITMAP) {
    Return DllCall(getFIMfunc("GetPageCount"), "UPtr", hFIMULTIBITMAP)
 }
 
-FreeImage_SimpleGetPageCount(hImage) {
-; a FIBITMAP is one page; FreeImage_GetPageCount() is for a FIMULTIBITMAP
-   Return hImage ? 1 : 0
-}
-
 FreeImage_AppendPage(hFIMULTIBITMAP, hImage) {
    DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage)
 }
