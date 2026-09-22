@@ -54,6 +54,52 @@ struct Block {
 
 // ----------------------------------------------------------
 
+// The name of a file, in the width the caller spelled it: char for
+// FreeImage_OpenMultiBitmap(), wchar_t for FreeImage_OpenMultiBitmapU().
+//
+// A multi-bitmap does not open its file once and forget the name, the way
+// FreeImage_LoadU() does. It keeps the name until FreeImage_CloseMultiBitmap(),
+// makes two more files beside it - the page cache and the spool the document is
+// rewritten in - and at the end renames the spool over the original. On Windows
+// every one of those has to go through the CRT's wide call: narrowed to the ANSI
+// code page, the name loses each character that code page cannot spell, so the
+// file would open and the edits then be saved under some other name, or nowhere.
+// A wide name therefore stays wide all the way down to _wfopen(), _wremove() and
+// _wrename(), and so does every name made from it.
+class FIFileName {
+public :
+	FIFileName() {}
+	explicit FIFileName(const char *name);
+#ifdef _WIN32
+	explicit FIFileName(const wchar_t *name);
+#endif
+
+	bool empty() const { return m_name.empty(); }
+
+	// Add to the end of the name. The cache and the spool only ever add plain
+	// ASCII, which reads the same in either width.
+	void append(const char *suffix);
+
+	FILE *openFile(const char *mode) const;
+	int removeFile() const;
+	// rename this file to dst_name, which has to be spelled in the same width
+	int renameFile(const FIFileName& dst_name) const;
+
+	// The name as a message can show it. FreeImage_OutputMessageProc() only takes
+	// char, so a wide name comes out with a '?' for each character outside ASCII.
+	const char *display() const { return m_name.c_str(); }
+
+private :
+	// the name itself - or, for a wide name, the rendering display() returns
+	std::string m_name;
+#ifdef _WIN32
+	// the name itself when it was given in wchar_t, empty otherwise
+	std::wstring m_wname;
+#endif
+};
+
+// ----------------------------------------------------------
+
 class CacheFile {
 	typedef std::list<Block *> PageCache;
 	typedef std::list<Block *>::iterator PageCacheIt;
@@ -64,7 +110,7 @@ public :
 	CacheFile();
 	~CacheFile();
 	
-	BOOL open(const std::string& filename = "", BOOL keep_in_memory = TRUE);
+	BOOL open(const FIFileName& filename = FIFileName(), BOOL keep_in_memory = TRUE);
 	void close();
 
 	BOOL readFile(BYTE *data, int nr, int size);
@@ -80,7 +126,7 @@ private :
 
 private :
 	FILE *m_file;
-	std::string m_filename;
+	FIFileName m_filename;
 	std::list<int> m_free_pages;
 	PageCache m_page_cache_mem;
 	PageCache m_page_cache_disk;

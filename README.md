@@ -48,6 +48,7 @@ Changes:
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - FreeImage_CloseMultiBitmap() returns FALSE when the document was opened by name with read_only=0 in a format that has no writer, such as AVIF or HEIF;
 - added FreeImage_RescaleRawBits();
+- added FreeImage_OpenMultiBitmapU(), which works like FreeImage_LoadU(): it is FreeImage_OpenMultiBitmap() with a const wchar_t *filename, for multi-page files whose names the ANSI code page cannot spell. The page cache, and the spool file FreeImage_CloseMultiBitmap() rewrites the document in, are created beside the file under the wide name as well, so edits are saved back to it too. Windows only, like the other ...U functions: elsewhere it returns NULL;
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 

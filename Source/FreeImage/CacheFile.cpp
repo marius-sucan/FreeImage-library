@@ -29,6 +29,94 @@
 
 // ----------------------------------------------------------
 
+#ifdef _WIN32
+// Widen plain ASCII - a mode string, or a suffix FIFileName::append() adds. Every
+// ASCII character is the same number in wchar_t, so this is exact.
+static std::wstring
+WidenASCII(const char *s) {
+	std::wstring ws;
+
+	for (; *s != '\0'; s++) {
+		ws += (wchar_t)(unsigned char)*s;
+	}
+
+	return ws;
+}
+#endif
+
+FIFileName::FIFileName(const char *name) : m_name(name) {
+}
+
+#ifdef _WIN32
+FIFileName::FIFileName(const wchar_t *name) : m_wname(name) {
+	// Messages are char, and a message is all this rendering is for, so it keeps
+	// ASCII and shows '?' for the rest. Converting to the ANSI code page instead
+	// would print a different, perfectly valid name wherever that code page has a
+	// look-alike, and UTF-8 would turn to gibberish in the ANSI debugger output
+	// FreeImage_OutputMessageProc() also writes to. '?' is not allowed in a Windows
+	// filename, so the rendering cannot be mistaken for a file that exists either.
+	m_name.reserve(m_wname.size());
+
+	for (size_t i = 0; i < m_wname.size(); i++) {
+		const wchar_t c = m_wname[i];
+
+		if (c < 0x80) {
+			m_name += (char)c;
+		} else {
+			m_name += '?';
+
+			// a character outside the BMP takes two UTF-16 units, and is still one character
+			if ((c >= 0xD800) && (c <= 0xDBFF) && (i + 1 < m_wname.size())
+				&& (m_wname[i + 1] >= 0xDC00) && (m_wname[i + 1] <= 0xDFFF)) {
+				i++;
+			}
+		}
+	}
+}
+#endif
+
+void
+FIFileName::append(const char *suffix) {
+#ifdef _WIN32
+	if (!m_wname.empty()) {
+		m_wname += WidenASCII(suffix);
+	}
+#endif
+	m_name += suffix;
+}
+
+FILE *
+FIFileName::openFile(const char *mode) const {
+#ifdef _WIN32
+	if (!m_wname.empty()) {
+		return _wfopen(m_wname.c_str(), WidenASCII(mode).c_str());
+	}
+#endif
+	return fopen(m_name.c_str(), mode);
+}
+
+int
+FIFileName::removeFile() const {
+#ifdef _WIN32
+	if (!m_wname.empty()) {
+		return _wremove(m_wname.c_str());
+	}
+#endif
+	return remove(m_name.c_str());
+}
+
+int
+FIFileName::renameFile(const FIFileName& dst_name) const {
+#ifdef _WIN32
+	if (!m_wname.empty()) {
+		return _wrename(m_wname.c_str(), dst_name.m_wname.c_str());
+	}
+#endif
+	return rename(m_name.c_str(), dst_name.m_name.c_str());
+}
+
+// ----------------------------------------------------------
+
 CacheFile::CacheFile() :
 m_file(NULL),
 m_free_pages(),
@@ -53,7 +141,7 @@ CacheFile::~CacheFile() {
 }
 
 BOOL
-CacheFile::open(const std::string& filename, BOOL keep_in_memory) {
+CacheFile::open(const FIFileName& filename, BOOL keep_in_memory) {
 
   assert(!m_file);
 
@@ -61,7 +149,7 @@ CacheFile::open(const std::string& filename, BOOL keep_in_memory) {
   m_keep_in_memory = keep_in_memory;
 
 	if ((!m_filename.empty()) && (!m_keep_in_memory)) {
-		m_file = fopen(m_filename.c_str(), "w+b"); 
+		m_file = m_filename.openFile("w+b");
 		return (m_file != NULL);
 	}
 
@@ -91,7 +179,7 @@ CacheFile::close() {
 		m_file = NULL;
 		
 		// delete the file
-		remove(m_filename.c_str());
+		m_filename.removeFile();
 	}
 }
 

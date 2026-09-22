@@ -136,7 +136,9 @@ struct MULTIBITMAPHEADER {
 	BOOL changed;
 	int page_count;
 	BlockList m_blocks;
-	std::string m_filename;
+	// the file this was opened from by name, in the width the caller gave it;
+	// empty for a stream or a memory handle, which are never written back
+	FIFileName m_filename;
 	BOOL read_only;
 	FREE_IMAGE_FORMAT cache_fif;
 	int load_flags;
@@ -185,8 +187,11 @@ struct MULTIBITMAPHEADER {
 // filesystem, and there is no reason to send the cache somewhere else on its own.
 // The name is about 30 characters longer than the image's, which matters only for a
 // filename already close to the system's limit.
+// What is added is plain ASCII, so it is the same whether the image's name came in
+// char or, from FreeImage_OpenMultiBitmapU(), in wchar_t - and the companion is
+// spelled in the image's width, so it is created in the same directory.
 inline void
-MakeCompanionName(std::string& dst_filename, const std::string& src_filename, const void *owner, const char *dst_extension) {
+MakeCompanionName(FIFileName& dst_filename, const FIFileName& src_filename, const void *owner, const char *dst_extension) {
 	char suffix[64];
 
 	sprintf(suffix, ".%lu.%llx.",
@@ -194,8 +199,8 @@ MakeCompanionName(std::string& dst_filename, const std::string& src_filename, co
 		(unsigned long long)(size_t)owner);
 
 	dst_filename = src_filename;
-	dst_filename += suffix;
-	dst_filename += dst_extension;
+	dst_filename.append(suffix);
+	dst_filename.append(dst_extension);
 }
 
 } //< ns
@@ -521,8 +526,11 @@ FreeImage_InternalGetPageCount(FIMULTIBITMAP *bitmap) {
 // Multipage functions
 // =====================================================================
 
-FIMULTIBITMAP * DLL_CALLCONV
-FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL create_new, BOOL read_only, BOOL keep_cache_in_memory, int flags) {
+// FreeImage_OpenMultiBitmap() and FreeImage_OpenMultiBitmapU() are one function, and
+// this is it. They differ only in how the filename is spelled, and FIFileName takes
+// care of that - for the image itself, and for the cache and spool files named after it.
+static FIMULTIBITMAP *
+FreeImage_OpenMultiBitmapByName(FREE_IMAGE_FORMAT fif, const FIFileName& filename, BOOL create_new, BOOL read_only, BOOL keep_cache_in_memory, int flags) {
 
 	FILE *handle = NULL;
 	try {
@@ -556,7 +564,7 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 				}
 
 				if (!create_new) {
-					handle = fopen(filename, "rb");
+					handle = filename.openFile("rb");
 					if (handle == NULL) {
 						return NULL;
 					}
@@ -587,7 +595,7 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 
 				if (!read_only && (node->m_plugin->save_proc == NULL)) {
 					FreeImage_OutputMessageProc(fif, "%s does not support writing: \"%s\" can be read page by page, but nothing can be saved back to it - FreeImage_CloseMultiBitmap() will report the failure",
-						FreeImage_GetFormatFromFIF(fif), filename);
+						FreeImage_GetFormatFromFIF(fif), filename.display());
 					header->failed = TRUE;
 				}
 
@@ -609,7 +617,7 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 
 				if (!create_new && (header->page_count <= 0)) {
 					FreeImage_OutputMessageProc(fif, "%s: \"%s\" holds no page this plugin can read",
-						FreeImage_GetFormatFromFIF(fif), filename);
+						FreeImage_GetFormatFromFIF(fif), filename.display());
 					if (handle) {
 						fclose(handle);
 					}
@@ -625,7 +633,7 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 				// set up the cache
 
 				if (!read_only) {
-					std::string cache_name;
+					FIFileName cache_name;
 					MakeCompanionName(cache_name, filename, header.get(), "ficache");
 					
 					if (!header->m_cachefile.open(cache_name, keep_cache_in_memory)) {
@@ -648,6 +656,38 @@ FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL crea
 	if (handle) {
 		fclose(handle);
 	}
+	return NULL;
+}
+
+FIMULTIBITMAP * DLL_CALLCONV
+FreeImage_OpenMultiBitmap(FREE_IMAGE_FORMAT fif, const char *filename, BOOL create_new, BOOL read_only, BOOL keep_cache_in_memory, int flags) {
+	if (filename != NULL) {
+		try {
+			return FreeImage_OpenMultiBitmapByName(fif, FIFileName(filename), create_new, read_only, keep_cache_in_memory, flags);
+		} catch (std::bad_alloc &) {
+			/** @todo report error */
+		}
+	}
+	return NULL;
+}
+
+// FreeImage_OpenMultiBitmap() for a wchar_t filename, as FreeImage_LoadU() is to
+// FreeImage_Load(). A multi-bitmap goes back to its file long after opening it - the
+// page cache and the spool are made beside it, and FreeImage_CloseMultiBitmap()
+// renames the spool over it - and every one of those steps uses the wide name too.
+// Like the other ...U functions this works on Windows only; anywhere else it does
+// nothing and returns NULL.
+FIMULTIBITMAP * DLL_CALLCONV
+FreeImage_OpenMultiBitmapU(FREE_IMAGE_FORMAT fif, const wchar_t *filename, BOOL create_new, BOOL read_only, BOOL keep_cache_in_memory, int flags) {
+#ifdef _WIN32
+	if (filename != NULL) {
+		try {
+			return FreeImage_OpenMultiBitmapByName(fif, FIFileName(filename), create_new, read_only, keep_cache_in_memory, flags);
+		} catch (std::bad_alloc &) {
+			/** @todo report error */
+		}
+	}
+#endif
 	return NULL;
 }
 
@@ -863,17 +903,17 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 				try {
 					// open a temp file
 
-					std::string spool_name;
+					FIFileName spool_name;
 
 					MakeCompanionName(spool_name, header->m_filename, header, "fispool");
 
 					// open the spool file and the source file
         
-					FILE *f = fopen(spool_name.c_str(), "w+b");
+					FILE *f = spool_name.openFile("w+b");
 				
 					// saves changes
 					if (f == NULL) {
-						FreeImage_OutputMessageProc(header->fif, "Failed to open %s, %s", spool_name.c_str(), strerror(errno));
+						FreeImage_OutputMessageProc(header->fif, "Failed to open %s, %s", spool_name.display(), strerror(errno));
 						success = FALSE;
 					} else {
 						success = FreeImage_SaveMultiBitmapToHandle(header->fif, bitmap, &header->io, (fi_handle)f, flags);
@@ -882,7 +922,7 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 
 						if (fclose(f) != 0) {
 							success = FALSE;
-							FreeImage_OutputMessageProc(header->fif, "Failed to close %s, %s", spool_name.c_str(), strerror(errno));
+							FreeImage_OutputMessageProc(header->fif, "Failed to close %s, %s", spool_name.display(), strerror(errno));
 						}
 					}
 					if (header->handle) {
@@ -899,21 +939,21 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 						// code used to do on every platform - meant that a rename that
 						// failed for any reason left the caller with no file at all,
 						// the rewritten one stranded under the spool's name.
-						remove(header->m_filename.c_str());
+						header->m_filename.removeFile();
 #endif
-						if (rename(spool_name.c_str(), header->m_filename.c_str()) == 0) {
+						if (spool_name.renameFile(header->m_filename) == 0) {
 							success = TRUE;
 						} else {
 							success = FALSE;
 							FreeImage_OutputMessageProc(header->fif, "Failed to rename %s to %s, %s",
-								spool_name.c_str(), header->m_filename.c_str(), strerror(errno));
+								spool_name.display(), header->m_filename.display(), strerror(errno));
 #ifndef _WIN32
 							// the original is still there, so the spool is only litter
-							remove(spool_name.c_str());
+							spool_name.removeFile();
 #endif
 						}
 					} else {
-						remove(spool_name.c_str());
+						spool_name.removeFile();
 					}
 				} catch (std::bad_alloc &) {
 					success = FALSE;
