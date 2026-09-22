@@ -1,5 +1,4 @@
-/* Generates the TestAPI/EXR corpus: one small file per compression method plus
-   the layouts FreeImage itself never writes (tiled, mipmapped, float, YC). */
+/* writes the TestAPI/EXR corpus: every compression and layout */
 #include <ImfRgbaFile.h>
 #include <ImfTiledRgbaFile.h>
 #include <ImfOutputFile.h>
@@ -72,8 +71,7 @@ int main(int argc, char **argv) {
         OutputFile o((dir + "/fi_exr_float.exr").c_str(), h);
         o.setFrameBuffer(fb); o.writePixels(H);
     }
-    {   // a data window that does not start at the origin, which the reader has
-        // to honour both when allocating and when placing the pixels
+    {   // data window away from the origin
         Imath::Box2i display (Imath::V2i (0, 0), Imath::V2i (W - 1, H - 1));
         Imath::Box2i data (Imath::V2i (100, 200), Imath::V2i (100 + W - 1, 200 + H - 1));
         Header h (display, data); h.compression() = ZIP_COMPRESSION;
@@ -81,7 +79,7 @@ int main(int argc, char **argv) {
         o.setFrameBuffer (&px[0][0] - 100 - 200 * W, 1, W);
         o.writePixels (H);
     }
-    {   // luminance/chroma, chroma subsampled - the RgbaInputFile YC path
+    {   // luminance/chroma (YCA)
         Header h(W, H); h.compression() = PIZ_COMPRESSION;
         RgbaOutputFile o((dir + "/fi_exr_yc.exr").c_str(), h, WRITE_YCA);
         o.setFrameBuffer(&px[0][0], 1, W); o.writePixels(H);

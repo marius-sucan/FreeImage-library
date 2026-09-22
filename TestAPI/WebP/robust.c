@@ -1,27 +1,4 @@
-/*
- * FreeImage 3 - WebP robustness test
- *
- * Feeds the plugin damaged input and checks only that it survives: truncated
- * prefixes, junk appended, single-byte corruptions spread over the container
- * and the compressed data, wiped regions, nonsense in the RIFF and chunk
- * length fields, and empty and tiny buffers. Every one of these may load or be
- * refused - what it may not do is crash, hang, or leak.
- *
- * This is the test that is about the reason for the 1.2.1 -> 1.6.0 upgrade.
- * CVE-2023-4863 was a heap overflow in the lossless decoder's Huffman table
- * construction, reached from a crafted file and exploited in the wild; 1.3.2
- * fixed it and 1.2.1 predates the fix. A sanitized run over damaged input is
- * the shape of test that catches its like, so run it under AddressSanitizer -
- * "make asan-run" is what that is for. Without one it still catches aborts and
- * null dereferences.
- *
- * The corpus leans on the lossless files on purpose: VP8L is where that bug
- * lived and where the interesting parsing still is.
- *
- * Every load goes through a memory stream, so nothing is written to disk.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* WebP robustness test: damaged input may fail, never crash; run under ASan */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -41,7 +18,7 @@ static long loaded = 0, refused = 0, cases = 0;
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
 
-/* Loads one buffer and throws the result away. Returns 1 if it decoded. */
+/* 1 if it decoded */
 static int try_load(const BYTE *data, long len) {
     FIMEMORY *mem;
     FIBITMAP *dib;
@@ -52,7 +29,7 @@ static int try_load(const BYTE *data, long len) {
     dib = FreeImage_LoadFromMemory(FIF_WEBP, mem, 0);
     ok = dib != NULL;
     if (dib) {
-        /* touch every row, so a short buffer shows up as a fault here */
+        /* touch every row: a short buffer faults here */
         unsigned h = FreeImage_GetHeight(dib), line = FreeImage_GetLine(dib), y, i;
         unsigned long long acc = 0;
         for (y = 0; y < h; y++) {
@@ -85,9 +62,7 @@ static unsigned get32(const BYTE *p) {
     return (unsigned)p[0] | ((unsigned)p[1] << 8) | ((unsigned)p[2] << 16) | ((unsigned)p[3] << 24);
 }
 
-/* A WebP file is RIFF: "RIFF" <size> "WEBP" then 4-byte-tag/4-byte-size chunks,
-   each payload padded to an even length. Rewrite every one of those size fields
-   in turn to values a decoder must not believe. */
+/* corrupt the RIFF size and each chunk size in turn */
 static void maul_lengths(const BYTE *orig, long len) {
     static const unsigned BAD[] = { 0u, 1u, 0x7FFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFF0u };
     BYTE *copy = (BYTE *)malloc((size_t)len);
@@ -144,7 +119,7 @@ int main(void) {
 
         copy = (BYTE *)malloc((size_t)len + 4096);
         if (copy) {
-            /* junk appended - a decoder must stop at the length it was told */
+            /* junk appended */
             memcpy(copy, orig, (size_t)len);
             memset(copy + len, 0xA5, 4096);
             try_load(copy, len + 4096);

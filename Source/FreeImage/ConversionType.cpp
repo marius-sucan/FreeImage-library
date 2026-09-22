@@ -103,10 +103,7 @@ CONVERT_TO_BYTE<Tsrc>::convert(FIBITMAP *src, BOOL scale_linear) {
 		Tsrc max, min;
 		double scale;
 
-		// find the min and max value of the image.
-		// Seed from the data rather than from min = 255 / max = 0: those seeds
-		// silently clip the range of any image that does not straddle [0..255],
-		// and non finite samples must not define the range at all.
+		// find the min and max value of the image
 		BOOL seeded = FALSE;
 		min = 0, max = 0;
 		for(y = 0; y < height; y++) {
@@ -137,8 +134,7 @@ CONVERT_TO_BYTE<Tsrc>::convert(FIBITMAP *src, BOOL scale_linear) {
 			Tsrc *src_bits = reinterpret_cast<Tsrc*>(FreeImage_GetScanLine(src, y));
 			BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
 			for(x = 0; x < width; x++) {
-				// clip before the cast: converting a value that does not fit
-				// the destination type - a NaN in particular - is undefined
+				// clip before the cast: NaN or overflow casts are undefined
 				const double q = scale * (double)(src_bits[x] - min) + 0.5;
 				dst_bits[x] = (q >= 255.0) ? 255 : ((q > 0.0) ? (BYTE)q : 0);
 			}
@@ -148,9 +144,7 @@ CONVERT_TO_BYTE<Tsrc>::convert(FIBITMAP *src, BOOL scale_linear) {
 			Tsrc *src_bits = reinterpret_cast<Tsrc*>(FreeImage_GetScanLine(src, y));
 			BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
 			for(x = 0; x < width; x++) {
-				// rounding, clipped in floating point. int(1e30), int(INF) and
-				// int(NaN) are all undefined, and in practice used to wrap round
-				// to 0 - turning the brightest pixels of a HDR image black.
+				// rounding
 				const double q = (double)src_bits[x] + 0.5;
 				dst_bits[x] = (q >= 255.0) ? 255 : ((q > 0.0) ? (BYTE)q : 0);
 			}

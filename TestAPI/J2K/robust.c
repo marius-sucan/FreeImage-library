@@ -1,15 +1,5 @@
-/*
- * FreeImage 3 - JPEG 2000 robustness test
- *
- * Feeds the J2K and JP2 loaders what real life feeds them: truncated files,
- * files with junk appended, files with corrupted bytes, header-only requests,
- * and streams that do not start at offset 0. A damaged input may load or be
- * refused, but it must never crash, and the well-formed variants must decode
- * exactly. Run it under AddressSanitizer (make asan) to catch the silent
- * out-of-bounds accesses a plain run would not report.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- */
+/* JPEG 2000 robustness: damaged or offset streams must never crash */
+/* run under ASan: make asan */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -59,7 +49,7 @@ static FIBITMAP *load_buf(FREE_IMAGE_FORMAT fif, const BYTE *p, DWORD n, int fla
     return d;
 }
 
-/* --- a FreeImageIO over a memory block, so loads and saves can start anywhere --- */
+/* FreeImageIO over a memory block */
 typedef struct { BYTE *p; long size, cap, pos; } membuf;
 static unsigned DLL_CALLCONV mb_read(void *b, unsigned s, unsigned c, fi_handle h) {
     membuf *m = (membuf*)h; long n = (long)s * c;
@@ -90,7 +80,7 @@ static void damage_tests(FREE_IMAGE_FORMAT fif, FIBITMAP *d, BYTE *buf, DWORD n)
     BYTE *tmp = (BYTE*)malloc(n + 4096);
     FIBITMAP *b;
 
-    /* every prefix length from 1 byte to n-1, stepping through the file in ~200 cuts plus the tiny ones */
+    /* truncations: every length up to 64, then ~200 cuts */
     for (i = 1; i < n; i = (i < 64) ? i + 1 : i + (n / 200 > 1 ? n / 200 : 1)) {
         b = load_buf(fif, buf, i, 0);
         if (b) { loaded++; FreeImage_Unload(b); } else refused++;
@@ -146,7 +136,7 @@ static void geometry_tests(FREE_IMAGE_FORMAT fif, FIBITMAP *d, BYTE *buf, DWORD 
           && FreeImage_GetBPP(b) == 24 && !FreeImage_HasPixels(b), what);
     if (b) FreeImage_Unload(b);
 
-    /* load from a handle positioned 1000 bytes into a buffer with junk in front */
+    /* load at offset 1000, junk in front */
     m.cap = n + 1000; m.size = n + 1000; m.p = (BYTE*)malloc((size_t)m.cap); m.pos = 1000;
     memset(m.p, 0x5A, 1000); memcpy(m.p + 1000, buf, n);
     b = FreeImage_LoadFromHandle(fif, &io, (fi_handle)&m, 0);
@@ -155,7 +145,7 @@ static void geometry_tests(FREE_IMAGE_FORMAT fif, FIBITMAP *d, BYTE *buf, DWORD 
     if (b) FreeImage_Unload(b);
     free(m.p);
 
-    /* save to a handle positioned 777 bytes into a buffer, then load from there */
+    /* save and load at offset 777 */
     m.cap = 4096; m.size = 777; m.p = (BYTE*)malloc((size_t)m.cap); m.pos = 777;
     memset(m.p, 0x3C, 777);
     if (FreeImage_SaveToHandle(fif, d, &io, (fi_handle)&m, 1)) {

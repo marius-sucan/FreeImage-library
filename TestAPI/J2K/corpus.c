@@ -1,28 +1,5 @@
-/*
- * FreeImage 3 - JPEG 2000 corpus decoder
- *
- * Decodes every file on the command line through the J2K/JP2 plugins and prints
- * one line per file: geometry, pixel type, an order-sensitive checksum of the
- * pixel rows (pitch padding excluded), the decode time and any messages the
- * library emitted. Run it before and after a change to the bundled OpenJPEG
- * and diff the output; feed it the openjpeg-data conformance and
- * non-regression files (see README.md) and compare the dumps against the
- * reference decoder with compcheck.py.
- *
- *   corpus [-h] [-m] [-o N] [-d DIR] file...
- *     -h      header-only load (FIF_LOAD_NOPIXELS): geometry only, no checksum
- *     -m      load through FreeImage_LoadFromMemory instead of a file name
- *     -o N    load through a FreeImageIO handle positioned N bytes into a
- *             temporary copy that has N junk bytes prepended
- *     -d DIR  dump the decoded pixels of each file to DIR/<name>.raw: a text
- *             header "FIRAW <w> <h> <bpp> <type>" then the rows top to bottom
- *             without padding, in FreeImage's own byte order (BGR for 24-bit,
- *             BGRA for 32-bit, little-endian R,G,B[,A] for the 16-bit types)
- *
- * Exits non-zero if any file failed to load.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- */
+/* JPEG 2000 corpus decoder: one line per file (geometry, checksum, time, messages) */
+/* corpus [-h header only] [-m from memory] [-o N offset] [-d DIR raw dump] file... */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +14,6 @@ static void handler(FREE_IMAGE_FORMAT fif, const char *msg) {
     if (n + strlen(msg) + 4 < sizeof(msgbuf)) {
         snprintf(msgbuf + n, sizeof(msgbuf) - n, "%s%s", n ? " | " : "", msg);
     }
-    /* strip the newlines the plugins put in some messages */
     for (n = 0; msgbuf[n]; n++) if (msgbuf[n] == '\n') msgbuf[n] = ' ';
 }
 
@@ -93,7 +69,7 @@ static void dump_raw(FIBITMAP *dib, const char *dir, const char *name) {
     fclose(f);
 }
 
-/* --- a FreeImageIO over a plain FILE*, so the load can start at an offset --- */
+/* FreeImageIO over a FILE*, for loads at an offset */
 static unsigned DLL_CALLCONV io_read(void *b, unsigned s, unsigned c, fi_handle h) { return (unsigned)fread(b, s, c, (FILE*)h); }
 static unsigned DLL_CALLCONV io_write(void *b, unsigned s, unsigned c, fi_handle h) { return (unsigned)fwrite(b, s, c, (FILE*)h); }
 static int DLL_CALLCONV io_seek(fi_handle h, long o, int w) { return fseek((FILE*)h, o, w); }

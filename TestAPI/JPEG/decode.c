@@ -1,25 +1,5 @@
-/*
- * FreeImage 3 - JPEG decode test
- *
- * Loads the files of data/ and checks the geometry, the decoded pixels and the
- * attached metadata against a recorded table, plus format detection, a memory
- * stream and a header-only load for each.
- *
- * The corpus is the point. Every file here was entropy-coded by the IJG
- * libjpeg 9d that FreeImage bundled until the version 10 upgrade, so the table
- * below records what *that* library read back out of them. The JPEG bitstream
- * is normative: any later libjpeg must decode these to exactly the same
- * pixels. That makes this the cross-version oracle for the next upgrade, and
- * the files cannot be regenerated once the old encoder is gone - keep them.
- *
- * Both IDCTs are recorded. JPEG_DEFAULT and JPEG_FAST select libjpeg's
- * JDCT_IFAST, JPEG_ACCURATE selects JDCT_ISLOW; they are different code and
- * they produce different pixels, so a change in either has to show up here.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- *   ./decode            check against the table
- *   ./decode --record   reprint the table (only when a change is deliberate)
- */
+/* JPEG decode test: data/ against a recorded table */
+/* data/ is libjpeg 9d output, a cross-version oracle: never regenerate it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -66,8 +46,7 @@ static void fail(const char *file, const char *what, const char *fmt, ...) {
     failures++;
 }
 
-/* Hash the visible pixels only: the rows GetScanLine hands back are padded to a
-   4-byte pitch and the padding is not part of the image. */
+/* hash visible pixels only, not the pitch padding */
 static unsigned long long digest(FIBITMAP *dib) {
     unsigned long long h = 1469598103934665603ULL;
     unsigned w = FreeImage_GetWidth(dib), ht = FreeImage_GetHeight(dib);
@@ -124,7 +103,6 @@ int main(int argc, char **argv) {
         unsigned long long d, da;
         int icc, xmp, exif;
 
-        /* format detection must not need the extension */
         if (FreeImage_GetFileType(e->file, 0) != FIF_JPEG)
             fail(e->file, "detection", "GetFileType did not say FIF_JPEG");
 
@@ -164,8 +142,7 @@ int main(int argc, char **argv) {
                    e->file, e->width, e->height, e->bpp, icc, xmp, exif);
         }
 
-        /* JPEG_FAST is what JPEG_DEFAULT already selects; say so out loud, since
-           a future change to that default would otherwise pass unnoticed */
+        /* JPEG_FAST must equal JPEG_DEFAULT */
         {
             FIBITMAP *f = FreeImage_Load(FIF_JPEG, e->file, JPEG_FAST);
             if (!f) {
@@ -177,7 +154,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        /* a header-only load must agree about the image without decoding it */
         hdr_only = FreeImage_Load(FIF_JPEG, e->file, FIF_LOAD_NOPIXELS);
         if (!hdr_only) {
             fail(e->file, "header-only", "returned NULL");
@@ -189,7 +165,6 @@ int main(int argc, char **argv) {
             FreeImage_Unload(hdr_only);
         }
 
-        /* and the same bytes through a memory stream must decode identically */
         raw = slurp(e->file, &len);
         if (!raw) {
             fail(e->file, "read", "could not read the file");
@@ -213,9 +188,7 @@ int main(int argc, char **argv) {
 
     if (record) { printf("};\n"); FreeImage_DeInitialise(); return 0; }
 
-    /* The CMYK file is the one that exercises libjpeg's Adobe marker handling
-       and FreeImage's YCCK/CMYK conversion. JPEG_CMYK hands the four channels
-       over untouched; without it they are converted to RGB. */
+    /* JPEG_CMYK keeps the four channels; without it they become RGB */
     {
         const char *f = "data/fi_jpeg_cmyk.jpg";
         FIBITMAP *rgb = FreeImage_Load(FIF_JPEG, f, JPEG_DEFAULT);

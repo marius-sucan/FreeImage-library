@@ -339,8 +339,6 @@ static BOOL fmg_mglin(FIBITMAP *U, int n, int ncycle) {
 			throw(1);
 		}
 		if (ng < 2) {
-			// the coarsest grid is index 0 and the first restriction target is
-			// ng - 2, so a single level (n = 3) would index the grid arrays at -1
 			FreeImage_OutputMessageProc(FIF_UNKNOWN, "Multigrid algorithm: n = %d is too small, at least 5 is needed.", n);
 			throw(1);
 		}
@@ -472,12 +470,6 @@ FIBITMAP* DLL_CALLCONV
 FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	if(!FreeImage_HasPixels(Laplacian)) return NULL;
 
-	// The solver works on the FIT_FLOAT square built below, and FreeImage_Paste
-	// refuses a source of any other type (CopyPaste.cpp:663-667).  That return
-	// value used to be dropped, so an 8- or 24-bit Laplacian left the square as
-	// FreeImage_AllocateT had zeroed it and the solver returned a plausible
-	// FIT_FLOAT image of exactly the right dimensions, derived from nothing and
-	// with no diagnostic.
 	if(FreeImage_GetImageType(Laplacian) != FIT_FLOAT) {
 		FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_MultigridPoissonSolver: the Laplacian must be a FIT_FLOAT image");
 		return NULL;
@@ -496,8 +488,7 @@ FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	// size must be of the form 2^j + 1 for some integer j
 	size = 1 + (1 << size);
 	if(size < 5) {
-		// fmg_mglin needs at least two grid levels, and one pixel of boundary is
-		// added on every side below, so the smallest usable square is 5x5
+		// two grid levels plus a 1-pixel border: 5x5 minimum
 		size = 5;
 	}
 
@@ -512,9 +503,6 @@ FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle) {
 	}
 
 	// solve the PDE equation
-	//
-	// fmg_mglin returns FALSE from its catch(int) when a grid allocation or the
-	// grid size check fails; running on regardless returned the unsolved square.
 	if(!fmg_mglin(I, size, ncycle)) {
 		FreeImage_Unload(I);
 		return NULL;

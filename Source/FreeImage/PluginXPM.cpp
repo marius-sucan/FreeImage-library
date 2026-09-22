@@ -53,8 +53,6 @@ static int s_format_id;
 static BOOL
 FindChar(FreeImageIO *io, fi_handle handle, BYTE look_for) {
 	BYTE c;
-	// the first read was the one call here whose result was not looked at, so on
-	// an empty stream the comparison below was against an indeterminate byte
 	if( io->read_proc(&c, sizeof(BYTE), 1, handle) != 1 )
 		return FALSE;
 	while(c != look_for) {
@@ -168,8 +166,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
     if (!handle) return NULL;
 
-	// str is out here so the handlers below can release it: the std::string and
-	// the two std::maps used between the calls to ReadString can all throw
+	// out here so the handlers below can free it
 	char *str = NULL;
 
     try {
@@ -204,9 +201,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		} else {
 			dib = FreeImage_AllocateHeader(header_only, width, height, 8);
 		}
-		// width and height are only tested for <= 0 above, never for plausibility,
-		// so an XPM declaring a huge canvas gets NULL back here - and the palette
-		// loop below writes through whatever FreeImage_GetPalette() then returns
 		if(dib == NULL) {
 			throw FI_MSG_ERROR_DIB_MEMORY;
 		}
@@ -218,8 +212,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			str = ReadString(io, handle);
 			if(!str || (strlen(str) < (size_t)cpp)) {
-				// a colour line shorter than cpp is an ordinary malformed file, and
-				// it used to throw with str still allocated
 				free(str);
 				str = NULL;
 				throw "Error reading color strings";
@@ -303,8 +295,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 
 					if (!FreeImage_LookupX11Color(clr,  &rgba.r, &rgba.g, &rgba.b)) {
-						// str is the whole colour line as the file supplied it, of any
-						// length: it must not be formatted into msg unbounded
 						snprintf(msg, sizeof(msg), "Unknown color name '%s'", str);
 						free(str);
 						str = NULL;
@@ -345,9 +335,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			str = ReadString(io, handle);
 			if(!str)
 				throw "Error reading pixel strings";
-			// the row must actually hold the width * cpp characters the info string
-			// promised: the loop below reads cpp bytes per pixel with no regard for
-			// where str ends.  size_t, so that width * cpp cannot overflow.
 			if( strlen(str) < (size_t)width * (size_t)cpp ) {
 				free(str);
 				str = NULL;
@@ -388,11 +375,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
        return NULL;
     } catch(const std::exception& e) {
-       // ReadString grows a std::string for as long as the file keeps supplying
-       // bytes between two quotes, and the colour map allocates as well.  Such
-       // a throw is not a const char*, so it used to pass the handler above,
-       // pass FreeImage_LoadFromHandle - which has no handler either - and
-       // terminate the application.
        FreeImage_OutputMessageProc(s_format_id, e.what());
 
        free(str);

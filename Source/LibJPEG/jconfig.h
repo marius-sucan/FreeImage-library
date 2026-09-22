@@ -106,10 +106,7 @@ typedef unsigned char boolean;
 
 /* Define custom RGB color order, prevent jmorecfg.h from redefinition */
 #undef JPEG_HAVE_RGB_CUSTOM
-/* Use Windows custom BGR color order defined in jmorecfg.h.  FreeImage does
- * not: PluginJPEG.cpp swaps red and blue itself, and the three other users of
- * this library - LibTIFF4, LibRawLite and LibHEIF - all expect plain RGB.
- */
+/* FreeImage: no custom BGR order, every user expects RGB */
 #undef JPEG_USE_RGB_CUSTOM
 
 /* Define custom file I/O functions, prevent jinclude.h from redefinition */

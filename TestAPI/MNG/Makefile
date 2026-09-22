@@ -1,25 +1,7 @@
-# MNG tests. Each one is a standalone program that prints a report and exits
-# non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan       build them with AddressSanitizer
-#   make asan-run   rebuild PluginMNG.cpp, MNGHelper.cpp, PluginPNG.cpp and the
-#                   bundled libpng with AddressSanitizer into a private copy of
-#                   the library and run the tests against that
-#
-# Scratch files go to $MNG_TEST_TMP, or the current directory.
-#
-# There is no data directory: MNG has no writer, so there is nothing to make a
-# corpus with, and the tests build their datastreams themselves from the chunk
-# layouts in the specification (see mngbuild.h). The frames inside them are
-# made with FreeImage's own PNG writer and stripped of their signature, which
-# is exactly what a MNG encoder does with them - the tests are about the
-# container, not about PNG.
+# MNG tests. Build the library first: make -f Makefile.gnu dist
+# Targets: all, run, asan, asan-run. Scratch files: $MNG_TEST_TMP or cwd.
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust
@@ -30,23 +12,17 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 default: all
 all: $(TESTS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
 $(TESTS): %: %.c mngbuild.h ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
 run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
-# --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters for robust: the MNG plugin parses the container by hand - chunk
-# headers, lengths, the extent of each embedded datastream, the variable-length
-# bodies of FRAM and DEFI - and a sanitized run over deliberately damaged input
-# is what catches a mistake in that.
+# --- AddressSanitizer (asan-run also instruments the plugin) ---
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C and C++ files with
+# Makefile.gnu's library flags
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)

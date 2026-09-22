@@ -80,12 +80,6 @@ GetInt(FreeImageIO *io, fi_handle handle) {
     while (1) {
         const int digit = c - '0';
 
-		// a file may supply digits for as long as it likes, and this used to
-		// accumulate them all.  The overflow is undefined, and unlike its twin in
-		// PluginPFM the wrapped value is used: 99999999999 wraps to 1215752191,
-		// which is positive, so neither the width < 0 test below nor
-		// FreeImage_AllocateHeader refuses it, and a 22-byte file allocates a
-		// 1.2 GB bitmap whose width appears nowhere in it.
 		if (i > (INT_MAX - digit) / 10) {
 			throw FI_MSG_ERROR_PARSING;
 		}
@@ -103,12 +97,7 @@ GetInt(FreeImageIO *io, fi_handle handle) {
     return i;
 }
 
-/**
-Read one ASCII sample and hold it to the range the header declared.  The format
-says no sample exceeds maxval; without that, the 255 * level below overflows an
-int, and the 65535 * (double)level conversions land outside the destination
-type, which is undefined as well.
-*/
+// read one ASCII sample, clamped to maxval
 static int
 GetSample(FreeImageIO *io, fi_handle handle, int maxval) {
 	int level = GetInt(io, handle);

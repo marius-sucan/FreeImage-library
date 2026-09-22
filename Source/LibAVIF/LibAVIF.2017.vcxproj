@@ -224,7 +224,7 @@
     <ClCompile Include="src\stream.c" />
     <ClCompile Include="src\utils.c" />
     <ClCompile Include="src\write.c" />
-    <!-- FreeImage: the libyuv subset has its own scale.c next to src\scale.c; with the default $(IntDir)%(Filename).obj both would land in scale.obj and one would overwrite the other (MSB8027), which leaves avifImageScale / avifImageScaleWithLimit unresolved when linking FreeImage.dll -->
+    <!-- FreeImage: two scale.c files, so distinct object names -->
     <ClCompile Include="third_party\libyuv\source\planar_functions.c">
       <ObjectFileName>$(IntDir)libyuv_%(Filename).obj</ObjectFileName>
     </ClCompile>

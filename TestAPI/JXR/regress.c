@@ -1,19 +1,10 @@
-/*
- * FreeImage 3 - JPEG XR regression test
- *
- * Round-trip corpus: saves every format the plugin supports at three quality
- * settings, printing size + checksum per output, and checks that a lossless
- * round-trip is pixel-exact. Run before and after a change and diff the output.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files are written to $JXR_TEST_TMP (default: the current directory).
- */
+/* FreeImage 3 - JPEG XR round-trip corpus: size + checksum per output */
+/* diff the output across a change; lossless must be exact */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
 
-/* Scratch files go to $JXR_TEST_TMP, or the current directory. */
 static const char *tmppath(const char *name) {
     static char buf[1024];
     const char *dir = getenv("JXR_TEST_TMP");
@@ -58,10 +49,7 @@ static int same(FIBITMAP*a,FIBITMAP*b){
         if(memcmp(FreeImage_GetScanLine(a,y),FreeImage_GetScanLine(b,y),n)) return 0;
     return 1;
 }
-/* Which formats JXR_LOSSLESS actually round-trips bit-exactly. The codec's float
-   pipeline works in a fixed-point internal space and 16-bit packed RGB loses bits,
-   so "lossless" is exact only for the integer formats - a property of JPEG XR, not
-   a defect. Flagged here so a real change in behaviour stands out. */
+/* JXR_LOSSLESS is exact only for integer formats (codec property) */
 static void run(const char*name,FREE_IMAGE_TYPE t,int bpp,int w,int h,int exact_expected){
     static const struct{const char*q;int f;} Q[]={{"default",0},{"q90",90},{"lossless",JXR_LOSSLESS}};
     FIBITMAP *d=mk(t,w,h,bpp); int i;

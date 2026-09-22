@@ -1,5 +1,4 @@
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../Makefile.openmp
 
 default: all

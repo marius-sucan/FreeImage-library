@@ -1,22 +1,5 @@
-/*
- * FreeImage 3 - OpenEXR decode regression test
- *
- * Loads every file of the corpus in data/ and checks what the plugin and the
- * bundled OpenEXR are jointly responsible for: format detection, the bitmap
- * type and depth picked for each channel layout, the decoded pixels, and that
- * a memory stream and a header-only load agree with the file. One line per
- * file; anything that deviates from the expected table prints "*** MISMATCH"
- * and the program exits non-zero.
- *
- * The corpus is generated (see README.md) and deliberately covers what
- * FreeImage itself never writes: RLE, ZIPS, B44A, DWAA and DWAB compression,
- * tiled and mipmapped layouts, and 32-bit float channels - plus the subsampled
- * luminance/chroma layout, which it does write but long could not read.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- * "./decode --record" prints the table above in source form, for when a
- * deliberate change makes the recorded values move.
- */
+/* FreeImage 3 - OpenEXR decode regression test */
+/* checks every data/ file against EXPECTED; --record reprints it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,23 +13,7 @@ typedef struct {
     unsigned long long sum;     /* checksum of the decoded pixel rows */
 } Expected;
 
-/* Recorded from a passing run against OpenEXR 3.3.14.  The lossless entries -
- * none, rle, zips, zip, piz, pxr24, tiled and mipmap - all carry the same
- * checksum: they are one picture through eight different compressors and
- * layouts, so any of them drifting alone points at that codec.  b44/b44a and
- * dwaa/dwab are lossy and share a checksum per pair.  Every value here also
- * held for the OpenEXR 3.1.3 the library shipped before, except dwaa/dwab,
- * which 3.3 reimplemented in C and which moved by one or two half-float ULP
- * in a handful of pixels.
- *
- * A width of 0 would mean the file must be *refused*; no entry uses it now.
- * fi_exr_yc.exr is the subsampled luminance/chroma file (OpenEXR's WRITE_YCA,
- * which is what FreeImage's own EXR_LC save flag writes for an RGBAF image).
- * Until 2026-09-15 PluginEXR recognised only the three-channel Y/BY/RY form and
- * rejected this one with "Unsupported color model: A/BY/RY/Y", so FreeImage
- * could write EXR files it could not read back; it now loads as FIT_RGBAF
- * through Imf::RgbaInputFile, alpha included.  Its checksum stands alone
- * because subsampled chroma is lossy. */
+/* lossless entries share a checksum; width 0 = must be refused */
 static const Expected EXPECTED[] = {
     {"fi_exr_b44.exr",     64, 48, FIT_RGBAF, 128, 0xeb11267f4ec83547ULL},
     {"fi_exr_b44a.exr",    64, 48, FIT_RGBAF, 128, 0xeb11267f4ec83547ULL},
@@ -152,7 +119,6 @@ int main(int argc, char **argv) {
                      FreeImage_GetWidth(m) == (unsigned)w &&
                      FreeImage_GetHeight(m) == (unsigned)h;
 
-        /* header-only: geometry and type without the pixels */
         FIBITMAP *hdr = FreeImage_Load(FIF_EXR, path, FIF_LOAD_NOPIXELS);
         int hdr_ok = hdr && FreeImage_GetWidth(hdr) == (unsigned)w &&
                      FreeImage_GetHeight(hdr) == (unsigned)h &&

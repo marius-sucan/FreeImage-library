@@ -1,37 +1,11 @@
-/*
- * FreeImage 3 - OpenEXR luminance/chroma (EXR_LC) round-trip test
- *
- * Saves a flat-coloured image with EXR_LC and checks every row of what comes
- * back. EXR_LC writes Imf::WRITE_YC for an RGBF image and Imf::WRITE_YCA for an
- * RGBAF one, and both go back through Imf::RgbaInputFile on the way in, which
- * is a different reader from the one the rest of the suite exercises.
- *
- * It is deliberately not a checksum test. regress.c hashes the whole bitmap,
- * and a hash cannot tell a scanline the reader forgot to write from one it
- * wrote correctly - the zeros FreeImage_AllocateHeaderT left there hash just as
- * stably as pixels do. Two bugs lived behind that until 2026-09-15:
- *
- *   - the chunk loop copied (dw.max.y - dw.min.y) rows out of the
- *     (dw.max.y - dw.min.y + 1) it had read, so the bottom scanline of every
- *     Y/BY/RY image was left black. It is visible in the openexr-images set
- *     too: Chromaticities/Rec709_YC.exr and the four LuminanceChroma files
- *     each lost their bottom row.
- *   - an RGBAF image saved with EXR_LC could not be loaded at all, because only
- *     the three-channel form of the layout was recognised.
- *
- * A flat colour makes both visible: every row must come back as that colour,
- * and the alpha of an RGBAF round-trip must survive as 1.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- * Scratch files go to $EXR_TEST_TMP, or the current directory.
- */
+/* FreeImage 3 - OpenEXR luminance/chroma (EXR_LC) round-trip test */
+/* checks every row: a checksum cannot see a missing row */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
 
-/* the chroma is subsampled and stored as half, so the colour comes back close
- * rather than exact; anything beyond this is a bug, not a rounding difference */
+/* subsampled half-float chroma: close, not exact */
 #define TOLERANCE 0.02f
 
 static const float RED = 0.5f, GREEN = 0.25f, BLUE = 0.75f;
@@ -83,7 +57,6 @@ static void run(FREE_IMAGE_TYPE type, const char *type_name, int width, int heig
         failures++; FreeImage_Unload(src); remove(path); return;
     }
 
-    /* an RGBF source stays RGBF; an RGBAF one has to keep its alpha channel */
     FREE_IMAGE_TYPE want = type;
     FREE_IMAGE_TYPE got = FreeImage_GetImageType(back);
     int bad_rows = 0, bad_alpha = 0, first_bad = -1;
@@ -116,8 +89,7 @@ int main(void) {
     FreeImage_Initialise(TRUE);
     FreeImage_SetOutputMessage(collect);
 
-    /* EXR_LC needs even dimensions; heights on both sides of the reader's
-     * 16-row chunk boundary, since the bug was in the short final chunk */
+    /* even heights around the 16-row chunk boundary */
     static const int HEIGHTS[] = { 2, 8, 16, 18, 32, 34, 48, 96 };
 
     printf("EXR_LC round-trip\n");

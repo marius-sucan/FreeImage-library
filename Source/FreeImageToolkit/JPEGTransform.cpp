@@ -36,7 +36,7 @@ extern "C" {
 #include "Utilities.h"
 #include "FreeImageIO.h"
 
-// for the in-place truncation in truncateInPlaceStdIO() below
+// for truncateInPlaceStdIO()
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -388,23 +388,6 @@ closeStdIO(fi_handle src_handle, fi_handle dst_handle) {
 	}
 }
 
-/**
-Shorten an in-place transform's file to what was actually written.
-
-An in-place transform opens one FILE* in "r+b", seeks back to the start of the
-stream and writes the new image over the old one.  transfoptions.trim is always
-set, so a transform that cannot carry a partial edge MCU drops it and the result
-is shorter than what it replaced - and nothing here shortened the file, which
-kept its original size with the tail of the previous image left after EOI.
-Decoders stop at EOI so the image still loads, but the size is wrong and the
-tail is a fragment of the pre-transform entropy-coded data.
-
-Only a destination this file opened can be truncated.  A caller that hands the
-same handle to FreeImage_JPEGTransformFromHandle twice with its own FreeImageIO
-has to do this itself: FreeImageIO has no truncate operation to call.
-@param src_handle Source handle, as returned by openStdIO
-@param dst_handle Destination handle; nothing is done unless it is the source
-*/
 static void
 truncateInPlaceStdIO(fi_handle src_handle, fi_handle dst_handle) {
 	if(!dst_handle || (dst_handle != src_handle)) {
@@ -427,13 +410,6 @@ truncateInPlaceStdIO(fi_handle src_handle, fi_handle dst_handle) {
 	}
 }
 
-/**
-The same for a memory stream, where the length is a field rather than a syscall.
-_MemoryWriteProc only ever grows file_length, so an in-place transform that
-produced fewer bytes left the tail of the old image readable past the new EOI.
-@param src_stream Source stream
-@param dst_stream Destination stream; nothing is done unless it is the source
-*/
 static void
 truncateInPlaceMemory(FIMEMORY* src_stream, FIMEMORY* dst_stream) {
 	if(!dst_stream || (dst_stream != src_stream) || !dst_stream->data) {

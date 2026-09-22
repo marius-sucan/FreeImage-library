@@ -298,21 +298,11 @@ FreeImage_AllocateBitmap(BOOL header_only, BYTE *ext_bits, unsigned ext_pitch, F
 
 	// check input variables
 
-	// A negative width is never meaningful: every format whose loader reaches
-	// here stores its width unsigned, so a negative one means that loader
-	// mis-parsed its header.  Silently substituting a different, positive size
-	// is worse than failing - the caller carries on with its own value, and its
-	// loop bounds and buffer sizes no longer describe the bitmap it was handed.
-	// That is how a DDS declaring dwWidth = 0xFFFFFFF0, and a Radiance file
-	// whose resolution line says "+X -1", each came to read a whole file into
-	// one scanline.
 	if(width < 0) {
 		return NULL;
 	}
 
-	// A negative height, by contrast, is meaningful: it is how a top-down DIB
-	// is spelled, and PluginBMP passes biHeight through unchanged and relies on
-	// the abs() here.  (abs(INT_MIN) is itself undefined, so rule that out.)
+	// negative height = top-down DIB; abs(INT_MIN) is undefined
 	if(height == INT_MIN) {
 		return NULL;
 	}

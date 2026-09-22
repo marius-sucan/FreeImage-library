@@ -1,21 +1,5 @@
-/*
- * FreeImage 3 - OpenEXR robustness test
- *
- * Feeds the plugin damaged input and checks only that it survives: truncated
- * prefixes, junk appended, single-byte corruptions spread over the header and
- * the pixel data, wiped regions, and empty and tiny buffers. Every one of
- * these may load or be refused - what it may not do is crash, hang, or leak.
- * Run it under AddressSanitizer ("make asan && ./robust"); without one it
- * still catches aborts and null dereferences.
- *
- * This matters more since OpenEXR 3.3 than it did before: the parsing and
- * decompression the plugin now relies on live in OpenEXRCore, a C library
- * (Source/OpenEXR/OpenEXRCore), rather than in the C++ readers.
- *
- * Every load goes through a memory stream, so nothing is written to disk.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - OpenEXR robustness test */
+/* damaged input may load or be refused, never crash; run under ASan */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +8,7 @@
 static const char *FILES[] = {
     "data/fi_exr_zip.exr",      /* scanline, the common case  */
     "data/fi_exr_piz.exr",      /* the wavelet + huffman path */
-    "data/fi_exr_dwaa.exr",     /* the DWA path, new C code in 3.3 */
+    "data/fi_exr_dwaa.exr",     /* the DWA path               */
     "data/fi_exr_b44.exr",      /* the B44 path               */
     "data/fi_exr_tiled.exr",    /* the tiled reader           */
     "data/fi_exr_float.exr",    /* 32-bit channels            */
@@ -35,14 +19,13 @@ static long loaded = 0, refused = 0;
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
 
-/* Loads one buffer and throws the result away. Returns 1 if it decoded. */
 static int try_load(const BYTE *data, long len) {
     FIMEMORY *mem = FreeImage_OpenMemory((BYTE *)data, (DWORD)len);
     if (!mem) return 0;
     FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_EXR, mem, 0);
     int ok = dib != NULL;
     if (dib) {
-        /* touch every row, so a short buffer shows up as a fault here */
+        /* touch every row: a short buffer faults here */
         unsigned h = FreeImage_GetHeight(dib), line = FreeImage_GetLine(dib);
         unsigned long long acc = 0;
         for (unsigned y = 0; y < h; y++) {
@@ -87,11 +70,11 @@ int main(void) {
         if (!orig) { printf("%-24s MISSING\n", FILES[fi]); continue; }
         long before = loaded + refused;
 
-        /* 1. truncated prefixes, fine near the header and coarser after */
+        /* 1. truncated prefixes */
         for (long n = 0; n < len; n += (n < 512 ? 7 : len / 64 + 1))
             try_load(orig, n);
 
-        /* 2. junk appended: a valid file followed by garbage */
+        /* 2. junk appended */
         {
             BYTE *big = (BYTE *)malloc(len + 4096);
             memcpy(big, orig, len);
@@ -100,7 +83,7 @@ int main(void) {
             free(big);
         }
 
-        /* 3. single-byte corruptions, every 13th byte, each on a fresh copy */
+        /* 3. single-byte corruptions */
         {
             BYTE *copy = (BYTE *)malloc(len);
             for (long i = 0; i < len; i += 13) {
@@ -118,7 +101,7 @@ int main(void) {
             free(copy);
         }
 
-        /* 4. wiped regions: 64 bytes of zeros, walked across the file */
+        /* 4. wiped 64-byte regions */
         {
             BYTE *copy = (BYTE *)malloc(len);
             for (long i = 0; i < len; i += 64) {

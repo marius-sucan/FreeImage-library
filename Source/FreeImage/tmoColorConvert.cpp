@@ -218,39 +218,18 @@ ConvertInPlaceYxyToRGBF(FIBITMAP *dib) {
 }
 
 // ----------------------------------------------------------
-// Robust luminance statistics
-//
-// A tone mapping operator derives its response curve from scene statistics.
-// Taking the *absolute* maximum luminance makes those statistics hostage to a
-// single pixel: one specular highlight, one clipped sensor sample, or a single
-// +INF produced by a HDR codec is enough to drive the whole frame to black.
-// The helpers below therefore ignore non finite samples and report a
-// *percentile* maximum, estimated with a log spaced histogram so that the
-// memory cost does not grow with the image size.
+// Robust luminance statistics (finite samples, percentile extrema)
 // ----------------------------------------------------------
 
-/** Number of bins of the log spaced histogram used to estimate percentiles. */
 #define TMO_HISTOGRAM_BINS	4096
 
-/** Fraction of the samples that must fall below the reported maximum luminance,
-    i.e. the brightest 0.1% of the scene is treated as outliers and excluded.
-    The budget is deliberately small: it has to swallow hot sensor pixels and
-    codec artefacts without eating into a legitimate specular highlight. */
+/** the brightest 0.1% are outliers */
 #define TMO_MAX_PERCENTILE	0.999
 
-/** Fraction of the samples that may fall below the reported minimum luminance.
-    Symmetrical to TMO_MAX_PERCENTILE: an operator that subtracts the minimum
-    luminance is just as sensitive to a single dark outlier as to a bright one. */
+/** the darkest 0.1% are outliers */
 #define TMO_MIN_PERCENTILE	0.001
 
-/**
-Convert a floating point sample expected in [0..1] to an 8-bit value.
-Values outside the range are clipped. NaN compares false against every bound,
-so it is mapped to 0 rather than being cast: casting a NaN, an infinity, or any
-value outside the destination range is undefined behaviour in C++.
-@param value Value to convert
-@return Returns the corresponding 8-bit value
-*/
+/** [0..1] float to BYTE, clipped; NaN gives 0 (casting it is UB) */
 static inline BYTE
 ClampFloatToByte(float value) {
 	const float scaled = 255.0F * value + 0.5F;
@@ -259,10 +238,7 @@ ClampFloatToByte(float value) {
 	return 0;	// covers negative values, -INF and NaN
 }
 
-/**
-Statistics gathered over the luminance samples of an image.
-Non finite samples are excluded from every field.
-*/
+/** luminance statistics over the finite samples */
 typedef struct tagLuminanceStats {
 	float maxLum;		//! percentile ("robust") maximum luminance
 	float minLumRobust;	//! percentile ("robust") minimum luminance
@@ -274,19 +250,7 @@ typedef struct tagLuminanceStats {
 	size_t count;		//! number of usable samples
 } LuminanceStats;
 
-/**
-Gather the luminance statistics needed by the tone mapping operators.
-The luminance samples are read as floats spaced 'stride' floats apart, which
-covers both a FIT_FLOAT luminance channel (stride 1) and the Y channel of a Yxy
-FIT_RGBF image (stride 3, Y being the first member of FIRGBF).
-
-@param dib Input image
-@param samplesPerRow Number of samples to read on each scanline
-@param stride Distance, in floats, between two consecutive samples
-@param clampNegative When TRUE, negative samples are read as 0 instead of being kept
-@param stats Returned statistics
-@return Returns TRUE when at least one usable sample was found, returns FALSE otherwise
-*/
+/** luminance stats of samples 'stride' floats apart (3: the Y of Yxy) */
 static BOOL
 GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOOL clampNegative, LuminanceStats *stats) {
 	const unsigned width  = samplesPerRow;
@@ -307,7 +271,6 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		for(unsigned x = 0; x < width; x++) {
 			const float sample = pixel[x * stride];
 			if(!IsFiniteValue(sample)) {
-				// a single NaN or INF must not define the scene statistics
 				continue;
 			}
 			const float Y = (clampNegative && (sample < 0)) ? 0 : sample;
@@ -318,9 +281,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 				if(Y < min_pos_lum) min_pos_lum = Y;
 				positive_count++;
 			}
-			// the sums describe the light in the scene, and negative radiance is
-			// not light: log(2.3e-5 + Y) is a NaN as soon as Y < -2.3e-5, which
-			// would poison the world adaptation luminance of the whole image
+			// negative radiance is not light, and its log() is NaN
 			const float lit = (Y > 0) ? Y : 0;
 			sum_lum += lit;
 			sum_log_lum += log(2.3e-5F + lit);	// contrast constant in Tumblin paper
@@ -341,13 +302,10 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	stats->sumLum       = sum_lum;
 	stats->sumLogLum    = sum_log_lum;
 	stats->count        = count;
-	// the percentile estimates default to the absolute extrema, and are refined
-	// by the histogram pass below whenever there is enough data for it
 	stats->maxLum       = max_lum;
 	stats->minLumRobust = min_lum;
 
-	// second pass : estimate the percentile maximum over the positive samples.
-	// Anything darker cannot influence the bright end of the curve.
+	// second pass : percentile estimates
 
 	if((positive_count < 2) || (stats->minPosLum >= max_lum)) {
 		// nothing to reject
@@ -361,11 +319,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		return TRUE;
 	}
 
-	// Two histograms: the positive samples are log spaced, which is the right
-	// domain for radiance, while the samples at or below zero get a linear one
-	// over [min_lum, 0]. Without the second one the low percentile could not be
-	// resolved at all whenever the dark end of the image is mostly black or
-	// negative - exactly the case where a robust minimum matters most.
+	// log-spaced bins for positive samples, linear ones over [min_lum, 0]
 	unsigned *histogram = (unsigned*)calloc(2 * TMO_HISTOGRAM_BINS, sizeof(unsigned));
 	if(!histogram) {
 		// out of memory : fall back on the absolute extrema
@@ -406,10 +360,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	// walk down from the brightest bin until the outlier budget is spent
 
 	{
-		// Base the budget on the *lit* samples rather than on every sample.
-		// Large black regions are common (a subject on a black backdrop), and
-		// counting them would make the cut bite deep into the real highlights
-		// instead of just trimming a few hot pixels.
+		// budget from lit samples only: black backdrops would inflate it
 		const size_t budget = (size_t)((1.0 - TMO_MAX_PERCENTILE) * (double)positive_count);
 		size_t accumulated = 0;
 		int cut_bin = TMO_HISTOGRAM_BINS - 1;
@@ -423,8 +374,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 			}
 		}
 		if(!spent) {
-			// fewer bright samples than the budget allows for: there is nothing
-			// to reject, and cutting here would collapse the range to nothing
+			// budget not spent: nothing to reject
 			stats->maxLum = max_lum;
 		} else {
 			// upper edge of the bin that holds the percentile
@@ -438,7 +388,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		}
 	}
 
-	// and up from the darkest bin, for the operators that subtract the minimum
+	// and up from the darkest bin
 
 	{
 		const size_t budget = (size_t)(TMO_MIN_PERCENTILE * (double)count);
@@ -505,19 +455,16 @@ LuminanceFromYxy(FIBITMAP *Yxy, float *maxLum, float *minLum, float *worldLum) {
 
 	LuminanceStats stats;
 
-	// Y is the first member of FIRGBF, hence a stride of 3 floats.
-	// Negative luminance is read as 0, as this function has always done.
+	// Y of Yxy: stride 3, negatives read as 0
 	if(!GatherLuminanceStats(Yxy, FreeImage_GetWidth(Yxy), 3, TRUE, &stats)) {
-		// no usable sample at all
 		return FALSE;
 	}
 
-	// maximum luminance, with the brightest outliers excluded so that a single
-	// specular highlight cannot define the response curve of the whole frame
+	// maximum luminance
 	*maxLum = stats.maxLum;
 	// minimum luminance
 	*minLum = stats.minLum;
-	// world adaptation luminance : averaged over the usable samples only
+	// world adaptation luminance
 	*worldLum = (float)exp(stats.sumLogLum / (double)stats.count);
 
 	return TRUE;
@@ -548,8 +495,7 @@ ClampConvertRGBFTo24(FIBITMAP *src) {
 		const FIRGBF *src_pixel = (FIRGBF*)src_bits;
 		BYTE *dst_pixel = (BYTE*)dst_bits;
 		for(unsigned x = 0; x < width; x++) {
-			// CLAMP() lets a NaN through untouched, and casting one to BYTE is
-			// undefined behaviour, so do the clipping and the cast together
+			// not CLAMP(): it passes NaN, and casting NaN is UB
 			dst_pixel[FI_RGBA_RED]   = ClampFloatToByte(src_pixel[x].red);
 			dst_pixel[FI_RGBA_GREEN] = ClampFloatToByte(src_pixel[x].green);
 			dst_pixel[FI_RGBA_BLUE]  = ClampFloatToByte(src_pixel[x].blue);
@@ -622,18 +568,14 @@ LuminanceFromY(FIBITMAP *dib, float *maxLum, float *minLum, float *Lav, float *L
 	LuminanceStats stats;
 
 	if(!GatherLuminanceStats(dib, FreeImage_GetWidth(dib), 1, FALSE, &stats)) {
-		// no usable sample at all
 		return FALSE;
 	}
 
-	// maximum luminance, with the brightest outliers excluded
+	// maximum luminance
 	*maxLum = stats.maxLum;
-	// minimum *strictly positive* luminance. Callers feed this value to log(),
-	// so returning a zero or negative sample here would yield -INF or NaN and
-	// poison the whole curve. The original test intended to skip such samples
-	// but assigned them instead.
+	// minimum positive luminance: callers take its log()
 	*minLum = (stats.minPosLum > 0) ? stats.minPosLum : stats.maxLum;
-	// average luminance : averaged over the usable samples only
+	// average luminance
 	*Lav = (float)(stats.sumLum / (double)stats.count);
 	// average log luminance, a.k.a. world adaptation luminance
 	*Llav = (float)exp(stats.sumLogLum / (double)stats.count);
@@ -642,13 +584,8 @@ LuminanceFromY(FIBITMAP *dib, float *maxLum, float *minLum, float *Lav, float *L
 }
 
 /**
-Get the luminance range of a luminance image, excluding non finite samples and
-the brightest outliers.
-@param Y Input luminance image (FIT_FLOAT)
-@param maxLum Returned maximum luminance, outliers excluded
-@param minLum Returned minimum luminance
+Luminance range of Y, outliers excluded
 @return Returns TRUE if successful, returns FALSE otherwise
-@see GatherLuminanceStats
 */
 BOOL
 LuminanceRange(FIBITMAP *Y, float *maxLum, float *minLum) {
@@ -667,20 +604,7 @@ LuminanceRange(FIBITMAP *Y, float *maxLum, float *minLum) {
 }
 
 /**
-Clip negative radiance to zero, in place.
-
-Tone mapping operators model the response of an eye or a sensor to light, and
-negative radiance is not light. Letting it through makes pow() return a NaN,
-drives divisions through zero, and lets a single sample define the statistics
-of a whole frame. Wide gamut and scene referred sources - JPEG XR and OpenEXR
-in particular - routinely store such samples: a file can easily hold more
-negative samples than positive ones.
-
-The format converters are deliberately left lossless, so each operator clips
-its own working copy instead. NaN is mapped to zero here as well, since it
-fails the comparison below.
-
-@param dib Input / Output RGBF image
+Clip negative radiance and NaN to zero, in place
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 BOOL
@@ -696,7 +620,7 @@ ClampNegativeRGBF(FIBITMAP *dib) {
 	for(unsigned y = 0; y < height; y++) {
 		float *pixel = (float*)bits;
 		for(unsigned x = 0; x < width * 3; x++) {
-			// a NaN fails this test too, and is clipped to zero as well
+			// NaN fails this test too
 			if(!(pixel[x] > 0)) {
 				pixel[x] = 0;
 			}
@@ -709,15 +633,8 @@ ClampNegativeRGBF(FIBITMAP *dib) {
 }
 
 /**
-Get the robust range of every colour sample of a RGBF image, i.e. of all three
-channels taken together, excluding non finite samples and the extreme outliers.
-Intended for operators that rescale their output by its own range: taking the
-absolute extrema there lets a single saturated pixel compress the whole picture.
-@param dib Input RGBF image
-@param maxValue Returned maximum sample value, outliers excluded
-@param minValue Returned minimum sample value, outliers excluded
+Robust range of all RGBF samples, outliers excluded
 @return Returns TRUE if successful, returns FALSE otherwise
-@see GatherLuminanceStats
 */
 BOOL
 RGBFRobustRange(FIBITMAP *dib, float *maxValue, float *minValue) {
@@ -743,9 +660,7 @@ static void findMaxMinPercentile(FIBITMAP *Y, float minPrct, float *minLum, floa
 	int height = FreeImage_GetHeight(Y);
 	int pitch = FreeImage_GetPitch(Y);
 
-	// reserve(), *not* the sizing constructor: the latter pre-fills the vector
-	// with width*height zeros that push_back then appends to, which silently
-	// shifts every percentile towards the dark end
+	// reserve(), not the sizing constructor: push_back appends
 	std::vector<float> vY;
 	vY.reserve((size_t)width * height);
 
@@ -772,7 +687,6 @@ static void findMaxMinPercentile(FIBITMAP *Y, float minPrct, float *minLum, floa
 	if(min_index >= vY.size()) min_index = vY.size() - 1;
 	if(max_index >= vY.size()) max_index = vY.size() - 1;
 
-	// partial selection is enough here, and is linear rather than n.log(n)
 	std::nth_element(vY.begin(), vY.begin() + min_index, vY.end());
 	*minLum = vY[min_index];
 	std::nth_element(vY.begin(), vY.begin() + max_index, vY.end());
@@ -814,7 +728,6 @@ NormalizeY(FIBITMAP *Y, float minPrct, float maxPrct) {
 			const float *pixel = (float*)bits;
 			for(x = 0; x < width; x++) {
 				const float value = pixel[x];
-				// NaN would win the 'min' test below and poison the whole range
 				if(!IsFiniteValue(value)) continue;
 				maxLum = (maxLum < value) ? value : maxLum;	// max Luminance in the scene
 				minLum = (minLum < value) ? minLum : value;	// min Luminance in the scene
@@ -823,7 +736,6 @@ NormalizeY(FIBITMAP *Y, float minPrct, float maxPrct) {
 			bits += pitch;
 		}
 	}
-	// also catches the case where no usable sample was found at all
 	if(!(maxLum > minLum)) return;
 
 	// normalize to range 0..1 

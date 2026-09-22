@@ -45,8 +45,6 @@ FreeImage_RescaleRect(FIBITMAP *src, int dst_width, int dst_height, int src_left
 	if((src_left < 0) || (src_right > src_width) || (src_top < 0) || (src_bottom > src_height)) {
 		return NULL;
 	}
-	// an empty rectangle has no pixels to filter: the weights table would be built
-	// against a zero source size, and the non-FIT_BITMAP filters divide by it
 	if((src_right <= src_left) || (src_bottom <= src_top)) {
 		return NULL;
 	}
@@ -102,8 +100,6 @@ BOOL DLL_CALLCONV
 FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, int width, int height, int src_pitch, int dst_pitch, unsigned bpp, int dst_width, int dst_height, int src_left, int src_top, int src_right, int src_bottom, FREE_IMAGE_FILTER filter) {
    FIBITMAP *src = NULL;
    if((src_pitch <= 0) || (dst_pitch <= 0)) {
-      // both are signed here but unsigned inside the library, where a negative
-      // value becomes a stride of billions
       return FALSE;
    }
    src = FreeImage_AllocateHeaderForBits(src_bits, src_pitch, type, width, height, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
@@ -133,7 +129,6 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
       FreeImage_Unload(src);
       return FALSE;
    }
-   // an empty rectangle has no pixels to filter: see FreeImage_RescaleRect
    if((src_right <= src_left) || (src_bottom <= src_top)) {
       FreeImage_Unload(src);
       return FALSE;
@@ -174,18 +169,14 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
    delete pFilter;
 
    if(!dst) {
-      // either the destination bit depth would have had to change, which this
-      // entry point cannot express, or the header allocation failed
+      // NULL also when the bit depth would have to change
       FreeImage_Unload(src);
       return FALSE;
    }
 
    BOOL bResult = TRUE;
    if(FreeImage_GetBits(dst) != dst_bits) {
-      // scale() writes through the header it wrapped around dst_bits on the
-      // filtered path, but its early exit - when the source rectangle is already
-      // the destination size - returns a freshly allocated bitmap instead, which
-      // would leave dst_bits untouched
+      // scale()'s early exit returns a new bitmap: copy it back
       const unsigned line = FreeImage_GetLine(dst);
       if((unsigned)dst_pitch >= line) {
          for(unsigned y = 0; y < FreeImage_GetHeight(dst); y++) {
@@ -197,7 +188,7 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
    }
 
    FreeImage_Unload(dst);
-   FreeImage_Unload(src);   // the header wrapped around src_bits, leaked until now
+   FreeImage_Unload(src);
    return bResult;
 }
 
@@ -211,16 +202,7 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 	int width	= FreeImage_GetWidth(dib);
 	int height = FreeImage_GetHeight(dib);
 
-	// <= , not < .  An image whose larger dimension is exactly max_pixel_size
-	// already fits the thumbnail, but the < sent it to FreeImage_Rescale at a
-	// ratio of 1.0 instead of cloning it - and the rescaler picks the
-	// destination bit depth for itself.  A palettised or 16-bit source came back
-	// converted (1 -> 8, 4 -> 24, 16 -> 24) where the same image one pixel
-	// narrower came back untouched, so the caller's pixel format depended on
-	// whether its image was max_pixel_size or max_pixel_size - 1 wide.
-	//
-	// (The "max_pixel_size == 0" line that stood here could never be true: the
-	// <= 0 test above has already returned.)
+	// <=: an exact fit is cloned, keeping its pixel format
 	if((width <= max_pixel_size) && (height <= max_pixel_size)) {
 		// image is no larger than the requested thumbnail
 		return FreeImage_Clone(dib);

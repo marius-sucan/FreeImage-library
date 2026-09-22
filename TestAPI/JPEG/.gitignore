@@ -1,4 +1,3 @@
-# built by this directory's Makefile
 decode
 regress
 robust
@@ -7,6 +6,5 @@ oracle
 *-asan
 libfreeimage-asan.a
 asan-obj/
-# scratch images written by the tests
 fi_jpeg_rt_*.jpg
 fi_jpeg_xf_*.jpg

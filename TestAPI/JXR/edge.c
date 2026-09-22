@@ -1,20 +1,9 @@
-/*
- * FreeImage 3 - JPEG XR regression test
- *
- * Edge cases the old 16x16 save floor used to hide: very small images at every
- * supported depth and quality, including the low-quality YUV 4:2:0 plus
- * two-level-overlap path. Also covers JXR_PROGRESSIVE and partial-file cleanup.
- * Best run under AddressSanitizer.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files are written to $JXR_TEST_TMP (default: the current directory).
- */
+/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
 
-/* Scratch files go to $JXR_TEST_TMP, or the current directory. */
 static const char *tmppath(const char *name) {
     static char buf[1024];
     const char *dir = getenv("JXR_TEST_TMP");

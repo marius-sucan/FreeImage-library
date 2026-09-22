@@ -1,8 +1,7 @@
 CC = gcc
 CPP = g++
 
-# libfreeimage may be the static library, which carries undefined GOMP_*/omp_*
-# symbols when FreeImage was built with OpenMP (the default).
+# a static libfreeimage needs the OpenMP runtime
 include ../../Makefile.openmp
 
 COMPILERFLAGS = -O3

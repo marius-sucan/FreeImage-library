@@ -139,9 +139,7 @@ copyFaxFile(FreeImageIO *io, fi_handle handle, TIFF* tifin, uint32_t xsize, int 
 		_TIFFmemset(refbuf, 0, linesize);
 		row = 0;
 		badrun = 0;		// current run of bad lines 
-		// on corrupt input the decoder can return without consuming anything;
-		// stop when a row makes no progress, or this loop never ends
-		// (libtiff issue #759, fixed upstream in tools/fax2tiff.c)
+		// stop if a row consumes nothing, or corrupt input loops forever
 		uint16_t compression_in = COMPRESSION_CCITTFAX3;
 		TIFFGetField(tifin, TIFFTAG_COMPRESSION, &compression_in);
 		tmsize_t lastcc = tifin->tif_rawcc;

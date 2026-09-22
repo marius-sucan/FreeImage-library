@@ -96,8 +96,7 @@ extern "C"
 /* This cannot be in the extern C setting... */
 #include "libraw_const.h"
 #include "libraw_version.h"
-/* FreeImage: for the INT64/UINT64 typedefs below; an include does not belong
-   inside the extern "C" block either. */
+/* FreeImage: for INT64/UINT64 below */
 #ifndef _WIN32
 #include <stdint.h>
 #endif
@@ -111,11 +110,7 @@ extern "C"
   typedef __int64 INT64;
   typedef unsigned __int64 UINT64;
 #else
-/* FreeImage: these have to be the same types FreeImage.h gives INT64/UINT64,
-   and those are the <stdint.h> ones.  On LP64 int64_t is "long" and not
-   "long long", so upstream's spelling is a conflicting typedef in every
-   translation unit that includes both headers - PluginRAW.cpp does.
-   Keep this through LibRaw updates. */
+/* FreeImage: must match FreeImage.h's INT64/UINT64 */
 typedef int64_t INT64;
 typedef uint64_t UINT64;
 #endif

@@ -1,22 +1,5 @@
-/*
- * FreeImage 3 - JPEG 2000 round-trip regression test
- *
- * Saves every pixel format the J2K and JP2 plugins export, at a matrix of
- * image sizes and compression rates, through FreeImage's memory streams, and
- * reloads each result. Prints one line per combination (encoded size and an
- * order-sensitive checksum of the encoded bytes) and checks that
- *   - every save and reload succeeds and keeps the geometry and pixel type,
- *   - a rate of 1 (which OpenJPEG treats as lossless, 5/3 reversible) reloads
- *     pixel-exact for every format,
- *   - a file round-trip at the default rate works too.
- *
- * Encoded checksums change legitimately when the encoder changes (the 2.4.0
- * rework, for instance), so treat them as a record; the FAIL lines and the
- * final tally are the assertions. Exits non-zero on any failure.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files go to $J2K_TEST_TMP, or the current directory.
- */
+/* JPEG 2000 round trips: every export format, many sizes and rates */
+/* rate 1 must reload pixel-exact; checksums are a record, FAIL lines the test */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

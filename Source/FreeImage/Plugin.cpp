@@ -6,7 +6,7 @@
 // - Rui Lopes (ruiglopes@yahoo.com)
 // - Detlev Vendt (detlev.vendt@brillit.de)
 // - Petr Pytelka (pyta@lightcomp.com)
-// - Hervï¿½ Drolon (drolon@infonie.fr)
+// - Hervé Drolon (drolon@infonie.fr)
 //
 // This file is part of FreeImage 3
 //
@@ -479,9 +479,7 @@ FreeImage_Save(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, const char *filename, int f
 		fclose(handle);
 
 		if (!success) {
-			// whatever the plugin managed to write is a partial image; leaving it on disk
-			// hands the caller a file that looks saved but is not. The open above already
-			// truncated any previous contents, so there is nothing here left to preserve
+			// do not leave a partial image behind
 			remove(filename);
 		}
 
@@ -506,7 +504,6 @@ FreeImage_SaveU(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, const wchar_t *filename, i
 		fclose(handle);
 
 		if (!success) {
-			// see FreeImage_Save: do not leave a partial image behind
 			_wremove(filename);
 		}
 

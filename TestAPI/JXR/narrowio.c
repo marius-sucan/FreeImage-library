@@ -1,22 +1,10 @@
-/*
- * FreeImage 3 - JPEG XR regression test
- *
- * Emulates the LLP64 wall that FI_TellProc's 'long' return imposes on Win64:
- * tell_proc cannot report a position past LIMIT, exactly as ftell() cannot
- * report one past LONG_MAX. The plugin must not depend on it.
- *
- * To also exercise the stepped seek in _jxr_io_SetPos - unreachable where 'long'
- * is 64-bit - rebuild PluginJXR.o with -DFI_JXR_SEEK_STEP_MAX=4096; see README.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files are written to $JXR_TEST_TMP (default: the current directory).
- */
+/* FreeImage 3 - JPEG XR test: tell_proc capped like a 32-bit long */
+/* for the stepped seek: make narrowio-step */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
 
-/* Scratch files go to $JXR_TEST_TMP, or the current directory. */
 static const char *tmppath(const char *name) {
     static char buf[1024];
     const char *dir = getenv("JXR_TEST_TMP");
@@ -24,13 +12,7 @@ static const char *tmppath(const char *name) {
     return buf;
 }
 
-/* Two independent caps, because the plugin's two 'long' dependencies are separate:
-   TELL_CAP  - tell_proc cannot report past this. Always on: this is the wall that
-               used to abort a >2 GB save, and the fix must not depend on tell at all.
-   SEEK_CAP  - a single absolute SEEK_SET cannot reach past this. Off by default,
-               because the stepped seek that copes with it is unreachable where
-               'long' is 64-bit; pass a value as argv[1] after rebuilding
-               PluginJXR.o with a matching -DFI_JXR_SEEK_STEP_MAX (see README). */
+/* emulated 32-bit limits: tell always, seek only via argv[1] */
 static long  TELL_CAP = 4096;
 static long  SEEK_CAP = 0;          /* 0 = no cap */
 static int   g_tellFailures = 0;

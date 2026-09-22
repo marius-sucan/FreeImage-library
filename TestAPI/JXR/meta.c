@@ -1,19 +1,10 @@
-/*
- * FreeImage 3 - JPEG XR regression test
- *
- * A save carrying ICC + EXIF + XMP, exercising WriteMetadata's return check on
- * the way out and ReadProfile on the way back in. Pass a source image as argv[1];
- * defaults to raw_exif.jpg beside this test.
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files are written to $JXR_TEST_TMP (default: the current directory).
- */
+/* FreeImage 3 - JPEG XR metadata round trip (ICC, EXIF, XMP) */
+/* argv[1]: source image, default raw_exif.jpg */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
 
-/* Scratch files go to $JXR_TEST_TMP, or the current directory. */
 static const char *tmppath(const char *name) {
     static char buf[1024];
     const char *dir = getenv("JXR_TEST_TMP");

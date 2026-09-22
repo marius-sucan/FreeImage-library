@@ -3226,15 +3226,7 @@ static avifResult avifParseItemPropertiesBox(avifMeta * meta, uint64_t rawOffset
                     // BMFF (ISO/IEC 14496-12:2022) 8.11.14.1 - There shall be at most one
                     // ItemPropertyAssociationBox with a given pair of values of version and
                     // flags.
-                    //
-                    // FreeImage: upstream refuses the whole file here ("Multiple Box[ipma] with a
-                    // given pair of values of version and flags"), even with strict checks off.
-                    // Encoders exist that write one ipma box per item with the same version and
-                    // flags (link-u's cavif, whose output is the widely copied avif-sample-images
-                    // set), and such files open everywhere else. The associations stay
-                    // unambiguous because avifParseItemPropertyAssociation() above still refuses
-                    // an item that appears in more than one box, so the extra box is taken as a
-                    // continuation of the first and the pair is simply not recorded again.
+                    // FreeImage: tolerate a repeated ipma box (cavif writes one per item)
                     versionAndFlagsAlreadySeen = AVIF_TRUE;
                     break;
                 }
@@ -4539,8 +4531,7 @@ static avifResult avifParseMinimizedImageBox(avifDecoderData * data,
         colorItem->premByID = alphaIsPremultiplied;
         avifProperty * alphaAuxProp = avifMetaCreateProperty(meta, "auxC");
         AVIF_CHECKERR(alphaAuxProp, AVIF_RESULT_OUT_OF_MEMORY);
-        // FreeImage: spelled with the C11 keyword rather than the <assert.h> macro, because the
-        // FreeImage makefiles compile C as -std=c99, where <assert.h> does not define static_assert.
+        // FreeImage: _Static_assert, as -std=c99 has no static_assert macro
         _Static_assert(sizeof(alphaAuxProp->u.auxC.auxType) >= sizeof(AVIF_URN_ALPHA0), "");
         memcpy(alphaAuxProp->u.auxC.auxType, AVIF_URN_ALPHA0, sizeof(AVIF_URN_ALPHA0));
         AVIF_CHECKERR(avifDecoderItemAddProperty(alphaItem, alphaAuxProp), AVIF_RESULT_OUT_OF_MEMORY);
@@ -5303,10 +5294,7 @@ avifResult avifDecoderParse(avifDecoder * decoder)
 {
     avifDiagnosticsClearError(&decoder->diag);
 
-    // FreeImage: upstream also refuses an imageSizeLimit above AVIF_DEFAULT_IMAGE_SIZE_LIMIT
-    // (16384 x 16384) as "not yet implemented", which would cap AVIF at 268 megapixels. The
-    // size arithmetic below is overflow-checked and done in size_t (see avifImageAllocatePlanes),
-    // and FreeImage handles gigapixel bitmaps, so only the reserved value 0 is refused here.
+    // FreeImage: no 16384x16384 cap, only 0 is refused
     if (decoder->imageSizeLimit == 0) {
         return AVIF_RESULT_NOT_IMPLEMENTED;
     }

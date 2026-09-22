@@ -1,22 +1,5 @@
-/*
- * FreeImage 3 - WebP decode test
- *
- * Loads the files of data/ and checks the geometry, the decoded pixels and the
- * attached metadata against a recorded table, plus format detection, a memory
- * stream and a header-only load for each.
- *
- * The corpus is the point. Every file here was written by the libwebp 1.2.1
- * that FreeImage bundled until the 1.6.0 upgrade, so the table below records
- * what *that* encoder produced and what *its* decoder read back. The WebP
- * bitstream is normative: any later libwebp must decode these to exactly the
- * same pixels. That makes this the cross-version oracle for the next upgrade,
- * and the files cannot be regenerated once the old encoder is gone - keep
- * them.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- *   ./decode            check against the table
- *   ./decode --record   reprint the table (only when a change is deliberate)
- */
+/* WebP decode test: data/ against the table below */
+/* data/ is a cross-version oracle: never regenerate it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -51,8 +34,7 @@ static void fail(const char *file, const char *what, const char *fmt, ...) {
     failures++;
 }
 
-/* Hash the visible pixels only: the rows GetScanLine hands back are padded to a
-   4-byte pitch and the padding is not part of the image. */
+/* visible pixels only, padding excluded */
 static unsigned long long digest(FIBITMAP *dib) {
     unsigned long long h = 1469598103934665603ULL;
     unsigned w = FreeImage_GetWidth(dib), ht = FreeImage_GetHeight(dib);
@@ -139,7 +121,7 @@ int main(int argc, char **argv) {
                    e->file, e->width, e->height, e->bpp, icc, xmp, exif);
         }
 
-        /* a header-only load must agree about the image without decoding it */
+        /* a header-only load must agree */
         hdr_only = FreeImage_Load(FIF_WEBP, e->file, FIF_LOAD_NOPIXELS);
         if (!hdr_only) {
             fail(e->file, "header-only", "returned NULL");
@@ -151,7 +133,7 @@ int main(int argc, char **argv) {
             FreeImage_Unload(hdr_only);
         }
 
-        /* and the same bytes through a memory stream must decode identically */
+        /* a memory stream must decode identically */
         raw = slurp(e->file, &len);
         if (!raw) {
             fail(e->file, "read", "could not read the file");

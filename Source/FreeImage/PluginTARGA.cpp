@@ -243,7 +243,7 @@ public:
 	}
 	
 	inline
-	BYTE* getBytes(size_t count /*must be <= _size - the caller sizes the cache to guarantee it*/) {
+	BYTE* getBytes(size_t count /*must be <= _size*/) {
 		assert(count <= _size);
 		if (_ptr + count >= _end) {
 			
@@ -596,10 +596,7 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 	}
 	long sz = (remaining_size / height);
 
-	// ...but never below one pixel.  getBytes() hands back a pointer and assumes
-	// count bytes are behind it; the file chooses this size, so pixel data
-	// averaging fewer than bPP/8 bytes per row would otherwise build a cache
-	// smaller than a single getBytes(file_pixel_size) call can satisfy.
+	// ...but at least one pixel: getBytes() assumes that many bytes
 	if (sz < file_pixel_size) {
 		sz = file_pixel_size;
 	}
@@ -626,13 +623,7 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 		BYTE packet_count = rle + 1;
 
 		//packet_count might be corrupt, test if we are not about to write beyond the last image bit
-		//
-		// NB this measures the packet as if its pixels were contiguous, but x
-		// wraps at line_size while line_bits moves on by a whole pitch: every row
-		// the packet crosses costs pitch - line_size bytes this does not count.
-		// It is a cheap early rejection, not the bound - see the per-pixel test
-		// in the loops below, which is what actually keeps the writes inside the
-		// bitmap when line_size is not a multiple of 4.
+		// only an early rejection; the per-pixel test below is the bound
 
 		if ((line_bits+x) + packet_count*pixel_size > dib_end) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_CORRUPTED);

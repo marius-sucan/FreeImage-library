@@ -1,26 +1,8 @@
-# HEIF regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first: make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan-run   rebuild the plugin, libheif and libde265 with AddressSanitizer into
-#                   a private copy of the library and run the tests against it
-#   make narrowio-step
-#                   run narrowio against a plugin built with a 4 KB seek step, which
-#                   exercises the stepped seek that only Win64's 32-bit 'long' reaches
-#   make thirdparty-run
-#                   download the third-party samples into samples/ (fetch_samples.sh,
-#                   see samples/README.md) and run 'thirdparty' on them; not part of
-#                   'make run', which needs nothing but this directory
-#   make thirdparty-asan-run
-#                   the same against the AddressSanitizer copy of the library
-#
-# Scratch files go to $HEIF_TEST_TMP, or the current directory.
+# HEIF tests; needs Dist/libfreeimage.a. Scratch files: $HEIF_TEST_TMP or cwd
+# targets: run asan-run narrowio-step thirdparty-run thirdparty-asan-run
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
-# the per-library compiler flags of the two HEIF libraries (C++17/20, SIMD, defines)
 include ../../Makefile.heif
 
 TESTS   = decode narrowio sequence
@@ -28,7 +10,7 @@ CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
-# the flags Makefile.gnu compiles the library's C++ files with, seen from this directory
+# Makefile.gnu's C++ flags, relative to here
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden -D__ANSI__ $(OPENMP_CFLAGS)
 HEIF_PRE    = $(subst -ISource,-I../../Source,$(LIBHEIF_CXXFLAGS_PRE))
@@ -54,7 +36,6 @@ clean: clean-bin
 .PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step thirdparty-run thirdparty-asan-run
 
 # --- third-party samples -----------------------------------------------------
-# Files other encoders wrote, which the repository does not carry (samples/README.md).
 thirdparty: thirdparty.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) thirdparty.c -o $@ $(LIB)
 
@@ -68,9 +49,7 @@ thirdparty-asan-run: libfreeimage-asan.a
 	./thirdparty-asan
 
 # --- AddressSanitizer -------------------------------------------------------
-# Only the HEIF plugin, libheif and libde265 are instrumented; the rest of the
-# library is taken as built. Mixing instrumented and plain objects is fine.
-# libde265's x86 kernels get the same per-file SIMD flags as in Makefile.heif.
+# instruments only the HEIF plugin, libheif and libde265
 HEIF_CC  = $(wildcard ../../Source/LibHEIF/libheif/*.cc ../../Source/LibHEIF/libheif/*/*.cc ../../Source/LibHEIF/libheif/*/*/*.cc)
 DE265_CC = $(wildcard ../../Source/LibDe265/libde265/*.cc)
 ifneq (,$(filter x86_64 amd64 i86pc i386 i486 i586 i686,$(HEIF_MACHINE)))
@@ -97,10 +76,7 @@ asan-run: libfreeimage-asan.a
 	./decode-asan && ./narrowio-asan && ./sequence-asan
 
 # --- stepped seek -----------------------------------------------------------
-# HEIF_SeekTo reaches offsets beyond FI_HEIF_SEEK_STEP_MAX by rewinding and
-# stepping forward. Where 'long' is 64-bit that branch is unreachable, so it
-# would otherwise ship to Windows untested. Rebuild the plugin with a tiny step
-# into a private copy of the library and run narrowio with a matching cap.
+# runs narrowio against a 4 KB seek step (the Win64-only path)
 narrowio-step: narrowio.c ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginHEIF.cpp
 	rm -rf step-obj && mkdir -p step-obj
 	cp ../../Dist/libfreeimage.a libfreeimage-narrowstep.a

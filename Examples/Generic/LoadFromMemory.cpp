@@ -28,28 +28,17 @@
 
 // ----------------------------------------------------------
 
-// The read position within the buffer. `handle`, below, is where the buffer
-// starts, so the two together say how far into it we are.
+// read position; handle is the buffer start
 fi_handle g_load_address;
 
-// How long the buffer is. A plugin is entitled to seek to the end of its input
-// to find out how big it is - several of them do - so the size has to be known
-// here as well; the original example asserted that it would never be asked.
+// buffer size, for SEEK_END
 long g_buffer_size;
 
 // ----------------------------------------------------------
 
-// DLL_CALLCONV, not _stdcall: FreeImage declares its four I/O callbacks with
-// that macro, which is __stdcall only where the platform wants it and nothing
-// anywhere else. Spelling the convention out by hand does not compile off MSVC.
-
 static unsigned DLL_CALLCONV
 _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
-	// Stop at the end of the buffer and report how many whole items came out.
-	// A plugin may ask for more than is left - several do, on the last read of
-	// a stream - and the original of this example answered with whatever
-	// followed the buffer in memory, which is why it crashed on any file whose
-	// size it had not been told in advance.
+	// stop at the end of the buffer; return whole items read
 	BYTE *start = (BYTE *)handle;
 	BYTE *position = (BYTE *)g_load_address;
 	long remaining = g_buffer_size - (long)(position - start);
@@ -90,9 +79,6 @@ _SeekProc(fi_handle handle, long offset, int origin) {
 
 static long DLL_CALLCONV
 _TellProc(fi_handle handle) {
-	// how far into the buffer we are. Subtract the pointers themselves: casting
-	// each to int first, as this example used to, throws away the top half of
-	// every address on a 64-bit machine.
 	assert((BYTE *)g_load_address >= (BYTE *)handle);
 
 	return (long)((BYTE *)g_load_address - (BYTE *)handle);
@@ -116,9 +102,7 @@ main(int argc, char *argv[]) {
 	io.tell_proc  = _TellProc;
 	io.seek_proc  = _SeekProc;
 
-	// read the file into memory. Of course you can get the bytes any way you
-	// want - off the network, out of a resource, from a parent format that
-	// embeds this one - which is the whole point of loading from a handle.
+	// read the file into memory; any source will do
 
 	FILE *file = fopen(filename, "rb");
 
@@ -130,13 +114,12 @@ main(int argc, char *argv[]) {
 		BYTE *test = new BYTE[file_size];
 
 		if (fread(test, 1, file_size, file) == (size_t)file_size) {
-			// we store the load address and the length of the bitmap for
-			// internal reasons: the i/o functions above need both
+			// the i/o callbacks need the address and the length
 
 			g_load_address = test;
 			g_buffer_size = file_size;
 
-			// work out the format from the bytes themselves, then convert
+			// detect the format, then convert
 
 			FREE_IMAGE_FORMAT fif = FreeImage_GetFileTypeFromHandle(&io, (fi_handle)test, 0);
 

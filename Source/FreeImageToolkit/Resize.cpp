@@ -136,21 +136,7 @@ GetRGBAPalette(FIBITMAP *dib, RGBQUAD * const buffer) {
 	return buffer;
 }
 
-/**
-Returns the number of samples that make up one pixel of the given bitmap:
-1 for FIT_UINT16 and FIT_FLOAT, 3 for FIT_RGB16 and FIT_RGBF, 4 for FIT_RGBA16
-and FIT_RGBAF.
-
-The divisor has to be the width of the *image*.  FreeImage_GetLine() is the
-length of a whole source row, whereas the src_width and width parameters of the
-two filter methods are the width of the rectangle being rescaled, which
-FreeImage_RescaleRect lets the caller make narrower than the image.  Dividing by
-the rectangle overstates the sample count, and the result is used to step the
-destination pointer as well as the source one.
-@param dib A pointer to a FreeImage bitmap
-@param sample_size sizeof(WORD) or sizeof(float), according to the image type
-@return Returns the number of samples per pixel
-*/
+// samples per pixel, from the image width (not the rectangle's)
 static inline INT64
 SamplesPerPixel(FIBITMAP *dib, size_t sample_size) {
 	return (INT64)((FreeImage_GetLine(dib) / FreeImage_GetWidth(dib)) / sample_size);
@@ -172,8 +158,6 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 	m_bValid = FALSE;
 
 	if((uDstSize == 0) || (uSrcSize == 0)) {
-		// no destination pixels to weight, or nothing to weight them against;
-		// dScale below would be zero or infinite
 		return;
 	}
 
@@ -190,15 +174,7 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 	// allocate a new line contributions structure
 	//
 	// window size is the number of sampled pixels
-	//
-	// 2 * ceil(dWidth) + 1 was computed in int, and dWidth is the filter width
-	// divided by the caller's scale factor: a Lanczos3 minification down to one
-	// pixel makes it 3 * uSrcSize, so the int overflows once the source line is
-	// wider than about 358 million samples - a 45 MB 1-bit bitmap.  The wrapped
-	// value asked malloc for tens of gigabytes; malloc refused, and the weight
-	// loop below wrote through the NULL it had stored.  No window can usefully
-	// be wider than the source line anyway, since iLeft is clamped to 0 and
-	// iRight to uSrcSize, so cap it there and keep the arithmetic in double.
+	// in double, capped at uSrcSize: int overflows
 	const double dWindow = 2.0 * ceil(dWidth) + 1.0;
 	m_WindowSize = (dWindow >= (double)uSrcSize) ? uSrcSize : (unsigned)dWindow;
 	if(m_WindowSize == 0) {
@@ -208,11 +184,7 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 	m_LineLength = uDstSize; 
 
 	 // allocate list of contributions 
-	//
-	// calloc rather than malloc: it refuses a product that would overflow, which
-	// m_LineLength * sizeof(Contribution) does on a 32-bit size_t, and it leaves
-	// the Weights pointers NULL so that the destructor can run over a partly
-	// built table.
+	// calloc: overflow-checked, NULL Weights let the destructor run
 	m_WeightTable = (Contribution*)calloc(m_LineLength, sizeof(Contribution));
 	if(!m_WeightTable) {
 		m_LineLength = 0;
@@ -236,15 +208,7 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 		const double dCenter = (double)u / dScale + dOffset;
 
 		// find the significant edge points that affect the pixel
-		//
-		// dCenter and dWidth are both driven by the caller's ratio and are not
-		// bounded by anything, so converting them to int is not value-preserving.
-		// Out of range the conversion yields INT_MIN on x86, which made iRight
-		// negative; iTrailing = iRight - iLeft - 1 then wrapped the other way to
-		// INT_MAX and the trailing-zero trim below read Weights[2147483647].
-		// Clamp in double, where the whole range is representable, and convert
-		// afterwards.  For values that were in range this is the same answer:
-		// both casts truncate towards zero on operands that are already positive.
+		// clamp in double, then convert: the ratio is unbounded
 		const double dLeft = dCenter - dWidth + 0.5;
 		const double dRight = dCenter + dWidth + 0.5;
 		const int iLeft = (dLeft <= 0.0) ? 0
@@ -273,11 +237,6 @@ CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigne
 
 		// simplify the filter, discarding null weights at the right
 		{
-			// iTrailing is Right - Left - 1 throughout, so testing it before the
-			// subscript both keeps the read in bounds for an empty window and stops
-			// the walk once the window has been emptied.  The Right == Left test it
-			// replaces could do neither: it ran after the first read, and Right is
-			// unsigned, so once it wrapped below Left it never matched again.
 			int iTrailing = iRight - iLeft - 1;
 			while((iTrailing >= 0) && (m_WeightTable[u].Weights[iTrailing] == 0)) {
 				m_WeightTable[u].Right--;
@@ -314,18 +273,7 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	if (src_bpp <= 8) {
 		color_type = GetExtendedColorType(src, &bIsGreyscale);
 		if (src_bpp == 4) {
-			// A 4-bit source always has to have its palette handed to the filters.
-			// The 1-bit branches below can stand in for a missing one (the bit is
-			// black or white) and so can the 8-bit ones (the index is the grey
-			// level), but there is no such identity at 4 bpp: only the palette says
-			// what grey an index means.  GetExtendedColorType applies the 8-bit ramp
-			// test, pal[i].rgbBlue == i, to 4-bit palettes as well, so pal[i] =
-			// {i,i,i} - sixteen near-black greys - came back FIC_MINISBLACK,
-			// src_pal stayed NULL, and all six 4-bit branches dereferenced it under
-			// the comment "we always have got a palette for 4-bit images".  Every
-			// 4-bit palette that reaches FIC_MINISBLACK or FIC_MINISWHITE has that
-			// problem, so send them all down the palette path, which resolves the
-			// entries itself and needs no ramp assumption.
+			// 4-bit always needs its palette: only it says what an index means
 			color_type = FIC_PALETTE;
 		}
 	} else {
@@ -376,12 +324,7 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	}
 
 	if (rawBits && (dst_bpp != src_bpp)) {
-		// FreeImage_RescaleRawBits has a single bpp parameter, and the caller sized
-		// dst_bits and dst_pitch for it.  The rules above may well have picked a
-		// different destination depth - a 16-bit FIT_BITMAP always promotes to 24,
-		// and so does a non-greyscale palette - and there is no way to tell the
-		// caller, so writing dst_bpp pixels into a buffer laid out for src_bpp would
-		// simply overrun it.  Refuse instead.
+		// the caller's buffer is laid out for src_bpp
 		return NULL;
 	}
 
@@ -422,12 +365,7 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	// provide the source image's palette to the rescaler for
 	// FIC_PALETTE type images (this includes palletized greyscale
 	// images with an unordered palette as well as transparent images)
-	//
-	// A FIC_MINISWHITE source normally carries its inversion in the destination's
-	// own palette, built a few lines below - but only an 8-bit destination has a
-	// palette to carry it.  With FI_RESCALE_TRUE_COLOR the destination is 24-bit,
-	// nothing inverted it, and the filters emitted the raw index as a grey level,
-	// which for MINISWHITE is exactly backwards.  Hand them the palette instead.
+	// also MINISWHITE when dst has no palette to carry the inversion
 	if ((color_type == FIC_PALETTE) || ((color_type == FIC_MINISWHITE) && (dst_bpp != 8))) {
 		if (dst_bpp == 32) {
 			// a 32-bit destination image signals transparency, so
@@ -447,9 +385,6 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
       dst = FreeImage_AllocateT(image_type, dst_width, dst_height, dst_bpp, 0, 0, 0);
    }
    if (!dst) {
-      // Allocation failure is the expected outcome for the very large images this
-      // path exists for, and everything below writes through dst without testing it
-      // - GetPalette, the two filter methods and GetScanLine all take it as given.
       return NULL;
    }
 
@@ -648,7 +583,6 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
    // allocate and calculate the contributions
    CWeightsTable weightsTable(m_pFilter, dst_width, src_width);
    if(!weightsTable.isValid()) {
-      // every loop below indexes the table without testing it
       return FALSE;
    }
 
@@ -663,14 +597,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   case 8:
                   {
                      // transparently convert the 1-bit non-transparent greyscale image to 8 bpp
-                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
-                     // walk below then started at the byte holding the rectangle's first pixel
-                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
-                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
-                     // was given - and none beyond its right edge, the width having come along
-                     // with the offset.  Keep the remainder and add it to the sample index: the
-                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
-                     // is (left+width-1)/8.
+                     // keep the bit remainder of the left edge
                      const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      if (src_pal) {
@@ -733,14 +660,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   case 24:
                   {
                      // transparently convert the non-transparent 1-bit image to 24 bpp
-                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
-                     // walk below then started at the byte holding the rectangle's first pixel
-                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
-                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
-                     // was given - and none beyond its right edge, the width having come along
-                     // with the offset.  Keep the remainder and add it to the sample index: the
-                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
-                     // is (left+width-1)/8.
+                     // keep the bit remainder of the left edge
                      const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      if (src_pal) {
@@ -815,14 +735,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the transparent 1-bit image to 32 bpp; 
                      // we always have got a palette here
-                     // src_offset_x is a pixel column, and >>= 3 dropped its three low bits: the
-                     // walk below then started at the byte holding the rectangle's first pixel
-                     // rather than at the pixel itself, so a FreeImage_RescaleRect whose left is
-                     // not a multiple of 8 sampled up to seven columns to the left of the ones it
-                     // was given - and none beyond its right edge, the width having come along
-                     // with the offset.  Keep the remainder and add it to the sample index: the
-                     // byte it lands in is still inside the row, since (left>>3) + (width-1+left%8)/8
-                     // is (left+width-1)/8.
+                     // keep the bit remainder of the left edge
                      const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      #pragma omp parallel for schedule(dynamic) default(shared)
@@ -871,8 +784,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the non-transparent 4-bit greyscale image to 8 bpp; 
                      // we always have got a palette for 4-bit images
-                     // the same for 4-bit, where the remainder is one nibble: an odd left
-                     // rescaled the columns of the even one below it
+                     // keep the nibble remainder of the left edge
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
@@ -906,8 +818,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the non-transparent 4-bit image to 24 bpp; 
                      // we always have got a palette for 4-bit images
-                     // the same for 4-bit, where the remainder is one nibble: an odd left
-                     // rescaled the columns of the even one below it
+                     // keep the nibble remainder of the left edge
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
@@ -948,8 +859,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                   {
                      // transparently convert the transparent 4-bit image to 32 bpp; 
                      // we always have got a palette for 4-bit images
-                     // the same for 4-bit, where the remainder is one nibble: an odd left
-                     // rescaled the columns of the even one below it
+                     // keep the nibble remainder of the left edge
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
@@ -1481,7 +1391,6 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
    // allocate and calculate the contributions
    CWeightsTable weightsTable(m_pFilter, dst_height, src_height);
    if(!weightsTable.isValid()) {
-      // every loop below indexes the table without testing it
       return FALSE;
    }
 
@@ -1497,9 +1406,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
                const BYTE * const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 3);
-               // src_base is rounded down to a byte; the columns below are counted from
-               // the rectangle's left edge, so they have to carry the three bits that
-               // rounding dropped
+               // src_base is byte-aligned: carry the dropped bits
                const INT64 src_bit_offset = src_offset_x & 0x07;
 
                switch(FreeImage_GetBPP(dst)) {
@@ -1530,9 +1437,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                                  value += (weightsTable.getWeight(y, i) * (double)*(BYTE *)&src_pal[pixel]);
                                  src_bits += src_pitch;
                               }
-                              // no *= 0xFF here: value is a weighted average of
-                              // palette bytes and is already 0..255.  The three
-                              // branches that do scale by 255 average *bits*.
+                              // already 0..255: averaged palette bytes, not bits
 
                               // clamp and place result in destination pixel
                               *dst_bits = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
@@ -1699,7 +1604,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
                const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 1);
-               // and the nibble that rounding dropped here
+               // and the dropped nibble
                const INT64 src_nibble_offset = src_offset_x & 0x01;
 
                switch(FreeImage_GetBPP(dst)) {

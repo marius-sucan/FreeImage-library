@@ -18,14 +18,7 @@
  * along with libheif.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * FreeImage: this is heif_version.h.in as libheif's own build system (CMake)
- * would generate it for release 1.23.4. FreeImage compiles libheif from a flat
- * list of sources with no configure step, so the values are spelled out here.
- * Update them when the bundled libheif is updated. The plugin directory is
- * empty on purpose: the libde265 decoder is compiled in and dynamic plugin
- * loading (ENABLE_PLUGIN_LOADING) is not built.
- */
+/* FreeImage: heif_version.h.in filled in for 1.23.4 */
 
 #ifndef LIBHEIF_HEIF_VERSION_H
 #define LIBHEIF_HEIF_VERSION_H

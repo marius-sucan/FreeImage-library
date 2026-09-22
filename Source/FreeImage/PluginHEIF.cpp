@@ -1,8 +1,5 @@
 // ==========================================================
-// HEIF Loader
-//
-// High Efficiency Image File Format (HEIF / HEIC) decoder, built on libheif
-// (Source/LibHEIF) with libde265 (Source/LibDe265) as the HEVC decoder.
+// HEIF Loader (libheif + libde265)
 //
 // This file is part of FreeImage 3
 //
@@ -19,84 +16,7 @@
 // Use at your own risk!
 // ==========================================================
 //
-// What this plugin does
-// ---------------------
-// - Loads HEIC images: HEIF files whose images are HEVC-coded, which is what the
-//   iPhone and most other phone cameras, Canon, Sony (.hif) and Samsung write.
-//   Grid images (a phone photo is a mosaic of 512 x 512 tiles), identity-derived
-//   and overlay images are composed by libheif, and the transformative properties
-//   are applied by libheif in the order the HEIF/MIAF standards require: clean
-//   aperture ('clap'), then rotation ('irot'), then mirroring ('imir'). What comes
-//   back is the image as it is meant to be displayed. The advisory Exif orientation
-//   tag is passed through untouched in the Exif metadata, like every other plugin
-//   does.
-// - A file with several top-level images opens as a multi-page bitmap, one page per
-//   image with the primary image first, so page 0 is what FreeImage_Load returns.
-// - HEIF image sequences - animated HEIC, the 'msf1' / 'hevc' brands, often named
-//   .heics - open as a multi-page bitmap too, one page per frame, and every page
-//   carries the FIMD_ANIMATION tags GIF, APNG, WebP and AVIF give theirs: "FrameTime"
-//   (that frame's own duration, in milliseconds), "Loop", the canvas in
-//   "LogicalWidth"/"LogicalHeight", and where the frame sits on it. A file that holds
-//   both still images and a sequence is read the way its major brand says it is meant
-//   to be read: an image sequence brand gives the frames, an image brand the images,
-//   and anything else the frames - libavif's rule for AVIF, which has the same choice.
-// - HEIF_PLAYBACK hands a sequence over the way a player wants it: every frame comes
-//   back as a 32-bit image whatever the file's depth, so one loop can walk a HEIF
-//   animation and a GIF, APNG, WebP or AVIF one. Nothing is composited - a HEIF frame
-//   is a complete picture already - and a still image has nothing to play and ignores it.
-// - 8-bit content becomes a 24-bit or (with alpha) 32-bit FIT_BITMAP; 10- and 12-bit
-//   content becomes FIT_RGB16 / FIT_RGBA16, scaled to the full 16-bit range;
-//   monochrome content without alpha becomes 8-bit greyscale or FIT_UINT16.
-//   Premultiplied alpha is undone, so the pixels always carry straight alpha.
-// - ICC profiles, Exif (raw and parsed) and XMP are attached to the bitmap. The
-//   file's thumbnail image ('thmb'), when it has one, is attached as the bitmap's
-//   thumbnail (FreeImage_GetThumbnail), as the JPEG plugin does with the Exif
-//   thumbnail.
-// - Decoding uses every core: libheif decodes the tiles of a grid image in parallel
-//   and libde265 runs worker threads within a picture.
-//
-// What it does not do
-// -------------------
-// - It cannot save: no HEVC encoder is bundled. FreeImage_FIFSupportsWriting(FIF_HEIF)
-//   returns FALSE.
-// - HDR content (PQ or HLG transfer characteristics) is returned as encoded, without
-//   tone mapping; the CICP color description is not exposed.
-// - HEVC payloads are decoded by libde265; JPEG, ISO/IEC 23001-17 uncompressed and
-//   JPEG 2000 payloads by libheif's own decoder plugins, wired to the LibJPEG,
-//   ZLib and LibOpenJPEG that FreeImage already bundles. HEIF files carrying AV1
-//   (AVIF) belong to the AVIF plugin and are not claimed by FreeImage_GetFileType().
-//   A file whose payload is AVC (H.264) or VVC (H.266) is recognised as HEIF but
-//   fails to load with an explicit message: neither decoder is bundled. Depth maps,
-//   gain maps and auxiliary images other than alpha are not surfaced.
-// - Of an image sequence, what libheif decodes is what comes back: every sample of
-//   the track is a frame, in the order the decoder presents them. Its edit list is
-//   read for the loop count only (a pause or a jump in it is not played), a sample
-//   the file marks as not for display is shown like the others, and a 'clap' or
-//   'pasp' in the sample entry is not applied - libheif 1.23 does none of these for
-//   tracks either.
-//
-// The whole file is streamed through FreeImageIO on demand (libheif's heif_reader
-// interface), so a header-only load (FIF_LOAD_NOPIXELS) reads the metadata boxes
-// but not the compressed image data.
-//
-// Image sequences
-// ---------------
-// libheif decodes a track forwards and nothing else: heif_track_decode_next_image()
-// hands over the next frame, with no frame count, no seeking and no way back.
-// FreeImage's pages are random access, so:
-// - the frame count and every frame's duration come from the track's own sample
-//   tables ('stts', 'ctts'), read here from the file. libheif reports no count, and the
-//   duration it attaches to a decoded frame is looked up with the next sample to be
-//   pushed into the decoder rather than the one that came out of it
-//   (sequences/track_visual.cc), so it belongs to a later frame;
-// - the track is decoded in order and the frame last handed over is kept, so reading an
-//   animation from its first page to its last decodes each frame once, and asking for
-//   the same page again costs a copy. A page behind the one last read starts the track
-//   over from its first frame - a fresh parse of the file, which is the only way back
-//   libheif has - so reading a sequence backwards costs O(n) decodes per page;
-// - libheif's x265 writer pads a frame narrower or lower than 64 pixels, or of an odd
-//   size, and records the real size in the sample entry alone, with no 'clap': a
-//   decoded frame larger than its sample entry says is cropped to it, from the top left.
+// Read-only. Pages: the top-level images (primary first) or a sequence's frames.
 //
 // Code generated by Marius Șucan with Anthropic Claude
 // ==========================================================
@@ -118,7 +38,6 @@
 
 #include "../Metadata/FreeImageTag.h"
 
-// libheif is linked in statically: its Windows headers must not declare its API dllimport
 #ifndef LIBHEIF_STATIC_BUILD
 #define LIBHEIF_STATIC_BUILD
 #endif
@@ -135,14 +54,8 @@ static int s_format_id;
 //   Threads
 // ----------------------------------------------------------
 
-/** No point in more decoder threads than this for a single image */
 #define FI_HEIF_MAX_THREADS 64
 
-/**
-Number of logical processors, for libheif's parallel tile decoding and
-libde265's worker threads.
-@return Returns a value between 1 and FI_HEIF_MAX_THREADS
-*/
 static int
 GetProcessorCount() {
 	int count = 1;
@@ -169,34 +82,26 @@ GetProcessorCount() {
 //   heif_reader over FreeImageIO
 // ----------------------------------------------------------
 
-/**
-The largest offset a single absolute seek_proc call can express: seek_proc takes
-a 'long', which is 32-bit on Win64. Overridable so the stepped path below can be
-exercised where 'long' is 64-bit (see TestAPI/HEIF).
-*/
 #ifndef FI_HEIF_SEEK_STEP_MAX
 #define FI_HEIF_SEEK_STEP_MAX LONG_MAX
 #endif
 
-/** read_proc takes an 'unsigned' size: read at most this much per call */
+/** read_proc takes an 'unsigned' size */
 #define FI_HEIF_READ_CHUNK 0x40000000u
 
 typedef struct tagHEIFStream {
-	FreeImageIO *io;		//! FreeImage I/O functions
-	fi_handle handle;		//! FreeImage I/O handle
-	long base;				//! stream position of the first HEIF byte
-	uint64_t position;		//! current position, relative to 'base' (kept here: tell_proc cannot express it everywhere)
-	BOOL size_known;		//! TRUE when 'size' is meaningful
-	uint64_t size;			//! bytes from 'base' to the end of the stream (see size_known)
-	uint64_t budget;		//! when not 0, the most bytes reads may hand over before they fail (see SetReadBudget)
-	uint64_t spent;			//! bytes handed over against the budget
-	BOOL overspent;			//! a read was refused for going over the budget
+	FreeImageIO *io;
+	fi_handle handle;
+	long base;				//! stream offset of the first HEIF byte
+	uint64_t position;		//! relative to 'base'
+	BOOL size_known;
+	uint64_t size;			//! bytes from 'base' to the end
+	uint64_t budget;		//! read cap in bytes, 0 = none
+	uint64_t spent;
+	BOOL overspent;
 } HEIFStream;
 
-/**
-Move the stream to 'base + offset'. Offsets that do not fit in a 'long' are
-reached by rewinding to the base and walking forward in steps that do.
-*/
+/** seek to base + offset, stepping past what a 'long' holds */
 static BOOL
 HEIF_SeekTo(HEIFStream *s, uint64_t offset) {
 	const long span = (s->base <= FI_HEIF_SEEK_STEP_MAX) ? (FI_HEIF_SEEK_STEP_MAX - s->base) : 0;
@@ -217,22 +122,13 @@ HEIF_SeekTo(HEIFStream *s, uint64_t offset) {
 	return TRUE;
 }
 
-/**
-Is there a byte at 'offset'? The stream position is undefined afterwards.
-*/
+/** is there a byte at 'offset'? Leaves the position undefined */
 static BOOL
 HEIF_Probe(HEIFStream *s, uint64_t offset) {
 	BYTE b;
 	return (HEIF_SeekTo(s, offset) && (s->io->read_proc(&b, 1, 1, s->handle) == 1)) ? TRUE : FALSE;
 }
 
-/**
-The stream length when tell_proc cannot report it: a 'long' is 32-bit on Win64,
-so past 2 GB the end is out of its reach. libheif needs an exact answer from
-wait_for_file_size() (it bisects the length with it), so walk forward in the
-largest expressible steps until a read fails, then bisect the last step.
-@return Returns FALSE when the stream misbehaves (reads keep succeeding after 64 steps)
-*/
 static BOOL
 HEIF_MeasureStream(HEIFStream *s) {
 	const uint64_t step = (uint64_t)FI_HEIF_SEEK_STEP_MAX;
@@ -268,18 +164,14 @@ HEIF_MeasureStream(HEIFStream *s) {
 	return TRUE;
 }
 
-/**
-libheif callback: the current position, relative to the first HEIF byte. Kept by
-the seek and read callbacks rather than asked of tell_proc, whose 'long' cannot
-express positions past 2 GB on Win64 (and libheif does ask for it while parsing).
-*/
+/** libheif callback: tracked position; tell_proc is 32-bit on Win64 */
 static int64_t
 HEIF_GetPosition(void *userdata) {
 	HEIFStream *s = (HEIFStream*)userdata;
 	return (s->position <= (uint64_t)INT64_MAX) ? (int64_t)s->position : INT64_MAX;
 }
 
-/** libheif callback: read exactly 'size' bytes; 0 on success (heif_reader contract) */
+/** libheif callback: read exactly 'size' bytes, 0 on success */
 static int
 HEIF_Read(void *data, size_t size, void *userdata) {
 	HEIFStream *s = (HEIFStream*)userdata;
@@ -305,7 +197,7 @@ HEIF_Read(void *data, size_t size, void *userdata) {
 	return (total == size) ? 0 : -1;
 }
 
-/** libheif callback: absolute seek; 0 on success (heif_reader contract) */
+/** libheif callback: absolute seek, 0 on success */
 static int
 HEIF_Seek(int64_t position, void *userdata) {
 	HEIFStream *s = (HEIFStream*)userdata;
@@ -319,11 +211,7 @@ HEIF_Seek(int64_t position, void *userdata) {
 	return 0;
 }
 
-/**
-libheif callback: is the stream at least 'target_size' bytes long? libheif also
-uses this to find the exact stream length by bisection, so the answer must be
-exact whenever the length is known.
-*/
+/** libheif callback: must be exact, libheif bisects the length with it */
 static heif_reader_grow_status
 HEIF_WaitForFileSize(int64_t target_size, void *userdata) {
 	HEIFStream *s = (HEIFStream*)userdata;
@@ -331,14 +219,12 @@ HEIF_WaitForFileSize(int64_t target_size, void *userdata) {
 		return heif_reader_grow_status_size_beyond_eof;
 	}
 	if(!s->size_known) {
-		// the length could not be measured either (see HEIF_MeasureStream): be optimistic,
-		// a read past the end fails on its own
+		// unknown length: optimistic, a read past the end fails anyway
 		return heif_reader_grow_status_size_reached;
 	}
 	return ((uint64_t)target_size <= s->size) ? heif_reader_grow_status_size_reached : heif_reader_grow_status_size_beyond_eof;
 }
 
-/** version 1 of the reader interface: no range requests, libheif reads what it needs */
 static const heif_reader s_reader = {
 	1,						// reader_api_version
 	HEIF_GetPosition,
@@ -355,50 +241,45 @@ static const heif_reader s_reader = {
 //   Decoder context (the 'data' of Open/Load/Close)
 // ----------------------------------------------------------
 
-/** What the decoded image is turned into */
 typedef struct tagHEIFOutput {
 	FREE_IMAGE_TYPE type;
 	unsigned bpp;
 	BOOL grey;				//! a single greyscale plane (heif_channel_Y)
 	BOOL has_alpha;
-	heif_colorspace colorspace;	//! what libheif is asked to produce
+	heif_colorspace colorspace;
 	heif_chroma chroma;
 } HEIFOutput;
 
-/**
-An image sequence: the track whose frames are the pages, what its boxes say about
-them, and the state of its decoder (see "Image sequences" at the top of this file).
-*/
 typedef struct tagHEIFSequence {
-	uint32_t track_id;		//! the track
-	int frames;				//! its samples, one page each
-	uint32_t *durations;	//! each frame's duration in 'timescale' ticks, in the order the frames are shown
+	uint32_t track_id;
+	int frames;
+	uint32_t *durations;	//! per frame, in 'timescale' ticks, display order
 	uint32_t timescale;		//! ticks per second
-	LONG loop;				//! plays, 0 = forever ("Loop")
-	int width;				//! frame size, from the sample entry
+	LONG loop;				//! plays, 0 = forever
+	int width;				//! from the sample entry
 	int height;
-	BOOL has_alpha;			//! an auxiliary alpha track goes with it
-	int bits;				//! luma bit depth from 'hvcC', 0 when the codec is not HEVC
+	BOOL has_alpha;
+	int bits;				//! luma depth from 'hvcC', 0 if not HEVC
 	BOOL mono;				//! 'hvcC' says 4:0:0
-	BOOL no_grey;			//! libheif could not hand a frame over as greyscale: use colour
-	BYTE *icc;				//! the ICC profile of the sample entry's 'colr', if it has one
+	BOOL no_grey;			//! greyscale decode failed: use colour
+	BYTE *icc;
 	size_t icc_size;
 	// the decoder
-	heif_track *track;		//! the track being decoded, NULL until a frame is asked for or after a failure
-	BOOL dirty;				//! the context's track has been decoded from: going back needs a fresh parse
-	int next;				//! the frame 'track' hands over next
-	heif_image *image;		//! the frame last handed over, kept for a second request
-	int image_page;			//! its page, -1 when there is none
-	HEIFOutput image_out;	//! the format it was decoded to
+	heif_track *track;		//! NULL until needed, or after a failure
+	BOOL dirty;				//! decoded from: going back needs a fresh parse
+	int next;
+	heif_image *image;		//! last frame, kept for a repeat request
+	int image_page;			//! -1 = none
+	HEIFOutput image_out;
 } HEIFSequence;
 
 typedef struct tagHEIFContext {
 	HEIFStream stream;
-	heif_context *ctx;		//! the parsed container
-	int threads;			//! logical processors
-	int page_count;			//! number of pages: top-level images or frames
-	heif_item_id *pages;	//! the top-level images' item IDs, the primary image first
-	BOOL frames;			//! the pages are the frames of 'seq', not images
+	heif_context *ctx;
+	int threads;
+	int page_count;			//! top-level images or frames
+	heif_item_id *pages;	//! item IDs, primary first
+	BOOL frames;			//! pages are the frames of 'seq'
 	HEIFSequence seq;
 } HEIFContext;
 
@@ -407,10 +288,6 @@ ReportError(const char *what, const heif_error &error) {
 	FreeImage_OutputMessageProc(s_format_id, "%s: %s", what, error.message ? error.message : "unknown error");
 }
 
-/**
-The FreeImage type for content of the given kind: a greyscale plane, 10 bits or
-more, alpha. Everything that is not greyscale goes through RGB(A).
-*/
 static void
 SetOutput(BOOL grey, BOOL deep, BOOL has_alpha, HEIFOutput *out) {
 	out->grey = grey;
@@ -421,8 +298,7 @@ SetOutput(BOOL grey, BOOL deep, BOOL has_alpha, HEIFOutput *out) {
 		out->colorspace = heif_colorspace_monochrome;
 		out->chroma = heif_chroma_monochrome;
 	} else if(deep) {
-		// FIRGB16 / FIRGBA16 are red, green, blue in memory whatever FREEIMAGE_COLORORDER says;
-		// ask for 16-bit samples in the host's byte order
+		// FIRGB16 is RGB order regardless of FREEIMAGE_COLORORDER; host byte order
 		out->type = has_alpha ? FIT_RGBA16 : FIT_RGB16;
 		out->bpp = has_alpha ? 64 : 48;
 		out->colorspace = heif_colorspace_RGB;
@@ -439,17 +315,12 @@ SetOutput(BOOL grey, BOOL deep, BOOL has_alpha, HEIFOutput *out) {
 	}
 }
 
-/**
-Pick the FreeImage type for an image from what its handle declares (this is all
-a header-only load has). Greyscale is only used for monochrome content without
-alpha; everything else goes through RGB(A).
-*/
 static void
 ChooseOutput(const heif_image_handle *handle, BOOL allow_grey, HEIFOutput *out) {
 	const BOOL has_alpha = heif_image_handle_has_alpha_channel(handle) ? TRUE : FALSE;
 	int bits = heif_image_handle_get_luma_bits_per_pixel(handle);
 	if(bits <= 0) {
-		// unknown before decoding: assume 8, the decoded image tells the truth
+		// unknown until decoded: assume 8
 		bits = 8;
 	}
 	const BOOL deep = (bits > 8) ? TRUE : FALSE;
@@ -462,21 +333,10 @@ ChooseOutput(const heif_image_handle *handle, BOOL allow_grey, HEIFOutput *out) 
 	SetOutput(grey, deep, has_alpha, out);
 }
 
-/**
-Pick the FreeImage type for a frame of an image sequence, from what the track's boxes
-say about it, so that a header-only load describes the page a pixel load produces.
-
-With 'playback' the file's own depth and pixel format are set aside and every frame
-becomes one 32-bit format - see HEIF_PLAYBACK in FreeImage.h.
-*/
 static void
 ChooseFrameOutput(const HEIFSequence *seq, BOOL playback, HEIFOutput *out) {
 	if(playback) {
-		// One format for every frame, whatever the file's depth and pixel format, so that a
-		// caller can walk a HEIF animation with the code it already has for GIF, APNG, WebP
-		// and AVIF. Nothing is composited: a frame is a complete picture, so this only settles
-		// what the pixels look like. libheif does the conversion to 8 bits (convert_hdr_to_8bit)
-		// and gives a file without an alpha channel an opaque one.
+		// 32-bit RGBA; libheif converts to 8 bits and adds opaque alpha
 		out->grey = FALSE;
 		out->has_alpha = TRUE;
 		out->type = FIT_BITMAP;
@@ -517,12 +377,7 @@ AllocateOutput(BOOL header_only, const HEIFOutput *out, int width, int height) {
 	return dib;
 }
 
-/**
-The decoding options every decode uses.
-@param handle The image about to be decoded (its tiling decides the threading), or
-NULL for the frames of an image sequence
-@return Returns the options, or NULL on memory failure
-*/
+/** 'handle' is NULL for sequence frames; its tiling decides the threading */
 static heif_decoding_options *
 CreateDecodingOptions(const HEIFContext *ctx, const heif_image_handle *handle) {
 	heif_decoding_options *options = heif_decoding_options_alloc();
@@ -533,30 +388,20 @@ CreateDecodingOptions(const HEIFContext *ctx, const heif_image_handle *handle) {
 	options->ignore_transformations = 0;
 	// keep 10- and 12-bit content
 	options->convert_hdr_to_8bit = 0;
-	// lenient: files from encoders that bend the rules decode with warnings, not errors
+	// lenient: rule-bending files decode with warnings
 	options->strict_decoding = 0;
-	// Threads. A tiled image (a phone photo is a grid of 512 x 512 tiles) is decoded by libheif
-	// one tile per thread (heif_context_set_max_decoding_threads), so each codec instance
-	// stays single-threaded; a single picture gets the codec's own worker threads instead,
-	// which libheif would otherwise limit to one. num_codec_threads reaches every decoder
-	// plugin as heif_decoder_plugin_options::num_threads: libde265 starts that many worker
-	// threads, and OpenJPEG that many in its thread pool. Measured on an 8-core machine:
-	// a 1280 x 854 HEVC picture 81 ms with one thread and 40 ms with four or more, a
-	// 2048 x 2048 lossless JPEG 2000 picture 1052 ms with one and 246 ms with eight.
+	// tiled image: one tile per thread; single picture: codec threads
 	heif_image_tiling tiling;
 	uint64_t tiles = 1;
 	if(handle && (heif_image_handle_get_image_tiling(handle, 1, &tiling).code == heif_error_Ok)) {
 		tiles = (uint64_t)tiling.num_columns * tiling.num_rows;
 	}
 	options->num_codec_threads = (tiles > 1) ? 1 : ctx->threads;
-	// Every sample of a track once, whatever its edit list says. Applying the edit list
-	// replays the media as often as the list repeats it, and an animation that loops forever
-	// never ends; the repetitions are reported as "Loop" instead, for the caller to play.
+	// every sample once; the edit list's repeats become "Loop"
 	options->ignore_sequence_editlist = 1;
-	// keep the file's colour description: no re-tagging of the output as sRGB and
-	// no attempt at a conversion, HDR content stays as encoded
+	// no colour conversion: HDR stays as encoded
 	options->output_image_nclx_profile_passthrough = 1;
-	// known encoder quirks, e.g. Sony HIF files whose 'colr' box contradicts the bitstream
+	// known encoder quirks (e.g. Sony HIF 'colr')
 	options->autocorrect_broken_input = 1;
 	return options;
 }
@@ -565,9 +410,6 @@ CreateDecodingOptions(const HEIFContext *ctx, const heif_image_handle *handle) {
 //   Pixel copies (libheif rows are top-down, FreeImage rows bottom-up)
 // ----------------------------------------------------------
 
-/**
-Undo the premultiplication of one 8-bit RGBA pixel row (FreeImage keeps straight alpha).
-*/
 static void
 UnpremultiplyRow8(BYTE *row, int width) {
 	for(int x = 0; x < width; x++, row += 4) {
@@ -594,10 +436,6 @@ UnpremultiplyRow16(WORD *row, int width) {
 	}
 }
 
-/**
-A lookup table scaling 'bits'-bit samples to the full 16-bit range.
-@return Returns the table (1 << bits entries), or NULL
-*/
 static WORD *
 CreateScaleTable(int bits) {
 	if((bits < 1) || (bits > 16)) {
@@ -615,9 +453,6 @@ CreateScaleTable(int bits) {
 	return table;
 }
 
-/**
-Copy an interleaved 8-bit RGB / RGBA image into a 24- / 32-bit bitmap.
-*/
 static BOOL
 CopyInterleaved8(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL premultiplied) {
 	size_t stride = 0;
@@ -652,10 +487,6 @@ CopyInterleaved8(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL pr
 	return TRUE;
 }
 
-/**
-Copy an interleaved 16-bit RGB / RGBA image (host byte order) into a FIT_RGB16 /
-FIT_RGBA16 bitmap, scaling its 'bits'-bit samples to the full 16-bit range.
-*/
 static BOOL
 CopyInterleaved16(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL premultiplied, int bits) {
 	size_t stride = 0;
@@ -689,11 +520,7 @@ CopyInterleaved16(const heif_image *image, FIBITMAP *dib, BOOL has_alpha, BOOL p
 	return TRUE;
 }
 
-/**
-Copy a single greyscale plane into an 8-bit or a FIT_UINT16 bitmap.
-@param storage_bits 8 or 16: how the samples are stored
-@param bits how many of those bits carry the value
-*/
+/** storage_bits: 8 or 16 per sample; bits: how many carry the value */
 static BOOL
 CopyGrey(const heif_image *image, FIBITMAP *dib, int storage_bits, int bits) {
 	size_t stride = 0;
@@ -731,15 +558,7 @@ CopyGrey(const heif_image *image, FIBITMAP *dib, int storage_bits, int bits) {
 	return TRUE;
 }
 
-/**
-Copy a decoded image into a new bitmap. The image is the authority on its size and its
-depth, not whatever 'out' was chosen from: when that guessed the depth wrong, 'out' is
-corrected to follow the pixels.
-@param premultiplied The alpha channel is premultiplied (it is undone)
-@param max_width When positive, the widest the bitmap may be: an image wider than this is
-cropped to it, keeping its left side (see LoadFrame)
-@param max_height When positive, the same for the height, keeping the top rows
-*/
+/** 'out' follows the pixels' depth; max_width/height > 0 crop from the top left */
 static FIBITMAP *
 ImageToBitmap(const heif_image *image, HEIFOutput *out, BOOL premultiplied, int max_width, int max_height) {
 	const heif_channel channel = out->grey ? heif_channel_Y : heif_channel_interleaved;
@@ -756,7 +575,7 @@ ImageToBitmap(const heif_image *image, HEIFOutput *out, BOOL premultiplied, int 
 		bits = 8;
 	}
 	if(deep != ((out->type == FIT_BITMAP) ? FALSE : TRUE)) {
-		// the description guessed the depth wrong: follow the pixels
+		// guessed depth was wrong: follow the pixels
 		out->type = out->grey ? (deep ? FIT_UINT16 : FIT_BITMAP) : (deep ? (out->has_alpha ? FIT_RGBA16 : FIT_RGB16) : FIT_BITMAP);
 		out->bpp = out->grey ? (deep ? 16 : 8) : (deep ? (out->has_alpha ? 64 : 48) : (out->has_alpha ? 32 : 24));
 	}
@@ -767,7 +586,6 @@ ImageToBitmap(const heif_image *image, HEIFOutput *out, BOOL premultiplied, int 
 		height = max_height;
 	}
 
-	// the copies read the image's top-left 'width' x 'height' pixels, whatever its own size
 	FIBITMAP *dib = AllocateOutput(FALSE, out, width, height);
 	if(dib) {
 		BOOL ok;
@@ -791,12 +609,7 @@ ImageToBitmap(const heif_image *image, HEIFOutput *out, BOOL premultiplied, int 
 //   Metadata
 // ----------------------------------------------------------
 
-/**
-Offset of the TIFF header inside an Exif payload. ISO/IEC 23008-12 A.2.1 stores a
-4-byte offset to it, but writers get that wrong often enough (a zero offset in front
-of JPEG's "Exif\0\0" prefix is common) that the header is searched for as well.
-@return Returns the offset, or 'size' when there is no TIFF header
-*/
+/** searches for the TIFF header: writers get the A.2.1 offset wrong */
 static size_t
 FindTiffHeader(const BYTE *data, size_t size) {
 	static const BYTE lsb_first[4] = { 0x49, 0x49, 0x2A, 0x00 };	// "II*\0"
@@ -809,10 +622,7 @@ FindTiffHeader(const BYTE *data, size_t size) {
 	return size;
 }
 
-/**
-The Exif block of an image: the raw block (with the "Exif\0\0" prefix the JPEG and
-WebP writers expect) and the decoded tags (FIMD_EXIF_MAIN, FIMD_EXIF_EXIF, ...).
-*/
+/** raw block with the "Exif\0\0" prefix, plus the decoded tags */
 static void
 AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 	heif_item_id id;
@@ -820,7 +630,7 @@ AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 		return;
 	}
 	const size_t size = heif_image_handle_get_metadata_size(handle, id);
-	// at least a TIFF header; the 4 bytes of offset in front of it are not always there (see below)
+	// at least a TIFF header
 	if((size <= 8) || (size > (size_t)UINT_MAX)) {
 		return;
 	}
@@ -830,15 +640,7 @@ AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 	}
 	const heif_error error = heif_image_handle_get_metadata(handle, id, data);
 	if(error.code == heif_error_Ok) {
-		// ISO/IEC 23008-12 A.2.1: exif_tiff_header_offset, big-endian, counted from the end of the
-		// field. That field is not always there: a block stored in a MinimizedImageBox - the compact
-		// header of a 'mif3' file, which holds the Exif payload from its TIFF header on - is handed
-		// over as it stands, and libheif neither adds the field when reading such a file nor strips
-		// it when writing one (Source/LibHEIF/libheif/mini.cc), so a 'mini' block may come either
-		// way. Telling them apart needs no guessing: the first four bytes of a block without the
-		// field are the TIFF header itself, and "II*\0" / "MM\0*" read as an offset of at least
-		// 0x49492A00, far past the end of any Exif block. An offset that does not point inside the
-		// block is therefore not an offset, and the block begins at its first byte.
+		// ISO/IEC 23008-12 A.2.1 offset; 'mini' blocks may lack it
 		const uint32_t offset = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | (uint32_t)data[3];
 		size_t start = 0;
 		if(offset < size - 4) {
@@ -856,9 +658,6 @@ AttachExif(FIBITMAP *dib, const heif_image_handle *handle) {
 	free(data);
 }
 
-/**
-The XMP packet of an image: a 'mime' item of content type application/rdf+xml.
-*/
 static void
 AttachXMP(FIBITMAP *dib, const heif_image_handle *handle) {
 	const int count = heif_image_handle_get_number_of_metadata_blocks(handle, "mime");
@@ -901,9 +700,6 @@ AttachXMP(FIBITMAP *dib, const heif_image_handle *handle) {
 	free(ids);
 }
 
-/**
-The ICC profile of an image ('rICC' or 'prof' colour profile box).
-*/
 static void
 AttachICCProfile(FIBITMAP *dib, const heif_image_handle *handle) {
 	const heif_color_profile_type type = heif_image_handle_get_color_profile_type(handle);
@@ -924,10 +720,6 @@ AttachICCProfile(FIBITMAP *dib, const heif_image_handle *handle) {
 	free(profile);
 }
 
-/**
-Attach the ICC profile, the Exif block and the XMP packet. All three come from
-the container, so this also serves header-only loads.
-*/
 static void
 AttachMetadata(FIBITMAP *dib, const heif_image_handle *handle) {
 	AttachICCProfile(dib, handle);
@@ -935,11 +727,6 @@ AttachMetadata(FIBITMAP *dib, const heif_image_handle *handle) {
 	AttachXMP(dib, handle);
 }
 
-/**
-Attach one FIMD_ANIMATION tag with the key, id and type the GIF, APNG, WebP and AVIF
-plugins give it, so that a caller reads a HEIF animation with the code it already has
-for those.
-*/
 static BOOL
 SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
 	BOOL bResult = FALSE;
@@ -959,13 +746,6 @@ SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWOR
 	return bResult;
 }
 
-/**
-A duration of 'ticks' ticks of a 'timescale' Hz clock, in milliseconds rounded to the
-nearest one. ISO/IEC 14496-12 keeps a sample's duration in ticks of the track's
-timescale - 1001 ticks of 30000 Hz at an NTSC rate - and "FrameTime" is a LONG of
-milliseconds. Worked out in integers, as the AVIF plugin does: neither product can
-overflow, both fields being 32-bit.
-*/
 static LONG
 FrameTimeMs(uint32_t ticks, uint32_t timescale) {
 	if(timescale == 0) {
@@ -976,18 +756,7 @@ FrameTimeMs(uint32_t ticks, uint32_t timescale) {
 	return (ms > 0x7FFFFFFF) ? (LONG)0x7FFFFFFF : (LONG)ms;
 }
 
-/**
-Describe frame 'page' of an image sequence with the tags GIF, APNG, WebP and AVIF use,
-so that one caller can walk any of them: "FrameTime" in milliseconds, "Loop" counting
-plays (0 = forever), the canvas in "LogicalWidth"/"LogicalHeight", and the frame's place
-on it. 'dib' has to be the finished page: the canvas is its size.
-
-A HEIF frame is the whole canvas and replaces what was on screen rather than being drawn
-over it, so the position is 0,0, the disposal is GIF's 1 (leave the canvas alone, the
-next frame covers all of it anyway) and the blend is 1 (no blending, the source wins).
-Constants, but written all the same: a caller converting a HEIF animation to GIF, APNG or
-WebP through the page API reads exactly these tags, and so does this library's WebP writer.
-*/
+/** 'dib' must be the finished page: the canvas is its size */
 static void
 AttachAnimation(FIBITMAP *dib, const HEIFSequence *seq, int page) {
 	const LONG frametime = FrameTimeMs(seq->durations[page], seq->timescale);
@@ -1001,11 +770,7 @@ AttachAnimation(FIBITMAP *dib, const HEIFSequence *seq, int page) {
 	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
 	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
-	// The canvas and the loop count belong to the file rather than to any one frame, and
-	// every frame is drawn on that canvas - so every frame is told about them, not just the
-	// first: deleting page 0 would otherwise take the only copy of the canvas with it. Both
-	// sizes are SHORTs, as GIF's Logical Screen Descriptor has them; a track's sizes are
-	// 16-bit fields anyway.
+	// canvas and loop on every frame, so deleting page 0 keeps them
 	const unsigned width = FreeImage_GetWidth(dib);
 	const unsigned height = FreeImage_GetHeight(dib);
 	const WORD logicalwidth = (WORD)((width > 0xFFFF) ? 0xFFFF : width);
@@ -1015,10 +780,6 @@ AttachAnimation(FIBITMAP *dib, const HEIFSequence *seq, int page) {
 	SetAnimTag(dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &seq->loop);
 }
 
-/**
-What every page of an image sequence carries: the sample entry's ICC profile and the
-frame's animation tags. Both come from the boxes, so this also serves header-only loads.
-*/
 static void
 AttachFrameMetadata(FIBITMAP *dib, const HEIFSequence *seq, int page) {
 	if(seq->icc && (seq->icc_size > 0)) {
@@ -1027,10 +788,6 @@ AttachFrameMetadata(FIBITMAP *dib, const HEIFSequence *seq, int page) {
 	AttachAnimation(dib, seq, page);
 }
 
-/**
-Decode one thumbnail item as 8-bit RGB and attach it with FreeImage_SetThumbnail.
-@return Returns TRUE on success; 'error' holds the reason otherwise
-*/
 static BOOL
 DecodeThumbnail(const HEIFContext *ctx, FIBITMAP *dib, heif_image_handle *thumb_handle, heif_error *error) {
 	BOOL bResult = FALSE;
@@ -1038,7 +795,6 @@ DecodeThumbnail(const HEIFContext *ctx, FIBITMAP *dib, heif_image_handle *thumb_
 	if(!options) {
 		return FALSE;
 	}
-	// a thumbnail is a preview: 8-bit, no alpha, whatever the image, and too small for worker threads
 	options->convert_hdr_to_8bit = 1;
 	options->num_codec_threads = 1;
 	heif_image *image = NULL;
@@ -1063,12 +819,7 @@ DecodeThumbnail(const HEIFContext *ctx, FIBITMAP *dib, heif_image_handle *thumb_
 	return bResult;
 }
 
-/**
-The file's thumbnail of an image ('thmb' reference), decoded as 8-bit RGB and
-attached with FreeImage_SetThumbnail. Some cameras attach several thumbnails,
-not all of which decode: the first one that does is taken. A failure costs the
-thumbnail, not the image.
-*/
+/** first 'thmb' that decodes; a failure costs only the thumbnail */
 static void
 AttachThumbnail(const HEIFContext *ctx, FIBITMAP *dib, const heif_image_handle *handle) {
 	heif_item_id ids[8];
@@ -1098,19 +849,12 @@ AttachThumbnail(const HEIFContext *ctx, FIBITMAP *dib, const heif_image_handle *
 //   Image sequences: the track and its boxes
 // ----------------------------------------------------------
 
-/**
-The most frames a track may have. While it parses a track, libheif builds tables of
-about 64 bytes per sample, sized from the 'stts' and 'stsz' boxes - which a few bytes can
-make claim millions of samples - and the memory limit that would bound them is lifted
-here so that gigapixel images load (see CreateContext). 12 hours at 60 frames a second:
-libavif's default limit on the frame count of an AVIF sequence.
-*/
+/** 12 h at 60 fps (libavif's limit); bounds libheif's per-sample tables */
 #define FI_HEIF_MAX_FRAMES 2592000
 
-/** How many boxes of one container are looked at before a file is taken to be malformed */
 #define FI_HEIF_MAX_BOXES 4096
 
-/** The largest ICC profile read from a sample entry, libheif's own limit for images */
+/** libheif's own ICC size limit */
 #define FI_HEIF_MAX_ICC (100 * 1024 * 1024)
 
 #define FI_HEIF_FOURCC(a, b, c, d) (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
@@ -1125,14 +869,13 @@ GetBE64(const BYTE *p) {
 	return ((uint64_t)GetBE32(p) << 32) | (uint64_t)GetBE32(p + 4);
 }
 
-/** An ISOBMFF box, its positions relative to the first HEIF byte */
+/** ISOBMFF box; positions relative to 'base' */
 typedef struct tagHEIFBox {
 	uint32_t type;
-	uint64_t payload;		//! where its content starts, after the header
-	uint64_t end;			//! where the box after it starts
+	uint64_t payload;		//! content start, after the header
+	uint64_t end;			//! start of the next box
 } HEIFBox;
 
-/** Read 'size' bytes at stream position 'offset' */
 static BOOL
 ReadAt(HEIFStream *s, uint64_t offset, void *buffer, size_t size) {
 	if(offset > (uint64_t)INT64_MAX) {
@@ -1141,10 +884,6 @@ ReadAt(HEIFStream *s, uint64_t offset, void *buffer, size_t size) {
 	return ((HEIF_Seek((int64_t)offset, s) == 0) && (HEIF_Read(buffer, size, s) == 0)) ? TRUE : FALSE;
 }
 
-/**
-The box that starts at 'offset', inside a container that ends at 'end'.
-@return Returns FALSE when there is no valid box header there
-*/
 static BOOL
 ReadBox(HEIFStream *s, uint64_t offset, uint64_t end, HEIFBox *box) {
 	BYTE header[16];
@@ -1161,7 +900,7 @@ ReadBox(HEIFStream *s, uint64_t offset, uint64_t end, HEIFBox *box) {
 		size = GetBE64(header + 8);
 		header_size = 16;
 	} else if(size == 0) {
-		// the box runs to the end of its container, which is the end of the file at the top level
+		// size 0: to the end of the container
 		size = end - offset;
 	}
 	if((size < header_size) || (size > end - offset)) {
@@ -1173,7 +912,6 @@ ReadBox(HEIFStream *s, uint64_t offset, uint64_t end, HEIFBox *box) {
 	return TRUE;
 }
 
-/** The first box of type 'type' among the boxes that start at 'first' and end by 'end' */
 static BOOL
 FindBox(HEIFStream *s, uint64_t first, uint64_t end, uint32_t type, HEIFBox *box) {
 	uint64_t offset = first;
@@ -1186,7 +924,6 @@ FindBox(HEIFStream *s, uint64_t first, uint64_t end, uint32_t type, HEIFBox *box
 	return FALSE;
 }
 
-/** The content of a box, in a new buffer, when it is not empty and at most 'max' bytes long */
 static BYTE *
 ReadPayload(HEIFStream *s, const HEIFBox *box, size_t max, size_t *size) {
 	const uint64_t length = box->end - box->payload;
@@ -1206,13 +943,11 @@ ReadPayload(HEIFStream *s, const HEIFBox *box, size_t max, size_t *size) {
 	return data;
 }
 
-/** The end of the stream, for the top-level boxes */
 static uint64_t
 StreamEnd(const HEIFStream *s) {
 	return s->size_known ? s->size : UINT64_MAX;
 }
 
-/** The major brand of the file's FileTypeBox, 0 when it has none */
 static uint32_t
 ReadMajorBrand(HEIFStream *s) {
 	HEIFBox box;
@@ -1224,10 +959,6 @@ ReadMajorBrand(HEIFStream *s) {
 	return 0;
 }
 
-/**
-Does a major brand say that the file is an image sequence first? ISO/IEC 23008-12 has a
-structural brand for sequences ('msf1') and one per codec and profile.
-*/
 static BOOL
 IsSequenceBrand(uint32_t brand) {
 	switch(brand) {
@@ -1245,7 +976,6 @@ IsSequenceBrand(uint32_t brand) {
 	return FALSE;
 }
 
-/** Does a major brand say that the file holds still images first? */
 static BOOL
 IsImageBrand(uint32_t brand) {
 	switch(brand) {
@@ -1267,7 +997,6 @@ IsImageBrand(uint32_t brand) {
 	return FALSE;
 }
 
-/** The compression format of a track, from the type of its sample entry */
 static heif_compression_format
 SampleEntryFormat(uint32_t type) {
 	switch(type) {
@@ -1292,14 +1021,7 @@ SampleEntryFormat(uint32_t type) {
 	return heif_compression_undefined;
 }
 
-/**
-The track whose frames are the pages: the first image sequence track ('pict') that is
-not the thumbnail track of another, a video track ('vide') when the file has no image
-sequence track. Chosen here rather than by heif_context_get_track(ctx, 0), which takes the
-first visual track in file order, thumbnails included - a burst file's thumbnail track
-could come first.
-@return Returns the track's ID, 0 when there is none
-*/
+/** first 'pict' track that is not a thumbnail, else 'vide'; 0 if none */
 static uint32_t
 ChooseTrack(const heif_context *hctx) {
 	const int count = heif_context_number_of_sequence_tracks(hctx);
@@ -1331,16 +1053,6 @@ ChooseTrack(const heif_context *hctx) {
 	return best;
 }
 
-/**
-When the frames are shown in another order than they are decoded - B-frames, a 'ctts'
-box - turn the durations of the samples, in decoding order, into the durations of the
-frames in the order they are shown: a frame lasts until the next one is shown, and the
-last one for its own sample's duration. The decoder hands the frames over in the order
-they are shown, and that is the order of the pages.
-
-A composition offset of -2^31 marks a sample that is not meant to be shown (ISO/IEC
-14496-12, 8.6.1.3). libheif shows it like the others, so here it just keeps its place.
-*/
 static void
 ReorderDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	HEIFBox box;
@@ -1363,7 +1075,7 @@ ReorderDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 			total += GetBE32(ctts + 8 + 8 * (size_t)i);
 		}
 	}
-	// the offsets have to cover the samples exactly, as libheif also requires
+	// offsets must cover the samples exactly
 	if((total == n) && (n > 1)) {
 		composition = (int64_t*)malloc(n * sizeof(int64_t));
 		order = (uint32_t*)malloc(n * sizeof(uint32_t));
@@ -1375,8 +1087,7 @@ ReorderDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 		uint32_t k = 0;
 		for(uint32_t i = 0; i < entries; i++) {
 			const uint32_t count = GetBE32(ctts + 8 + 8 * (size_t)i);
-			// version 0 stores the offsets unsigned and version 1 signed; the two agree on every
-			// offset a file can sensibly hold
+			// v0 unsigned, v1 signed: they agree on sane offsets
 			int32_t offset = (int32_t)GetBE32(ctts + 12 + 8 * (size_t)i);
 			if(offset == INT32_MIN) {
 				offset = 0;
@@ -1412,12 +1123,7 @@ ReorderDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	free(ctts);
 }
 
-/**
-Every frame's duration, from the track's 'stts' box (reordered with its 'ctts' box, see
-ReorderDurations). This is also where the frame count comes from: libheif decodes every
-sample of the track once, and 'stts' counts them - libheif checks that it agrees with 'stsz'.
-@return Returns FALSE when the box is missing or makes no sense
-*/
+/** durations and the frame count, from 'stts' */
 static BOOL
 ReadDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	HEIFBox box;
@@ -1459,22 +1165,18 @@ ReadDurations(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	return bResult;
 }
 
-/**
-What the track's first sample entry says that libheif does not report for a track: the bit
-depth and chroma format of HEVC frames ('hvcC'), which decide the type of a page before any
-frame is decoded, and an ICC profile ('colr'), which libheif does not read for tracks.
-*/
+/** 'hvcC' depth/chroma and 'colr' ICC: libheif skips these for tracks */
 static void
 ReadSampleEntry(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	HEIFBox stsd, entry, child;
 	if(!FindBox(s, stbl->payload, stbl->end, FI_HEIF_FOURCC('s','t','s','d'), &stsd)) {
 		return;
 	}
-	// the entries follow the full box header and the entry count
+	// after the full box header and the entry count
 	if(!ReadBox(s, stsd.payload + 8, stsd.end, &entry)) {
 		return;
 	}
-	// the child boxes of a VisualSampleEntry follow 78 bytes of fields (ISO/IEC 14496-12, 12.1.3)
+	// VisualSampleEntry: 78 bytes of fields first (14496-12, 12.1.3)
 	if(entry.end - entry.payload < 78) {
 		return;
 	}
@@ -1482,8 +1184,7 @@ ReadSampleEntry(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	uint64_t offset = entry.payload + 78;
 	for(int n = 0; (n < FI_HEIF_MAX_BOXES) && ReadBox(s, offset, entry.end, &child); n++) {
 		if(hevc && (child.type == FI_HEIF_FOURCC('h','v','c','C')) && (child.end - child.payload >= 18)) {
-			// HEVCDecoderConfigurationRecord (ISO/IEC 14496-15, 8.3.3.1): chroma_format_idc is the
-			// low 2 bits of byte 16, bit_depth_luma_minus8 the low 3 bits of byte 17
+			// hvcC (14496-15 8.3.3.1): chroma = byte16 & 3, depth - 8 = byte17 & 7
 			BYTE hvcc[18];
 			if(ReadAt(s, child.payload, hvcc, sizeof(hvcc))) {
 				seq->mono = ((hvcc[16] & 3) == 0) ? TRUE : FALSE;
@@ -1509,11 +1210,6 @@ ReadSampleEntry(HEIFStream *s, const HEIFBox *stbl, HEIFSequence *seq) {
 	}
 }
 
-/**
-Read what libheif does not expose about track 'seq->track_id' from its boxes: the frames'
-durations and what its sample entry says (see ReadDurations and ReadSampleEntry).
-@return Returns FALSE when the track's sample tables cannot be read
-*/
 static BOOL
 ReadTrackBoxes(HEIFStream *s, HEIFSequence *seq) {
 	HEIFBox moov, trak, box, mdia, minf, stbl;
@@ -1526,7 +1222,7 @@ ReadTrackBoxes(HEIFStream *s, HEIFSequence *seq) {
 		if(trak.type != FI_HEIF_FOURCC('t','r','a','k')) {
 			continue;
 		}
-		// the track ID follows two 32-bit times in version 0 of 'tkhd', two 64-bit ones in version 1
+		// tkhd: track ID after two 32-bit (v0) or 64-bit (v1) times
 		BYTE tkhd[24];
 		if(!FindBox(s, trak.payload, trak.end, FI_HEIF_FOURCC('t','k','h','d'), &box) ||
 		   (box.end - box.payload < sizeof(tkhd)) || !ReadAt(s, box.payload, tkhd, sizeof(tkhd))) {
@@ -1549,7 +1245,6 @@ ReadTrackBoxes(HEIFStream *s, HEIFSequence *seq) {
 	return FALSE;
 }
 
-/** Release what a sequence holds, and leave it empty */
 static void
 FreeSequence(HEIFSequence *seq) {
 	if(seq->track) {
@@ -1564,12 +1259,6 @@ FreeSequence(HEIFSequence *seq) {
 	seq->image_page = -1;
 }
 
-/**
-Look for an image sequence whose frames can be pages: the track, what libheif says about
-it and what its boxes say.
-@param decodable Set to TRUE when a decoder for the track's codec is built in
-@return Returns FALSE when the file has no such sequence
-*/
 static BOOL
 OpenSequence(HEIFContext *ctx, BOOL *decodable) {
 	HEIFSequence *seq = &ctx->seq;
@@ -1592,8 +1281,7 @@ OpenSequence(HEIFContext *ctx, BOOL *decodable) {
 	seq->height = height;
 	seq->has_alpha = heif_track_has_alpha_channel(track) ? TRUE : FALSE;
 	seq->timescale = heif_track_get_timescale(track);
-	// libheif reads the repetitions from the edit list: 1 when there is none, UINT32_MAX when the
-	// list repeats forever, 0 when it is not one libheif reads as repeating (play once, it says)
+	// edit list repeats: 1 = none, UINT32_MAX = forever, 0 = play once
 	const uint32_t repetitions = heif_track_get_number_of_repetitions(track);
 	if((repetitions == heif_sequence_track_number_of_repetitions_infinite) || (repetitions > 0x7FFFFFFF)) {
 		seq->loop = 0;
@@ -1628,7 +1316,6 @@ Description() {
 
 static const char * DLL_CALLCONV
 Extension() {
-	// .heics and .heifs are the extensions ISO/IEC 23008-12 gives image sequences
 	return "heic,heif,hif,heics,heifs";
 }
 
@@ -1649,8 +1336,6 @@ IsBrand(const BYTE *b, const char *brand) {
 
 static BOOL DLL_CALLCONV
 Validate(FreeImageIO *io, fi_handle handle) {
-	// A HEIF file opens with a FileTypeBox ('ftyp') whose brands name the format:
-	// fetch the box by its declared size and look at the major and compatible brands.
 	BYTE buffer[4096];
 
 	if(io->read_proc(buffer, 1, 8, handle) != 8) {
@@ -1660,7 +1345,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 		return FALSE;
 	}
 	const unsigned box_size = ((unsigned)buffer[0] << 24) | ((unsigned)buffer[1] << 16) | ((unsigned)buffer[2] << 8) | (unsigned)buffer[3];
-	// 16 = box header + major brand + minor version; anything beyond the buffer is not an image's ftyp
+	// 16 = box header + major brand + minor version
 	if((box_size < 16) || (box_size > sizeof(buffer))) {
 		return FALSE;
 	}
@@ -1668,9 +1353,9 @@ Validate(FreeImageIO *io, fi_handle handle) {
 		return FALSE;
 	}
 
-	BOOL hevc = FALSE;		// an HEVC brand: what this plugin decodes
-	BOOL av1 = FALSE;		// an AV1 brand: the AVIF plugin's
-	BOOL heif = FALSE;		// a structural brand only: a HEIF file of some codec
+	BOOL hevc = FALSE;		// HEVC: this plugin's
+	BOOL av1 = FALSE;		// AV1: the AVIF plugin's
+	BOOL heif = FALSE;		// structural brand only
 	for(unsigned offset = 8; offset + 4 <= box_size; offset += 4) {
 		if(offset == 12) {
 			// the minor version
@@ -1692,7 +1377,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	if(av1) {
 		return FALSE;
 	}
-	// a HEIF file that names no codec: claim it, an unsupported payload is reported when loading
+	// no codec brand: claim it; Load reports an unsupported payload
 	return heif;
 }
 
@@ -1722,7 +1407,7 @@ static void DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	HEIFContext *ctx = (HEIFContext*)data;
 	if(ctx) {
-		// the track holds on to the context: let go of it first
+		// the track references the context: free it first
 		FreeSequence(&ctx->seq);
 		if(ctx->ctx) {
 			heif_context_free(ctx->ctx);
@@ -1732,12 +1417,6 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 	}
 }
 
-/**
-A new libheif context, parsed from the start of the stream. Everything but the coded
-image data is read here: the image items, their sizes, depths and properties, the
-metadata items, the thumbnails, the tracks and their sample tables.
-@return Returns the context, or NULL once the reason has been reported
-*/
 static heif_context *
 CreateContext(HEIFContext *ctx) {
 	heif_context *hctx = heif_context_alloc();
@@ -1745,10 +1424,7 @@ CreateContext(HEIFContext *ctx) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 		return NULL;
 	}
-	// FreeImage's own allocation is the limit, not libheif's 32768 x 32768 / 4 GB defaults:
-	// gigapixel images are in scope. The limits on item, box and tile counts stay, and the one
-	// on the frames of a track comes down to FI_HEIF_MAX_FRAMES, which the lifted memory limit
-	// no longer stands behind.
+	// lift libheif's size/memory limits (gigapixel); frames are capped instead
 	heif_security_limits *limits = heif_context_get_security_limits(hctx);
 	if(limits) {
 		limits->max_image_size_pixels = 0;
@@ -1759,8 +1435,7 @@ CreateContext(HEIFContext *ctx) {
 	// tiles of a grid image are decoded in parallel
 	heif_context_set_max_decoding_threads(hctx, ctx->threads);
 
-	// libheif reads the file from its first byte, and a context made to go back over an image
-	// sequence finds the stream wherever the last frame left it
+	// rewind: a re-parse finds the stream where the last frame left it
 	HEIF_Seek(0, &ctx->stream);
 	const heif_error error = heif_context_read_from_reader(hctx, &s_reader, &ctx->stream, NULL);
 	if(error.code != heif_error_Ok) {
@@ -1771,10 +1446,6 @@ CreateContext(HEIFContext *ctx) {
 	return hctx;
 }
 
-/**
-Parse the container, and find out what the pages are: the top-level images, or the
-frames of an image sequence.
-*/
 static void * DLL_CALLCONV
 Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	if(!read) {
@@ -1797,8 +1468,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	if(s->base < 0) {
 		s->base = 0;
 	}
-	// the stream length: from tell_proc when it can express it (it cannot beyond 2 GB where
-	// 'long' is 32-bit), by probing otherwise
+	// length from tell_proc, else by probing (32-bit 'long')
 	if(io->seek_proc(handle, 0, SEEK_END) == 0) {
 		const long end = io->tell_proc(handle);
 		if(end >= s->base) {
@@ -1822,11 +1492,9 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		return NULL;
 	}
 
-	// --- the top-level images: the primary image ('pitm'), then the others ---
+	// --- the top-level images, primary first ---
 
-	// The primary image is what libheif's own tools show, so it is page 0 even in a
-	// broken file that lists it as the thumbnail of another image (it is then not a
-	// top-level image, and the top-level image gets page 1).
+	// page 0 even when a broken file makes it a thumbnail
 	heif_item_id primary = 0;
 	const BOOL has_primary = (heif_context_get_primary_image_ID(ctx->ctx, &primary).code == heif_error_Ok) ? TRUE : FALSE;
 	const int count = heif_context_get_number_of_top_level_images(ctx->ctx);
@@ -1853,10 +1521,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 
 	// --- or the frames of an image sequence ---
 
-	// A file can hold both, and its major brand says which it is meant as first: an image
-	// sequence brand ('msf1', 'hevc', ...) the frames, an image brand ('mif1', 'heic', ...) the
-	// images, and anything else the frames - libavif's rule for AVIF (AVIF_DECODER_SOURCE_AUTO).
-	// A track that no decoder built in here can read never hides images that one can.
+	// both: images if the track is undecodable, else by major brand (libavif's rule)
 	BOOL decodable = FALSE;
 	if(OpenSequence(ctx, &decodable)) {
 		const uint32_t brand = ReadMajorBrand(s);
@@ -1894,10 +1559,6 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 	return (ctx->page_count > 0) ? ctx->page_count : 1;
 }
 
-/**
-Header-only load: the bitmap as the handle describes it (its size is the size
-after the transforms), without decoding.
-*/
 static FIBITMAP *
 LoadHeader(const HEIFContext *ctx, const heif_image_handle *handle) {
 	HEIFOutput out;
@@ -1911,9 +1572,6 @@ LoadHeader(const HEIFContext *ctx, const heif_image_handle *handle) {
 	return dib;
 }
 
-/**
-Decode the image into a new bitmap.
-*/
 static FIBITMAP *
 LoadPixels(const HEIFContext *ctx, const heif_image_handle *handle) {
 	HEIFOutput out;
@@ -1926,7 +1584,7 @@ LoadPixels(const HEIFContext *ctx, const heif_image_handle *handle) {
 		return NULL;
 	}
 
-	// first choice: greyscale for monochrome content; if libheif has no direct path for it, go through colour
+	// greyscale first; colour when libheif has no greyscale path
 	BOOL allow_grey = TRUE;
 	for(;;) {
 		ChooseOutput(handle, allow_grey, &out);
@@ -1948,14 +1606,13 @@ LoadPixels(const HEIFContext *ctx, const heif_image_handle *handle) {
 	}
 	heif_decoding_options_free(options);
 
-	// decoding warnings are worth a message but not a failure
 	heif_error warnings[4];
 	const int n = heif_image_get_decoding_warnings(image, 0, warnings, 4);
 	for(int i = 0; i < n; i++) {
 		ReportError("Warning", warnings[i]);
 	}
 
-	// the decoded image is the authority on its size and depth, not the handle
+	// the decoded image, not the handle, decides size and depth
 	const BOOL premultiplied = (out.has_alpha && (heif_image_handle_is_premultiplied_alpha(handle) || heif_image_is_premultiplied_alpha(image))) ? TRUE : FALSE;
 	dib = ImageToBitmap(image, &out, premultiplied, 0, 0);
 	heif_image_release(image);
@@ -1971,7 +1628,6 @@ LoadPixels(const HEIFContext *ctx, const heif_image_handle *handle) {
 //   Image sequences: the frames
 // ----------------------------------------------------------
 
-/** Let go of the track being decoded: the next frame asked for starts it over */
 static void
 DropTrack(HEIFSequence *seq) {
 	if(seq->track) {
@@ -1981,12 +1637,7 @@ DropTrack(HEIFSequence *seq) {
 	seq->next = 0;
 }
 
-/**
-Get the track ready to hand over frame 'page'. It only moves forwards: a page behind its
-next frame means starting it over, and a track that has handed over a frame can only be
-started over from a fresh parse of the file, libheif keeping its position inside the
-context.
-*/
+/** forward only; going back needs a fresh parse of the file */
 static BOOL
 PrepareTrack(HEIFContext *ctx, int page) {
 	HEIFSequence *seq = &ctx->seq;
@@ -2011,16 +1662,7 @@ PrepareTrack(HEIFContext *ctx, int page) {
 	return TRUE;
 }
 
-/**
-Cap what the reader hands over while libheif decodes one frame. For as long as the decoder
-gives no frame back, libheif keeps pushing samples into it - past the end of the track and
-round again, as many times as the track's edit list repeats it, and a looping animation
-repeats forever (its sample loop counts against the edit list even when
-ignore_sequence_editlist is set, sequences/track_visual.cc). So one damaged frame, or a
-damaged decoder configuration, would keep the call going for millions of samples. No frame
-needs the file read even once: twice its size, and a megabyte for good measure, stops that.
-A stream whose size is not known is not capped.
-*/
+/** caps a frame decode at 2x the file + 1 MB: libheif can loop forever */
 static void
 SetReadBudget(HEIFStream *s) {
 	s->budget = (s->size_known && (s->size < (UINT64_MAX >> 2))) ? 2 * s->size + (1u << 20) : 0;
@@ -2033,14 +1675,7 @@ ClearReadBudget(HEIFStream *s) {
 	s->budget = 0;
 }
 
-/**
-Decode frame 'page' to the format 'out' describes. The frames before it that the track has
-not handed over yet are decoded too - the frames after them are predicted from them - but
-are not converted to RGB.
-@param retry_in_colour Set to TRUE, and nothing reported, when libheif has no way to hand
-the frame over as greyscale
-@return Returns the frame, or NULL with the track dropped
-*/
+/** NULL drops the track; *retry_in_colour: no greyscale path, nothing reported */
 static heif_image *
 DecodeFrame(HEIFContext *ctx, int page, const HEIFOutput *out, BOOL playback, BOOL *retry_in_colour) {
 	HEIFSequence *seq = &ctx->seq;
@@ -2072,7 +1707,6 @@ DecodeFrame(HEIFContext *ctx, int page, const HEIFOutput *out, BOOL playback, BO
 	}
 	heif_image *image = NULL;
 	if(error.code == heif_error_Ok) {
-		// 8 bits a channel for playback, the file's own depth otherwise
 		options->convert_hdr_to_8bit = playback ? 1 : 0;
 		seq->dirty = TRUE;
 		SetReadBudget(s);
@@ -2088,7 +1722,6 @@ DecodeFrame(HEIFContext *ctx, int page, const HEIFOutput *out, BOOL playback, BO
 		heif_image_release(image);
 	}
 
-	// the track is in no state to go on from
 	const int failed = seq->next;
 	DropTrack(seq);
 	if(s->overspent) {
@@ -2103,9 +1736,6 @@ DecodeFrame(HEIFContext *ctx, int page, const HEIFOutput *out, BOOL playback, BO
 	return NULL;
 }
 
-/**
-Load frame 'page' of the image sequence.
-*/
 static FIBITMAP *
 LoadFrame(HEIFContext *ctx, int page, int flags) {
 	HEIFSequence *seq = &ctx->seq;
@@ -2116,14 +1746,11 @@ LoadFrame(HEIFContext *ctx, int page, int flags) {
 
 	FIBITMAP *dib = NULL;
 	if(header_only) {
-		// everything a header-only page carries came from the boxes: no frame is decoded
 		dib = AllocateOutput(TRUE, &out, seq->width, seq->height);
 	} else {
-		// the frame kept from the last call answers a second request for it
 		const BOOL kept = (seq->image && (seq->image_page == page) &&
 		                   (seq->image_out.colorspace == out.colorspace) && (seq->image_out.chroma == out.chroma)) ? TRUE : FALSE;
 		if(!kept) {
-			// let go of the kept frame before the decoder needs memory for the next one
 			if(seq->image) {
 				heif_image_release(seq->image);
 				seq->image = NULL;
@@ -2132,8 +1759,7 @@ LoadFrame(HEIFContext *ctx, int page, int flags) {
 			BOOL retry = FALSE;
 			heif_image *image = DecodeFrame(ctx, page, &out, playback, &retry);
 			if(!image && retry) {
-				// libheif has no direct greyscale path for these frames: every frame of the track
-				// goes through colour from now on, and this one is decoded again
+				// no greyscale path: decode this and later frames in colour
 				seq->no_grey = TRUE;
 				ChooseFrameOutput(seq, playback, &out);
 				image = DecodeFrame(ctx, page, &out, playback, &retry);
@@ -2141,7 +1767,6 @@ LoadFrame(HEIFContext *ctx, int page, int flags) {
 			if(!image) {
 				return NULL;
 			}
-			// decoding warnings are worth a message but not a failure
 			heif_error warnings[4];
 			const int n = heif_image_get_decoding_warnings(image, 0, warnings, 4);
 			for(int i = 0; i < n; i++) {
@@ -2151,9 +1776,7 @@ LoadFrame(HEIFContext *ctx, int page, int flags) {
 			seq->image_page = page;
 			seq->image_out = out;
 		}
-		// The decoded frame is the authority on the depth; on the size, the sample entry is:
-		// libheif's x265 writer pads a small or odd-sized frame and records its size in the
-		// sample entry alone, so a frame larger than that is cropped to it.
+		// crop to the sample entry size: x265 pads small or odd frames
 		HEIFOutput frame_out = seq->image_out;
 		const BOOL premultiplied = (frame_out.has_alpha && heif_image_is_premultiplied_alpha(seq->image)) ? TRUE : FALSE;
 		dib = ImageToBitmap(seq->image, &frame_out, premultiplied, seq->width, seq->height);
@@ -2178,7 +1801,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		return NULL;
 	}
 	if(ctx->frames) {
-		// HEIF_PLAYBACK and FIF_LOAD_NOPIXELS are read there; a still image ignores the first
 		return LoadFrame(ctx, page, flags);
 	}
 

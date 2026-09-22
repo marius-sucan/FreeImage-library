@@ -1,4 +1,3 @@
-# built by this directory's Makefile
 BatchLoad
 CloneMultiPage
 CreateAlpha
@@ -9,7 +8,7 @@ LoadFromMemory-classified
 ShowMetadata
 WebPAnimation
 *.o
-# scratch files the examples write when they are run
+# example output
 log_file.txt
 fif_import.csv
 fif_export.csv

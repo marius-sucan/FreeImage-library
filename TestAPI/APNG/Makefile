@@ -1,18 +1,7 @@
-# APNG regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan       build them with AddressSanitizer
-#   make asan-run   rebuild PluginAPNG.cpp, PluginPNG.cpp and the bundled
-#                   libpng with AddressSanitizer into a private copy of the
-#                   library and run the tests against that
-#
-# Scratch files go to $APNG_TEST_TMP, or the current directory.
+# APNG regression tests; build the library first: make -f Makefile.gnu dist
+# targets: all, run, asan, asan-run; scratch files go to $APNG_TEST_TMP
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = regress robust
@@ -23,7 +12,7 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 default: all
 all: $(TESTS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
+# relink the tests when libfreeimage.a changes
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
@@ -31,14 +20,10 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters for robust: the APNG plugin parses the container by hand - chunk
-# headers, lengths, sequence numbers, frame rectangles - and a sanitized run
-# over deliberately damaged input is what catches a mistake in that.
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C and C++ files with
+# the library's own compile flags (Makefile.gnu)
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)

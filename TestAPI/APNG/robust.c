@@ -1,28 +1,5 @@
-/*
- * FreeImage 3 - APNG robustness test
- *
- * The APNG plugin parses the container itself - chunk headers, lengths,
- * sequence numbers, frame rectangles - and only the pixels go to libpng. That
- * parser is what this exercises, with two kinds of input:
- *
- *   - files built wrong on purpose, one per rule the format states, mirroring
- *     the "invalid images" half of the APNG conformance suite. Each has a
- *     documented outcome: either the animation is abandoned and the default
- *     image - what every PNG decoder sees - is still served as a single page,
- *     or the file is refused outright. Never a crash, and never a frame made
- *     of something that was not in the file.
- *
- *   - a valid animation damaged every way a file gets damaged: truncated at
- *     every length, single bytes flipped, 64-byte regions wiped, and the chunk
- *     length fields rewritten to nonsense. These may load or be refused; they
- *     may not crash.
- *
- * Worth running under AddressSanitizer, which is what "make asan-run" is for.
- *
- * Scratch files go to $APNG_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - APNG robustness test; best run as "make asan-run" */
+/* scratch files: $APNG_TEST_TMP or the current directory */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -66,7 +43,7 @@ static const char *scratch(const char *name) {
 
 static const BYTE SIGNATURE[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 
-/* the CRC of the PNG specification, so a hand-built file is a real one */
+/* PNG CRC-32 */
 static unsigned long crc_table[256];
 static int crc_ready = 0;
 
@@ -104,8 +81,7 @@ static void put32(buf_t *b, unsigned long v) {
 	put(b, t, 4);
 }
 
-/* Append a chunk. `length` overrides the real one when it is not (size_t)-1,
-   which is how the "lies about its length" cases are built. */
+/* length != (size_t)-1 overrides the real length */
 static void chunk(buf_t *b, const char *type, const BYTE *data, size_t n, size_t length) {
 	BYTE *tmp = (BYTE *)malloc(n + 4);
 	put32(b, (unsigned long)(length == (size_t)-1 ? n : length));
@@ -116,8 +92,7 @@ static void chunk(buf_t *b, const char *type, const BYTE *data, size_t n, size_t
 	free(tmp);
 }
 
-/* The zlib stream of a solid w x h RGBA image, taken from a PNG the plugin
-   itself wrote, so it is real image data rather than something made up. */
+/* zlib stream of a solid w x h RGBA image, from the PNG writer */
 static BYTE *image_data(unsigned w, unsigned h, size_t *out_size, BYTE **out_ihdr) {
 	FIBITMAP *dib = FreeImage_Allocate(w, h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 	FIMEMORY *hmem;
@@ -203,7 +178,6 @@ static void expect(const char *what, const buf_t *file, int want, int pages) {
 	if (mb) {
 		int i;
 		got = FreeImage_GetPageCount(mb);
-		/* every page has to be touchable, whatever it turns out to hold */
 		for (i = 0; i < got; i++) {
 			FIBITMAP *page = FreeImage_LockPage(mb, i);
 			if (page) FreeImage_UnlockPage(mb, page, FALSE);
@@ -233,8 +207,7 @@ static void expect(const char *what, const buf_t *file, int want, int pages) {
 
 /* ------------------------------------------------------------------ */
 
-/* A correct three-frame animation, built here rather than by the plugin, so
-   that the invalid variants below differ from it by exactly one thing. */
+/* valid 3-frame animation; each variant breaks one rule */
 static void build(buf_t *b, const BYTE *ihdr, const BYTE *idat, size_t idat_size,
 	const BYTE *small, size_t small_size, int variant) {
 	BYTE f[26], a[8];
@@ -375,14 +348,12 @@ static void test_invalid(void) {
 	build(&b, ihdr, idat, idat_size, small, small_size, 14);
 	expect("a critical chunk nobody knows", &b, WANT_REFUSED, 0); free(b.data);
 
-	/* a file that is nothing but a header */
 	memset(&b, 0, sizeof(b));
 	put(&b, SIGNATURE, 8);
 	chunk(&b, "IHDR", ihdr, 13, (size_t)-1);
 	chunk(&b, "IEND", NULL, 0, (size_t)-1);
 	expect("a PNG with no IDAT", &b, WANT_REFUSED, 0); free(b.data);
 
-	/* a canvas of zero pixels */
 	{
 		BYTE zero[13];
 		memcpy(zero, ihdr, 13);
@@ -395,7 +366,6 @@ static void test_invalid(void) {
 		expect("a canvas of 0x0", &b, WANT_REFUSED, 0); free(b.data);
 	}
 
-	/* a chunk that says it is two gigabytes long */
 	{
 		BYTE a[8];
 		actl(a, 2, 0);
@@ -413,8 +383,7 @@ static void test_invalid(void) {
 
 /* ------------------------------------------------------------------ */
 
-/* Load whatever this is, touching every page, and say nothing about it: the
-   point is only that it comes back. */
+/* load and touch every page; not crashing is the test */
 static void survive(const BYTE *data, size_t size) {
 	FIMEMORY *hmem = FreeImage_OpenMemory((BYTE *)data, (DWORD)size);
 	FIMULTIBITMAP *mb;
@@ -429,7 +398,7 @@ static void survive(const BYTE *data, size_t size) {
 		FreeImage_CloseMultiBitmap(mb, 0);
 	}
 	FreeImage_CloseMemory(hmem);
-	/* and once more as a single image, which is a different path in */
+	/* and as a single image (a different code path) */
 	hmem = FreeImage_OpenMemory((BYTE *)data, (DWORD)size);
 	if (hmem) {
 		FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_APNG, hmem, 0);

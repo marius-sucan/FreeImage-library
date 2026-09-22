@@ -1,30 +1,5 @@
-/*
- * FreeImage 3 - WebP round-trip test
- *
- * Saves and reloads through the WebP plugin (Source/FreeImage/PluginWebP.cpp)
- * and the bundled libwebp (Source/LibWebP), to a file and to a memory stream,
- * over the two depths the plugin exports (24 and 32) and the flags it accepts.
- *
- * What is asserted, and what deliberately is not:
- *
- *   - a lossless round trip must return exactly what went in, and the file and
- *     the memory stream must agree to the byte;
- *   - a lossy round trip must return the right geometry and depth, but its
- *     pixels are not checked - that is what lossy means;
- *   - encoded sizes are reported, never asserted. libwebp's lossless encoder
- *     dropped floating point in 1.5.0 and its output legitimately moves
- *     between versions; the decoded pixels are what may not.
- *
- * The one case that looks like it should be bit exact and is not is the image
- * with fully transparent regions. The plugin leaves WebPConfig.exact at its
- * default of 0, in every version of libwebp, which lets the encoder put
- * whatever compresses best under alpha == 0. So that case asserts only that
- * the alpha channel and every visible pixel survive.
- *
- * Scratch files go to $WEBP_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* WebP round-trip test: lossless must be exact, lossy keeps geometry */
+/* WebPConfig.exact is 0: RGB under alpha 0 may change */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -67,8 +42,7 @@ static const char *scratch(const char *name) {
     return buf;
 }
 
-/* Compares two decodes and reports where they differ, telling visible pixels
-   apart from RGB hidden under alpha == 0. Returns 1 when nothing visible moved. */
+/* 1 when no visible pixel differs */
 static int same_visibly(FIBITMAP *a, FIBITMAP *b, long *hidden_out) {
     unsigned w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a), x, y;
     long visible = 0, hidden = 0;
@@ -91,8 +65,7 @@ static int same_visibly(FIBITMAP *a, FIBITMAP *b, long *hidden_out) {
     return visible == 0;
 }
 
-/* Alpha varying in both axes, so a dropped or duplicated row shows up.
-   'holes' decides whether fully transparent pixels appear at all. */
+/* alpha varies on both axes; 'holes' adds alpha 0 */
 static FIBITMAP *make_alpha(FIBITMAP *src, int holes) {
     FIBITMAP *d = FreeImage_ConvertTo32Bits(src);
     unsigned w, h, x, y;
@@ -125,7 +98,7 @@ static void attach_xmp(FIBITMAP *dib) {
     FreeImage_DeleteTag(tag);
 }
 
-/* A structurally valid ICC header, enough to prove the ICCP chunk survives. */
+/* minimal valid ICC header */
 static void attach_icc(FIBITMAP *dib, BYTE *buf, int len) {
     memset(buf, 0, (size_t)len);
     buf[3] = (BYTE)len;
@@ -135,8 +108,7 @@ static void attach_icc(FIBITMAP *dib, BYTE *buf, int len) {
     FreeImage_CreateICCProfile(dib, buf, len);
 }
 
-/* Saves through a file and through a memory stream, reloads both, and checks
-   them against each other and - when bitexact - against the source. */
+/* file and memory round trips, compared (and to src when bitexact) */
 static void round_trip(const char *label, FIBITMAP *src, int flags, int bitexact) {
     const char *path = scratch("fi_webp_rt_tmp.webp");
     FIBITMAP *from_file = NULL, *from_mem = NULL;
@@ -208,7 +180,7 @@ int main(void) {
     rgba = make_alpha(png, 0);
     holes = make_alpha(png, 1);
     grey = FreeImage_ConvertTo8Bits(png);
-    /* odd dimensions: the encoder's subsampling has to cope with a partial block */
+    /* odd size: partial blocks */
     tiny = FreeImage_Copy(rgb, 0, 0, 7, 3);
     FreeImage_Unload(png);
     if (!rgb || !rgba || !holes || !grey || !tiny) { printf("FAIL: conversion\n"); return 1; }
@@ -230,7 +202,7 @@ int main(void) {
     round_trip("7x3 lossless", tiny, WEBP_LOSSLESS, 1);
     round_trip("7x3 default quality", tiny, WEBP_DEFAULT, 0);
 
-    /* the plugin exports 24 and 32 bpp only, and says so */
+    /* 24 and 32 bpp only */
     printf("refusals\n");
     if (FreeImage_FIFSupportsExportBPP(FIF_WEBP, 8))
         fail("the plugin claims it can export 8 bpp");
@@ -240,7 +212,7 @@ int main(void) {
         printf("  ok %-34s refused as unsupported\n", "8-bit greyscale");
     remove(scratch("fi_webp_rt_grey.webp"));
 
-    /* ICC, XMP and EXIF all travel as mux chunks; check they come back whole */
+    /* ICC, XMP and EXIF chunks must survive */
     printf("metadata\n");
     meta = FreeImage_Clone(rgb);
     attach_icc(meta, icc, (int)sizeof(icc));

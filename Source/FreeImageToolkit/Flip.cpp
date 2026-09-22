@@ -64,15 +64,11 @@ FreeImage_FlipHorizontal(FIBITMAP *src) {
 
 			case 4 :
 			{
-				// Reversing whole bytes and then swapping their nibbles only mirrors
-				// the row when it holds an even number of pixels.  With an odd width
-				// the last byte's low nibble is padding, and reversing brings it to
-				// the front: every pixel was displaced by one and the first was lost.
-				// Work in pixels, as the 1-bit case above does.
+				// per pixel: reversing bytes breaks odd widths
 				for(size_t x = 0; x < width; x++) {
-					// get pixel at (x, y) from the untouched copy
+					// get pixel at (x, y)
 					const BYTE value = (x & 1) ? (BYTE)(new_bits[x >> 1] & 0x0F) : (BYTE)(new_bits[x >> 1] >> 4);
-					// set pixel at (width - 1 - x, y)
+					// set pixel at (new_x, y)
 					const size_t new_x = width - 1 - x;
 					if (new_x & 1) {
 						bits[new_x >> 1] = (BYTE)((bits[new_x >> 1] & 0xF0) | value);
@@ -161,12 +157,7 @@ FreeImage_FlipVertical(FIBITMAP *src) {
 
 	for(size_t y = 0; y < height/2; y++) {
 
-		// 3a57bb4 narrowed these three from 'pitch' to 'line' so that a
-		// FreeImage_CreateView() result would stop swapping the whole of the
-		// backing image's row.  'line' is still rounded up to a whole byte, so at
-		// 1 and 4 bpp the last byte of the view's row - shared with the backing
-		// image's next pixels - was still going with it.  Reading that byte into
-		// Mid is harmless; only the pixels are written back.
+		// copy pixels only: a view shares its row's last byte
 		memcpy(Mid, From + line_s, line);
 		CopyRowPixels(From + line_s, From + line_t, width, bpp);
 		CopyRowPixels(From + line_t, Mid, width, bpp);

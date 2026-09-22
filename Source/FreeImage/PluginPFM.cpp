@@ -57,10 +57,6 @@ pfm_get_line(FreeImageIO *io, fi_handle handle, char *buffer, int length) {
 		return FALSE;
 	}
 
-	// The last slot of the buffer belongs to the terminator.  Reading into it was
-	// what wiped the NUL that the memset had put there, and the function still
-	// reported a line: the caller's sscanf then went looking for its conversion
-	// past the end of the array.
 	memset(buffer, 0, length);
 	for(i = 0; i < length - 1; i++) {
 		if(!io->read_proc(&buffer[i], 1, 1, handle))
@@ -131,10 +127,6 @@ pfm_get_int(FreeImageIO *io, fi_handle handle) {
 		while (1) {
 			const int digit = c - '0';
 
-			// a file may supply digits for as long as it likes, and this used to
-			// accumulate them all: signed overflow, which is undefined, and in the
-			// copy of this loop in PluginPNM (finding 32) the wrapped value is then
-			// used as the width
 			if (i > (INT_MAX - digit) / 10) {
 				throw FI_MSG_ERROR_PARSING;
 			}

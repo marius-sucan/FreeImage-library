@@ -1,34 +1,6 @@
 # ---------------------------------------------------------------------------
 #  OpenMP support, shared by every FreeImage makefile.
-#
-#  FreeImage parallelises its resizer (Source/FreeImageToolkit/Resize.cpp), its
-#  90/180/270 degree rotations (Source/FreeImageToolkit/ClassicRotate.cpp) and
-#  LibRawLite's demosaicing with "#pragma omp parallel for".  A compiler that is
-#  not told to enable OpenMP ignores those pragmas silently, so the code runs on
-#  a single core - which is what every makefile in this tree did, even though
-#  FreeImage.2017.vcxproj has shipped <OpenMPSupport>true</OpenMPSupport> in its
-#  Release configurations for years.  This file closes that gap.
-#
-#  Include it from a makefile *after* CC/CXX have been chosen, then use:
-#
-#      CFLAGS   += $(OPENMP_CFLAGS)     both C and C++: the flag has to be
-#      CXXFLAGS += $(OPENMP_CFLAGS)     uniform across the whole library
-#      $(CC) ... $(OPENMP_LDFLAGS)      on every link line
-#
-#  Knobs:
-#      make OPENMP=0                    build single-threaded
-#      make OPENMP_CFLAGS=-xopenmp OPENMP_LDFLAGS=-xopenmp
-#                                       compilers that spell it differently
-#                                       (Sun Studio, older Intel, ...)
-#
-#  Why the flag has to go on the C files too, not just the C++ ones:
-#  LibRawLite's libraw_types.h and libraw_alloc.h switch on _OPENMP and change
-#  their inline function bodies accordingly.  Compiling half of the library with
-#  the flag and half without is an ODR violation.
-#
-#  Why the flag has to go on the link lines too: libfreeimage.a then carries
-#  undefined GOMP_*/omp_* symbols, so every program linking the static library
-#  needs the OpenMP runtime pulled in as well.
+#  OPENMP_CFLAGS on C and C++ alike (LibRaw ODR), OPENMP_LDFLAGS on links.
 # ---------------------------------------------------------------------------
 
 # 1 = build with OpenMP, 0 = build single-threaded.
@@ -43,14 +15,10 @@ else
 ifeq ($(OPENMP_DETECT),1)
 
 # ---------------------------------------------------------------------------
-#  Probed mode, used by Makefile.osx.  Apple's clang accepts -fopenmp but ships
-#  neither <omp.h> nor libomp, so the flag cannot simply be assumed there: the
-#  build would die at link time with "library not found for -lomp".  Try a real
-#  -fopenmp compiler first (GCC, LLVM clang), then Apple clang against a
-#  Homebrew libomp, and fall back to a single-threaded build with a warning.
+#  Probed mode (Makefile.osx): Apple clang ships no libomp.
 # ---------------------------------------------------------------------------
 
-# The compiler to interrogate; makefiles that drive several toolchains set this.
+# compiler to probe
 OPENMP_CC ?= $(CC)
 
 OPENMP_PROBE_OUT ?= .fi-openmp-probe.out
@@ -67,7 +35,7 @@ openmp-works = $(shell printf '$(OPENMP_HASH)include <omp.h>\nint main(void){ret
     | $(OPENMP_CC) $(1) -x c - $(2) -o $(OPENMP_PROBE_OUT) >/dev/null 2>&1 && echo yes; \
     rm -f $(OPENMP_PROBE_OUT))
 
-# Skip the probe entirely when the flags were handed to us.
+# no probe when the flags are given
 ifeq ($(origin OPENMP_CFLAGS),undefined)
 
 ifeq ($(call openmp-works,-fopenmp,-fopenmp),yes)
@@ -94,8 +62,7 @@ endif
 else
 
 # ---------------------------------------------------------------------------
-#  Assumed mode, used everywhere GCC or a GCC-compatible clang is the compiler.
-#  Probing there would only add a way for the build to quietly turn OpenMP off.
+#  Assumed mode: GCC and GCC-compatible clang.
 # ---------------------------------------------------------------------------
 OPENMP_CFLAGS  ?= -fopenmp
 OPENMP_LDFLAGS ?= -fopenmp

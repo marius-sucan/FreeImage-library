@@ -74,13 +74,7 @@ FreeImage_Invert(FIBITMAP *src) {
 						pal[i].rgbBlue	= 255 - pal[i].rgbBlue;
 					}
 				} else {
-					// FreeImage_GetLine() rounds up to a whole byte, so at 1 and 4 bpp
-					// the bits past the last pixel of a row are not necessarily this
-					// image's.  In a FreeImage_CreateView() result they are the backing
-					// image's next pixels - FreeImage_CreateView only constrains 'left'
-					// to a byte boundary, never 'right' - and inverting the whole byte
-					// inverted them too.  Do the whole bytes, then the pixels left in the
-					// final one under a mask: inverting bits under a mask is an XOR.
+					// whole bytes, then XOR the tail: a view shares its last byte
 					const unsigned whole = CalculateWholeRowBytes(width, bpp);
 					const BYTE tail = CalculateRowTailMask(width, bpp);
 
@@ -104,15 +98,7 @@ FreeImage_Invert(FIBITMAP *src) {
 			{
 				// Calculate the number of bytes per pixel (3 for 24-bit or 4 for 32-bit)
 				const unsigned bytespp = FreeImage_GetLine(src) / width;
-				// The alpha channel is a mask, not colour, and inverting it turned an
-				// opaque image fully transparent.  The other two inversions this
-				// library offers already leave it alone: the palette branch above
-				// does not touch rgbReserved, and FreeImage_AdjustColors(.., TRUE)
-				// goes through FreeImage_AdjustCurve with FICC_RGB.  A caller who
-				// does want the alpha inverted can ask for it with
-				// FreeImage_AdjustCurve(dib, LUT, FICC_ALPHA).
-				// FI_RGBA_ALPHA is 3 in both colour orders, so the first three bytes
-				// are the colour ones either way.
+				// leave alpha alone (FI_RGBA_ALPHA is 3 in both byte orders)
 				const unsigned samples = (bytespp == 4) ? 3 : bytespp;
 
 				for(y = 0; y < height; y++) {
@@ -134,7 +120,7 @@ FreeImage_Invert(FIBITMAP *src) {
 	else if((image_type == FIT_UINT16) || (image_type == FIT_RGB16) || (image_type == FIT_RGBA16)) {
 		// Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
 		const unsigned wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
-		// FIT_RGBA16's fourth sample is its alpha channel; see the 32-bit case above
+		// leave FIT_RGBA16's alpha alone
 		const unsigned samples = (wordspp == 4) ? 3 : wordspp;
 
 		for(y = 0; y < height; y++) {
@@ -649,10 +635,7 @@ FreeImage_AdjustColors(FIBITMAP *dib, double brightness, double contrast, double
 	}
 
 	if (FreeImage_GetAdjustColorsLookupTable(LUT, brightness, contrast, gamma, invert) == 0) {
-		// That function returns the number of adjustments it folded into the table,
-		// which is zero when every argument has its default value.  The table is
-		// then the identity: there is nothing to do, and nothing went wrong either,
-		// so reporting FALSE here contradicted the documented "TRUE on success".
+		// identity table: nothing to do, not an error
 		return TRUE;
 	}
 	return FreeImage_AdjustCurve(dib, LUT, FICC_RGB);
@@ -713,13 +696,7 @@ FreeImage_ApplyColorMapping(FIBITMAP *dib, RGBQUAD *srccolors, RGBQUAD *dstcolor
 			unsigned size = FreeImage_GetColorsUsed(dib);
 			RGBQUAD *pal = FreeImage_GetPalette(dib);
 			RGBQUAD *a, *b;
-			// This branch used to increment result once per changed palette
-			// entry, while the documentation above - and the 16-, 24- and 32-bit
-			// branches below - say the return value is the number of pixels
-			// changed.  A hundred pixels all carrying one remapped index answered
-			// 1 where the 24-bit version of the same image answered 100, and
-			// nothing in the return value said which question had been answered.
-			// Remember which entries moved, then count the pixels that use one.
+			// count pixels, not palette entries
 			BYTE changed[256];
 			unsigned nchanged = 0;
 			memset(changed, 0, sizeof(changed));
@@ -950,11 +927,6 @@ FreeImage_ApplyPaletteIndexMapping(FIBITMAP *dib, BYTE *srcindices,	BYTE *dstind
 	int bpp = FreeImage_GetBPP(dib);
 	switch (bpp) {
 		case 1: {
-			// Documented as supported since the function was added, but never
-			// written: it returned 0 having done nothing, which a caller cannot tell
-			// from "the index was not present".  The shape is the 4-bit case below,
-			// one bit at a time; iterating over pixels rather than over the bytes of
-			// the line leaves the padding bits of the last byte alone.
 			const unsigned pixels = FreeImage_GetWidth(dib);
 			for (unsigned y = 0; y < height; y++) {
 				BYTE *bits = FreeImage_GetScanLine(dib, y);

@@ -223,7 +223,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if((type != ID_ILBM) && (type != ID_PBM))
 			return NULL;
 
-		// the FORM type has been read; size counts what is left of the FORM
 		if (size < 4)
 			return NULL;
 
@@ -231,15 +230,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		unsigned width = 0, height = 0, planes = 0, depth = 0, comp = 0;
 
-		// a chunk costs at least its 8-byte header, so anything less than that
-		// left in the FORM ends the walk.  size is unsigned and was decremented
-		// by ch_size + 8 unchecked, so any file whose chunk lengths did not land
-		// exactly on zero used to wrap it to ~4e9 and keep going.
 		while (size >= 8) {
 			DWORD ch_type,ch_size;
 
-			// past end of file read_proc writes nothing and leaves these holding
-			// the previous iteration's values - the walk has to stop here
 			if (io->read_proc(&ch_type, 4, 1, handle) != 1)
 				break;
 #ifndef FREEIMAGE_BIGENDIAN
@@ -254,16 +247,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			size -= 8;
 
-			// a chunk that claims more than the FORM has left is malformed
 			if (ch_size > size)
 				break;
 
 			unsigned ch_end = io->tell_proc(handle) + ch_size;
 
 			if (ch_type == ID_BMHD) {			// Bitmap Header
-				// the read below always takes 20 bytes, so a chunk declaring fewer
-				// would eat the header of the next one and leave ch_end pointing
-				// backwards
 				if (ch_size < sizeof(BMHD))
 					return NULL;
 
@@ -272,12 +261,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					dib = NULL;
 				}
 
-				// zeroed, and the read is checked: this is declared inside the chunk
-				// loop, so a second BMHD reuses the same stack slot, and a read that
-				// fails writes nothing at all.  A 48-byte file whose second BMHD is at
-				// end of file used to re-use the first one's fields - byte-swapped a
-				// second time - and allocate 1.4 MB at a size that appears nowhere in
-				// it.
 				BMHD bmhd;
 				memset(&bmhd, 0, sizeof(bmhd));
 
@@ -340,11 +323,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							BYTE rle_count;
 							BYTE byte;
 
-							// the loop condition is only reached between packets, and
-							// a single packet writes up to 128 bytes: the row bound
-							// has to be enforced inside them as well.  The literal
-							// bytes are still all consumed, so that a packet running
-							// past the row does not misalign the rows after it.
+							// bound every packet by the row, but still consume its bytes
 							while (number_of_bytes_written < line) {
 								if (io->read_proc(&rle_count, 1, 1, handle) != 1) {
 									break;
@@ -373,9 +352,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 										bits[number_of_bytes_written++] += byte;
 									}
 								}
-								// rle_count == 128 is a PackBits no-op.  It writes
-								// nothing, so only the read check above stops the
-								// loop spinning on a file made of 0x80 bytes.
+								// 128 is a PackBits no-op
 							}
 						} else {
 							// don't use compression

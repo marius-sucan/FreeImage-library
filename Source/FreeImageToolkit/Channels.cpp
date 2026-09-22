@@ -426,9 +426,6 @@ FreeImage_GetComplexChannel(FIBITMAP *src, FREE_IMAGE_COLOR_CHANNEL channel) {
 				break;
 
 			default:
-				// not a channel of a complex image.  The destination is allocated
-				// before the switch, so an unhandled channel used to be returned as a
-				// valid, silently all-zero FIT_DOUBLE image.
 				FreeImage_Unload(dst);
 				return NULL;
 		}
@@ -491,10 +488,7 @@ FreeImage_SetComplexChannel(FIBITMAP *dst, FIBITMAP *src, FREE_IMAGE_COLOR_CHANN
 			break;
 
 		default:
-			// only the real and the imaginary part can be written back;
-			// magnitude and phase would each need the other one to reconstruct
-			// a complex value.  Returning TRUE having done nothing said the
-			// opposite.
+			// magnitude or phase alone cannot rebuild a complex value
 			return FALSE;
 	}
 

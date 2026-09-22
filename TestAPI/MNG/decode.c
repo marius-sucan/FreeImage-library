@@ -1,30 +1,5 @@
-/*
- * FreeImage 3 - MNG container test
- *
- * Covers the MNG plugin (Source/FreeImage/PluginMNG.cpp) through the API a
- * caller uses for an animation: FreeImage_OpenMultiBitmap to open it,
- * FreeImage_GetPageCount to size it, FreeImage_LockPage to read a frame, and
- * FreeImage_Load for the single-image case.
- *
- * Every expectation here is worked out from the MNG 1.0 specification rather
- * than from what the plugin happens to do.  The rules that drive most of the
- * numbers:
- *
- *   - "When ticks_per_second is nonzero, and there is no other information
- *     available about interframe delay, viewers should display the sequence of
- *     frames at the rate of one frame per tick": the default delay is 1 tick.
- *   - "When this field is zero, the length of a tick is infinite, and decoders
- *     will ignore any attempt to define interframe delay": ticks_per_second of
- *     0 means every delay is 0.
- *   - Framing modes 1 and 3 associate the interframe delay with every
- *     foreground layer; 2 and 4 with only the last layer of a subframe, "a zero
- *     interframe delay is associated with the other layers".
- *   - Modes 3 and 4 restore the background first; 1 and 2 do not.
- *
- * Scratch files go to $MNG_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - MNG container test; expectations follow the MNG 1.0 spec */
+/* scratch files: $MNG_TEST_TMP or the current directory */
 
 #include <stdarg.h>
 
@@ -61,7 +36,7 @@ static const BYTE COLOUR[6][3] = {
 	{ 255, 255, 0 }, { 0, 255, 255 }, { 255, 0, 255 }
 };
 
-/** A FIMD_ANIMATION tag as a long, or `missing` when the tag is not there. */
+/* FIMD_ANIMATION tag as a long, or `missing` */
 static long anim_tag(FIBITMAP *dib, const char *key, long missing) {
 	FITAG *tag = NULL;
 	const void *value;
@@ -82,7 +57,7 @@ static long anim_tag(FIBITMAP *dib, const char *key, long missing) {
 	}
 }
 
-/** The colour at a spec coordinate: x rightward, y downward from the top. */
+/* colour at (x, y), y counted down from the top */
 static int pixel_at(FIBITMAP *dib, int x, int y, RGBQUAD *out) {
 	unsigned fi_y;
 
@@ -102,10 +77,7 @@ static int same_rgb(const RGBQUAD *got, const BYTE *want) {
 /* the tests                                                             */
 /* --------------------------------------------------------------------- */
 
-/**
- * A MNG-VLC sequence: a bare run of images with no FRAM at all.  Five pages,
- * and at 10 ticks a second the default of one frame per tick is 100 ms.
- */
+/* MNG-VLC, no FRAM: default 1 tick = 100 ms at 10 ticks/s */
 static void test_vlc(void) {
 	Buf mng;
 	const char *path;
@@ -172,10 +144,7 @@ static void test_vlc(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * Framing modes.  Mode 1 puts the delay on every layer; mode 2 puts it on the
- * last layer of each subframe and zero on the others.
- */
+/* mode 1: delay on every layer; mode 2: on each subframe's last layer */
 static void test_framing_modes(void) {
 	Buf mng;
 	const char *path;
@@ -304,10 +273,7 @@ static void test_framing_modes(void) {
 	}
 }
 
-/**
- * ticks_per_second = 0 means the tick is infinite, so no delay can be defined
- * however hard a FRAM tries.
- */
+/* ticks_per_second 0: the tick is infinite, every delay is 0 */
 static void test_infinite_tick(void) {
 	Buf mng;
 	const char *path;
@@ -348,7 +314,6 @@ static void test_infinite_tick(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/** LOOP and TERM both describe how many times the animation plays. */
 static void test_loop_counts(void) {
 	struct { const char *name; int use_term; DWORD iterations; long expect; } cases[] = {
 		{ "mng_loop3.mng",   0, 3,          3 },
@@ -391,7 +356,6 @@ static void test_loop_counts(void) {
 			fail("%s: FreeImage_OpenMultiBitmap returned NULL", cases[c].name);
 			continue;
 		}
-		/* the images are in the file once, so they are pages once */
 		if (FreeImage_GetPageCount(mb) != 3) {
 			fail("%s: %d pages, expected 3 - a loop must not repeat the images",
 				 cases[c].name, FreeImage_GetPageCount(mb));
@@ -414,7 +378,7 @@ static void test_loop_counts(void) {
 	}
 }
 
-/** A LOOP with a zero iteration count runs its body no times at all. */
+/* a zero-count LOOP skips its body */
 static void test_zero_loop(void) {
 	Buf mng;
 	const char *path;
@@ -465,7 +429,6 @@ static void test_zero_loop(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/** DEFI places an image on the canvas, and MNG_PLAYBACK draws it there. */
 static void test_placement_and_playback(void) {
 	Buf mng;
 	const char *path;
@@ -489,7 +452,7 @@ static void test_placement_and_playback(void) {
 	path = write_file("mng_placed.mng", &mng);
 	buf_free(&mng);
 
-	/* --- raw: the page is the rectangle the file stores, tagged with where --- */
+	/* raw: the stored rectangle, tagged with its position */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
 	if (!mb) {
 		fail("FreeImage_OpenMultiBitmap returned NULL");
@@ -538,8 +501,7 @@ static void test_placement_and_playback(void) {
 			fail("MNG_PLAYBACK: page 1 is %u bpp, expected 32", FreeImage_GetBPP(dib));
 			bad = 1;
 		}
-		/* framing mode 1 generates no background layer between frames, so the
-		   first image is still there underneath the second */
+		/* mode 1 adds no background layer: image 1 stays under image 2 */
 		if (!bad && (!pixel_at(dib, 10, 10, &colour) || !same_rgb(&colour, COLOUR[0]))) {
 			fail("MNG_PLAYBACK: (10,10) is (%u,%u,%u), expected the first image - "
 				 "framing mode 1 does not restore the background",
@@ -565,10 +527,7 @@ static void test_placement_and_playback(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * A DEFI naming an object id that has been defined before leaves the fields it
- * omits alone; the spec's defaults are only for an id not seen before.
- */
+/* a short DEFI of a known id keeps the fields it omits */
 static void test_defi_omitted_fields(void) {
 	Buf mng;
 	const char *path;
@@ -610,10 +569,7 @@ static void test_defi_omitted_fields(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * SHOW displays an object defined earlier, which is how a MNG-LC file reuses
- * an image.  Two definitions, three SHOWs, three pages.
- */
+/* SHOW reuses objects: 2 definitions, 3 SHOWs, 3 pages */
 static void test_show(void) {
 	Buf mng;
 	const char *path;
@@ -667,7 +623,6 @@ static void test_show(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/** FIF_LOAD_NOPIXELS describes a frame without decoding it. */
 static void test_header_only(void) {
 	Buf mng;
 	const char *path;
@@ -757,7 +712,6 @@ static void test_single_load(void) {
 	FreeImage_Unload(dib);
 }
 
-/** An alpha frame composites over what is under it rather than replacing it. */
 static void test_alpha_compositing(void) {
 	Buf mng;
 	const char *path;
@@ -799,15 +753,7 @@ static void test_alpha_compositing(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * A canvas nothing in the file has to justify.
- *
- * MHDR's frame_width and frame_height go up to 2^31-1 each and need not agree
- * with anything else, so a 200-byte file holding one 16x16 image can ask for a
- * 65535x65535 canvas - seventeen gigabytes to compose, which Linux hands out
- * and then kills the process for touching.  The composition must be refused;
- * the images must still be readable without it.
- */
+/* huge MHDR canvas: composing is refused, the pages still read */
 static void test_absurd_canvas(void) {
 	Buf mng;
 	const char *path;
@@ -826,7 +772,6 @@ static void test_absurd_canvas(void) {
 	path = write_file("mng_absurd.mng", &mng);
 	buf_free(&mng);
 
-	/* the pages themselves are small and must still read */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
 	if (!mb) {
 		fail("the file cannot be opened at all");
@@ -849,9 +794,6 @@ static void test_absurd_canvas(void) {
 	}
 	FreeImage_CloseMultiBitmap(mb, 0);
 
-	/* composing it must be refused rather than attempted. Opening must still
-	   work: the canvas is only consulted when a frame is composed, and a file
-	   that cannot be opened at all is one whose images have been lost with it. */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
 	if (!mb) {
 		fail("MNG_PLAYBACK refused to open the file; only the composing should fail");

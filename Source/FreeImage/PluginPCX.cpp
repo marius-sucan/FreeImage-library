@@ -141,10 +141,6 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 						// we still have one BYTE, copy it to the start pos
 						*ReadBuf = ReadBuf[PCX_IO_BUF_SIZE - 1];
 						got = io->read_proc(ReadBuf + 1, 1, PCX_IO_BUF_SIZE - 1, handle);
-						// whatever the stream could not supply is not pixel data.  The
-						// result of these two reads used to be discarded, so the tail of
-						// a truncated file decoded as the previous refill - and on the
-						// first refill, as the uninitialised heap this buffer comes from.
 						memset(ReadBuf + 1 + got, 0, PCX_IO_BUF_SIZE - 1 - got);
 					} else {
 						// read the complete buffer
@@ -161,12 +157,7 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 					count = value & 0x3F;
 					value = *(ReadBuf + (*ReadPos)++);
 
-					// A repeat count of zero is no pixels, not 256 of them.  count is a
-					// BYTE, so the decrement below turned 0 into 255: one 0xC0 byte
-					// replaced the rest of a row with copies of one value and shifted
-					// every row after it.  The PCX specification gives the count as
-					// 1..63, and netpbm's pcxtoppm and ImageMagick's coders/pcx.c both
-					// emit nothing for 0.
+					// a zero count is no pixels (the spec allows 1..63)
 					if (count == 0) {
 						continue;
 					}
@@ -375,9 +366,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 
 	try {
-		// where this PCX begins.  It is not necessarily byte 0 of the stream:
-		// FreeImage_LoadFromHandle may be given a handle positioned inside a larger
-		// file, and the validation just below already takes care to restore it.
 		const long start_pos = io->tell_proc(handle);
 
 		// check PCX identifier
@@ -509,9 +497,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 
-				// back to the pixel data, which follows the header of THIS image -
-				// an absolute 128 put an embedded PCX 128 bytes before its own data
-				// and it went on to decode its own header as pixels
 				io->seek_proc(handle, start_pos + (long)sizeof(PCXHEADER), SEEK_SET);
 			}
 			break;

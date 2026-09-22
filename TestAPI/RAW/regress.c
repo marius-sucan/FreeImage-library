@@ -1,18 +1,5 @@
-/*
- * FreeImage 3 - RAW regression test
- *
- * The behaviour of PluginRAW itself, as opposed to the pixels LibRaw produces:
- * the datastream wrapper, the four load paths and how they relate, the
- * cropping the Raw.* metadata describes, the embedded colour profile, and the
- * fact that the plugin is read-only.
- *
- * The wrapper is the interesting part. LibRaw_freeimage_datastream is the only
- * FreeImage code in the RAW path that LibRaw calls back into, so every load
- * here is done twice - once from a file and once from a memory stream - and
- * the two are required to agree exactly.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - RAW regression test: PluginRAW's own behaviour */
+/* every load runs from a file and a memory stream; both must agree */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -84,8 +71,7 @@ static const char *meta_str(FIBITMAP *dib, const char *key) {
 	}
 }
 
-/* --- the datastream wrapper ------------------------------------------------
-   Every path, loaded from a file and from a memory stream, must agree. */
+/* --- the datastream wrapper ----------------------------------------------- */
 static void test_stream(void) {
 	static const struct { const char *name; int flags; } PATHS[] = {
 		{ "default16",   0                    },
@@ -122,7 +108,7 @@ static void test_stream(void) {
 			if (b) FreeImage_Unload(b);
 			if (m) FreeImage_CloseMemory(m);
 		}
-		/* the format is identified the same way through a stream too */
+		/* identification through a stream too */
 		{
 			FIMEMORY *m = FreeImage_OpenMemory(bytes, (DWORD)n);
 			FREE_IMAGE_FORMAT fif = FreeImage_GetFileTypeFromMemory(m, 0);
@@ -138,13 +124,7 @@ static void test_stream(void) {
 	}
 }
 
-/* --- a stream that does not start at byte zero -----------------------------
-   FreeImage_LoadFromHandle reads from wherever the handle stands, so a RAW
-   file may begin part way into a stream that holds something else first.
-   LibRaw_freeimage_datastream reports its size from that point, and its seek()
-   has to offset LibRaw's stream-relative positions by the same amount. When it
-   did not, every offset in the file landed in front of the image and the file
-   was not recognised at all. */
+/* --- a stream that does not start at byte zero ---------------------------- */
 static void test_offset(void) {
 	static const long PREFIX[] = { 1, 3, 64, 1000 };
 	static const struct { const char *name; int flags; } PATHS[] = {
@@ -163,7 +143,7 @@ static void test_offset(void) {
 			long pre = PREFIX[p];
 			BYTE *buf = (BYTE *)malloc((size_t)(n + pre));
 			if (!buf) { fail(FILES[i], "offset", "out of memory"); ok = 0; break; }
-			/* something that is not a RAW file in front of the RAW file */
+			/* junk prefix */
 			memset(buf, 0xAB, (size_t)pre);
 			memcpy(buf + pre, bytes, (size_t)n);
 
@@ -212,8 +192,6 @@ static void test_offset(void) {
 						fail(FILES[i], "offset", "ValidateFromMemory refused at %ld", pre);
 						ok = 0;
 					}
-					/* the plugin must leave the handle where it found it or
-					   before the end, never in front of where it started */
 					if (FreeImage_TellMemory(m) < pre) {
 						fail(FILES[i], "offset", "the handle moved in front of the stream");
 						ok = 0;
@@ -242,17 +220,14 @@ static void test_paths(void) {
 			fail(FILES[i], "paths", "one of the loads failed");
 		} else {
 			unsigned w = FreeImage_GetWidth(full), h = FreeImage_GetHeight(full);
-			/* a header-only load reports the same size and carries no pixels */
 			if (FreeImage_GetWidth(hdr) != w || FreeImage_GetHeight(hdr) != h)
 				fail(FILES[i], "header", "size %ux%u, full load %ux%u",
 				     FreeImage_GetWidth(hdr), FreeImage_GetHeight(hdr), w, h);
 			if (FreeImage_HasPixels(hdr))
 				fail(FILES[i], "header", "FIF_LOAD_NOPIXELS returned pixels");
-			/* half size is half, rounded down */
 			if (FreeImage_GetWidth(half) != w / 2 || FreeImage_GetHeight(half) != h / 2)
 				fail(FILES[i], "halfsize", "%ux%u, want %ux%u",
 				     FreeImage_GetWidth(half), FreeImage_GetHeight(half), w / 2, h / 2);
-			/* RAW_DISPLAY is the same picture at 8 bits per sample */
 			if (FreeImage_GetImageType(full) != FIT_RGB16 || FreeImage_GetBPP(full) != 48)
 				fail(FILES[i], "default", "want FIT_RGB16/48bpp, got type %d/%ubpp",
 				     (int)FreeImage_GetImageType(full), FreeImage_GetBPP(full));
@@ -270,8 +245,6 @@ static void test_paths(void) {
 		if (disp) FreeImage_Unload(disp);
 	}
 
-	/* With no embedded preview RAW_PREVIEW has to fall back to decoding, and
-	   then it is exactly the RAW_DISPLAY image. With one it is the preview. */
 	printf("-- RAW_PREVIEW uses the embedded preview, or decodes\n");
 	{
 		FIBITMAP *p = FreeImage_Load(FIF_RAW, "data/fi_raw_nopreview.dng", RAW_PREVIEW);
@@ -301,9 +274,7 @@ static void test_paths(void) {
 	}
 }
 
-/* --- cropping -------------------------------------------------------------
-   The two files with an ActiveArea margin must come out smaller than their CFA
-   field, and RAW_UNPROCESSED must still hand back the whole field. */
+/* --- cropping ------------------------------------------------------------- */
 static void test_crop(void) {
 	static const struct {
 		const char *file;
@@ -343,7 +314,7 @@ static void test_crop(void) {
 				     meta_long(un, "Raw.Frame.Top", -1), CROP[i].left, CROP[i].top);
 				bad = 1;
 			}
-			/* the Raw.Output.* pair has to describe the processed image */
+			/* Raw.Output.* describes the processed image */
 			if (meta_long(un, "Raw.Output.Width", -1) != (long)CROP[i].out_w ||
 			    meta_long(un, "Raw.Output.Height", -1) != (long)CROP[i].out_h) {
 				fail(CROP[i].file, "crop", "Raw.Output.* disagrees with the 16-bit load");

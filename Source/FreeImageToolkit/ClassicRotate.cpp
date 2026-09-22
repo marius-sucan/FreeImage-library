@@ -38,17 +38,7 @@
 
 #define RBLOCK		64	// image blocks of RBLOCK*RBLOCK pixels
 
-/**
-Rounding bias for the sample type of a skew.
-
-The weighted value is computed in double and stored back as T, so half a unit
-makes that a round-to-nearest for the BYTE and WORD instantiations.  For the
-float one it is not rounding at all - it is an offset of 0.5 on data whose whole
-range is typically 0..1.  Most of it cancels in the running pxlLeft - pxlOldLeft
-difference, but not at the two ends of each row or column, where pxlOldLeft comes
-from the background and carries no bias: a uniform 0.125 FIT_FLOAT image rotated
-by 10 degrees over a black background came out spanning -0.83 .. +1.04.
-*/
+// rounding bias: 0.5 for integer samples, none for float
 template <class T> struct SkewRounding { static double bias() { return 0.5; } };
 template <> struct SkewRounding<float> { static double bias() { return 0.0; } };
 
@@ -359,8 +349,7 @@ Rotate90(FIBITMAP *src) {
 				BYTE *bsrc  = FreeImage_GetBits(src); 
 				BYTE *bdest = FreeImage_GetBits(dst);
 				BYTE *dbitsmax = bdest + dst_height * dst_pitch - 1;
-				// Not parallelised: eight consecutive source rows y pack their bits into
-				// the same destination byte (column y/8), so a threaded |= drops updates.
+				// not parallel: 8 source rows share a destination byte (|= races)
 				for(INT64 y = 0; y < src_height; y++) {
 					// figure out the column we are going to be copying to
 					const div_t div_r = div((int)y, 8);
@@ -549,8 +538,7 @@ Rotate270(FIBITMAP *src) {
 				BYTE *bdest = FreeImage_GetBits(dst);
 				BYTE *dbitsmax = bdest + dst_height * dst_pitch - 1;
 				INT64 dlineup = 8 * dst_pitch - dst_width;
-				// Not parallelised: eight consecutive source rows y pack their bits into
-				// the same destination byte (column (y+dlineup)/8), so a threaded |= drops updates.
+				// not parallel: 8 source rows share a destination byte (|= races)
 				for(INT64 y = 0; y < src_height; y++) {
 					// figure out the column we are going to be copying to
 					const div_t div_r = div((int)(y + dlineup), 8);
@@ -772,19 +760,7 @@ RotateAny(FIBITMAP *src, double dAngle, const void *bkcolor) {
 
 	FIBITMAP *image = src;
 
-	// Bring angle to the range [0 .. 360).
-	//
-	// This was two loops stepping 360 degrees at a time, and neither of them
-	// terminated in bounded time.  At |dAngle| >= 2^63 a double's ULP exceeds
-	// 720, so dAngle - 360 == dAngle and FreeImage_Rotate never returned at all;
-	// below that it still took dAngle/360 iterations, which is 2.8e12 of them
-	// for an angle of 1e15.  A NaN failed both loop conditions and both of the
-	// range tests below, and fell through to Rotate45, where the shear
-	// dimensions come out of an undefined double-to-unsigned conversion - here
-	// that produced a 1x1 bitmap and reported success.
-	//
-	// fmod does the whole reduction in one operation, and it returns a NaN for
-	// an infinity, which is what catches both of those in one test.
+	// Bring angle to range of [0 .. 360)
 	dAngle = fmod(dAngle, 360);
 	if(dAngle != dAngle) {
 		// not a number, or an infinity
@@ -793,8 +769,7 @@ RotateAny(FIBITMAP *src, double dAngle, const void *bkcolor) {
 	if(dAngle < 0) {
 		dAngle += 360;
 		if(dAngle >= 360) {
-			// a tiny negative angle rounds up to exactly 360, which none of the
-			// range tests below would then claim
+			// a tiny negative angle can round up to 360
 			dAngle = 0;
 		}
 	}

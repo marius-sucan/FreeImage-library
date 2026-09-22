@@ -48,25 +48,7 @@
 
 static int s_format_id;
 
-/**
-How much larger than the file the uncompressed pixel data may claim to be
-before the data window is treated as a lie.  Used by CheckDataWindow below.
-
-Measured rather than guessed, against flat colour - the most compressible
-content there is - at sizes from 512 to 16384 square, four half channels:
-
-    codec   512     2048    4096    8192    16384
-    DWAB    2494    9590    14012   17672   19806
-    DWAA    605     2220    4071    6915    10574
-    ZIP     350     680     803     876     932     (deflate tops out at 1032)
-    PIZ     129     205     258
-
-The ratio grows with the picture and then levels off: quadrupling the pixel
-count from 8192 to 16384 square moved DWAB by a factor of 1.12, so ~20000:1 is
-where the most compressible file any encoder can write ends up.  This leaves
-better than six times that, and still refuses a data window that would need a
-ratio in the tens of millions, which is what a corrupted one asks for.
-*/
+// cap on raw size / file size; flat DWAB peaks near 20000:1
 #define FI_EXR_MAX_COMPRESSION_RATIO 131072
 
 // ----------------------------------------------------------
@@ -194,42 +176,14 @@ SupportsNoPixels() {
 
 // --------------------------------------------------------------------------
 
-/**
-Refuse a data window the file cannot possibly hold.
-
-The data window is a claim made by the header, and nothing checks it against
-the file: FreeImage_AllocateHeaderT takes a damaged or hostile one at face
-value and asks the system for whatever it says, which for a single flipped
-byte can be tens of gigabytes.
-
-OpenEXR has a limit of its own, but Header::sanityCheck() reads it from
-exr_set_default_maximum_image_size(), which is process-global state that a
-library has no business setting, and the per-context
-ContextInitializer::setMaxImageSize() is not wired through to it yet (see the
-TODO in ImfHeader.cpp).  So the check belongs here, where it can also use
-something OpenEXR does not have to hand: the length of the stream.
-
-Both tests below are derived from the file rather than from a fixed maximum
-size, so a genuinely enormous image still loads.
-
-@param header Header of the file being loaded
-@param width Data window width, already known to fit an int
-@param height Data window height, already known to fit an int
-@param stream_bytes Length of the stream, or 0 when it could not be measured
-@throw Iex::InputExc when the file is too small for the picture it describes
-*/
+// refuse a data window the file is too small to hold
 static void
 CheckDataWindow(const Imf::Header& header, int width, int height, long stream_bytes) {
 	if(stream_bytes <= 0) {
-		// the stream would not say how long it is: nothing to compare against
 		return;
 	}
 
-	// 1. A scanline image is stored in chunks of getCompressionNumScanlines()
-	// rows.  Every chunk costs 8 bytes in the chunk offset table plus an 8 byte
-	// chunk header (its y coordinate and its data size), so a file shorter than
-	// 16 bytes per chunk cannot hold the number of rows it claims.  Exact: no
-	// valid file can fail this.  Tiled images are left to the second test.
+	// 1. scanline: each chunk needs 16 bytes (table entry + header)
 	if(!header.hasTileDescription()) {
 		const int lines_per_chunk = Imf::getCompressionNumScanlines(header.compression());
 		if(lines_per_chunk > 0) {
@@ -243,19 +197,16 @@ CheckDataWindow(const Imf::Header& header, int width, int height, long stream_by
 		}
 	}
 
-	// 2. For any image, tiled or not, compare the uncompressed pixel data the
-	// header describes against the size of the file.
+	// 2. any layout: raw pixel bytes against the file size
 	double bytes_per_pixel = 0;
 	for (Imf::ChannelList::ConstIterator i = header.channels().begin(); i != header.channels().end(); ++i) {
 		const Imf::Channel &channel = i.channel();
 		const double sample_bytes = (channel.type == Imf::HALF) ? 2.0 : 4.0;
 		const double x_sampling = (channel.xSampling > 0) ? (double)channel.xSampling : 1.0;
 		const double y_sampling = (channel.ySampling > 0) ? (double)channel.ySampling : 1.0;
-		// a subsampled channel keeps one sample per xSampling x ySampling pixels
 		bytes_per_pixel += sample_bytes / (x_sampling * y_sampling);
 	}
-	// in double, because the product overflows every integer type long before
-	// it becomes implausible, and no precision is needed at this magnitude
+	// in double: the product can overflow 64 bits
 	const double raw_bytes = (double)width * (double)height * bytes_per_pixel;
 	if(raw_bytes > (double)stream_bytes * FI_EXR_MAX_COMPRESSION_RATIO) {
 		THROW (Iex::InputExc, "Invalid data window: the header describes " << width << " x " << height
@@ -281,10 +232,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// save the stream starting point
 		const long stream_start = io->tell_proc(handle);
 
-		// measure the stream, so that CheckDataWindow below can tell whether the
-		// file is big enough to hold the picture its header describes.  Zero means
-		// the size could not be established - a handle whose tell_proc is a 32-bit
-		// long, for instance - and the checks are then skipped rather than guessed.
+		// stream length for CheckDataWindow; 0 = unknown, no check
 		long stream_bytes = 0;
 		if(io->seek_proc(handle, 0, SEEK_END) == 0) {
 			const long stream_end = io->tell_proc(handle);
@@ -302,8 +250,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// get file info			
 		const Imath::Box2i &dataWindow = file.header().dataWindow();
-		// the difference of two ints does not fit an int, so widen before subtracting:
-		// OpenEXR only guarantees the corners are within +/- INT_MAX/2
+		// widen first: max - min can overflow an int
 		const INT64 window_width  = (INT64)dataWindow.max.x - (INT64)dataWindow.min.x + 1;
 		const INT64 window_height = (INT64)dataWindow.max.y - (INT64)dataWindow.min.y + 1;
 		if((window_width <= 0) || (window_height <= 0) || (window_width > INT_MAX) || (window_height > INT_MAX)) {
@@ -374,16 +321,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// --------------------------------------------------------------
 
 		if(channels.findChannel("Y") && channels.findChannel("BY") && channels.findChannel("RY")) {
-			// Luminance and chroma, the chroma normally subsampled: Y/BY/RY, or
-			// A/BY/RY/Y once the image has an alpha channel - which is exactly what
-			// SaveAsEXR_LC writes for a RGBAF image (Imf::WRITE_YCA).  Only
-			// Imf::RgbaInputFile puts RGB back together out of these, so the low
-			// level interface further down is not used for them.
-			//
-			// Recognised by channel name rather than by channel count: until
-			// 2026-09-15 only the three channel form was, and the four channel one
-			// fell through to "Unsupported color model: A/BY/RY/Y" - so FreeImage
-			// refused to read back the files its own EXR_LC flag had written.
+			// luminance/chroma (Y/BY/RY[/A]): needs Imf::RgbaInputFile
 			bUseRgbaInterface = true;
 			if(channels.findChannel("A")) {
 				image_type = FIT_RGBAF;
@@ -433,7 +371,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			THROW (Iex::InputExc, "Unsupported color model: " << exr_color_model);
 		}
 
-		// the data window is only a claim until it has been checked against the file
 		CheckDataWindow(file.header(), width, height, stream_bytes);
 
 		// allocate a new dib
@@ -503,11 +440,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			Imath::Box2i dw = dataWindow;
 			Imf::Array2D<Imf::Rgba> chunk(chunk_size, width);
 			while (dw.min.y <= dw.max.y) {
-				// how many rows this pass covers: the last chunk is a short one.
-				// Until 2026-09-15 the copy below ran to (dw.max.y - dw.min.y), one
-				// row short of the (dw.max.y - dw.min.y + 1) that were read, so the
-				// bottom scanline of every Y/BY/RY image was left as the zeros
-				// FreeImage_AllocateHeaderT had cleared it to.
+				// dw.max.y is inclusive; the last chunk is short
 				const int rows = MIN(chunk_size, dw.max.y - dw.min.y + 1);
 				// read a chunk
 				rgbaFile.setFrameBuffer (&chunk[0][0] - dw.min.x - dw.min.y * width, 1, width);

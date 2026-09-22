@@ -130,10 +130,6 @@ rgbe_GetLine(FreeImageIO *io, fi_handle handle, char *buffer, int length) {
 		return FALSE;
 	}
 
-	// The last slot of the buffer belongs to the terminator.  Reading into it was
-	// what wiped the NUL that the memset had put there, and the function still
-	// reported a line: the sscanfs the header parser then runs on it went looking
-	// for their conversions past the end of the array.
 	memset(buffer, 0, length);
 	for(i = 0; i < length - 1; i++) {
 		if (!io->read_proc(&buffer[i], 1, 1, handle)) {
@@ -266,28 +262,10 @@ rgbe_ReadHeader(FreeImageIO *io, fi_handle handle, unsigned *width, unsigned *he
 		return rgbe_Error(rgbe_read_error, NULL);
 	}
 
-	// get the image width & height.
-	// %d must land in ints: writing it straight into the unsigned outputs let a
-	// negative value through, and "-Y 1 +X -1" then reached rgbe_ReadPixels()
-	// with numpixels = 4294967295 - twelve bytes written per four read, over a
-	// twelve-byte scanline, until the file ran out.
+	// get the image width & height
 	int nWidth = 0, nHeight = 0;
 
-	// Which axis is named FIRST decides how the samples are laid out, not
-	// merely which of the two numbers comes first.  Radiance raises its
-	// YMAJOR flag only when the X token follows the Y token (resolu.c,
-	// str2resolu) and takes the scanline geometry from that flag
-	// (fgetresolu):
-	//
-	//     if (rt & YMAJOR) { *sl = xr; *ns = yr; }   // "-Y <yr> +X <xr>"
-	//     else             { *sl = yr; *ns = xr; }   // "+X <xr> +Y <yr>"
-	//
-	// So "+X w +Y h" is still a w-wide, h-tall picture - but it is held as
-	// w scanlines of h pixels, one per COLUMN.  Reading it as h rows of w
-	// merely happens to consume the right number of bytes: the pixels land
-	// transposed, and the run-length form is rejected outright, because
-	// every scanline then declares a length of h where w was expected.
-	// Load() reads this form a column at a time instead.
+	// "+X w +Y h" is column-major: w scanlines of h pixels (resolu.c)
 	*bYmajor = TRUE;
 
 	if(sscanf(buf,"-Y %d +X %d", &nHeight, &nWidth) < 2) {
@@ -703,8 +681,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// read the image pixels and fill the dib
 
 		if(bYmajor) {
-			// "-Y <height> +X <width>": one scanline per row, topmost first.
-			// The dib is bottom-up, so row 0 of the file is its last scanline.
+			// "-Y h +X w": one scanline per row, top row first
 			for(unsigned y = 0; y < height; y++) {
 				FIRGBF *scanline = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
 				if(!rgbe_ReadPixels_RLE(io, handle, scanline, width, 1)) {
@@ -713,10 +690,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 			}
 		} else {
-			// "+X <width> +Y <height>": one scanline per COLUMN, and with the
-			// Y axis ascending - so scanline x holds column x from the bottom
-			// up, which is the dib's own row order.  Read each column whole
-			// and scatter it across the rows.
+			// "+X w +Y h": one scanline per column, bottom up
 			FIRGBF *column = (FIRGBF*)malloc(height * sizeof(FIRGBF));
 			if(!column) {
 				throw FI_MSG_ERROR_MEMORY;

@@ -83,9 +83,7 @@ class Ifd(object):
         return bytes(out)
 
 
-# --- the colour matrix ------------------------------------------------------
-# A plausible sRGB-ish ColorMatrix1; LibRaw wants one to build its camera to
-# XYZ transform.  The numbers only have to be invertible, not real.
+# ColorMatrix1: only has to be invertible, not real
 COLOR_MATRIX = [
     (6220, 10000), (-1341, 10000), (-609, 10000),
     (-4112, 10000), (11932, 10000), (2288, 10000),
@@ -235,8 +233,7 @@ def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
     sub.set(50714, LONG, [0])                   # BlackLevel
     sub.set(50717, LONG, [65535])               # WhiteLevel
     if left or top or right or bottom:
-        # ActiveArea is what dcraw/LibRaw turn into top_margin/left_margin,
-        # so this is the tag that makes the output frame differ from the CFA.
+        # ActiveArea becomes LibRaw's top_margin/left_margin
         sub.set(50829, LONG, [top, left, raw_h - bottom, raw_w - right])
         sub.set(50719, LONG, [0, 0])            # DefaultCropOrigin
         sub.set(50720, LONG, [act_w, act_h])    # DefaultCropSize
@@ -268,25 +265,22 @@ def main():
 
     files = []
 
-    # The workhorse: 96x64 RGGB with an uncompressed RGB preview, an embedded
-    # ICC profile and a four-pixel active-area margin, so the post-processed
-    # size differs from the CFA size and a lost margin shows up.
+    # RGGB, preview, ICC, 4 px margin (a lost margin shows)
     w, h = 96, 64
     files.append(("fi_raw_rggb.dng",
                   make_dng(w, h, RGGB, bayer(w, h, RGGB), "Synth RGGB",
                            prev_w=48, prev_h=32, crop=(4, 4, 4, 4), icc=True)))
 
-    # The same image with the other common Bayer phase, to catch a decoder
-    # that hard-codes one.
+    # the other Bayer phase
     files.append(("fi_raw_bggr.dng",
                   make_dng(w, h, BGGR, bayer(w, h, BGGR), "Synth BGGR",
                            prev_w=48, prev_h=32, crop=(4, 4, 4, 4))))
 
-    # No preview at all: the RAW_PREVIEW path has to fall back to decoding.
+    # no preview: RAW_PREVIEW must fall back to decoding
     files.append(("fi_raw_nopreview.dng",
                   make_dng(w, h, RGGB, bayer(w, h, RGGB), "Synth NoPrev")))
 
-    # Odd, uncropped dimensions, to catch off-by-one in the row loops.
+    # odd, uncropped dimensions
     w2, h2 = 70, 46
     files.append(("fi_raw_odd.dng",
                   make_dng(w2, h2, RGGB, bayer(w2, h2, RGGB), "Synth Odd")))

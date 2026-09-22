@@ -1,16 +1,5 @@
-/*
- * refdec - decode a JPEG 2000 file with the reference libopenjp2 2.5.4 and
- * write every component as planar samples, without any colour conversion,
- * in the convention FreeImage's J2KHelper uses (unsigned; signed components
- * offset by 2^(prec-1); 1 byte for prec <= 8, else 2 bytes little-endian).
- *
- *   refdec [-l] [-t N] in.j2k out.comps
- *     -l    lenient: opj_decoder_set_strict_mode(FALSE)
- *     -t N  opj_codec_set_threads(N)
- *
- * out.comps: line "OPJCOMPS <n>\n", then per component a line
- * "<w> <h> <prec> <sgnd> <dx> <dy>\n" followed by the samples.
- */
+/* refdec: decode with the reference libopenjp2, dump raw components (README.md) */
+/* -l lenient, -t N threads */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

@@ -1,39 +1,4 @@
-/*
- * FreeImage 3 - MNG writing and page-editing test
- *
- * Covers the MNG writer in Source/FreeImage/PluginMNG.cpp through the API a
- * caller uses to build one: FreeImage_Save for a single image,
- * FreeImage_OpenMultiBitmap with create_new plus AppendPage/InsertPage/
- * DeletePage/MovePage for an animation, and FreeImage_CloseMultiBitmap to write
- * it out.
- *
- * What is asserted:
- *
- *   - what went in comes back. Every depth and image type MNG says it can
- *     export is written and read again, and compared pixel for pixel - through
- *     the palette where there is one, so that a palette that did not survive is
- *     a failure rather than a coincidence.
- *   - the animation metadata - delays, placement, disposal, loop count and
- *     canvas - survives the round trip exactly. The tick is a millisecond, so
- *     there is no rounding to allow for.
- *   - editing a document - appending, deleting, inserting, moving - produces
- *     the pages in the order asked for, with their own timing still attached.
- *   - the memory stream and the file agree.
- *
- * Three things are deliberately lossy and are not asserted, because MNG has
- * nowhere to put them:
- *
- *   - the *last* frame's DisposalMethod. The reader derives a frame's disposal
- *     from whether the frame after it is drawn on a fresh background, and the
- *     last frame has no frame after it.
- *   - GIF_DISPOSAL_PREVIOUS, which needs the stored object buffers of full MNG.
- *     It is written as "leave the canvas alone".
- *   - BlendMethod. A MNG layer is always composited over what is beneath it.
- *
- * Scratch files go to $MNG_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* MNG writer and page-editing round trips */
 
 #include <stdarg.h>
 
@@ -60,15 +25,9 @@ static void ok(const char *fmt, ...) {
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
 
-/* ------------------------------------------------------------------ */
-/* bitmaps to write, and a way to tell two of them apart              */
-/* ------------------------------------------------------------------ */
+/* ---- test bitmaps ---- */
 
-/**
- * A bitmap whose every pixel is a function of where it is, so that a round trip
- * that lost or shifted anything shows up.  Images with a palette get a
- * distinctive one, so that a palette dropped on the way is a failure too.
- */
+/* position-dependent pixels; distinctive palette */
 static FIBITMAP *
 pattern(int width, int height, FREE_IMAGE_TYPE type, int bpp, int seed) {
 	FIBITMAP *dib = (type == FIT_BITMAP)
@@ -108,7 +67,6 @@ pattern(int width, int height, FREE_IMAGE_TYPE type, int bpp, int seed) {
 	return dib;
 }
 
-/** A solid colour, for the tests that only need to tell frames apart. */
 static FIBITMAP *
 solid(int width, int height, BYTE red, BYTE green, BYTE blue) {
 	FIBITMAP *dib = FreeImage_Allocate(width, height, 24, 0, 0, 0);
@@ -129,14 +87,7 @@ solid(int width, int height, BYTE red, BYTE green, BYTE blue) {
 	return dib;
 }
 
-/**
- * Do these two hold the same picture?
- *
- * Row padding is not compared: at 1 and 4 bits a row ends mid-byte, and the
- * bits past the last pixel belong to nobody.  A palette image is compared
- * through its palette, so an image whose indices were renumbered but whose
- * colours are the same still passes, and one whose palette was lost does not.
- */
+/* ignores row padding; compares palette images by colour */
 static int
 same_picture(FIBITMAP *a, FIBITMAP *b) {
 	unsigned x, y, bpp;
@@ -184,9 +135,7 @@ same_picture(FIBITMAP *a, FIBITMAP *b) {
 	return 1;
 }
 
-/* ------------------------------------------------------------------ */
-/* animation metadata                                                 */
-/* ------------------------------------------------------------------ */
+/* ---- animation metadata ---- */
 
 #define ANIM_LOGICALWIDTH	0x0001
 #define ANIM_LOGICALHEIGHT	0x0002
@@ -256,16 +205,9 @@ anim_tag(FIBITMAP *dib, const char *key, long missing) {
 	}
 }
 
-/* ------------------------------------------------------------------ */
-/* the tests                                                          */
-/* ------------------------------------------------------------------ */
+/* ---- the tests ---- */
 
-/**
- * One image, saved with FreeImage_Save.  It must come back as a MNG - not as
- * the bare PNG a MNG datastream is also allowed to be, because then
- * FreeImage_GetFileType() would call it a PNG - and it must come back
- * unchanged, whatever it was.
- */
+/* must come back as a MNG, not a bare PNG, and unchanged */
 static void test_single_image(void) {
 	static const struct {
 		const char *name;
@@ -336,10 +278,6 @@ static void test_single_image(void) {
 	}
 }
 
-/**
- * An animation built a page at a time, with its timing and placement stated,
- * then read back.
- */
 static void test_animation_round_trip(void) {
 	static const BYTE COLOUR[4][3] = {
 		{ 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 }, { 255, 255, 0 }
@@ -430,14 +368,6 @@ static void test_animation_round_trip(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * A page that says nothing about its timing.
- *
- * The default has to be stated somewhere, and it is worth pinning down: a page
- * appended without tags has been through the cache, which writes it out as a
- * MNG and reads it back, so by the time the file is assembled it carries
- * whatever the writer chose. A tenth of a second is what PluginAPNG.cpp uses.
- */
 static void test_untagged_default(void) {
 	const char *path = scratch("mng_untagged.mng");
 	FIMULTIBITMAP *mb;
@@ -482,10 +412,6 @@ static void test_untagged_default(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * Editing a document that already exists: delete a page, insert one, move one,
- * and see the file come back in the order asked for.
- */
 static void test_editing(void) {
 	static const BYTE COLOUR[4][3] = {
 		{ 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 }, { 255, 255, 0 }
@@ -494,8 +420,7 @@ static void test_editing(void) {
 	FIMULTIBITMAP *mb;
 	FIBITMAP *dib;
 	int i, bad = 0;
-	/* after deleting page 1 (green): red, blue, yellow; then cyan inserted at 1;
-	   then page 0 moved to the end */
+	/* delete 1, insert cyan at 1, move 0 to the end */
 	static const BYTE EXPECTED[4][3] = {
 		{ 0, 255, 255 }, { 0, 0, 255 }, { 255, 255, 0 }, { 255, 0, 0 }
 	};
@@ -515,8 +440,7 @@ static void test_editing(void) {
 	}
 	FreeImage_CloseMultiBitmap(mb, 0);
 
-	/* reopen it for editing - not with MNG_PLAYBACK, which would hand back
-	   composited canvases rather than the frames the file stores */
+	/* no MNG_PLAYBACK: edit stored frames, not canvases */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, FALSE, FALSE, 0);
 	if (!mb) {
 		fail("the file cannot be opened for editing");
@@ -541,9 +465,7 @@ static void test_editing(void) {
 		bad = 1;
 	}
 
-	/* cyan, red, blue, yellow -> move the red to the end.
-	   The arguments are (target, source): where it should end up, then where it
-	   is now. */
+	/* move red to the end; MovePage takes (target, source) */
 	FreeImage_MovePage(mb, 3, 1);
 
 	if (!FreeImage_CloseMultiBitmap(mb, 0)) {
@@ -584,8 +506,7 @@ static void test_editing(void) {
 		ok("delete, insert and move leave the pages in the order asked for");
 	}
 
-	/* the moved page kept the delay it was given, which is what proves the
-	   timing travelled with the page rather than with its position */
+	/* timing must follow the page, not its position */
 	dib = FreeImage_LockPage(mb, 3);
 	if (dib) {
 		if (anim_tag(dib, "FrameTime", -1) != 200) {
@@ -599,12 +520,6 @@ static void test_editing(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/**
- * Disposal.  A frame that disposes to the background is written as a framing
- * mode that has the background drawn ahead of the frame after it, which is
- * what the reader turns back into a disposal.  The last frame's disposal has
- * nowhere to go and is not asserted.
- */
 static void test_disposal(void) {
 	const char *path = scratch("mng_disposal.mng");
 	FIMULTIBITMAP *mb;
@@ -635,7 +550,7 @@ static void test_disposal(void) {
 		fail("the file cannot be read back");
 		return;
 	}
-	/* only the frames that have a frame after them can carry a disposal */
+	/* the last frame's disposal is not stored */
 	for (i = 0; i < 2 && i < FreeImage_GetPageCount(mb); i++) {
 		dib = FreeImage_LockPage(mb, i);
 		if (!dib) {
@@ -655,7 +570,6 @@ static void test_disposal(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/** Loop counts, including the two that are spelled specially. */
 static void test_loop_counts(void) {
 	static const LONG LOOPS[] = { 1, 5, 0 };   /* once, five times, forever */
 	size_t c;
@@ -703,11 +617,6 @@ static void test_loop_counts(void) {
 	}
 }
 
-/**
- * The canvas has to hold every frame.  Pages of different sizes, placed at
- * different offsets, must not end up with a canvas that some of them hang off -
- * whatever the LogicalWidth they were given says.
- */
 static void test_canvas_grows(void) {
 	const char *path = scratch("mng_canvas.mng");
 	FIMULTIBITMAP *mb;
@@ -757,7 +666,6 @@ static void test_canvas_grows(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/** A background colour, which MNG keeps in a BACK chunk. */
 static void test_background(void) {
 	const char *path = scratch("mng_back.mng");
 	FIBITMAP *dib, *back;
@@ -794,7 +702,6 @@ static void test_background(void) {
 	FreeImage_Unload(back);
 }
 
-/** The memory stream and the file must agree. */
 static void test_memory_stream(void) {
 	FIBITMAP *src, *back;
 	FIMEMORY *hmem;
@@ -837,11 +744,6 @@ static void test_memory_stream(void) {
 	FreeImage_Unload(src);
 }
 
-/**
- * The save flags are the PNG writer's, because the PNG writer is what encodes
- * every frame.  Both ends of the compression range must produce a file that
- * reads back unchanged.
- */
 static void test_save_flags(void) {
 	static const struct { const char *name; int flags; } cases[] = {
 		{ "PNG_Z_BEST_SPEED", PNG_Z_BEST_SPEED },
@@ -881,13 +783,7 @@ static void test_save_flags(void) {
 	}
 }
 
-/**
- * A document created and closed without ever being given a page.
- *
- * There is no such thing as a MNG of nothing, so nothing is written - which is
- * what APNG, GIF and TIFF all do here too. The test exists to pin that down
- * rather than to approve of it: the point is that MNG does not differ.
- */
+/* no pages: no file, as with APNG, GIF and TIFF */
 static void test_empty_document(void) {
 	const char *path = scratch("mng_empty_doc.mng");
 	FIMULTIBITMAP *mb;
@@ -908,11 +804,6 @@ static void test_empty_document(void) {
 	}
 }
 
-/**
- * What cannot be written has to be refused while there is still something to
- * return FALSE to - Close() is void, and a page accepted there would leave
- * FreeImage_Save answering TRUE over a file it would otherwise have removed.
- */
 static void test_refuses_unsupported(void) {
 	const char *path = scratch("mng_refuse.mng");
 	FIBITMAP *dib;
@@ -933,8 +824,7 @@ static void test_refuses_unsupported(void) {
 	}
 	FreeImage_Unload(dib);
 
-	/* and a bitmap with no pixels has nothing to write. One comes back from a
-	   header-only load, which is the only way a caller gets one. */
+	/* a header-only bitmap has nothing to write */
 	{
 		FIBITMAP *solid_dib = solid(8, 8, 1, 2, 3);
 		const char *source = scratch("mng_nopixels_src.mng");
@@ -961,10 +851,6 @@ static void test_refuses_unsupported(void) {
 }
 
 
-/**
- * The memory-stream half of the page API: build a document, write it to a
- * memory stream, and read it back from one.
- */
 static void test_multibitmap_memory(void) {
 	static const BYTE COLOUR[3][3] = { { 200, 0, 0 }, { 0, 200, 0 }, { 0, 0, 200 } };
 	const char *path = scratch("mng_mem_src.mng");
@@ -974,7 +860,6 @@ static void test_multibitmap_memory(void) {
 
 	printf("the page API over a memory stream\n");
 
-	/* something to start from */
 	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, TRUE, FALSE, FALSE, 0);
 	if (!mb) {
 		fail("FreeImage_OpenMultiBitmap with create_new returned NULL");
@@ -1051,10 +936,6 @@ static void test_multibitmap_memory(void) {
 	}
 }
 
-/**
- * FreeImage_UnlockPage with changed = TRUE: the edited page has to reach the
- * file, and the pages around it have to be left alone.
- */
 static void test_unlock_changed(void) {
 	const char *path = scratch("mng_unlock.mng");
 	FIMULTIBITMAP *mb;
@@ -1133,10 +1014,7 @@ static void test_unlock_changed(void) {
 				 want_red, want_green, want_blue);
 			bad = 1;
 		}
-		/* The edited page went through the cache, which keeps its FIMD_ANIMATION
-		   aside and puts it back before this writer sees the page - the one place
-		   MultiPage.cpp's metadata carrier and the MNG writer meet. The repaint
-		   must not have cost the page its timing. */
+		/* the repaint must keep the page's timing */
 		if (anim_tag(dib, "FrameTime", -1) != 111) {
 			fail("page %d is %ld ms after the edit, expected the 111 it had before",
 				 i, anim_tag(dib, "FrameTime", -1));

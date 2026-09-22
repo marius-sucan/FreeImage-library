@@ -1,4 +1,3 @@
-# built by this directory's Makefile
 decode
 narrowio
 decode-asan
@@ -8,5 +7,4 @@ asan-obj/
 step-obj/
 libfreeimage-asan.a
 libfreeimage-narrowstep.a
-# scratch images written by the tests
 fi_avif_*

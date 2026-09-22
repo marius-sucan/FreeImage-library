@@ -90,24 +90,13 @@ typedef struct tagSUNHEADER {
 // Internal functions
 // ==========================================================
 
-/**
-The state of a run in progress.  A Sun RLE run may span rows and ReadData is
-called once per row, so it has to survive from one call to the next - but only
-within one image.  These two used to be static locals, which is one image too
-many: an unfinished run left behind by a truncated file was still there when the
-next RAS was decoded, and that file's rows came out filled with the previous
-one's byte.  Two threads decoding RAS at once shared them as well.
-*/
+// RLE run state, per image; a run may span rows
 typedef struct {
-	BYTE repchar;		// the byte the run repeats
-	BYTE remaining;		// how much of the run is still owed
+	BYTE repchar;
+	BYTE remaining;
 } RASRLEState;
 
-/**
-Skip n bytes of the stream.  maplength is an unvalidated DWORD out of the file
-and seek_proc takes a long, which is 32 bits and signed on plenty of builds, so
-the skip is taken in steps that always fit one.
-*/
+// seek in steps that fit a long
 static BOOL
 SkipBytes(FreeImageIO *io, fi_handle handle, DWORD n) {
 	while (n > 0) {
@@ -223,9 +212,6 @@ SupportsNoPixels() {
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	SUNHEADER header;	// Sun file header
-	// these four track DWORD header fields: as WORDs they truncated the line
-	// length and, worse, made the row and column loops below wrap at 65536 and
-	// never terminate
 	unsigned linelength;	// Length of raster line in bytes
 	unsigned fill;			// Number of fill bytes per raster line
 	BOOL rle;			// TRUE if RLE file
@@ -235,7 +221,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 	BYTE *bits;			// Pointer to dib data
 	unsigned x, y;
-	RASRLEState run = { 0, 0 };	// one run of RLE state per image, not per process
+	RASRLEState run = { 0, 0 };
 
 	if(!handle) {
 		return NULL;
@@ -345,17 +331,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				// Read SUN raster colormap
 
-				// 1 << depth is undefined for the 32-bit case that also reaches
-				// this switch; a colormap only means anything for the palettised
-				// depths, and GetPalette() below rejects the others anyway
+				// colormaps exist only for depths <= 8
 				int numcolors = (header.depth <= 8) ? (1 << header.depth) : 0;
 				if((DWORD)(3 * numcolors) > header.maplength) {
 					// some RAS may have less colors than the full palette
 					numcolors = header.maplength / 3;
 				}
-				// a colormap holding exactly the full palette - maplength == 3 *
-				// numcolors, which is what every conforming file has - used to land
-				// in an "else throw", so no complete 256-colour RAS could be read
 
 				RGBQUAD *pal = FreeImage_GetPalette(dib);
 				if (NULL == pal) {
@@ -381,8 +362,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					free(r);
 				}
 
-				// step over any colormap bytes beyond the entries we took, so the
-				// pixel data starts where the header says it does
 				if(header.maplength > (DWORD)(3 * numcolors)) {
 					SkipBytes(io, handle, header.maplength - 3 * numcolors);
 				}
@@ -392,10 +371,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			case RMT_RAW:
 			{
-				// Skip the SUN raster colormap.  This used to malloc maplength bytes,
-				// read them and free them again - and maplength is an unvalidated
-				// DWORD, so a 34-byte file could ask for 4 GiB and then dereference
-				// whatever malloc returned.  Nothing ever looked at the bytes.
+				// Skip the SUN raster colormap.
 
 				if (!SkipBytes(io, handle, header.maplength)) {
 					throw "Invalid colormap";
@@ -419,12 +395,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			linelength = header.width * (header.depth / 8);
 		}
 
-		// The pad byte follows the row, so it is the row's own length in bytes
-		// that decides whether there is one.  This took the parity of the width
-		// instead, which gave every odd-width 32-bit image a pad byte the file does
-		// not contain - width*4 is always even - and from the second row on the
-		// whole image was then read one byte late.  24 bpp came out right only by
-		// accident, width*3 having the same parity as width.
+		// rows pad to an even byte count
 		fill = (linelength % 2) ? 1 : 0;
 
 		unsigned pitch = FreeImage_GetPitch(dib);

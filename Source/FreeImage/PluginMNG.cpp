@@ -19,87 +19,8 @@
 // Use at your own risk!
 // ==========================================================
 
-/**
-A MNG is a container: a header, some chunks that say when and where things are
-drawn, and one or more complete PNG or JNG datastreams embedded whole, minus
-their signatures.  The pixels are therefore already handled - by PluginPNG.cpp
-and PluginJNG.cpp - and what this plugin has to do is the container.
-
-So it does the same thing PluginAPNG.cpp does for animated PNG.  Open() walks
-the stream once and builds an index: for every embedded image, where its bytes
-start, how many there are, and the animation state in force when it is drawn.
-Load(page) turns one of those byte ranges back into a standalone PNG or JNG in
-memory - signature, the global chunks the image inherits, its own chunks - and
-hands it to FIF_PNG or FIF_JNG.  Every colour type, bit depth, palette,
-transparency chunk and ICC profile those two already understand therefore works
-here for free, and nothing in MNGHelper.cpp had to change: PluginJNG.cpp still
-reaches it by exactly the route it always did.
-
-One page per layer that is drawn, which for the ordinary file is one per
-embedded image, as GIF, APNG and WebP do.  The two differ only where a file
-uses objects: an image DEFI declares "not potentially visible" draws nothing
-where it is defined and becomes a page each time a SHOW chunk displays it, so
-two stored images shown three times between them are three pages.
-
-MNG_PLAYBACK = 2 asks for the canvas a viewer would show at that frame instead
-of the rectangle the file stores, mirroring GIF_PLAYBACK and APNG_PLAYBACK down
-to the tag names.  Each frame carries FrameTime (milliseconds), FrameLeft,
-FrameTop, DisposalMethod and BlendMethod, and every page also carries
-LogicalWidth, LogicalHeight and Loop.
-
-Writing is the same trick backwards.  Save() takes one page at a time, encodes
-it with the PNG writer and keeps the bytes; Close() assembles the file, because
-MHDR has to state a canvas that is not known until the last frame has said how
-big it is and where it goes.  The tick is a millisecond - ticks_per_second is
-1000 - so a FrameTime written in milliseconds is read back as exactly itself,
-and every frame is preceded by a FRAM that states its delay outright rather than
-leaning on the specification's default of one tick.  What the format can hold is
-therefore what PNG can hold: a palette stays a palette, 1-bit stays 1-bit,
-16-bit channels stay 16-bit.  The save flags are the PNG writer's own -
-PNG_Z_BEST_SPEED, PNG_INTERLACED and the rest - since it is the PNG writer that
-encodes every frame.
-
-A single image is written as a one-frame MNG rather than as the bare PNG a MNG
-datastream is also allowed to be.  That is not a stylistic choice: the page
-cache round-trips every appended page through this plugin's own writer and
-reader, and a file without the MNG signature would not get past Validate() on
-the way back, so FreeImage_AppendPage() would break.
-
-Three things do not survive a round trip, because MNG has nowhere to put them.
-The last frame's DisposalMethod: a frame's disposal is carried by whether the
-frame after it is drawn on a fresh background, and the last frame has no frame
-after it.  GIF_DISPOSAL_PREVIOUS, which needs the stored object buffers of full
-MNG, and which is written as "leave the canvas alone".  And BlendMethod, since
-a MNG layer is always composited over what is beneath it.
-
-What is covered.  MNG-VLC and MNG-LC in full: MHDR, the embedded PNG/JNG/BASI
-images, global PLTE and tRNS and the other global ancillary chunks, FRAM with
-its framing modes and its interframe delays, DEFI placement and clipping, BACK,
-LOOP/ENDL, TERM, SHOW, MEND.
-
-What is not.  The delta images of full MNG - DHDR and the object-buffer chunks
-that go with it (PAST, MAGN, CLON, DISC, MOVE, CLIP applied to stored objects) -
-are parsed well enough to be skipped and counted, never rendered.  Rendering
-them means keeping every object buffer alive and replaying arbitrary edits onto
-it, which is a different program from this one.  A file that uses them, or that
-declares them in the MHDR simplicity profile, says so once through
-FreeImage_OutputMessageProc and then reads as the images it does contain.
-That is the whole difference between this and libmng, and it is a deliberate
-one: silently returning a delta frame as though it were a whole picture would
-be worse than saying it cannot be done.  Nothing written here uses them either,
-so a file this produces never trips its own warning.
-
-The writer's one structural limit is that Close() is where the file is built and
-Close() returns void: a page that turns out to be unwritable once the assembly
-has started can only be reported, not refused.  Everything that can be refused
-is therefore refused in Save(), while FreeImage_Save() still has a FALSE to
-return and a half-written file to remove.
-
-References
-  http://www.libpng.org/pub/mng/spec/    MNG 1.0, and the chunk layouts below
-  http://www.libpng.org/pub/mng/spec/jng.html
-  http://www.w3.org/TR/PNG/
-*/
+// Pages are the embedded PNG/JNG streams, decoded by FIF_PNG and FIF_JNG.
+// Delta images and object-buffer chunks are skipped, not rendered.
 
 #include "FreeImage.h"
 #include "Utilities.h"
@@ -121,15 +42,10 @@ static int s_format_id;
 
 #define MNG_SIGNATURE_SIZE 8	// size of the signature
 
-/** MNG signature, which every file this writes begins with */
 static const BYTE g_mng_signature[8] = { 138, 77, 78, 71, 13, 10, 26, 10 };
-/** PNG signature, prefixed to an embedded IHDR..IEND to make it a file again */
 static const BYTE g_png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
-/** JNG signature, likewise for an embedded JHDR..IEND */
 static const BYTE g_jng_signature[8] = { 139, 74, 78, 71, 13, 10, 26, 10 };
 
-/** The disposal methods the animation metadata is written in, which are GIF's.
-PluginGIF.cpp and PluginAPNG.cpp spell them out the same way. */
 #define GIF_DISPOSAL_UNSPECIFIED	0
 #define GIF_DISPOSAL_LEAVE			1
 #define GIF_DISPOSAL_BACKGROUND		2
@@ -143,7 +59,6 @@ PluginGIF.cpp and PluginAPNG.cpp spell them out the same way. */
 #define MNG_PROFILE_JNG				(1 << 4)
 #define MNG_PROFILE_DELTA_PNG		(1 << 5)
 
-/** A chunk type as a single comparable number. */
 #define MNG_CHUNK(a, b, c, d) \
 	((DWORD)(((DWORD)(a) << 24) | ((DWORD)(b) << 16) | ((DWORD)(c) << 8) | (DWORD)(d)))
 
@@ -178,32 +93,13 @@ static const DWORD CHUNK_DISC = MNG_CHUNK('D', 'I', 'S', 'C');
 static const DWORD CHUNK_MOVE = MNG_CHUNK('M', 'O', 'V', 'E');
 static const DWORD CHUNK_CLIP = MNG_CHUNK('C', 'L', 'I', 'P');
 
-/** A chunk header is 4 bytes of length plus 4 of type; a chunk also has a
-4-byte CRC after its data. */
 #define MNG_CHUNK_OVERHEAD	12
 
-/** No sane MNG-level chunk is anywhere near this big, and refusing to allocate
-for a bogus length is cheaper than discovering it later. */
 #define MNG_MAX_CHUNK_PAYLOAD	(64u * 1024u * 1024u)
 
-/** The spec caps iteration counts at 2^31-1, which means "forever". */
 #define MNG_INFINITE_ITERATIONS	0x7FFFFFFF
 
-/**
-The largest canvas this will compose, in pixels: 2^28, which is a gigabyte at
-the 32 bits a composed frame is kept in.
-
-MHDR's frame_width and frame_height are whatever the file says, up to 2^31-1
-each, and nothing else in the file has to agree with them. A 200-byte MNG
-holding one 16x16 image can therefore ask for a 65535x65535 canvas, and
-composing it means seventeen gigabytes - which Linux will happily hand out and
-then kill the process for touching. FreeImage's own limit is only that the size
-fits in a size_t, so it does not catch this.
-
-The images themselves are not affected: their sizes come from their own headers
-and are bounded by the PNG and JNG readers. A file whose canvas is refused
-still reads page by page without MNG_PLAYBACK.
-*/
+// 1 GiB at 32 bpp; MHDR may claim any canvas size
 #define MNG_MAX_CANVAS_PIXELS	((UINT64)1 << 28)
 
 // ----------------------------------------------------------
@@ -243,14 +139,9 @@ PutDWORD(BYTE *p, DWORD value) {
 // The index Open() builds
 // ==========================================================
 
-/**
-The global chunks in force at a point in the stream.  MNG lets these be
-redefined between images, so an image inherits whatever was last declared
-before it rather than whatever the file ends with - which is why a frame
-records which snapshot it belongs to instead of pointing at one global copy.
-*/
+// global chunks as of one point in the stream; MNG can redefine them
 struct MNGGlobals {
-	std::vector<BYTE> plte;		//! payload only, without length/type/CRC
+	std::vector<BYTE> plte;
 	std::vector<BYTE> trns;
 	std::vector<BYTE> gama;
 	std::vector<BYTE> chrm;
@@ -259,26 +150,22 @@ struct MNGGlobals {
 	std::vector<BYTE> phys;
 };
 
-/**
-One embedded image: where its bytes are, and everything the container says
-about how it is drawn.
-*/
 struct MNGFrame {
-	long offset;			//! file offset of its first chunk (IHDR, JHDR or BASI)
-	DWORD length;			//! bytes from there through the CRC of its IEND
-	BOOL is_jng;			//! JHDR..IEND rather than IHDR..IEND
-	BOOL is_basi;			//! BASI..IEND, whose first 13 payload bytes are an IHDR
+	long offset;			//! first chunk: IHDR, JHDR or BASI
+	DWORD length;			//! through the CRC of IEND
+	BOOL is_jng;
+	BOOL is_basi;
 	DWORD width, height;
 
-	DWORD delay_ticks;		//! interframe delay in force, in MHDR ticks
-	LONG x, y;				//! where DEFI puts it on the canvas
-	BOOL do_not_show;		//! DEFI said it is not potentially visible
+	DWORD delay_ticks;		//! MHDR ticks
+	LONG x, y;
+	BOOL do_not_show;
 	BOOL has_clip;
 	LONG clip_left, clip_right, clip_top, clip_bottom;
 
-	BYTE framing_mode;		//! the FRAM framing mode in force
-	int subframe;			//! which run between FRAM chunks it belongs to
-	BOOL restore_background;//! a background layer is drawn immediately before it
+	BYTE framing_mode;
+	int subframe;
+	BOOL restore_background; //! background layer drawn before it
 
 	size_t globals;			//! index into MNGinfo::globals
 
@@ -289,22 +176,12 @@ struct MNGFrame {
 	}
 };
 
-/**
-One frame on its way out: the PNG datastream that carries it, and when and where
-it is drawn.
-
-The pixels are kept as the bytes FIF_PNG produced for them rather than as a
-bitmap, because that is what finally goes in the file and because encoding them
-once, as each page arrives, is cheaper than holding every page as a bitmap until
-the end.  MHDR has to state the canvas and the file cannot be written until every
-frame's size and placement is known, so something has to be held either way.
-*/
 struct MNGOutFrame {
-	std::vector<BYTE> png;	//! IHDR..IEND, with the signature already trimmed
+	std::vector<BYTE> png;	//! IHDR..IEND, no signature
 	DWORD width, height;
 	LONG x, y;
 	DWORD delay_ms;
-	BYTE disposal;			//! in GIF's numbering, as FIMD_ANIMATION states it
+	BYTE disposal;			//! GIF numbering
 	BOOL has_alpha;
 
 	MNGOutFrame() : width(0), height(0), x(0), y(0), delay_ms(0),
@@ -312,9 +189,6 @@ struct MNGOutFrame {
 	}
 };
 
-/**
-What Open() hands to the other entry points.
-*/
 struct MNGinfo {
 	BOOL read;
 
@@ -324,30 +198,27 @@ struct MNGinfo {
 	DWORD nominal_layer_count, nominal_frame_count, nominal_play_time;
 	DWORD simplicity;
 
-	LONG loop_count;			//! plays: 1 is once, 0 is forever, as GIF and APNG spell it
+	LONG loop_count;			//! 1 = once, 0 = forever
 	BOOL has_background;
 	RGBQUAD background;
 
 	std::vector<MNGGlobals> globals;
 	std::vector<MNGFrame> frames;
 
-	BOOL complex_features;		//! a delta image or an object-buffer chunk was met
-	BOOL warned;				//! the message about them has been issued once
+	BOOL complex_features;		//! delta image or object-buffer chunk seen
+	BOOL warned;
 
-	// MNG_PLAYBACK cache, the same shape as the one in PluginAPNG.cpp: compositing a
-	// frame needs the canvas the frame before it left behind, so keeping that canvas
-	// turns walking an animation in order into one frame of work per frame instead of
-	// replaying it from the start each time.
+	// MNG_PLAYBACK cache: the last composed canvas
 	FIBITMAP *canvas;
-	int canvas_page;			//! the frame `canvas` shows, -1 when there is none
+	int canvas_page;			//! -1 when none
 
 	// ---------- writing ----------
 
 	std::vector<MNGOutFrame> out_frames;
-	int out_flags;				//! the save flags the first page arrived with
-	DWORD out_canvas_width;		//! from LogicalWidth/LogicalHeight, grown to fit
+	int out_flags;
+	DWORD out_canvas_width;		//! LogicalWidth, grown to fit
 	DWORD out_canvas_height;
-	LONG out_loop;				//! plays: 1 is once, 0 is forever
+	LONG out_loop;				//! 1 = once, 0 = forever
 	BOOL out_has_background;
 	RGBQUAD out_background;
 
@@ -370,9 +241,6 @@ struct MNGinfo {
 	}
 };
 
-/**
-Say once, and only once, that this file uses something no one here renders.
-*/
 static void
 WarnComplex(MNGinfo *info) {
 	if(info->warned) {
@@ -388,9 +256,6 @@ WarnComplex(MNGinfo *info) {
 // Walking the stream
 // ==========================================================
 
-/**
-The length of the stream, from the current position restored afterwards.
-*/
 static long
 MNG_GetFileLength(FreeImageIO *io, fi_handle handle) {
 	const long start_pos = io->tell_proc(handle);
@@ -400,10 +265,6 @@ MNG_GetFileLength(FreeImageIO *io, fi_handle handle) {
 	return file_length;
 }
 
-/**
-Read a chunk's length and type at the current position.
-@return TRUE if 8 bytes were there to read
-*/
 static BOOL
 ReadChunkHeader(FreeImageIO *io, fi_handle handle, DWORD *length, DWORD *type) {
 	BYTE header[8];
@@ -415,12 +276,6 @@ ReadChunkHeader(FreeImageIO *io, fi_handle handle, DWORD *length, DWORD *type) {
 	return TRUE;
 }
 
-/**
-Measure an embedded datastream: from the first byte of its IHDR, JHDR, BASI or
-DHDR chunk through the CRC of the IEND that closes it.  The stream position is
-left at the byte after that IEND.
-@return TRUE if a complete datastream was found
-*/
 static BOOL
 ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_length, DWORD *out_length) {
 	io->seek_proc(handle, start, SEEK_SET);
@@ -435,7 +290,6 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_leng
 		if(!ReadChunkHeader(io, handle, &length, &type)) {
 			return FALSE;
 		}
-		// the 4-byte CRC follows the payload
 		if((length > (DWORD)file_length) || (pos + 8 + (long)length + 4 > file_length)) {
 			return FALSE;
 		}
@@ -452,9 +306,6 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_leng
 	}
 }
 
-/**
-Read `length` bytes at `offset`.
-*/
 static BOOL
 ReadBytesAt(FreeImageIO *io, fi_handle handle, long offset, DWORD length, std::vector<BYTE>& out) {
 	if(length == 0) {
@@ -473,15 +324,10 @@ ReadBytesAt(FreeImageIO *io, fi_handle handle, long offset, DWORD length, std::v
 // The chunks that drive the animation
 // ==========================================================
 
-/**
-The FRAM parameters in force while the stream is walked.  FRAM is a state
-machine, not a per-frame record: a chunk can change a parameter for the
-upcoming subframe only, or change it and reset the default with it.
-*/
 struct MNGFramingState {
 	BYTE framing_mode;
-	DWORD default_delay;	//! ticks, and 1 tick is the spec's default rate
-	DWORD current_delay;	//! what the upcoming subframe uses
+	DWORD default_delay;	//! ticks
+	DWORD current_delay;	//! for the upcoming subframe
 	BOOL has_clip;
 	LONG clip_left, clip_right, clip_top, clip_bottom;
 
@@ -490,30 +336,11 @@ struct MNGFramingState {
 	}
 };
 
-/**
-Parse a FRAM chunk (MNG 1.0, 4.3.2).
-
-Everything after the framing mode is optional, and the optional parts are
-omitted as a group, so the chunk has to be read by what is left rather than by
-fixed offsets:
-
-	framing_mode      1 byte
-	subframe_name     0..n bytes of Latin-1, then
-	separator         1 NUL - both omitted together with everything after them
-	change_interframe_delay           1 byte   0 no, 1 this subframe, 2 also the default
-	change_timeout_and_termination    1 byte   0..8
-	change_layer_clipping_boundaries  1 byte   0 no, 1 this subframe, 2 also the default
-	change_sync_id_list               1 byte
-	interframe_delay  4 bytes, present only if change_interframe_delay is nonzero
-	timeout           4 bytes, present only if change_timeout is nonzero
-	clipping          1 byte delta type then 4 signed longs, if change_clipping is nonzero
-	sync ids          4 bytes each, to the end of the chunk
-*/
+// FRAM (MNG 1.0, 4.3.2); optional fields are omitted as a group
 static void
 ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 	if(length == 0) {
-		// "An empty FRAM chunk is just a subframe delimiter": it changes nothing,
-		// but the one-shot parameters of the subframe it closes do not survive it.
+		// empty FRAM: a subframe delimiter; one-shot values expire
 		state->current_delay = state->default_delay;
 		return;
 	}
@@ -525,17 +352,14 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 
 	DWORD pos = 1;
 
-	// the subframe name, if any, up to its NUL separator
 	if(pos < length) {
 		DWORD separator = pos;
 		while((separator < length) && (payload[separator] != 0)) {
 			separator++;
 		}
-		// no separator means the name ran to the end and nothing follows it
 		pos = (separator < length) ? separator + 1 : length;
 	}
 
-	// with no change bytes, the defaults come back for the upcoming subframe
 	if(pos + 4 > length) {
 		state->current_delay = state->default_delay;
 		return;
@@ -547,8 +371,6 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 	const BYTE change_sync = payload[pos + 3];
 	pos += 4;
 
-	// A delay the chunk promised but did not carry leaves the default alone -
-	// the alternative is to invent a number for it.
 	DWORD delay = state->default_delay;
 	BOOL got_delay = FALSE;
 	if(change_delay && (pos + 4 <= length)) {
@@ -557,8 +379,6 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 		got_delay = TRUE;
 	}
 	if(change_timeout && (pos + 4 <= length)) {
-		// the timeout says how long to wait for the event that ends a
-		// non-deterministic subframe; nothing here waits for events
 		pos += 4;
 	}
 	if(change_clipping && (pos + 17 <= length)) {
@@ -570,8 +390,6 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 		pos += 17;
 
 		if(delta_type == 1) {
-			// "determined by adding the FRAM data to the values from the
-			// previous subframe"
 			state->clip_left += left;
 			state->clip_right += right;
 			state->clip_top += top;
@@ -584,7 +402,7 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 		}
 		state->has_clip = TRUE;
 	}
-	(void)change_sync;	// the sync id list only matters to a decoder that waits on one
+	(void)change_sync;
 
 	if(got_delay) {
 		state->current_delay = delay;
@@ -596,9 +414,6 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 	}
 }
 
-/**
-The DEFI placement in force while the stream is walked.
-*/
 struct MNGObjectState {
 	WORD id;
 	LONG x, y;
@@ -611,48 +426,25 @@ struct MNGObjectState {
 	}
 };
 
-/**
-An image defined with a nonzero DEFI object id, kept so that a later SHOW chunk
-can display it again.  This is how a MNG-LC file reuses an image without the
-stored object buffers of full MNG: the image is defined once, usually with
-do_not_show set, and shown whenever it is wanted.
-*/
+// image stored under a nonzero DEFI id, for SHOW
 struct MNGObject {
 	WORD id;
-	MNGFrame frame;			//! where its bytes are, and how big it is
+	MNGFrame frame;
 	BOOL do_not_show;
 
 	MNGObject() : id(0), do_not_show(FALSE) {
 	}
 };
 
-/**
-Where a SHOW chunk using show_mode 6 or 7 has got to in its range.  Those modes
-step through the objects one per chunk, so the place has to be kept somewhere,
-and it is kept per range: a file stepping through two ranges keeps a place in
-each.
-*/
+// SHOW mode 6/7 position, one per range
 struct MNGShowCursor {
 	WORD low, high;
 	size_t next;
 };
 
-/** A file cannot name more layers than this without something being wrong. */
 #define MNG_MAX_FRAMES	65536
 
-/**
-Parse a DEFI chunk (MNG 1.0, 4.2.1), which is 2, 3, 4, 12 or 28 bytes: an
-object id, then do_not_show, then the concrete flag, then a location, then
-clipping boundaries.  "If any field is omitted, all subsequent fields must
-also be omitted", and only the fields that are present are applied here.
-
-What an omitted field means depends on the object id, which is why the caller
-chooses what this starts from: the spec's default values "are also used to fill
-any fields that were omitted from the DEFI chunk, when an object with the same
-object_id has not been previously defined".  For an id that has been defined,
-the attributes it already has stand, so a 2-byte DEFI naming it leaves its
-location where the last one put it.
-*/
+// DEFI (MNG 1.0, 4.2.1): applies only the fields present
 static void
 ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
 	if(length < 2) {
@@ -662,7 +454,7 @@ ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
 	if(length >= 3) {
 		state->do_not_show = (payload[2] != 0) ? TRUE : FALSE;
 	}
-	// payload[3] is the concrete flag, which only matters to a delta image
+	// payload[3] (concrete) only matters to delta images
 	if(length >= 12) {
 		state->x = GetLONG(&payload[4]);
 		state->y = GetLONG(&payload[8]);
@@ -676,17 +468,12 @@ ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
 	}
 }
 
-/**
-Parse a BACK chunk (MNG 1.0, 4.3.1): 6, 7, 9 or 10 bytes of 16-bit RGB, a
-mandatory flag, and a background image id this plugin has no object buffers
-to look up.
-*/
+// BACK (MNG 1.0, 4.3.1); the background image id is ignored
 static void
 ParseBACK(const BYTE *payload, DWORD length, MNGinfo *info) {
 	if(length < 6) {
 		return;
 	}
-	// the samples are 16 bit; FreeImage's background colour is 8
 	info->background.rgbRed = (BYTE)(GetWORD(&payload[0]) >> 8);
 	info->background.rgbGreen = (BYTE)(GetWORD(&payload[2]) >> 8);
 	info->background.rgbBlue = (BYTE)(GetWORD(&payload[4]) >> 8);
@@ -694,18 +481,7 @@ ParseBACK(const BYTE *payload, DWORD length, MNGinfo *info) {
 	info->has_background = TRUE;
 }
 
-/**
-A LOOP whose iteration_count is zero runs its body no times at all: "Upon
-encountering a LOOP chunk whose iteration_count is zero, decoders simply skip
-chunks until the matching ENDL chunk is found, and resume processing with the
-chunk immediately following it".  The images inside such a loop are therefore
-not part of the animation, and not pages either.
-
-The stream is positioned just after the LOOP chunk on entry, and just after its
-ENDL on success.  Loops nest, so this counts rather than matches: the spec says
-the nest level "should be used as a sanity check but is not required", and a
-count cannot be fooled by a file that numbers its levels oddly.
-*/
+// skip a zero-count LOOP up to its matching ENDL
 static BOOL
 SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
 	int depth = 1;
@@ -729,8 +505,7 @@ SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
 		} else if(type == CHUNK_ENDL) {
 			depth--;
 		} else if(type == CHUNK_MEND) {
-			// the loop is never closed; stop here rather than run off the end,
-			// and leave MEND to be read by the caller
+			// unclosed loop: leave MEND to the caller
 			io->seek_proc(handle, chunk_start, SEEK_SET);
 			return TRUE;
 		}
@@ -741,13 +516,7 @@ SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
 	return TRUE;
 }
 
-/**
-Framing modes 2 and 4 associate the interframe delay "only with the final layer
-in the subframe.  A zero interframe delay is associated with the other layers",
-so the delay recorded against every layer while walking the stream has to come
-back off all but the last of each subframe.  Modes 1 and 3 associate it with
-every foreground layer and are already right.
-*/
+// modes 2 and 4: only a subframe's last layer keeps the delay
 static void
 ApplyFramingModes(MNGinfo *info) {
 	const size_t count = info->frames.size();
@@ -765,14 +534,6 @@ ApplyFramingModes(MNGinfo *info) {
 	}
 }
 
-/**
-Record a layer: an image's bytes together with the timing in force when it is
-drawn.  Both an embedded image and a SHOW chunk that displays a stored object
-come through here, because the spec counts both as layers - its list of what
-"generates a layer" names decoding an IHDR-IEND sequence and decoding a SHOW
-chunk side by side.
-@return FALSE when the file has named more layers than can be believed
-*/
 static BOOL
 AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 		 int subframe, BOOL *first_image) {
@@ -785,8 +546,7 @@ AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 	frame.subframe = subframe;
 	frame.do_not_show = FALSE;
 
-	// Whose clipping wins: DEFI's is the object's own and is already on the
-	// frame, FRAM's is the layer's, and the layer's is the one a viewer applies.
+	// FRAM's layer clipping overrides DEFI's
 	if(framing.has_clip) {
 		frame.has_clip = TRUE;
 		frame.clip_left = framing.clip_left;
@@ -795,10 +555,7 @@ AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 		frame.clip_bottom = framing.clip_bottom;
 	}
 
-	// "Regardless of the framing mode, encoders must insert a background layer
-	// ... ahead of the first image layer in the datastream", and modes 3 and 4
-	// insert more of them: 3 before every foreground layer, 4 before the first
-	// of each subframe.
+	// a background layer before the first image; modes 3 and 4 add more
 	frame.restore_background = FALSE;
 	if(*first_image) {
 		frame.restore_background = TRUE;
@@ -814,9 +571,6 @@ AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 	return TRUE;
 }
 
-/**
-Find a stored object by its id.
-*/
 static MNGObject *
 FindObject(std::vector<MNGObject>& objects, WORD id) {
 	for(size_t i = 0; i < objects.size(); i++) {
@@ -831,10 +585,6 @@ FindObject(std::vector<MNGObject>& objects, WORD id) {
 // Building the index
 // ==========================================================
 
-/**
-Walk the whole stream once and record every embedded image with the animation
-state in force when it is drawn.
-*/
 static BOOL
 ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	const long file_length = MNG_GetFileLength(io, handle);
@@ -847,26 +597,18 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	MNGObjectState object;
 	MNGGlobals globals;
 
-	// The attribute sets DEFI has defined, by object id, and the images stored
-	// under those ids. They are kept apart because a DEFI can name an id before
-	// any image has been stored under it.
+	// a DEFI can name an id before an image is stored under it
 	std::vector<MNGObjectState> defined;
 	std::vector<MNGObject> objects;
 	std::vector<MNGShowCursor> cursors;
 
-	// `globals` is only copied into the list when an image actually needs it, so a
-	// file that redefines its palette between every frame costs one snapshot per
-	// distinct state and a file that never redefines it costs exactly one.
 	size_t globals_index = (size_t)-1;
 
 	int subframe = 0;
 	BOOL first_image = TRUE;
 	BOOL seen_mend = FALSE;
 
-	// LOOP/ENDL.  The images are not repeated in the file and are not repeated
-	// here either: the iteration count of a loop that encloses the whole sequence
-	// becomes the animation's loop count instead.  The spec expects exactly this
-	// of "MNG editors that extract a series of PNG or JNG files".
+	// an outer LOOP becomes the loop count; images are not repeated
 	int loop_depth = 0;
 	BOOL have_outer_loop = FALSE;
 	DWORD outer_loop_count = 1;
@@ -895,9 +637,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 		const long next_chunk = payload_start + (long)length + 4;
 
-		// An embedded datastream is measured and stepped over whole; its own chunks
-		// are none of this loop's business, which is also what keeps a PLTE inside an
-		// image from being mistaken for a global one.
+		// skip embedded streams whole, so their PLTE is not taken as global
 		if((type == CHUNK_IHDR) || (type == CHUNK_JHDR) || (type == CHUNK_BASI) || (type == CHUNK_DHDR)) {
 			DWORD stream_length = 0;
 			if(!ScanEmbeddedStream(io, handle, chunk_start, file_length, &stream_length)) {
@@ -907,7 +647,6 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			}
 
 			if(type == CHUNK_DHDR) {
-				// a delta image: counted and skipped, never rendered
 				info->complex_features = TRUE;
 				WarnComplex(info);
 			} else {
@@ -924,8 +663,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 					}
 					frame.width = GetDWORD(&payload[0]);
 					frame.height = GetDWORD(&payload[4]);
-					// filter method 64 is MNG's intrapixel differencing, which libpng
-					// does not implement
+					// filter 64 (intrapixel differencing): libpng lacks it
 					if(!frame.is_jng && (length >= 13) && (payload[11] == 64)) {
 						info->complex_features = TRUE;
 						WarnComplex(info);
@@ -948,9 +686,6 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 				}
 				frame.globals = globals_index;
 
-				// An image defined with an object id is kept, so that a later SHOW
-				// chunk can display it: that is how a MNG-LC file reuses an image
-				// without the stored object buffers of full MNG.
 				if(object.id != 0) {
 					MNGObject *stored = FindObject(objects, object.id);
 					if(!stored) {
@@ -966,10 +701,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 					}
 				}
 
-				// A page is a layer that is drawn. An object defined "not
-				// potentially visible" draws nothing here and becomes a page when
-				// a SHOW chunk displays it - the same reason PluginAPNG.cpp does
-				// not make a page of a default image that is not a frame.
+				// hidden objects become pages only when shown
 				if(!object.do_not_show) {
 					if(!AddLayer(info, frame, framing, subframe, &first_image)) {
 						FreeImage_OutputMessageProc(s_format_id,
@@ -986,7 +718,6 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			continue;
 		}
 
-		// everything else is a MNG-level chunk whose payload may matter
 		const BOOL want_payload =
 			(type == CHUNK_MHDR) || (type == CHUNK_FRAM) || (type == CHUNK_DEFI) ||
 			(type == CHUNK_BACK) || (type == CHUNK_LOOP) || (type == CHUNK_ENDL) ||
@@ -1008,17 +739,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 		const BYTE *data = payload.empty() ? NULL : &payload[0];
 
-		// Check the CRC of the chunks that steer this parser - the timing, the
-		// placement, the palette.  The embedded images check their own, through
-		// libpng, and are skipped whole here; but a corrupt FRAM is not caught by
-		// anything downstream, and quietly playing an animation at a delay that
-		// was never written is worse than saying the file is damaged.
-		//
-		// A chunk that fails is dropped rather than taken as the end of the file.
-		// The images are the part worth having and they carry their own CRCs, so
-		// one flipped bit in a FRAM should cost the timing it describes, not every
-		// picture after it. If the damage was in the length rather than the
-		// payload, the walk desynchronises and the bounds checks above end it.
+		// CRC-check the chunks that steer parsing; drop a bad one and go on
 		if(want_payload) {
 			BYTE type_bytes[5];
 			PutDWORD(type_bytes, type);
@@ -1053,8 +774,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 				info->nominal_play_time = GetDWORD(&data[20]);
 				info->simplicity = GetDWORD(&data[24]);
 
-				// The profile is only meaningful when it says it is; bit 0 off means
-				// "the absence of any features is unspecified", not "none are used".
+				// bit 0 off: the profile says nothing
 				if((info->simplicity & MNG_PROFILE_VALID) &&
 				   (info->simplicity & (MNG_PROFILE_COMPLEX | MNG_PROFILE_DELTA_PNG))) {
 					info->complex_features = TRUE;
@@ -1070,9 +790,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			subframe++;
 			ParseFRAM(data, length, &framing);
 		} else if(type == CHUNK_DEFI) {
-			// The defaults fill the fields a DEFI omits, but only for an id that
-			// has not been defined before; for one that has, its own attributes
-			// stand and the chunk changes just the fields it carries.
+			// defaults fill omitted fields only for a new id
 			if(length >= 2) {
 				const WORD id = GetWORD(&data[0]);
 				MNGObjectState state;
@@ -1098,14 +816,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 				object = state;
 			}
 		} else if(type == CHUNK_SHOW) {
-			// SHOW displays objects defined earlier. Its layers are this plugin's
-			// pages, which is what lets a MNG-LC file that defines its images once
-			// and shows them repeatedly read as the animation it is.
-			//
-			//   first_image, last_image  2 bytes each, both omittable
-			//   show_mode                1 byte: 0 and 2 display, 4 and 6 display
-			//                            after changing visibility, 1, 3, 5 and 7
-			//                            only change it
+			// SHOW: modes 0/2/4/6 display, 1/3/5/7 only change visibility
 			WORD first_id = 1, last_id = 0xFFFF;
 			BYTE show_mode = 0;
 			if(length >= 2) {
@@ -1122,8 +833,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			const WORD low = MIN(first_id, last_id);
 			const WORD high = MAX(first_id, last_id);
 
-			// the objects the chunk names, in the order it names them - "in
-			// reverse order if last_image < first_image"
+			// in reverse order if last_image < first_image
 			std::vector<size_t> range;
 			for(size_t i = 0; i < objects.size(); i++) {
 				if((objects[i].id >= low) && (objects[i].id <= high)) {
@@ -1135,12 +845,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			}
 
 			if((show_mode == 6) || (show_mode == 7)) {
-				// "Step through the images in the given range, making the next
-				// image potentially visible and display it. Set do_not_show=1 for
-				// all other images in the range. Jump to the beginning of the
-				// range when reaching the end. Perform one step for each SHOW
-				// chunk." The cursor is per range, so a file stepping through two
-				// ranges keeps a place in each.
+				// modes 6/7 step one object per SHOW; one cursor per range
 				size_t slot = cursors.size();
 				for(size_t i = 0; i < cursors.size(); i++) {
 					if((cursors[i].low == low) && (cursors[i].high == high)) {
@@ -1204,7 +909,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		} else if(type == CHUNK_BACK) {
 			ParseBACK(data, length, info);
 		} else if(type == CHUNK_TERM) {
-			// TERM 3 repeats the whole datastream; anything else is a single pass
+			// TERM 3 repeats; anything else plays once
 			if((length >= 10) && (data[0] == 3)) {
 				have_term = TRUE;
 				term_iterations = GetDWORD(&data[6]);
@@ -1215,14 +920,9 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		} else if(type == CHUNK_LOOP) {
 			DWORD iterations = 1;
 			if(length >= 5) {
-				// data[0] is the nest level, which the depth count below tracks
-				// for itself
 				iterations = GetDWORD(&data[1]);
 			}
 			if(iterations == 0) {
-				// "Upon encountering a LOOP chunk whose iteration_count is zero,
-				// decoders simply skip chunks until the matching ENDL chunk is
-				// found": the images inside are not part of the animation.
 				io->seek_proc(handle, next_chunk, SEEK_SET);
 				if(!SkipToMatchingENDL(io, handle, file_length)) {
 					break;
@@ -1241,15 +941,13 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 				loop_depth--;
 			}
 		} else if(type == CHUNK_SEEK) {
-			// "The object attributes for all existing unfrozen objects except for
-			// object 0 become undefined when a SEEK chunk is encountered." The
-			// images themselves survive it - only what is known about where they go.
+			// SEEK undefines object attributes, not the images
 			object = MNGObjectState();
 			defined.clear();
 			cursors.clear();
 		} else if((type == CHUNK_PAST) || (type == CHUNK_MAGN) || (type == CHUNK_CLON) ||
 				  (type == CHUNK_DISC) || (type == CHUNK_MOVE) || (type == CHUNK_CLIP)) {
-			// object-buffer chunks: they edit images this plugin does not keep
+			// object-buffer chunks: not rendered
 			info->complex_features = TRUE;
 			WarnComplex(info);
 		} else if(type == CHUNK_PLTE) {
@@ -1287,8 +985,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		io->seek_proc(handle, next_chunk, SEEK_SET);
 	}
 
-	// How many times the whole thing plays.  TERM describes the datastream and so
-	// wins over a LOOP, which might only enclose part of it.
+	// TERM wins over LOOP
 	if(have_term) {
 		info->loop_count = (term_iterations >= MNG_INFINITE_ITERATIONS) ? 0 : (LONG)term_iterations;
 	} else if(have_outer_loop && (outer_loop_first == 0) && (outer_loop_last == info->frames.size())
@@ -1296,10 +993,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		info->loop_count = (outer_loop_count >= MNG_INFINITE_ITERATIONS) ? 0 : (LONG)outer_loop_count;
 	}
 
-	// A file whose every image is defined "not potentially visible" and never
-	// shown has no layers at all. As an animation there is nothing to see, but
-	// the images are still in there, and refusing the file outright would make
-	// them unreachable - so they are handed over in the order they were defined.
+	// nothing ever shown: hand over the stored images in order
 	if(info->frames.empty() && !objects.empty()) {
 		for(size_t i = 0; i < objects.size(); i++) {
 			MNGFrame frame = objects[i].frame;
@@ -1316,8 +1010,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	ApplyFramingModes(info);
 
 	if(!info->has_mhdr) {
-		// a MNG with no MHDR is malformed, but if it held images they are still
-		// images; give them a canvas big enough to hold them
+		// no MHDR: size the canvas to fit the images
 		for(size_t i = 0; i < info->frames.size(); i++) {
 			const MNGFrame& frame = info->frames[i];
 			const DWORD right = (DWORD)MAX((LONG)0, frame.x + (LONG)frame.width);
@@ -1334,9 +1027,6 @@ ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 // Turning a frame back into a file
 // ==========================================================
 
-/**
-Append a chunk: length, type, payload, CRC.
-*/
 static void
 AppendChunk(std::vector<BYTE>& out, DWORD type, const BYTE *data, DWORD length) {
 	BYTE header[8];
@@ -1363,9 +1053,6 @@ AppendGlobalChunk(std::vector<BYTE>& out, DWORD type, const std::vector<BYTE>& p
 	AppendChunk(out, type, payload.empty() ? NULL : &payload[0], (DWORD)payload.size());
 }
 
-/**
-One chunk of an embedded datastream.
-*/
 struct MNGChunkRef {
 	DWORD type;
 	const BYTE *payload;
@@ -1374,9 +1061,6 @@ struct MNGChunkRef {
 	DWORD raw_length;
 };
 
-/**
-Split an embedded datastream into its chunks.
-*/
 static BOOL
 SplitChunks(const std::vector<BYTE>& stream, std::vector<MNGChunkRef>& out) {
 	size_t pos = 0;
@@ -1396,16 +1080,7 @@ SplitChunks(const std::vector<BYTE>& stream, std::vector<MNGChunkRef>& out) {
 	return !out.empty();
 }
 
-/**
-Rebuild a standalone PNG from an embedded IHDR..IEND or BASI..IEND, splicing in
-the global chunks the image inherits.
-
-The only substitution the MNG spec asks for is the palette: an embedded image
-whose own PLTE is empty uses the global one, and one that carries a real
-palette keeps it.  The rest of the global chunks - gAMA, cHRM, sRGB, iCCP,
-pHYs, tRNS - are added only where the image has none of its own, and at a point
-in the stream where PNG allows them.
-*/
+// splice in inherited globals; an empty PLTE means the global one
 static BOOL
 BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYTE>& raw,
 			   std::vector<BYTE>& out) {
@@ -1421,11 +1096,10 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 
 	out.insert(out.end(), g_png_signature, g_png_signature + 8);
 
-	// BASI's first 13 payload bytes are an IHDR; the samples that follow only
-	// matter when there is no IDAT, which is handled by the caller.
+	// BASI starts with a 13-byte IHDR
 	AppendChunk(out, CHUNK_IHDR, chunks[0].payload, 13);
 
-	// These must all precede PLTE, and the image's own copy always wins.
+	// these precede PLTE; the image's own copy wins
 	BOOL has_local_gama = FALSE, has_local_chrm = FALSE, has_local_srgb = FALSE;
 	BOOL has_local_iccp = FALSE, has_local_phys = FALSE, has_local_trns = FALSE;
 	BOOL has_local_plte = FALSE;
@@ -1466,7 +1140,6 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 
 		if(chunk.type == CHUNK_PLTE) {
 			if((chunk.length == 0) && !globals.plte.empty()) {
-				// the empty PLTE that means "use the global palette"
 				AppendGlobalChunk(out, CHUNK_PLTE, globals.plte);
 			} else {
 				out.insert(out.end(), chunk.raw, chunk.raw + chunk.raw_length);
@@ -1477,8 +1150,7 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 
 		if((chunk.type == CHUNK_IDAT) && !wrote_pre_idat) {
 			wrote_pre_idat = TRUE;
-			// A palette image that carries no PLTE at all still inherits the
-			// global one, and tRNS and pHYs have to land before the image data.
+			// an inherited PLTE, tRNS and pHYs go before IDAT
 			if(!wrote_plte && !has_local_plte && (colour_type == 3) && !globals.plte.empty()) {
 				AppendGlobalChunk(out, CHUNK_PLTE, globals.plte);
 				wrote_plte = TRUE;
@@ -1503,12 +1175,6 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 	return TRUE;
 }
 
-/**
-Rebuild a standalone JNG from an embedded JHDR..IEND.  A JNG carries everything
-it needs, so this is the signature and the chunks as they stand - and handing
-it to FIF_JNG is what makes the JPEG-plus-alpha path in MNGHelper.cpp do the
-work, exactly as it does for a .jng file.
-*/
 static BOOL
 BuildJNGStream(const std::vector<BYTE>& raw, std::vector<BYTE>& out) {
 	if(raw.size() < MNG_CHUNK_OVERHEAD) {
@@ -1519,9 +1185,6 @@ BuildJNGStream(const std::vector<BYTE>& raw, std::vector<BYTE>& out) {
 	return TRUE;
 }
 
-/**
-Is there any IDAT in this datastream?  A BASI without one is a solid colour.
-*/
 static BOOL
 HasImageData(const std::vector<BYTE>& raw) {
 	std::vector<MNGChunkRef> chunks;
@@ -1536,10 +1199,7 @@ HasImageData(const std::vector<BYTE>& raw) {
 	return FALSE;
 }
 
-/**
-A BASI with no IDAT: "sixteen-bit {red, green, blue, alpha} values that are
-used to fill the entire basis object when the IDAT chunk is not present".
-*/
+// BASI without IDAT: fill with its 16-bit RGBA
 static FIBITMAP *
 CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	std::vector<MNGChunkRef> chunks;
@@ -1549,8 +1209,7 @@ CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	const BYTE *payload = chunks[0].payload;
 	const DWORD length = chunks[0].length;
 
-	// "If the color samples are omitted, zeroes will be used", and an omitted
-	// alpha means opaque.
+	// omitted samples are 0; omitted alpha is opaque
 	BYTE red = 0, green = 0, blue = 0, alpha = 255;
 	if(length >= 19) {
 		red = (BYTE)(GetWORD(&payload[13]) >> 8);
@@ -1563,8 +1222,7 @@ CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 
 	const BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 
-	// BASI says how big its fill is, and nothing else in the file has to agree,
-	// so the same bound the canvas gets applies here
+	// same bound as the canvas
 	if(!header_only &&
 	   ((UINT64)frame.width * (UINT64)frame.height > MNG_MAX_CANVAS_PIXELS)) {
 		FreeImage_OutputMessageProc(s_format_id,
@@ -1592,9 +1250,6 @@ CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	return dib;
 }
 
-/**
-Decode one page as the file stores it.
-*/
 static FIBITMAP *
 DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flags) {
 	if((page < 0) || (page >= (int)info->frames.size())) {
@@ -1637,11 +1292,7 @@ DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 // MNG_PLAYBACK: the canvas a viewer would show
 // ==========================================================
 
-/**
-Fill the whole canvas with the background: the BACK colour when the file gives
-one, and otherwise transparent, so that an application can put its own scene
-behind a MNG whose images do not cover the frame.
-*/
+// BACK colour, or transparent when there is none
 static void
 FillBackground(FIBITMAP *canvas, const MNGinfo *info) {
 	RGBQUAD colour;
@@ -1664,14 +1315,7 @@ FillBackground(FIBITMAP *canvas, const MNGinfo *info) {
 	}
 }
 
-/**
-Draw a 32-bit frame onto the 32-bit canvas at (x, y), compositing it over what
-is already there the way MNG says a layer is composited, and clipped to the
-layer clipping boundaries when the file sets any.
-
-FreeImage stores the bottom line first, so a MNG y - which counts down from the
-top - is turned round here rather than everywhere else.
-*/
+// composite over, clipped; MNG y counts down from the top
 static void
 CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, const MNGFrame& info) {
 	const int canvas_width = (int)FreeImage_GetWidth(canvas);
@@ -1686,8 +1330,7 @@ CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, const MNGFrame& info) {
 	int bottom = top + frame_height;
 
 	if(info.has_clip) {
-		// "The left and top boundaries are inclusive, while the right and bottom
-		// boundaries are exclusive."
+		// left/top inclusive, right/bottom exclusive
 		left = MAX(left, (int)info.clip_left);
 		top = MAX(top, (int)info.clip_top);
 		right = MIN(right, (int)info.clip_right);
@@ -1737,9 +1380,6 @@ CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, const MNGFrame& info) {
 	}
 }
 
-/**
-Play the animation up to `page` and return the canvas as it then looks.
-*/
 static FIBITMAP *
 RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flags) {
 	if((page < 0) || (page >= (int)info->frames.size())) {
@@ -1751,8 +1391,6 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 	if(!width || !height) {
 		return NULL;
 	}
-	// a header-only load allocates no pixels, so the size it reports costs
-	// nothing and is simply what the file says
 	if((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) {
 		return FreeImage_AllocateHeader(TRUE, (int)width, (int)height, 32,
 			FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
@@ -1765,8 +1403,7 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		return NULL;
 	}
 
-	// Walking the animation in order costs one frame of work per frame; jumping
-	// backwards, or to a canvas of a different size, starts again from the top.
+	// reuse the cached canvas when moving forward
 	int start = 0;
 	if(info->canvas && (info->canvas_page >= 0) && (info->canvas_page < page) &&
 	   (FreeImage_GetWidth(info->canvas) == width) && (FreeImage_GetHeight(info->canvas) == height)) {
@@ -1835,13 +1472,7 @@ SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWOR
 	return bResult;
 }
 
-/**
-Turn an interframe delay in MHDR ticks into milliseconds.
-
-"When this field is zero, the length of a tick is infinite, and decoders will
-ignore any attempt to define interframe delay" - a file with one frame is
-supposed to say ticks_per_second = 0, and it gets no delay at all.
-*/
+// ticks_per_second 0: infinite tick, no delays
 static LONG
 DelayToMilliseconds(const MNGinfo *info, DWORD ticks) {
 	if(info->ticks_per_second == 0) {
@@ -1862,14 +1493,12 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
 	WORD left = (WORD)MIN(MAX(frame.x, (LONG)0), (LONG)0xFFFF);
 	WORD top = (WORD)MIN(MAX(frame.y, (LONG)0), (LONG)0xFFFF);
 
-	// GIF's numbering, which is what FIMD_ANIMATION is written in. A background
-	// layer drawn ahead of the *next* frame is the same thing as this frame
-	// disposing to the background.
+	// a background layer before the next frame = dispose to background
 	BYTE disposal = GIF_DISPOSAL_LEAVE;
 	if((page + 1 < (int)info->frames.size()) && info->frames[page + 1].restore_background) {
 		disposal = GIF_DISPOSAL_BACKGROUND;
 	}
-	// a MNG layer is composited over what is beneath it, never replacing it
+	// MNG layers always blend over
 	BYTE blend = 0;
 
 	SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
@@ -1878,9 +1507,7 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
 	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
 	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
-	// The canvas and the loop count describe the file rather than any one frame,
-	// so every frame is told about them, exactly as PluginAPNG.cpp and
-	// PluginGIF.cpp do.
+	// file-level tags go on every frame
 	{
 		WORD logicalwidth = (WORD)MIN(info->canvas_width, (DWORD)0xFFFF);
 		WORD logicalheight = (WORD)MIN(info->canvas_height, (DWORD)0xFFFF);
@@ -1895,9 +1522,6 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
 // Writing
 // ==========================================================
 
-/**
-Read one FIMD_ANIMATION tag of a known type.
-*/
 static BOOL
 GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, FITAG **tag) {
 	if(FreeImage_GetMetadata(FIMD_ANIMATION, dib, key, tag) && *tag) {
@@ -1908,16 +1532,7 @@ GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, FITAG **tag) 
 	return FALSE;
 }
 
-/**
-Encode a page as the PNG datastream a MNG embeds: everything the PNG writer
-produced except its 8-byte signature.
-
-Going through FIF_PNG is what keeps the writer honest about depth.  A palette
-stays a palette, 1-bit stays 1-bit, 16-bit channels stay 16-bit, and the
-transparency table, the ICC profile and the text chunks travel with the frame -
-none of which would survive a writer of its own that flattened everything to
-RGBA first.
-*/
+// PNG datastream without its 8-byte signature
 static BOOL
 EncodeFrame(FIBITMAP *dib, int flags, std::vector<BYTE>& out) {
 	FIMEMORY *hmem = FreeImage_OpenMemory(NULL, 0);
@@ -1944,9 +1559,6 @@ EncodeFrame(FIBITMAP *dib, int flags, std::vector<BYTE>& out) {
 	return bResult;
 }
 
-/**
-Write one chunk to the output: length, type, payload, CRC.
-*/
 static BOOL
 WriteChunk(FreeImageIO *io, fi_handle handle, DWORD type, const BYTE *data, DWORD length) {
 	BYTE header[8];
@@ -1970,30 +1582,15 @@ WriteChunk(FreeImageIO *io, fi_handle handle, DWORD type, const BYTE *data, DWOR
 	return (io->write_proc(crc_bytes, 1, 4, handle) == 4);
 }
 
-/**
-Assemble the file: a signature, a header, the frames with the chunks that time
-and place them, and MEND.
-
-The tick is a millisecond - ticks_per_second is 1000 - so a FrameTime in
-milliseconds is written and read back as exactly itself, with no rounding
-anywhere.  Every frame is preceded by a FRAM that states its delay outright
-rather than leaning on the specification's default of one tick, and by a DEFI
-when it is not where the frame before it was.
-
-The framing mode carries the disposal: mode 3 has the background drawn ahead of
-each layer, which is what a frame disposing to the background asks of the frame
-after it, and mode 1 leaves the canvas alone.  Both associate the delay with
-every layer, so one FRAM per frame gives each its own.
-*/
+// 1000 ticks/s; FRAM mode 3 = dispose to background, mode 1 = leave
 static BOOL
 WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	const size_t count = info->out_frames.size();
 	if(count == 0) {
-		return TRUE;	// nothing was ever saved; an empty file is not a MNG
+		return TRUE;	// no pages: write nothing
 	}
 
-	// The canvas has to hold every frame: a LogicalWidth smaller than the pictures
-	// placed on it would describe a file whose own frames hang off the edge.
+	// grow the canvas to hold every frame
 	DWORD canvas_width = info->out_canvas_width;
 	DWORD canvas_height = info->out_canvas_height;
 	BOOL has_alpha = FALSE;
@@ -2012,8 +1609,7 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		if(frame.has_alpha) {
 			has_alpha = TRUE;
 		}
-		// nominal_play_time is informative, and the spec caps the nominal counts at
-		// 2^31-1; a long enough animation of long enough frames would otherwise wrap
+		// saturate at 2^31-1 (spec cap)
 		play_time = (frame.delay_ms > MNG_INFINITE_ITERATIONS - play_time)
 			? MNG_INFINITE_ITERATIONS : play_time + frame.delay_ms;
 	}
@@ -2021,17 +1617,13 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		return FALSE;
 	}
 
-	// bit 0: the profile means something; bit 1: simple MNG features - FRAM, DEFI,
-	// BACK and TERM are all in here; bit 3: transparency.  Never bit 2 or bit 5,
-	// which would claim the complex features and the delta images this does not
-	// write, and which the reader would rightly complain about.
+	// VALID | SIMPLE (+ transparency); never the complex or delta bits
 	DWORD simplicity = MNG_PROFILE_VALID | MNG_PROFILE_SIMPLE;
 	if(has_alpha) {
 		simplicity |= MNG_PROFILE_TRANSPARENCY;
 	}
 
-	// One background layer ahead of the first frame, and one more before every
-	// frame that asked for the canvas to be cleared first.
+	// background layers: one first, one per clearing frame
 	DWORD layers = (DWORD)count + 1;
 	for(size_t i = 1; i < count; i++) {
 		if(info->out_frames[i - 1].disposal == GIF_DISPOSAL_BACKGROUND) {
@@ -2057,8 +1649,7 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 	}
 
-	// TERM says what to do at MEND. One play is what a file with no TERM already
-	// means, so only a different answer is worth writing.
+	// no TERM means play once
 	if(info->out_loop != 1) {
 		BYTE term[10];
 		term[0] = 3;						// repeat the datastream
@@ -2073,7 +1664,6 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 
 	if(info->out_has_background) {
 		BYTE back[7];
-		// the chunk's samples are 16 bit; FreeImage's are 8
 		back[0] = info->out_background.rgbRed;   back[1] = info->out_background.rgbRed;
 		back[2] = info->out_background.rgbGreen; back[3] = info->out_background.rgbGreen;
 		back[4] = info->out_background.rgbBlue;  back[5] = info->out_background.rgbBlue;
@@ -2083,8 +1673,7 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 	}
 
-	// With no DEFI at all an image goes at the origin, so the first frame only needs
-	// one if it goes somewhere else.
+	// DEFI only when the position changes (default: the origin)
 	LONG placed_x = 0, placed_y = 0;
 
 	for(size_t i = 0; i < count; i++) {
@@ -2168,9 +1757,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	return (memcmp(g_mng_signature, signature, MNG_SIGNATURE_SIZE) == 0) ? TRUE : FALSE;
 }
 
-// Every frame is written by the PNG encoder, so what a MNG can hold here is
-// exactly what PNG can hold - palettes, 1- and 4-bit images and 16-bit channels
-// included. These are PluginPNG.cpp's own lists.
+// same as PluginPNG.cpp: frames are PNG-encoded
 static BOOL DLL_CALLCONV
 SupportsExportDepth(int depth) {
 	return (
@@ -2213,11 +1800,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	}
 
 	if(!read) {
-		// Nothing is read or written here. A write session is handed an empty
-		// stream - FreeImage_SaveToMemory() opens one, FreeImage_OpenMultiBitmap()
-		// with create_new truncates one - so there is nothing to validate and
-		// nowhere to seek to. The pages arrive through Save(), and the file is
-		// assembled in Close().
+		// writing: pages arrive in Save(), Close() builds the file
 		info->read = FALSE;
 		return info;
 	}
@@ -2245,11 +1828,7 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		return;
 	}
 
-	// The file is written here rather than as the pages arrive: MHDR states the
-	// canvas, and the canvas is not known until the last frame has said how big it
-	// is and where it goes. A document opened for writing and never given a page
-	// leaves the stream alone, as PluginAPNG.cpp does - there is no such thing as
-	// a MNG of nothing.
+	// MHDR needs the final canvas, so the file is written here
 	if(!info->read && !info->out_frames.empty()) {
 		try {
 			if(!WriteMNG(io, handle, info)) {
@@ -2275,8 +1854,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	if(!info || info->frames.empty()) {
 		return NULL;
 	}
-	// FreeImage_Load() asks for page -1, meaning "the image"; for an animation
-	// that is its first frame
+	// page -1 (FreeImage_Load): the first frame
 	if(page < 0) {
 		page = 0;
 	}
@@ -2309,10 +1887,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
-	// What cannot be written is refused here, where there is still something to
-	// return FALSE to. The file itself is only assembled in Close(), which returns
-	// void - so a page accepted now and found impossible then would leave
-	// FreeImage_Save() answering TRUE over a file it would otherwise have removed.
+	// refuse here: Close() returns void
 	{
 		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
 		if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) ||
@@ -2340,20 +1915,13 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		info->out_frames.push_back(MNGOutFrame());
 		MNGOutFrame& frame = info->out_frames.back();
-		frame.png.swap(png);	// the bytes move into the list rather than being copied
+		frame.png.swap(png);
 
 		frame.width = FreeImage_GetWidth(dib);
 		frame.height = FreeImage_GetHeight(dib);
 		frame.has_alpha = (FreeImage_GetBPP(dib) == 32) || FreeImage_IsTransparent(dib);
 
-		// The delay a page does not state.  Every page that has been through
-		// FreeImage_AppendPage() states one, because the cache writes it out as a
-		// MNG and reads it back, and this reader tags every page it returns - so
-		// this default is reached only by a page handed straight to
-		// FreeImage_Save() or FreeImage_SaveMultiBitmap*() without tags.  A tenth
-		// of a second is what PluginAPNG.cpp uses for the same case, and an
-		// animation whose frames all lasted no time at all would be one nobody
-		// could watch.
+		// default for untagged pages, as in PluginAPNG.cpp
 		frame.delay_ms = 100;
 
 		FITAG *tag = NULL;
@@ -2368,15 +1936,13 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			frame.y = *(WORD*)FreeImage_GetTagValue(tag);
 		}
 		if(GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &tag)) {
-			// GIF_DISPOSAL_PREVIOUS has no counterpart without stored object
-			// buffers, so it is written as "leave the canvas alone"
+			// GIF_DISPOSAL_PREVIOUS is written as LEAVE
 			const BYTE disposal = *(BYTE*)FreeImage_GetTagValue(tag);
 			frame.disposal = (disposal == GIF_DISPOSAL_BACKGROUND) ? GIF_DISPOSAL_BACKGROUND
 																   : GIF_DISPOSAL_LEAVE;
 		}
 
-		// The canvas and the loop count describe the file, not a frame, and every
-		// page carries them; the first page settles them.
+		// the first page sets canvas and loop count
 		if(is_first) {
 			info->out_flags = flags;
 

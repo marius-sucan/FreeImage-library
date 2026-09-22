@@ -1,7 +1,4 @@
-/* FreeImage: hand-written stand-in for the opj_config.h that OpenJPEG's CMake
- * build generates from opj_config.h.cmake.in. FreeImage builds the library
- * with its own makefiles and MSVC project, so nothing generates it here.
- * Keep the version in step with NEWS.md when the library is updated. */
+/* FreeImage: stands in for CMake's opj_config.h */
 #ifndef OPJ_CONFIG_H_INCLUDED
 #define OPJ_CONFIG_H_INCLUDED
 

@@ -1,15 +1,5 @@
-/*
- * FreeImage 3 - JPEG XR regression test
- *
- * Writes and reads back a JXR larger than 2 GiB, from an image with more than
- * 2^31 pixels, proving the container offsets stay correct at that scale.
- *
- * Needs about 4.5 GB of RAM and 2.4 GB of free space, and takes ~2 minutes.
- * Optional arguments: width height (default 46341 46341).
- *
- * Standalone: build with the Makefile in this directory, run from anywhere.
- * Scratch files are written to $JXR_TEST_TMP (default: the current directory).
- */
+/* FreeImage 3 - JPEG XR test: a > 2 GiB file (> 2^31 pixels) */
+/* needs ~4.5 GB RAM and ~2.4 GB disk; args: width height */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,7 +7,6 @@
 #include <sys/stat.h>
 #include "FreeImage.h"
 
-/* Scratch files go to $JXR_TEST_TMP, or the current directory. */
 static const char *tmppath(const char *name) {
     static char buf[1024];
     const char *dir = getenv("JXR_TEST_TMP");

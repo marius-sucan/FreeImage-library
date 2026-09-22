@@ -148,10 +148,7 @@ void DLL_CALLCONV InitAPNG(Plugin *plugin, int format_id);
 //   Shared between the PNG and the APNG plugins
 // ==========================================================
 
-/** Does this stream hold an *animated* PNG? Both plugins read the same signature,
-and the acTL chunk is the only thing that tells the two formats apart.
-@see PluginAPNG.cpp
-*/
+// TRUE for an animated PNG (acTL chunk present)
 BOOL APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle);
 
 #endif //!PLUGIN_H

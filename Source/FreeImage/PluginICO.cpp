@@ -234,12 +234,7 @@ SupportsNoPixels() {
 
 // ----------------------------------------------------------
 
-/**
-What Open hands to the rest of the plugin: the header, and where this ICO begins
-in the stream.  Everything the directory holds - its own position, and every
-dwImageOffset in it - is an offset from the start of the ICO, which is not
-necessarily the start of the file it is being read out of.
-*/
+// start_pos: where the ICO begins; its offsets count from there
 typedef struct tagICOSTATE {
 	ICONHEADER	header;
 	long		start_pos;
@@ -253,7 +248,6 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		return NULL;
 	}
 
-	// taken before the header is read, so that it is the position of the ICO
 	state->start_pos = io->tell_proc(handle);
 
 	if (read) {
@@ -298,10 +292,6 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 	if(state) {
 		return state->header.idCount;
 	}
-	// no state means Open() failed, so there is no page here to count. This used to
-	// answer 1, and it is the only one of the seven multi-page plugins that did:
-	// a file that is not an icon was reported as holding a page that then would not
-	// load, which is also what stopped FreeImage_OpenMultiBitmap() noticing.
 	return 0;
 }
 
@@ -321,13 +311,7 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 	SwapInfoHeader(&bmih);
 #endif
 
-	// An icon stores its XOR and AND masks stacked, so biHeight is twice the
-	// image height and is never negative - unlike a BMP, an icon has no
-	// top-down form.  Neither dimension was checked: biHeight = -4 gave
-	// height = -2, FreeImage_AllocateHeader() abs()ed that into a two-row
-	// bitmap, and the pixel read below is "height * pitch" - int times unsigned,
-	// so evaluated as unsigned - which turned into a request for 4294967264
-	// bytes into a 32-byte bitmap.
+	// biHeight covers both masks (XOR + AND) and is never negative
 	if ((bmih.biWidth <= 0) || (bmih.biHeight <= 0)) {
 		return NULL;
 	}
@@ -337,10 +321,7 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 	int height = bmih.biHeight / 2; // height == xor + and mask
 	unsigned bit_count = bmih.biBitCount;
 	
-	// 2 is not on this list.  FreeImage_AllocateBitmap has no case for it and
-	// falls into "default: bpp = 8", so admitting it built an 8-bpp bitmap while
-	// line and pitch just below were computed for 2 bpp - and the pixel read is
-	// then a quarter of the row length the bitmap actually has.
+	// no 2 bpp: FreeImage cannot allocate it
 	if (bit_count != 1 && bit_count != 4 && bit_count != 8 && bit_count != 16 && bit_count != 24 && bit_count != 32) {
 		// Fix for CVE-2020-24292 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2020-24292.patch
 		return NULL;
@@ -462,11 +443,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 			io->seek_proc(handle, state->start_pos + (long)sizeof(ICONHEADER), SEEK_SET);
 
-			// the (size, 1) form of read_proc writes nothing at all unless it can
-			// satisfy the whole request, and this result used to be discarded: a
-			// file that declares 64 icons and contains none left icon_list holding
-			// whatever malloc had returned, and the seek below went to an offset
-			// taken from it - 0xBEBEBEBE under a sanitiser that fills fresh memory
 			if (io->read_proc(icon_list, icon_header->idCount * sizeof(ICONDIRENTRY), 1, handle) != 1) {
 				free(icon_list);
 				FreeImage_OutputMessageProc(s_format_id, "Truncated icon directory");
@@ -478,8 +454,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			// load the requested icon
 			if (page < icon_header->idCount) {
-				// seek to the start of the bitmap data for the icon.  dwImageOffset
-				// counts from the start of the ICO, not of the stream.
+				// seek to the start of the bitmap data for the icon
 				io->seek_proc(handle, state->start_pos + (long)icon_list[page].dwImageOffset, SEEK_SET);
 
 				if( IsPNG(io, handle) ) {
@@ -754,8 +729,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		vPages.push_back(icon_dib);
 		icon_header->idCount++;
 
-		// write the header, where this ICO starts.  Save reads the pages already
-		// written back through Load, so the two have to agree about that.
+		// write the header
 		io->seek_proc(handle, state->start_pos, SEEK_SET);
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapIconHeader(icon_header);

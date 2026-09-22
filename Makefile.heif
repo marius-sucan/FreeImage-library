@@ -1,44 +1,6 @@
 # ---------------------------------------------------------------------------
 #  HEIF/HEIC support (libheif + libde265), shared by every FreeImage makefile.
-#
-#  FreeImage builds every bundled library from one flat list of sources with
-#  one set of flags (Makefile.srcs).  The two libraries behind the HEIF plugin
-#  (Source/LibHEIF, Source/LibDe265) do not fit that mould in three ways, and
-#  this file closes the gaps:
-#
-#   1. Their sources are C++ files named *.cc.  Every makefile has a .cc rule
-#      of the form
-#
-#          $(CXX) $(HEIF_CXXFLAGS_PRE) $(CXXFLAGS) $(HEIF_CXXFLAGS_POST) -c $< -o $@
-#
-#      and the two extra variables are set per target pattern below.  They are
-#      empty for any other .cc file.
-#
-#   2. libheif is C++20 and libde265 is C++17, while the rest of FreeImage is
-#      compiled as C++0x/11.  A later -std= flag overrides an earlier one, so
-#      the standard is appended after $(CXXFLAGS).
-#
-#   3. Both libraries include their own headers by short generic names
-#      (bitstream.h, image.h, util.h, error.h ...) that also exist elsewhere in
-#      the tree (Source/LibOpenJPEG/image.h, Source/LibDav1d/config.h ...).
-#      Their own directories are therefore *prepended* so they win over the
-#      global $(INCLUDE), and neither directory is on the global list.  The only
-#      global addition is Source/LibHEIF/libheif/api, whose sole content is the
-#      libheif/ subdirectory of public headers used by PluginHEIF.cpp.
-#
-#  libde265 is configured through -D flags instead of a config.h (every one of
-#  its "config.h" includes is guarded by HAVE_CONFIG_H, which is never defined
-#  here), so no config.h of ours can be picked up by, or shadow, another
-#  library's.  The MSVC projects (LibHEIF.2017.vcxproj, LibDe265.2017.vcxproj)
-#  spell out the same defines.
-#
-#  libde265's x86 SIMD kernels (libde265/x86/) are portable C++ intrinsics:
-#  the sse-*.cc files need -msse4.1 (they run only after sse.cc's runtime CPU
-#  check, which is deliberately compiled without it), transform-avx2.cc needs
-#  -mavx2 and transform-avx512.cc needs -mavx512f -mavx512bw.  On a non-x86
-#  host the whole x86/ directory is dropped from the build; the scalar
-#  fallbacks are always compiled.  HEIF_MACHINE can be overridden for cross
-#  builds.
+#  Per-library -std and -I flags; the -I dirs go first (header names clash).
 # ---------------------------------------------------------------------------
 
 HEIF_MACHINE ?= $(shell uname -m 2>/dev/null || echo unknown)
@@ -51,11 +13,9 @@ HEIF_CXXFLAGS_POST =
 # --- libde265 (HEVC decoder) -----------------------------------------------
 
 LIBDE265_CXXFLAGS_PRE = -ISource/LibDe265 -ISource/LibDe265/libde265
-# LIBDE265_STATIC_BUILD: no __declspec(dllimport/dllexport) on Windows
-# DE265_LOG_ERROR: libde265's default log level ("error")
 LIBDE265_CXXFLAGS_POST = -std=c++17 -DLIBDE265_STATIC_BUILD -DDE265_LOG_ERROR -DHAVE_POSIX_MEMALIGN=1
 
-# <malloc.h> is where MinGW declares __mingw_aligned_malloc (libde265/image.cc)
+# MinGW declares __mingw_aligned_malloc in <malloc.h>
 ifneq (,$(findstring MINGW,$(HEIF_SYSTEM))$(findstring MSYS,$(HEIF_SYSTEM)))
 LIBDE265_CXXFLAGS_POST += -DHAVE_MALLOC_H=1
 endif
@@ -80,43 +40,8 @@ endif
 # --- libheif (HEIF container) ----------------------------------------------
 
 LIBHEIF_CXXFLAGS_PRE = -ISource/LibHEIF/libheif -ISource/LibHEIF/libheif/api -ISource/LibDe265
-# HAVE_LIBDE265: the libde265 decoder is compiled in (no dynamic plugin loading)
-# ENABLE_MULTITHREADING_SUPPORT / ENABLE_PARALLEL_TILE_DECODING: libheif's defaults
-# LIBHEIF_STATIC_BUILD / LIBDE265_STATIC_BUILD: see above; libheif includes de265.h
-#
-# The other decoders are wired to libraries FreeImage already bundles, so a HEIF
-# file whose payload is not HEVC still opens:
-#   HAVE_JPEG_DECODER=1     -> libheif/plugins/decoder_jpeg.cc  -> Source/LibJPEG
-#                              (also decodes the JPEG 'thmb' thumbnails Sony HIF
-#                              files carry, and JPEG-in-HEIF payloads)
-#   WITH_UNCOMPRESSED_CODEC=1 -> libheif/codecs/uncompressed/*.cc and image-items/
-#                              unc_image.cc plus the unci decoder/encoder plugins
-#                              (ISO/IEC 23001-17 uncompressed)
-#   HAVE_ZLIB=1             -> libheif/compression_zlib.cc -> Source/ZLib, for the
-#                              zlib/deflate-compressed variant of an 'unci' item
-#   HAVE_OPENJPEG_DECODER=1 -> libheif/plugins/decoder_openjpeg.cc -> Source/LibOpenJPEG
-#                              (JPEG 2000 and, through the same codestream decoder,
-#                              HTJ2K; the jpeg2000_* codec and box sources were always
-#                              compiled, only the decoder plugin was missing)
-# The bundled -ISource/LibJPEG, -ISource/ZLib and -ISource/LibOpenJPEG are already on
-# the global include path; the MSVC project adds them itself.
-#
-# OPJ_STATIC has to be defined for these .cc files as well, not just for the C ones:
-# without it openjpeg.h declares the API __declspec(dllimport) and __stdcall on
-# Windows, which neither links nor calls correctly against the static LibOpenJPEG,
-# and on GCC it marks the declarations visibility("default") while the definitions
-# are hidden.  FreeImage.2017.vcxproj already defines it for J2KHelper.cpp.
-#
-# JPEG 2000 was disabled here until 2026-09-15, on the grounds that the bundled
-# Source/LibOpenJPEG (a 2014 snapshot labelled 2.0.0) mis-decoded J2K-in-HEIF.  That
-# was a misreading of the only sample there is: libheif ships exactly one J2K file,
-# fuzzing/data/corpus/j2k32.heif, and its tile-part carries 32 bytes of packet data
-# for a 32x32 RGB image, so every decoder turns it into a near-flat gradient.  It was
-# compared against unci32.heif, the lossless version of the same picture, and the
-# codec was blamed for the difference.  TestAPI/HEIF/data/j2k32-lossless.heif exists
-# to keep that mistake from being made twice.  No AVC (H.264) or VVC decoder is
-# enabled - neither OpenH264 nor vvdec is bundled - and those payloads are still
-# reported and skipped.
+# decoders: HEVC, JPEG, J2K, uncompressed/zlib (bundled libs); no AVC/VVC
+# OPJ_STATIC: openjpeg.h is included here too
 LIBHEIF_CXXFLAGS_POST = -std=c++20 -DLIBHEIF_STATIC_BUILD -DLIBDE265_STATIC_BUILD -DHAVE_LIBDE265=1 -DENABLE_MULTITHREADING_SUPPORT=1 -DENABLE_PARALLEL_TILE_DECODING=1 -DHAVE_JPEG_DECODER=1 -DWITH_UNCOMPRESSED_CODEC=1 -DHAVE_ZLIB=1 -DHAVE_OPENJPEG_DECODER=1 -DOPJ_STATIC
 
 ./Source/LibHEIF/%: HEIF_CXXFLAGS_PRE = $(LIBHEIF_CXXFLAGS_PRE)

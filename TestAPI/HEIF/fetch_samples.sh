@@ -1,9 +1,5 @@
 #!/bin/sh
-# Download the third-party HEIF samples that 'samples' tests into samples/ and check them
-# against the MD5 sums the expectations were recorded with. See samples/README.md for where
-# each file comes from and on what terms. Files already present and intact are kept.
-#
-#   sh fetch_samples.sh        (needs curl and md5sum)
+# download the third-party samples into samples/ and check their MD5 (curl, md5sum)
 cd "$(dirname "$0")" || exit 1
 
 NOKIA=https://nokiatech.github.io/heif/content
@@ -50,7 +46,6 @@ echo "$LIST" | while read -r sum file url; do
 	fi
 	mv "samples/$file.part" "samples/$file"
 done
-# what is still not there after the downloads
 echo "$LIST" | while read -r sum file url; do
 	[ -z "$sum" ] && continue
 	[ -f "samples/$file" ] || echo "missing: samples/$file"

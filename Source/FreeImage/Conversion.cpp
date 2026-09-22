@@ -381,10 +381,6 @@ FreeImage_ColorQuantizeEx(FIBITMAP *dib, FREE_IMAGE_QUANTIZE quantize, int Palet
 	if( PaletteSize > 256 ) PaletteSize = 256;
 	if( ReserveSize < 0 ) ReserveSize = 0;
 	if( ReserveSize > PaletteSize ) ReserveSize = PaletteSize;
-	// The sizes were clamped here and the pointer was not, and the three
-	// quantizers disagree about whether it may be NULL: LFPQuantizer tests it,
-	// WuQuantizer and NNQuantizer walk it.  A reserve size without a palette to
-	// take the reserved entries from means no reserved entries.
 	if( ReservePalette == NULL ) ReserveSize = 0;
 	if (FreeImage_HasPixels(dib)) {
 		const unsigned bpp = FreeImage_GetBPP(dib);

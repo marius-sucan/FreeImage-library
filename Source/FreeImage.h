@@ -672,7 +672,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define FIF_LOAD_NOPIXELS 0x8000	//! loading: load the image header only (not supported by all plugins, default to full loading)
 
 #define APNG_DEFAULT		0
-#define APNG_PLAYBACK		2		//! 'Play' the APNG to generate each frame (as 32bpp) instead of returning raw frame data when loading
+#define APNG_PLAYBACK		2		//! 'Play' the APNG: each frame composited, as 32bpp
 #define BMP_DEFAULT         0
 #define BMP_SAVE_RLE        1
 #define CUT_DEFAULT         0
@@ -716,7 +716,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define KOALA_DEFAULT       0
 #define LBM_DEFAULT         0
 #define MNG_DEFAULT         0
-#define MNG_PLAYBACK		2		//! 'Play' the MNG to generate each frame (as 32bpp) instead of returning raw frame data when loading
+#define MNG_PLAYBACK		2		//! 'Play' the MNG: each frame composited, as 32bpp
 #define PCD_DEFAULT         0
 #define PCD_BASE            1		//! load the bitmap sized 768 x 512
 #define PCD_BASEDIV4        2		//! load the bitmap sized 384 x 256
@@ -765,15 +765,15 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define XBM_DEFAULT			0
 #define XPM_DEFAULT			0
 #define WEBP_DEFAULT		0		//! save with good quality (75:1)
-#define WEBP_PLAYBACK		0x0001	//! 'Play' the animation to generate each frame (as 32bpp) instead of returning raw frame data when loading
+#define WEBP_PLAYBACK		0x0001	//! 'Play' the animation: each frame composited, as 32bpp
 #define WEBP_LOSSLESS		0x100	//! save in lossless mode
 #define JXR_DEFAULT			0		//! save with quality 80 and no chroma subsampling (4:4:4)
 #define JXR_LOSSLESS		0x0064	//! save lossless
 #define JXR_PROGRESSIVE		0x2000	//! save as a progressive-JXR (use | to combine with other save flags)
-#define AVIF_DEFAULT		0		//! loading: decode the image, apply its clap/irot/imir transforms, keep ICC, Exif and XMP (this plugin cannot save)
-#define AVIF_PLAYBACK		2		//! loading: 'play' an image sequence - every frame comes back as 32bpp whatever the file's depth (an AVIF frame is a whole picture already, so nothing is composited); a still image has nothing to play and ignores it
-#define HEIF_DEFAULT		0		//! loading: decode the primary image with its clap/irot/imir transforms applied, keep ICC, Exif, XMP and the thumbnail - or the first frame of an image sequence (this plugin cannot save)
-#define HEIF_PLAYBACK		2		//! loading: 'play' an image sequence - every frame comes back as 32bpp whatever the file's depth (a HEIF frame is a whole picture already, so nothing is composited); a still image has nothing to play and ignores it
+#define AVIF_DEFAULT		0		//! apply clap/irot/imir; keep ICC, Exif, XMP (load only)
+#define AVIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
+#define HEIF_DEFAULT		0		//! primary image or first frame, transforms applied (load only)
+#define HEIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
 
 // Background filling options ---------------------------------------------------------
 // Constants used in FreeImage_FillBackground and FreeImage_EnlargeCanvas
@@ -807,7 +807,7 @@ DLL_API const char *DLL_CALLCONV FreeImage_GetVersion(void);
 DLL_API const char *DLL_CALLCONV FreeImage_GetCopyrightMessage(void);
 
 // Message output functions -------------------------------------------------
-// Quick Picto Viewer: with or without a handler set, every message is also sent to the debugger output (DebugView) as "qpv: fim: [FORMAT] message"
+// Windows: messages are also sent to the debugger ("qpv: fim: ...")
 
 typedef void (*FreeImage_OutputMessageFunction)(FREE_IMAGE_FORMAT fif, const char *msg);
 typedef void (DLL_CALLCONV *FreeImage_OutputMessageFunctionStdCall)(FREE_IMAGE_FORMAT fif, const char *msg); 
@@ -884,9 +884,7 @@ DLL_API int DLL_CALLCONV FreeImage_GetPageCount(FIMULTIBITMAP *bitmap);
 DLL_API void DLL_CALLCONV FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data);
 DLL_API void DLL_CALLCONV FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data);
 DLL_API void DLL_CALLCONV FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page);
-// The three above return void and so cannot report that the page was not added or
-// removed - a locked page, a read-only bitmap, a format that cannot encode the image
-// or hold more than one page. These do the same work and say whether it happened.
+// like the three above, but return whether it worked
 DLL_API BOOL DLL_CALLCONV FreeImage_AppendPageEx(FIMULTIBITMAP *bitmap, FIBITMAP *data);
 DLL_API BOOL DLL_CALLCONV FreeImage_InsertPageEx(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data);
 DLL_API BOOL DLL_CALLCONV FreeImage_DeletePageEx(FIMULTIBITMAP *bitmap, int page);

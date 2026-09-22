@@ -13,17 +13,7 @@
 #  error "lib_common.h must always be included before libdeflate.h"
 #endif
 
-/*
- * FreeImage: libdeflate is bundled only as the ZIP/DWA codec behind OpenEXR,
- * and nothing outside Source/OpenEXR calls it, so its API is hidden rather
- * than exported.  Upstream tags it visibility("default"), which overrides the
- * -fvisibility=hidden the rest of FreeImage is built with and would put ~25
- * unversioned libdeflate_* symbols into libfreeimage's dynamic symbol table,
- * where they could interpose on (or be interposed by) another libdeflate in
- * the same process.  OpenEXR's own build does exactly this rewrite when it
- * vendors libdeflate - see EXR_DEFLATE_SOURCES in cmake/OpenEXRSetup.cmake.
- * Keep this when updating libdeflate.
- */
+/* FreeImage: hidden, not exported (only OpenEXR uses libdeflate) */
 #if defined(LIBDEFLATE_DLL) && (defined(_WIN32) || defined(__CYGWIN__))
 #  define LIBDEFLATE_EXPORT_SYM  /**/
 #elif defined(__GNUC__)

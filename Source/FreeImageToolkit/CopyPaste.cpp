@@ -135,8 +135,7 @@ Combine4(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned 
 		}
 	}
 
-	// the start of the destination row, not of the byte holding pixel x: at 4 bpp
-	// the two differ by a nibble and the loop below indexes by pixel
+	// row start: the loop below indexes by pixel
 	BYTE *dst_bits = FreeImage_GetBits(dst_dib) + ((size_t)(FreeImage_GetHeight(dst_dib) - FreeImage_GetHeight(src_dib) - y) *	FreeImage_GetPitch(dst_dib));
 	BYTE *src_bits = FreeImage_GetBits(src_dib);    
 
@@ -152,20 +151,13 @@ Combine4(FIBITMAP *dst_dib, FIBITMAP *src_dib, unsigned x, unsigned y, unsigned 
 		return FALSE;
 	}
 
-	// A destination x that is odd puts the source nibbles half a byte out of step
-	// with the destination ones.  The row cannot simply be copied across: it has
-	// to be written a pixel at a time, which also keeps the destination nibbles
-	// outside [x, x + src_width) untouched without any special-casing of the two
-	// end bytes.  The temporary row is still taken so that a source and a
-	// destination sharing pixels behave as a read-then-write.
+	// pixel by pixel: an odd x puts the nibbles out of step
 	for(unsigned rows = 0; rows < src_height; rows++) {
 		memcpy(buffer, src_bits, src_line);
 
 		for (unsigned cols = 0; cols < src_width; cols++) {
-			// source pixel 'cols', mapped through the palette swap table
 			const BYTE index = (cols & 1) ? (BYTE)(buffer[cols >> 1] & 0x0F) : (BYTE)(buffer[cols >> 1] >> 4);
 			const BYTE value = (BYTE)(swapTable[index] & 0x0F);
-			// destination pixel 'x + cols'
 			const unsigned dst_x = x + cols;
 			if (dst_x & 1) {
 				dst_bits[dst_x >> 1] = (BYTE)((dst_bits[dst_x >> 1] & 0xF0) | value);
@@ -552,8 +544,6 @@ FreeImage_Copy(FIBITMAP *src, int left, int top, int right, int bottom) {
 
 	// copy the palette
 
-	// memcpy() may not be passed a NULL pointer, not even with a length of 0,
-	// and FreeImage_GetPalette() returns NULL for every non palettised image
 	{
 		RGBQUAD *dst_pal = FreeImage_GetPalette(dst);
 		RGBQUAD *src_pal = FreeImage_GetPalette(src);
@@ -566,12 +556,6 @@ FreeImage_Copy(FIBITMAP *src, int left, int top, int right, int bottom) {
 	// copy the bits
 	if (bpp == 1) {
 		BOOL value;
-		// y * src_pitch is an INT64 product - 0a8e25e widened the pitches - but
-		// it was stored in an unsigned and truncated there, so a 1- or 4-bit
-		// image whose pixel data passes 4 GiB copied from and to the wrong rows.
-		// 3.18.0 declares src_pitch as int and breaks at 2 GiB instead, which is
-		// what this replaces rather than introduces.  The loop counters go with
-		// them: dst_height and dst_width are INT64 above.
 		INT64 y_src, y_dst;
 
 		for (INT64 y = 0; y < dst_height; y++) {
@@ -686,10 +670,7 @@ FreeImage_Paste(FIBITMAP *dst, FIBITMAP *src, int left, int top, int alpha) {
 		if(bpp_dst == bpp_src) {
 			const BOOL srcIsRGB565 = IS_FORMAT_RGB565(src) ? TRUE : FALSE;
 			if((bpp_dst == 16) && (isRGB565 != srcIsRGB565)) {
-				// Same depth, different 16-bit layout.  Combine16_555 and
-				// Combine16_565 test only FreeImage_GetBPP, so the source words
-				// would be copied across unconverted: pure red in 555 (0x7C00)
-				// read as 565 is a dark green.  Convert instead.
+				// same depth, other 16-bit layout: convert first
 				clone = isRGB565 ? FreeImage_ConvertTo16Bits565(src) : FreeImage_ConvertTo16Bits555(src);
 			} else {
 				clone = src;
@@ -867,7 +848,6 @@ FreeImage_CreateView(FIBITMAP *dib, unsigned left, unsigned top, unsigned right,
 	}
 
 	// palette
-	// see above : NULL is not a valid memcpy() argument, even for a length of 0
 	{
 		RGBQUAD *dst_pal = FreeImage_GetPalette(dst);
 		RGBQUAD *src_pal = FreeImage_GetPalette(dib);

@@ -1,18 +1,7 @@
-# WebP regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan       build them with AddressSanitizer (recommended for robust)
-#   make asan-run   rebuild the bundled libwebp and the plugin with
-#                   AddressSanitizer into a private copy of the library and run
-#                   the tests against that
-#
-# Scratch files go to $WEBP_TEST_TMP, or the current directory.
+# WebP tests; build the library first (make -f Makefile.gnu dist)
+# targets: run, asan, asan-run; scratch files in $WEBP_TEST_TMP
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust
@@ -23,7 +12,7 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 default: all
 all: $(TESTS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
+# relink when libfreeimage.a changes
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
@@ -31,19 +20,11 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters for robust: it rebuilds what this upgrade actually replaced - the
-# whole of Source/LibWebP and PluginWebP.cpp - with AddressSanitizer into a
-# private copy of the library. Mixing instrumented and plain objects is fine.
-#
-# This is the test that is about the reason for the upgrade: CVE-2023-4863 was
-# a heap overflow in the lossless decoder's Huffman table construction, reached
-# from a crafted file, and a sanitized run over damaged input is what would
-# catch its like.
+# asan-run instruments Source/LibWebP and PluginWebP.cpp
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C and C++ files with
+# Makefile.gnu's compile flags
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden -DWEBP_EXTERN=extern $(OPENMP_CFLAGS)
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden -DWEBP_EXTERN=extern $(OPENMP_CFLAGS)

@@ -101,9 +101,7 @@ main(int argc, char *argv[]) {
 
 	FreeImage_SetOutputMessage(MyMessageFunc);
 
-	// Copy the input to the output, page by page. The format comes from the
-	// file itself rather than being assumed, so this clones any of the paging
-	// formats that can also be written - TIFF, GIF, ICO.
+	// Copy the input to the output, page by page
 
 	FREE_IMAGE_FORMAT fif = FreeImage_GetFileType(input_filename, 0);
 	if (fif == FIF_UNKNOWN) {

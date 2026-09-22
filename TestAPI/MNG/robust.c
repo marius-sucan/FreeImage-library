@@ -1,20 +1,5 @@
-/*
- * FreeImage 3 - MNG robustness test
- *
- * The MNG plugin parses the container by hand: chunk headers, lengths, the
- * extent of each embedded datastream, the variable-length bodies of FRAM and
- * DEFI.  This throws damaged files at it and insists it neither crashes, hangs
- * nor allocates wildly.  Refusing a file is a perfectly good answer; the only
- * wrong answers are dying and lying.
- *
- * Worth running under AddressSanitizer - "make asan-run" in this directory -
- * because most of what can go wrong here is a read past the end of a buffer
- * that a normal build will not notice.
- *
- * Scratch files go to $MNG_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - MNG robustness test; best run as "make asan-run" */
+/* scratch files: $MNG_TEST_TMP or the current directory */
 
 #include <stdarg.h>
 
@@ -44,10 +29,7 @@ static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg
 #define W 16
 #define H 16
 
-/**
- * Open a file, walk every page it claims, and let go.  Whatever it answers is
- * acceptable; getting here again is the test.
- */
+/* any answer is fine; not crashing is the test */
 static void survive(const char *path, const char *what) {
 	static const int flags[3] = { 0, MNG_PLAYBACK, FIF_LOAD_NOPIXELS };
 	int f;
@@ -65,8 +47,7 @@ static void survive(const char *path, const char *what) {
 			for (i = 0; i < pages; i++) {
 				FIBITMAP *dib = FreeImage_LockPage(mb, i);
 				if (dib) {
-					/* touch the pixels, so a bad pitch or size is not merely
-					   allocated but used */
+					/* touch the pixels so a bad pitch is used */
 					if (FreeImage_HasPixels(dib)) {
 						RGBQUAD colour;
 						FreeImage_GetPixelColor(dib, 0, 0, &colour);
@@ -77,7 +58,6 @@ static void survive(const char *path, const char *what) {
 			FreeImage_CloseMultiBitmap(mb, 0);
 		}
 
-		/* the single-image entry point takes the same walk */
 		{
 			FIBITMAP *dib = FreeImage_Load(FIF_MNG, path, flags[f]);
 			if (dib) {
@@ -88,13 +68,7 @@ static void survive(const char *path, const char *what) {
 	ok("%s", what);
 }
 
-/**
- * A complete, valid file, to cut up in the tests below.
- *
- * It carries one of every chunk that steers the parser - MHDR, TERM, BACK,
- * FRAM, DEFI, LOOP and ENDL - so that the truncation and CRC tests below reach
- * all of them rather than only the two a minimal file would have.
- */
+/* a valid file with every parser-steering chunk, to damage below */
 static void build_good(Buf *mng) {
 	int i;
 	static const BYTE COLOUR[3][3] = { { 255, 0, 0 }, { 0, 255, 0 }, { 0, 0, 255 } };
@@ -114,7 +88,6 @@ static void build_good(Buf *mng) {
 	mng_mend(mng);
 }
 
-/** Every truncation of a valid file. */
 static void test_truncation(void) {
 	Buf good;
 	size_t cut;
@@ -154,7 +127,6 @@ static void test_truncation(void) {
 	buf_free(&good);
 }
 
-/** A chunk length that runs past the end of the file, and other impossible ones. */
 static void test_chunk_lengths(void) {
 	static const DWORD lengths[] = { 0xFFFFFFFFu, 0x7FFFFFFFu, 0x80000000u, 100000u };
 	size_t i;
@@ -169,7 +141,6 @@ static void test_chunk_lengths(void) {
 		buf_init(&mng);
 		mng_signature(&mng);
 		mng_mhdr(&mng, W, H, 100, 1, 1, 0, 3);
-		/* a chunk header claiming more bytes than exist, with no payload */
 		buf_u32(&mng, lengths[i]);
 		buf_add(&mng, "FRAM", 4);
 		buf_u32(&mng, 0);
@@ -183,7 +154,6 @@ static void test_chunk_lengths(void) {
 	}
 }
 
-/** A FRAM that promises fields it does not carry. */
 static void test_short_fram(void) {
 	static const int sizes[] = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
 	size_t i;
@@ -222,7 +192,6 @@ static void test_short_fram(void) {
 	}
 }
 
-/** A DEFI of every length, including ones the spec does not allow. */
 static void test_defi_lengths(void) {
 	int n;
 
@@ -253,7 +222,6 @@ static void test_defi_lengths(void) {
 	}
 }
 
-/** An embedded image with no IEND: the file ends inside it. */
 static void test_unterminated_image(void) {
 	Buf mng, good;
 	const char *path;
@@ -278,14 +246,12 @@ static void test_unterminated_image(void) {
 	survive(path, "an image whose IEND never arrives");
 }
 
-/** Chunks that arrive where nothing expects them. */
 static void test_misplaced_chunks(void) {
 	Buf mng;
 	const char *path;
 
 	printf("misplaced chunks\n");
 
-	/* MEND before any image */
 	buf_init(&mng);
 	mng_signature(&mng);
 	mng_mhdr(&mng, W, H, 100, 0, 0, 0, 3);
@@ -294,7 +260,6 @@ static void test_misplaced_chunks(void) {
 	buf_free(&mng);
 	survive(path, "a MEND with no image before it");
 
-	/* a header and nothing else */
 	buf_init(&mng);
 	mng_signature(&mng);
 	mng_mhdr(&mng, W, H, 100, 3, 3, 0, 3);
@@ -302,14 +267,12 @@ static void test_misplaced_chunks(void) {
 	buf_free(&mng);
 	survive(path, "a MHDR and nothing else");
 
-	/* a signature and nothing else */
 	buf_init(&mng);
 	mng_signature(&mng);
 	path = write_file("mng_sigonly.mng", &mng);
 	buf_free(&mng);
 	survive(path, "a signature and nothing else");
 
-	/* an ENDL with no LOOP, and a LOOP with no ENDL */
 	buf_init(&mng);
 	mng_signature(&mng);
 	mng_mhdr(&mng, W, H, 100, 1, 1, 0, 3);
@@ -321,7 +284,6 @@ static void test_misplaced_chunks(void) {
 	buf_free(&mng);
 	survive(path, "an ENDL with no LOOP and a LOOP with no ENDL");
 
-	/* a zero-count LOOP that is never closed */
 	buf_init(&mng);
 	mng_signature(&mng);
 	mng_mhdr(&mng, W, H, 100, 1, 1, 0, 3);
@@ -332,7 +294,6 @@ static void test_misplaced_chunks(void) {
 	buf_free(&mng);
 	survive(path, "a zero-count LOOP with no ENDL");
 
-	/* deeply nested loops */
 	{
 		int d;
 		buf_init(&mng);
@@ -352,7 +313,6 @@ static void test_misplaced_chunks(void) {
 	}
 }
 
-/** A SHOW naming objects that do not exist, and huge ranges. */
 static void test_show_ranges(void) {
 	static const struct { WORD first, last; BYTE mode; const char *what; } cases[] = {
 		{ 1,      1,      0, "SHOW of an object that was never defined" },
@@ -391,7 +351,6 @@ static void test_show_ranges(void) {
 	}
 }
 
-/** A bad CRC on a chunk that steers the parser. */
 static void test_bad_crc(void) {
 	static const char *types[] = { "MHDR", "FRAM", "DEFI", "BACK", "TERM", "LOOP" };
 	size_t t;
@@ -425,15 +384,12 @@ static void test_bad_crc(void) {
 			snprintf(what, sizeof(what), "a %s with a bad CRC", types[t]);
 			survive(path, what);
 		} else {
-			/* a silently skipped case is a test that reports a check it never
-			   ran, so say so instead */
 			fail("build_good() carries no %s to damage", types[t]);
 		}
 		buf_free(&good);
 	}
 }
 
-/** A MHDR claiming a canvas far bigger than anything in the file. */
 static void test_huge_canvas(void) {
 	static const DWORD sizes[][2] = {
 		{ 0xFFFFFFFFu, 0xFFFFFFFFu },
@@ -464,7 +420,6 @@ static void test_huge_canvas(void) {
 	}
 }
 
-/** An image whose DEFI puts it far off the canvas, in both directions. */
 static void test_off_canvas(void) {
 	static const LONG places[][2] = {
 		{ -1000, -1000 }, { 1000, 1000 }, { -8, -8 },
@@ -495,7 +450,6 @@ static void test_off_canvas(void) {
 	}
 }
 
-/** Garbage that merely starts with the signature. */
 static void test_garbage(void) {
 	Buf mng;
 	const char *path;

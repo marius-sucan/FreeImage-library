@@ -50,8 +50,7 @@ static avif_off_t avif_ftello(FILE * stream)
 
 #if defined(AVIF_USE_FSEEKO)
 // POSIX large file support
-// FreeImage: spelled with the C11 keyword rather than the <assert.h> macro, because the
-// FreeImage makefiles compile C as -std=c99, where <assert.h> does not define static_assert.
+// FreeImage: _Static_assert, as -std=c99 has no static_assert macro
 _Static_assert(sizeof(off_t) == sizeof(int64_t), "");
 typedef off_t avif_off_t;
 #define AVIF_OFF_MAX INT64_MAX

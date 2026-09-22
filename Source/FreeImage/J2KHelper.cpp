@@ -29,8 +29,7 @@
 
 static OPJ_UINT64 
 _LengthProc(J2KFIO_t *fio) {
-	// from the position the handle had when the stream was created to the end of the file:
-	// OpenJPEG needs it to size a last tile-part whose Psot field is 0
+	// length from the stream start; OpenJPEG needs it when Psot is 0
 	fio->io->seek_proc(fio->handle, 0, SEEK_END);
 	long end_pos = fio->io->tell_proc(fio->handle);
 	fio->io->seek_proc(fio->handle, fio->start, SEEK_SET);
@@ -62,10 +61,7 @@ _SkipProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 static OPJ_BOOL 
 _SeekProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
-	// OpenJPEG's positions count from the start of the stream, which is wherever the
-	// handle stood when the stream was created - not necessarily the start of the file
-	// (FreeImage_LoadFromHandle / FreeImage_SaveToHandle inside a container). The JP2
-	// writer seeks back to patch box lengths, so an absolute seek corrupts such a save.
+	// positions are relative to where the stream started, not the file
 	if( (p_nb_bytes < 0) || (p_nb_bytes > (OPJ_OFF_T)(LONG_MAX - fio->start)) ) {
 		return OPJ_FALSE;
 	}
@@ -426,7 +422,7 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 Convert a FIBITMAP to a OpenJPEG image
 @param format_id Plugin ID
 @param dib FreeImage image
-@param parameters Compression parameters; numresolution is lowered when the image is too small for it
+@param parameters Compression parameters
 @return Returns the converted image if successful, returns NULL otherwise
 */
 opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t *parameters) {
@@ -489,10 +485,7 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t 
 			}
 		}
 
-		// fit the number of resolution levels to the image: OpenJPEG refuses to encode when the
-		// lowest level would be empty, i.e. it needs min(w, h) >= 2^(numresolution - 1). The
-		// default of 6 levels therefore needs 32 pixels; smaller images get fewer levels
-		// (down to a single one for a 1-pixel side), which is what the standard allows anyway.
+		// OpenJPEG needs min(w, h) >= 2^(numresolution - 1)
 		{
 			const int min_side = (w < h) ? w : h;
 			int levels = 1;

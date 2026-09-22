@@ -1,21 +1,5 @@
-/*
- * FreeImage 3 - RAW decode test
- *
- * Loads the files of data/ through every path PluginRAW offers and checks the
- * geometry, the decoded pixels, the ICC profile and the Raw.* metadata against
- * a recorded table.
- *
- * The table is the oracle. Its values were recorded from the LibRaw 0.21.1
- * that FreeImage bundled until the 0.22.2 upgrade, and 0.22.2 reproduces every
- * one of them; that is what makes them worth keeping. Unlike the WebP corpus,
- * data/ *is* reproducible - LibRaw only ever decodes, so nothing about these
- * files depends on the version being replaced, and mkdata.py rewrites them
- * byte for byte. What must not drift silently is this table.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- *   ./decode            check against the table
- *   ./decode --record   reprint the table (only when a change is deliberate)
- */
+/* FreeImage 3 - RAW decode test: every load path against TABLE */
+/* TABLE is the oracle; ./decode --record reprints it */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -34,7 +18,6 @@ typedef struct {
 
 #define HDR FIF_LOAD_NOPIXELS
 
-/* --record reprints this table. */
 static const Expect TABLE[] = {
 	{ "data/fi_raw_rggb.dng",        "default16",   0,                FIT_RGB16,    88, 56, 48, 0xa300b79403246db2ULL,  516 },
 	{ "data/fi_raw_rggb.dng",        "display8",    RAW_DISPLAY,      FIT_BITMAP,   88, 56, 24, 0x7e31e282f700895cULL,  516 },
@@ -66,7 +49,7 @@ static const Expect TABLE[] = {
 };
 #define NCASES ((int)(sizeof(TABLE) / sizeof(TABLE[0])))
 
-/* The Raw.* keys PluginRAW attaches on the RAW_UNPROCESSED path. */
+/* Raw.* keys from the RAW_UNPROCESSED path */
 typedef struct {
 	const char *file;
 	const char *out_w, *out_h;
@@ -92,8 +75,7 @@ static void fail(const char *file, const char *what, const char *fmt, ...) {
 	failures++;
 }
 
-/* Hash the visible pixels only: the rows GetScanLine hands back are padded to
-   a 4-byte pitch and the padding is not part of the image. */
+/* visible pixels only, not the pitch padding */
 static unsigned long long digest(FIBITMAP *dib) {
 	unsigned long long h = 1469598103934665603ULL;
 	unsigned w = FreeImage_GetWidth(dib), ht = FreeImage_GetHeight(dib);
@@ -236,7 +218,6 @@ int main(int argc, char **argv) {
 			if (d != e->pixels)
 				{ fail(e->file, e->path, "pixels: want 0x%016llx, got 0x%016llx", e->pixels, d); bad = 1; }
 			if (ic != e->icc) { fail(e->file, e->path, "icc: want %d, got %d", e->icc, ic); bad = 1; }
-			/* a header-only load must not carry pixels */
 			if (e->flags == HDR && FreeImage_HasPixels(dib))
 				{ fail(e->file, e->path, "FIF_LOAD_NOPIXELS returned pixels"); bad = 1; }
 			if (!bad)

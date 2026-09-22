@@ -1,15 +1,4 @@
-/*
- * Build MNG datastreams by hand, from the specification at
- * http://www.libpng.org/pub/mng/spec/
- *
- * A MNG is a container: an 8-byte signature, then chunks, of which some are
- * whole PNG or JNG datastreams embedded minus their own signature.  Nothing
- * here needs an encoder for those - the tests are about the container, so the
- * frames are made with FreeImage's own PNG writer and the signature trimmed
- * off, which is exactly what a MNG encoder does with them.
- *
- * Shared by decode.c and robust.c.
- */
+/* Builds MNG datastreams by hand for the MNG tests. */
 
 #ifndef MNG_TEST_BUILD_H
 #define MNG_TEST_BUILD_H
@@ -20,9 +9,7 @@
 
 #include "FreeImage.h"
 
-/* ------------------------------------------------------------------ */
-/* a growable byte buffer                                             */
-/* ------------------------------------------------------------------ */
+/* ---- a growable byte buffer ---- */
 
 typedef struct {
 	BYTE *data;
@@ -75,13 +62,10 @@ static void buf_u16(Buf *b, WORD v) {
 	buf_add(b, out, 2);
 }
 
-/* ------------------------------------------------------------------ */
-/* chunks                                                             */
-/* ------------------------------------------------------------------ */
+/* ---- chunks ---- */
 
 static const BYTE MNG_SIG[8] = { 138, 77, 78, 71, 13, 10, 26, 10 };
 
-/** Append a chunk: length, type, payload, CRC of (type + payload). */
 static void chunk(Buf *out, const char *type, const void *payload, DWORD length) {
 	DWORD crc;
 
@@ -97,7 +81,6 @@ static void chunk(Buf *out, const char *type, const void *payload, DWORD length)
 	buf_u32(out, crc);
 }
 
-/** Append a chunk whose payload was built in `body`. */
 static void chunk_buf(Buf *out, const char *type, Buf *body) {
 	chunk(out, type, body->data, (DWORD)body->size);
 	buf_free(body);
@@ -107,7 +90,6 @@ static void mng_signature(Buf *out) {
 	buf_add(out, MNG_SIG, 8);
 }
 
-/** MHDR is 28 bytes, none of which can be omitted. */
 static void mng_mhdr(Buf *out, DWORD width, DWORD height, DWORD ticks_per_second,
 					 DWORD layers, DWORD frames, DWORD play_time, DWORD simplicity) {
 	Buf body; buf_init(&body);
@@ -125,15 +107,12 @@ static void mng_mend(Buf *out) {
 	chunk(out, "MEND", NULL, 0);
 }
 
-/**
- * FRAM.  Pass change_delay 0 for a chunk that carries only a framing mode;
- * 1 sets the delay for the upcoming subframe, 2 resets the default with it.
- */
+/* change_delay: 0 none, 1 next subframe, 2 also the default */
 static void mng_fram(Buf *out, BYTE framing_mode, BYTE change_delay, DWORD delay) {
 	Buf body; buf_init(&body);
 	buf_byte(&body, framing_mode);
 	if (change_delay) {
-		buf_byte(&body, 0);              /* the empty subframe name's separator */
+		buf_byte(&body, 0);              /* empty name's NUL */
 		buf_byte(&body, change_delay);
 		buf_byte(&body, 0);              /* change_timeout_and_termination */
 		buf_byte(&body, 0);              /* change_layer_clipping_boundaries */
@@ -143,12 +122,10 @@ static void mng_fram(Buf *out, BYTE framing_mode, BYTE change_delay, DWORD delay
 	chunk_buf(out, "FRAM", &body);
 }
 
-/** An empty FRAM: "just a subframe delimiter". */
 static void mng_fram_empty(Buf *out) {
 	chunk(out, "FRAM", NULL, 0);
 }
 
-/** DEFI with an object id, do_not_show, concrete flag and a location: 12 bytes. */
 static void mng_defi(Buf *out, WORD object_id, BYTE do_not_show, BYTE concrete,
 					 LONG x, LONG y) {
 	Buf body; buf_init(&body);
@@ -160,14 +137,12 @@ static void mng_defi(Buf *out, WORD object_id, BYTE do_not_show, BYTE concrete,
 	chunk_buf(out, "DEFI", &body);
 }
 
-/** DEFI naming an object and nothing else: 2 bytes. */
 static void mng_defi_short(Buf *out, WORD object_id) {
 	Buf body; buf_init(&body);
 	buf_u16(&body, object_id);
 	chunk_buf(out, "DEFI", &body);
 }
 
-/** BACK with a mandatory colour: 7 bytes. The samples are 16 bit. */
 static void mng_back(Buf *out, WORD red, WORD green, WORD blue, BYTE mandatory) {
 	Buf body; buf_init(&body);
 	buf_u16(&body, red);
@@ -190,7 +165,7 @@ static void mng_endl(Buf *out, BYTE nest_level) {
 	chunk_buf(out, "ENDL", &body);
 }
 
-/** TERM 3 repeats the datastream; 0x7fffffff iterations means forever. */
+/* TERM 3 repeats; 0x7fffffff means forever */
 static void mng_term(Buf *out, BYTE action, DWORD iteration_max) {
 	Buf body; buf_init(&body);
 	buf_byte(&body, action);
@@ -210,14 +185,9 @@ static void mng_show(Buf *out, WORD first, WORD last, BYTE mode) {
 	chunk_buf(out, "SHOW", &body);
 }
 
-/* ------------------------------------------------------------------ */
-/* embedded images                                                    */
-/* ------------------------------------------------------------------ */
+/* ---- embedded images ---- */
 
-/**
- * Append a solid-colour image as a MNG embeds one: the PNG's IHDR..IEND with
- * its 8-byte signature trimmed off.
- */
+/* a solid PNG minus its signature */
 static int mng_image(Buf *out, int width, int height,
 					 BYTE red, BYTE green, BYTE blue, int bpp) {
 	FIBITMAP *dib;
@@ -260,7 +230,6 @@ static int mng_image(Buf *out, int width, int height,
 	return ok;
 }
 
-/** The same, with an alpha value, so the compositing path is exercised. */
 static int mng_image_alpha(Buf *out, int width, int height,
 						   BYTE red, BYTE green, BYTE blue, BYTE alpha) {
 	FIBITMAP *dib;
@@ -301,14 +270,12 @@ static int mng_image_alpha(Buf *out, int width, int height,
 	return ok;
 }
 
-/* ------------------------------------------------------------------ */
-/* scratch files                                                      */
-/* ------------------------------------------------------------------ */
+/* ---- scratch files ---- */
 
 static char mng_tmpbuf[4][4096];
 static int mng_tmpnext = 0;
 
-/** A path in $MNG_TEST_TMP, or the current directory. */
+/* in $MNG_TEST_TMP, else the current directory */
 static const char *scratch(const char *name) {
 	const char *dir = getenv("MNG_TEST_TMP");
 	char *out = mng_tmpbuf[mng_tmpnext++ & 3];
@@ -321,7 +288,6 @@ static const char *scratch(const char *name) {
 	return out;
 }
 
-/** Write a built datastream out, and hand back the path it went to. */
 static const char *write_file(const char *name, Buf *b) {
 	const char *path = scratch(name);
 	FILE *f = fopen(path, "wb");

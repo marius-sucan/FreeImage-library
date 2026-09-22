@@ -27,13 +27,7 @@
 // File IO functions
 // =====================================================================
 
-// static: these four are the stdio implementations SetDefaultIO installs, they
-// are used nowhere but in this file and are declared in no header. Without it
-// they have external linkage, and four names as ordinary as _ReadProc and
-// _TellProc sit in the static library waiting to capture any program that
-// happens to define its own - which is exactly what they did to
-// Examples/Generic/LoadFromMemory.cpp, whose FreeImageIO then read the caller's
-// memory buffer with fread() and crashed.
+// static: names like _ReadProc must not leak out of the static library
 
 static unsigned DLL_CALLCONV 
 _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
@@ -89,13 +83,7 @@ _MemoryReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	// size * count has to be computed in a type that can hold it.  As
-	// "(int)size * count" it was evaluated in 32 bits and stored in an int, so
-	// any request of 2 GiB or more landed on a negative value and fell out of
-	// the test below - a silent short read that looked like end of file.  A
-	// memory stream is bounded by file_length, which is an int, so a request
-	// that large cannot be served at all: refuse it deliberately rather than
-	// leave it to the arithmetic.
+	// 64-bit product; the stream is int-sized, so refuse anything larger
 	const UINT64 required_bytes = (UINT64)size * (UINT64)count;
 	const int remaining_bytes = mem_header->file_length - mem_header->current_position;
 
@@ -126,9 +114,6 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	// the cast to long used to happen AFTER a 32-bit multiply, so size = count =
-	// 0x10000 gave required_bytes == 0: nothing was copied and the function
-	// still returned count, reporting a write that never happened
 	const UINT64 wanted = (UINT64)size * (UINT64)count;
 
 	if (wanted > (UINT64)std::numeric_limits<int>::max()) {

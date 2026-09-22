@@ -565,19 +565,7 @@ Rotate8Bit(FIBITMAP *dib, double angle, double x_shift, double y_shift, double x
 	}
 
 	// allocate a temporary array
-	//
-	// width * height was an int product, promoted to size_t only afterwards.  At
-	// 65536 x 65536 it is exactly 2^32, which as an int is 0: malloc(0) handed
-	// back a one-byte chunk, the test below passed, and the copy loop that
-	// follows wrote 32 GiB of double into it.  Between 2^31 and 2^32 pixels the
-	// product is negative instead and the size wraps to something enormous, so
-	// the allocation fails and that case was survivable - the dangerous window
-	// is the neighbourhood of each multiple of 2^32 pixels.
-	//
-	// The rest of this file addresses the array with long arithmetic (y * Width
-	// at :196, :248 and :495, and y*width just below), so an image that does not
-	// fit a long is refused here rather than mis-indexed later; a long is 32 bits
-	// on Win64.
+	// refuse what a long cannot index (32 bits on Win64)
 	const size_t npixels = (size_t)width * (size_t)height;
 	if((npixels == 0) || (npixels > (size_t)LONG_MAX) ||
 		(npixels > ((size_t)-1) / sizeof(double))) {
@@ -674,13 +662,7 @@ FreeImage_RotateEx(FIBITMAP *dib, double angle, double x_shift, double y_shift, 
 	if(!FreeImage_HasPixels(dib)) return NULL;
 
 	if(FreeImage_GetImageType(dib) != FIT_BITMAP) {
-		// The dispatch below is on the bit depth alone, and FIT_UINT32, FIT_INT32
-		// and FIT_FLOAT all report 32.  Each was taken apart into four "colour
-		// channels", each byte plane B-spline rotated as if it were an 8-bit
-		// greyscale image, and the pieces reassembled as a 32-bit FIT_BITMAP: the
-		// exponent and mantissa bytes of a float interpolated independently of one
-		// another, and the image type silently changed.  "8, 24 or 32-bit" in this
-		// function's documentation means 8-, 24- or 32-bit FIT_BITMAP.
+		// FIT_BITMAP only: the switch below goes by bpp alone
 		return NULL;
 	}
 

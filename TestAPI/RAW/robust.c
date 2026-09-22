@@ -1,31 +1,5 @@
-/*
- * FreeImage 3 - RAW robustness test
- *
- * Feeds the plugin damaged input and checks only that it survives: truncated
- * prefixes, junk appended, single-byte corruptions spread over the file, wiped
- * regions, a dense sweep over the header where the IFDs live, and empty and
- * tiny buffers. Every one of these may load or be refused - what it may not do
- * is crash, hang, or leak.
- *
- * This is the test that is about the reason for the upgrade. A RAW file is
- * parsed long before it is decoded: LibRaw walks TIFF IFDs, maker notes and
- * vendor tables across some seventy format-specific paths, and that parsing is
- * where its own release notes spend most of their fixes - 0.22.1 and 0.22.2
- * between them list four TALOS advisories and a long tail of overflow and
- * out-of-range checks. A sanitized run over damaged input is the shape of test
- * that catches their like, so run it under AddressSanitizer; "make asan-run"
- * is what that is for. Without one it still catches aborts and null
- * dereferences.
- *
- * The damage concentrates on the first kilobyte on purpose. These files are
- * uncompressed DNGs, so that is where the TIFF header, both IFDs and every
- * offset live, and an offset pointing outside the file is the single most
- * productive way to upset a RAW parser.
- *
- * Every load goes through a memory stream, so nothing is written to disk.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - RAW robustness test */
+/* damaged input may load or be refused, never crash; run under ASan */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,7 +17,6 @@ static long loaded = 0, refused = 0, cases = 0;
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
 
-/* Loads one buffer and throws the result away. Returns 1 if it decoded. */
 static int try_load(const BYTE *data, long len, int flags) {
 	FIMEMORY *mem;
 	FIBITMAP *dib;
@@ -54,7 +27,7 @@ static int try_load(const BYTE *data, long len, int flags) {
 	dib = FreeImage_LoadFromMemory(FIF_RAW, mem, flags);
 	ok = dib != NULL;
 	if (dib) {
-		/* touch every row, so a short buffer shows up as a fault here */
+		/* touch every row: a short buffer faults here */
 		unsigned h = FreeImage_GetHeight(dib), line = FreeImage_GetLine(dib), y, i;
 		unsigned long long acc = 0;
 		if (FreeImage_HasPixels(dib) && line) {
@@ -73,8 +46,7 @@ static int try_load(const BYTE *data, long len, int flags) {
 	return ok;
 }
 
-/* Identification alone, which runs the plugin's Validate and so LibRaw's
-   open_datastream and identify() - the parsing, without the decoding. */
+/* identify only: LibRaw's parsing without decoding */
 static void try_identify(const BYTE *data, long len) {
 	FIMEMORY *mem = FreeImage_OpenMemory((BYTE *)data, (DWORD)len);
 	if (!mem) return;
@@ -122,14 +94,13 @@ int main(void) {
 			try_identify(orig, k);
 		}
 
-		/* junk appended - a RAW parser should ignore trailing bytes */
+		/* junk appended */
 		memcpy(tmp, orig, (size_t)n);
 		memset(tmp + n, 0x5A, 4096);
 		try_load(tmp, n + 4096, 0);
 		try_load(tmp, n + 1, RAW_UNPROCESSED);
 
-		/* single-byte corruption, dense over the header and sparse after it:
-		   the IFDs, and so every offset in the file, live in the first 1 KB */
+		/* single-byte corruption, dense over the 1 KB of IFDs */
 		for (k = 0; k < n; k += (k < 1024 ? 1 : 251)) {
 			memcpy(tmp, orig, (size_t)n);
 			tmp[k] ^= 0xFF;
@@ -137,9 +108,7 @@ int main(void) {
 			if (k < 1024) try_identify(tmp, n);
 		}
 
-		/* offsets and counts are 32-bit little-endian: setting a whole word to
-		   0xFFFFFFFF is the shape of damage that makes a parser read out of
-		   bounds, rather than merely read the wrong value */
+		/* whole 32-bit words set to 0xFFFFFFFF */
 		for (k = 0; k + 4 <= n && k < 1024; k += 2) {
 			memcpy(tmp, orig, (size_t)n);
 			tmp[k] = tmp[k + 1] = tmp[k + 2] = tmp[k + 3] = 0xFF;
@@ -153,8 +122,7 @@ int main(void) {
 			try_load(tmp, n, RAW_UNPROCESSED);
 		}
 
-		/* a full decode over a sample of the damaged header, so the
-		   post-processing path sees nonsense dimensions too */
+		/* full decodes of damaged headers */
 		for (k = 0; k + 4 <= n && k < 512; k += 16) {
 			memcpy(tmp, orig, (size_t)n);
 			tmp[k] = tmp[k + 1] = tmp[k + 2] = tmp[k + 3] = 0xFF;

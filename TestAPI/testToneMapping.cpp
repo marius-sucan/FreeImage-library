@@ -1,8 +1,7 @@
 // ==========================================================
 // FreeImage 3 Test Script
 //
-// Regression tests for the floating point conversions and for the
-// robustness of the tone mapping operators.
+// Float conversion and tone mapping tests
 //
 // This file is part of FreeImage 3
 //
@@ -28,11 +27,10 @@
 // helpers
 // ----------------------------------------------------------
 
-/** Values a HDR pixel may legitimately take, including out of [0..1] ones. */
 static const float s_testValues[] = { -2.0F, 0.0F, 0.25F, 1.0F, 5.0F, 15.0F, 50.0F, 1000.0F };
 static const unsigned s_testValueCount = 8;
 
-/** Build a one line image holding s_testValues in every colour channel. */
+/** one-row image of s_testValues in every channel */
 static FIBITMAP* createRamp(FREE_IMAGE_TYPE image_type) {
 	FIBITMAP *dib = FreeImage_AllocateT(image_type, s_testValueCount, 1);
 	if(!dib) return NULL;
@@ -63,7 +61,7 @@ static FIBITMAP* createRamp(FREE_IMAGE_TYPE image_type) {
 	return dib;
 }
 
-/** Read back the red (or only) channel of a one line float image. */
+/** red (or only) channel of a one-row float image */
 static float sampleOf(FIBITMAP *dib, unsigned x) {
 	switch(FreeImage_GetImageType(dib)) {
 		case FIT_FLOAT:
@@ -77,7 +75,7 @@ static float sampleOf(FIBITMAP *dib, unsigned x) {
 	}
 }
 
-/** A synthetic HDR scene whose luminance sweeps over the given range. */
+/** HDR scene sweeping luminance up to maxLum */
 static FIBITMAP* createScene(FREE_IMAGE_TYPE image_type, unsigned width, unsigned height, double maxLum) {
 	FIBITMAP *dib = FreeImage_AllocateT(image_type, width, height);
 	if(!dib) return NULL;
@@ -120,7 +118,6 @@ static double meanByte(FIBITMAP *dib) {
 	return count ? (sum / count) : 0;
 }
 
-/** Largest absolute difference between two 24-bit images of the same size. */
 static int maxByteDifference(FIBITMAP *a, FIBITMAP *b) {
 	const unsigned width  = FreeImage_GetWidth(a);
 	const unsigned height = FreeImage_GetHeight(a);
@@ -141,11 +138,6 @@ static int maxByteDifference(FIBITMAP *a, FIBITMAP *b) {
 // tests
 // ----------------------------------------------------------
 
-/**
-Converting between two floating point formats must preserve the samples:
-HDR data legitimately ranges outside of [0..1], and clamping it there (or at any
-other fixed bound) silently destroys highlights.
-*/
 static BOOL testFloatConversionIsLossless() {
 	FIBITMAP *src = NULL, *dst = NULL;
 	const FREE_IMAGE_TYPE types[3] = { FIT_FLOAT, FIT_RGBF, FIT_RGBAF };
@@ -165,8 +157,7 @@ static BOOL testFloatConversionIsLossless() {
 			for(unsigned x = 0; x < s_testValueCount; x++) {
 				const float expected = s_testValues[x];
 				const float actual   = sampleOf(dst, x);
-				// a grey <-> colour conversion goes through a luminance weighting,
-				// which is exact here because all three channels are equal
+				// exact: all three channels are equal
 				if(fabs(actual - expected) > 1e-3 * (fabs(expected) + 1.0)) {
 					FreeImage_Unload(src);
 					FreeImage_Unload(dst);
@@ -180,10 +171,6 @@ static BOOL testFloatConversionIsLossless() {
 	return TRUE;
 }
 
-/**
-The same scene stored as RGBF and as RGBAF must tone map to the same picture:
-the alpha channel carries no luminance, so dropping it may not change the result.
-*/
 static BOOL testToneMappingIgnoresAlpha() {
 	const FREE_IMAGE_TMO operators[3] = { FITMO_DRAGO03, FITMO_REINHARD05, FITMO_FATTAL02 };
 	const double ranges[3] = { 2.0, 50.0, 2000.0 };
@@ -217,10 +204,6 @@ static BOOL testToneMappingIgnoresAlpha() {
 	return TRUE;
 }
 
-/**
-A single NaN or infinite sample - both of which do occur in HDR files - must not
-be allowed to define the scene statistics and blank the whole frame.
-*/
 static BOOL testToneMappingSurvivesNonFiniteSamples() {
 	const FREE_IMAGE_TMO operators[3] = { FITMO_DRAGO03, FITMO_REINHARD05, FITMO_FATTAL02 };
 	const float poison[2] = { (float)HUGE_VAL, (float)(HUGE_VAL - HUGE_VAL) };	// +INF, NaN
@@ -246,7 +229,7 @@ static BOOL testToneMappingSurvivesNonFiniteSamples() {
 			const double actual = meanByte(dst);
 			FreeImage_Unload(dst);
 
-			// the rest of the picture must still look like the clean render
+			// the rest must match the clean render
 			if(fabs(actual - expected) > 5.0) {
 				return FALSE;
 			}
@@ -255,10 +238,6 @@ static BOOL testToneMappingSurvivesNonFiniteSamples() {
 	return TRUE;
 }
 
-/**
-Converting an out of range float to 8 bits must clip, not wrap: a very bright
-sample has to come out white, and casting it straight to an int is undefined.
-*/
 static BOOL testConvertToStandardTypeClips() {
 	FIBITMAP *dib = FreeImage_AllocateT(FIT_FLOAT, 5, 1);
 	if(!dib) return FALSE;
@@ -281,14 +260,6 @@ static BOOL testConvertToStandardTypeClips() {
 	return ok;
 }
 
-/**
-Wide gamut and scene referred HDR sources routinely store negative radiance:
-a JPEG XR file can easily hold more negative colour samples than positive ones.
-Such a file must still tone map to a usable picture. Reinhard05 in particular
-divides by (colour + pow(intensity * adaptation, contrast)), which is a NaN for
-a negative adaptation and diverges for a near zero denominator, so a negative
-sample used to send the whole frame to white.
-*/
 static BOOL testToneMappingHandlesNegativeRadiance() {
 	const FREE_IMAGE_TMO operators[3] = { FITMO_DRAGO03, FITMO_REINHARD05, FITMO_FATTAL02 };
 	const unsigned width = 96, height = 96;
@@ -298,9 +269,7 @@ static BOOL testToneMappingHandlesNegativeRadiance() {
 			FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBAF, width, height);
 			if(!dib) return FALSE;
 
-			// Two shapes taken from real JPEG XR files: a deep negative floor
-			// over most of the frame, and channels of mixed sign everywhere.
-			// The magnitude matters - a shallow floor does not reproduce.
+			// shapes from real JPEG XR files: deep negative floor, mixed signs
 			for(unsigned y = 0; y < height; y++) {
 				FIRGBAF *pixel = (FIRGBAF*)FreeImage_GetScanLine(dib, y);
 				for(unsigned x = 0; x < width; x++) {
@@ -333,7 +302,6 @@ static BOOL testToneMappingHandlesNegativeRadiance() {
 			}
 			FreeImage_Unload(dst);
 
-			// a blown out frame is the failure mode this guards against
 			if(white * 2 > total) {
 				return FALSE;
 			}
@@ -342,14 +310,6 @@ static BOOL testToneMappingHandlesNegativeRadiance() {
 	return TRUE;
 }
 
-/**
-Every operator clips negative radiance to zero on its working copy, so an image
-that carries negative samples must tone map exactly like the same image with
-those samples already clipped. Drago03 is the strict case: its bias function is
-pow(x, 0.234), which returns a NaN for a negative x, and its Pade approximation
-of log(x+1) has a pole at x = -1.5. Both used to be reachable, and speckled the
-result with black pixels - about 1% of the frame on real JPEG XR files.
-*/
 static BOOL testToneMappingClipsNegativeRadiance() {
 	const FREE_IMAGE_TMO operators[3] = { FITMO_DRAGO03, FITMO_REINHARD05, FITMO_FATTAL02 };
 	const unsigned width = 64, height = 64;
@@ -370,8 +330,7 @@ static BOOL testToneMappingClipsNegativeRadiance() {
 				const double t = (double)x / (double)(width - 1);
 				const double u = (double)y / (double)(height - 1);
 				const float lit = (float)(0.02 * pow(18.0 / 0.02, t));
-				// mixed signs, including pixels whose *luminance* is negative,
-				// which is what reaches Drago03's bias function
+				// mixed signs, some with negative luminance
 				float c[3];
 				c[0] = (u < 0.5) ? -0.5F : lit;
 				c[1] = (u < 0.7) ? -0.5F : (float)(lit * 0.9);
@@ -405,11 +364,6 @@ static BOOL testToneMappingClipsNegativeRadiance() {
 	return TRUE;
 }
 
-/**
-A flat image carries no gradient and no dynamic range, but it is still a valid
-input: every operator must hand back a picture rather than nothing, and a black
-scene must come out black rather than as a division by log10(1) = 0.
-*/
 static BOOL testToneMappingHandlesFlatImages() {
 	const FREE_IMAGE_TMO operators[3] = { FITMO_DRAGO03, FITMO_REINHARD05, FITMO_FATTAL02 };
 	const float values[3] = { 0.0F, -1.0F, 0.5F };

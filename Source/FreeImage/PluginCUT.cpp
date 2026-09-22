@@ -152,16 +152,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// unpack the RLE bitmap bits
 
-		// decode top-down into a bottom-up dib: y counts the rows still to fill.
-		// Addressing the row by index rather than stepping a pointer by the pitch
-		// is what keeps the writes inside the bitmap - see the end-of-row case.
+		// top-down into a bottom-up dib: y counts the rows still to fill
 		int y = (int)header.height - 1;
 		BYTE *bits = FreeImage_GetScanLine(dib, y);
 
 		unsigned i = 0, k = 0;
-		// both are WORD, so each promotes to int and the product is computed in
-		// int: 65535 * 65535 overflows it.  Multiply as unsigned, where the full
-		// range fits.
+		// unsigned: WORD * WORD overflows int
 		unsigned size = (unsigned)header.width * (unsigned)header.height;
 		BYTE count = 0, run = 0;
 
@@ -171,10 +167,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			if (count == 0) {
-				// end of row.  i is not advanced here, so nothing else bounds the
-				// number of these a file may contain: without the row count a run
-				// of them walks bits off the front of the allocation, and the next
-				// record then writes there.
+				// end of row
 				k = 0;
 
 				if (--y < 0) {

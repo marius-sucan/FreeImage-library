@@ -1,36 +1,4 @@
-/*
- * FreeImage 3 - JPEG before/after comparison tool
- *
- * Not a test: it asserts nothing and always exits 0. It prints one stable,
- * diffable line per operation, so that the *same* program, built against two
- * different libfreeimage.a, can be run twice and the two reports compared with
- * diff. That is how the 9d -> 10 upgrade was checked, and it is the thing
- * decode.c cannot do - decode.c compares against a frozen table of sixteen
- * committed files, this compares two builds over any corpus you point it at.
- *
- * The workflow at the next upgrade:
- *
- *     # with the old library still in place
- *     make oracle && ./oracle decode /path/to/corpus      > /tmp/before.txt
- *     ./oracle encode /path/to/src.png /tmp/enc-before    >> /tmp/before.txt
- *     ./oracle transform data/fi_jpeg_420.jpg /tmp/xf-before >> /tmp/before.txt
- *     # drop the new library in, rebuild everything, rebuild this
- *     make oracle && ./oracle decode /path/to/corpus      > /tmp/after.txt
- *     ...
- *     diff /tmp/before.txt /tmp/after.txt
- *
- * Point the corpus at more than data/: every JPEG on the machine is fair game,
- * and the more subsampling factors, scan structures and marker layouts it
- * covers the better. The decode report covers every load flag the plugin has,
- * a memory stream and the metadata counts; the encode report covers every save
- * flag and what the same build reads back out of what it just wrote; the
- * transform report covers all eight operations in both perfect modes.
- *
- * Usage:
- *   ./oracle decode    <dir-of-jpegs>
- *   ./oracle encode    <source.png> <out-dir>
- *   ./oracle transform <source.jpg> <out-dir>
- */
+/* JPEG oracle, not a test: run one build per library and diff the reports */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

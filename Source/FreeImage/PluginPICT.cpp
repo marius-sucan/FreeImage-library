@@ -465,8 +465,7 @@ expandBuf( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst, con
 			for ( int i=0; i<width; i++) {
 				WORD src = Read16( io, handle );
 
-				// keep consuming the source even once the row is full, so the
-				// stream stays aligned for the rows that follow
+				// row full: keep consuming the source
 				if ( dst_end - dst < 4 ) {
 					continue;
 				}
@@ -483,26 +482,14 @@ expandBuf( FreeImageIO *io, fi_handle handle, int width, int bpp, BYTE* dst, con
 	}
 }
 
-/** Advance a row pointer by n bytes, never past the end of the row. */
 static inline BYTE*
 advanceRow( BYTE* dst, size_t n, BYTE* dst_end ) {
 	return ( (size_t)(dst_end - dst) > n ) ? (dst + n) : dst_end;
 }
 
 /**
-Expands srcBytes bytes of source to 8-bit pixel data, writing no further than dst_end.
+Expands srcBytes source bytes to 8-bit pixel data.
 Max. 8 bpp source format.
-
-srcBytes counts bytes of SOURCE, not pixels: one source byte yields 8, 4, 2 or 1
-destination pixels for a bpp of 1, 2, 4 or 8.  That is what four of the five call
-sites always meant - they pass a PackBits packet length - while the main loops
-here counted source bytes and the "leftover pixels" blocks below them counted
-pixels, so the function could not be right both ways.  The one caller that passed
-a pixel count made a 1-bpp row write eight times its own length.
-
-Clamping at dst_end also subsumes those leftover blocks: a row whose width is not
-a whole number of source bytes simply stops at the row end, and the spare bits in
-the last byte are padding, which is what they were always meant to be.
 */
 static void 
 expandBuf8( FreeImageIO *io, fi_handle handle, int srcBytes, int bpp, BYTE* dst, BYTE* dst_end )
@@ -510,7 +497,6 @@ expandBuf8( FreeImageIO *io, fi_handle handle, int srcBytes, int bpp, BYTE* dst,
 	switch (bpp) {
 		case 8:
 		{
-			// one source byte per pixel
 			int n = srcBytes;
 
 			if ( n > (int)(dst_end - dst) ) {
@@ -554,14 +540,7 @@ expandBuf8( FreeImageIO *io, fi_handle handle, int srcBytes, int bpp, BYTE* dst,
 	}
 }
 
-/**
-Unpacks one PackBits row into pLineBuf, writing no further than dstBytes.
-
-srcBytes is the packed length the file gives for the row: it says how much source
-to consume and nothing at all about the destination, since a row of packets can
-expand to any length.  dstBytes is the size of the caller's buffer - a scanline
-in Unpack8Bits, the line buffer in Unpack32Bits - and is the bound that matters.
-*/
+// unpack one PackBits row: srcBytes of input, at most dstBytes out
 static BYTE* 
 UnpackPictRow( FreeImageIO *io, fi_handle handle, BYTE* pLineBuf, int width, int rowBytes, int srcBytes, int dstBytes ) {	
 
@@ -630,11 +609,7 @@ Unpack32Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds,
 		rowBytes = (WORD)( width * 4 );
 	}
 	
-	// The plane-juggling loop below reads width*4 bytes back out of this buffer,
-	// so it has to be at least that large whatever rowBytes the file declares -
-	// "enough for 4 bit planes" is what the line above always meant.  And it is
-	// zeroed: a row whose packets stop early would otherwise hand the caller
-	// uninitialised heap as pixels.
+	// at least width*4 bytes, zeroed: the loop below reads that much
 	const int lineBufSize = ( rowBytes > width * 4 ) ? rowBytes : width * 4;
 	BYTE* pLineBuf = (BYTE*)calloc( lineBufSize, 1 );
 	if ( pLineBuf )	{
@@ -703,8 +678,6 @@ Unpack8Bits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, 
 		rowBytes = (WORD)width;
 	}
 	
-	// each scanline owns pitch bytes; the padding apple adds to rowBytes lands in
-	// them, and anything beyond is the excess this routine is meant to throw away
 	const int pitch = (int)FreeImage_GetPitch( dib );
 	
 	for ( int i = 0; i < height; i++ ) {
@@ -781,17 +754,13 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 			// ah-ha!  The bits aren't actually packed.  This will be easy.
 			for ( int i = 0; i < height; i++ ) {
 				BYTE* dst = (BYTE*)FreeImage_GetScanLine( dib, height - 1 - i);
-				// the dib is 32-bit for a 16-bpp source and 8-bit otherwise, so
-				// this is where the row ends - writes must not pass it
+				// the dib is 32-bit for a 16-bpp source and 8-bit otherwise
 				BYTE* dst_end = dst + ((pixelSize == 16) ? (width * 4) : width);
 
 				if (pixelSize == 16) {
 					expandBuf( io, handle, width, pixelSize, dst, dst_end );
 				} else {
-					// rowBytes, not width: expandBuf8() counts SOURCE bytes, and
-					// a 1-, 2- or 4-bpp row packs several pixels into each one.
-					// Passing the pixel count made a 1-bpp row expand to eight
-					// times its own length.
+					// rowBytes, not width: expandBuf8() counts source bytes
 					expandBuf8( io, handle, rowBytes, pixelSize, dst, dst_end );
 				}
 			}
@@ -837,10 +806,7 @@ UnpackBits( FreeImageIO *io, fi_handle handle, FIBITMAP* dib, MacRect* bounds, W
 								}
 
 								for ( int k = 1; k < len; k++ ) { 
-									// Repeat the expanded unit len times, never
-									// past the end of the row.  Offsets, not
-									// pointers, so that the bound itself is not
-									// computed out of range.
+									// Repeat the expanded byte len times.
 									const size_t off = (size_t)k * unit;
 
 									if (off >= room) {
@@ -1034,11 +1000,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		MacRect frame;
 		ReadRect( io, handle, &frame );
 
-		// Read8() returns 0 both for a zero byte and at end of file, so this scan
-		// for the version opcode cannot tell them apart: a file that is all zeros
-		// from here on used to spin for ever.  The stream position is what says
-		// the file is exhausted - the opcode loop below guards itself the same
-		// way, with currentPos.
+		// Read8() also returns 0 at EOF: the stream position ends the scan
 		BYTE b = 0;
 		for (;;) {
 			const long scanPos = io->tell_proc(handle);

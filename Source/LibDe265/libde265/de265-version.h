@@ -18,13 +18,7 @@
  * along with libde265.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/*
- * FreeImage: this is de265-version.h.in as libde265's own build system
- * (CMake) would generate it for release 1.1.3. The numeric version is
- * binary-coded decimal, 0xMMmmppXX for major.minor.patch, which is what
- * de265_get_version_number() returns. Update both values when the bundled
- * libde265 is updated.
- */
+/* FreeImage: de265-version.h.in filled in for 1.1.3 */
 
 #ifndef LIBDE265_VERSION_H
 #define LIBDE265_VERSION_H

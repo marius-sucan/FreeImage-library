@@ -152,8 +152,7 @@ readExtHeader(FreeImageIO *io, fi_handle handle, BYTE b) {
 			BYTE sizeParamIdent = (b & 0x70) >> 4;	// Size of Parameter Identifier (in bytes)
 			BYTE sizeParamValue = (b & 0x0F);		// Size of Parameter Value (in bytes)
 
-			// both are bounded by the bits they are extracted from - at most 7 and
-			// 15 - so they fit on the stack, and there is no allocation to fail
+			// at most 7 and 15 bytes (3- and 4-bit sizes)
 			BYTE Ident[8], Value[16];
 
 			io->read_proc(Ident, sizeParamIdent, 1, handle);
@@ -255,8 +254,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				header.ExtHeaderFields = 0x80;
 
 				while(header.ExtHeaderFields & 0x80) {
-					// read_proc leaves the field untouched past end of file, and it
-					// is primed with 0x80 - so an unchecked read here never stops
 					if (io->read_proc(&header.ExtHeaderFields, 1, 1, handle) != 1) {
 						throw FI_MSG_ERROR_PARSING;
 					}

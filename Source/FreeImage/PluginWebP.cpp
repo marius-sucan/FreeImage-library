@@ -39,53 +39,35 @@ static int s_format_id;
 //   Plugin state
 // ----------------------------------------------------------
 
-/**
-What Open() hands to the other entry points. This used to be the WebPMux alone,
-which is all a single still image needs. An animation needs more: the file has to
-stay in memory for the frame decoder to reference, and the decoder itself is worth
-keeping between calls, because it can only move forwards - so remembering where it
-has got to is what makes reading an animation in order cost one frame of work per
-frame instead of replaying it from the beginning each time.
-*/
 typedef struct {
-	WebPMux *mux;				//! the container: still images, raw frames and the metadata chunks come from here
-	WebPData bitstream;			//! the whole file, owned here; the mux and the animation decoder both point into it
-	WebPAnimDecoder *anim;		//! composited-frame decoder, created the first time one is asked for
-	int anim_next;				//! frame the next WebPAnimDecoderGetNext() will return; -1 when the decoder has to be rewound
-	FIBITMAP *cached_frame;		//! the last composited frame handed out
-	int cached_page;			//! which frame that is, -1 when there is none
-	int frame_count;			//! number of ANMF frames, 1 for a still image
+	WebPMux *mux;
+	WebPData bitstream;			//! whole file; mux and anim point into it
+	WebPAnimDecoder *anim;		//! created on first use
+	int anim_next;				//! next frame GetNext() returns; -1 = rewind
+	FIBITMAP *cached_frame;
+	int cached_page;			//! its page; -1 = none
+	int frame_count;			//! 1 for a still image
 	BOOL is_animation;
-	int canvas_width;			//! the canvas the frames are drawn on (the VP8X size), 0 for a still image
+	int canvas_width;			//! VP8X canvas; 0 for a still image
 	int canvas_height;
 	int loop_count;
 
 	// --- writing ---
-	// A WebP animation is one container holding every frame, so the frames have to be
-	// collected as Save() is called for each page and the file assembled once, in
-	// Close(). Save() used to assemble and write a whole file on every call and
-	// ignore its page argument entirely, so a three-page save produced three complete
-	// WebP files concatenated - and every reader saw only the first.
-	BOOL write;					//! this state was opened for writing
-	BOOL written;				//! Save() has already written a complete file by itself
-	int out_pages;				//! pages handed to Save() so far
-	WebPData pending;			//! the first page's bitstream, held until a second arrives
-	WebPMuxFrameInfo pending_info;	//! and the frame description that goes with it
-	int out_canvas_width;		//! canvas the pages asked for, 0 if none of them said
+	// Save() collects the frames, Close() writes them
+	BOOL write;
+	BOOL written;				//! Save() wrote a still image
+	int out_pages;
+	WebPData pending;			//! first page, held until a second arrives
+	WebPMuxFrameInfo pending_info;
+	int out_canvas_width;		//! canvas the pages asked for; 0 = none
 	int out_canvas_height;
-	int out_bound_width;		//! how much canvas the frames actually need
+	int out_bound_width;		//! bounding box of the frames
 	int out_bound_height;
-	int out_loop;				//! loop count for the output
+	int out_loop;
 } WebPPluginData;
 
-// Close() assembles and writes a collected animation, but the code that does it sits
-// with the rest of the writing helpers, below the encoder they depend on.
 static BOOL WebP_FinishAnimation(WebPPluginData *state, FreeImageIO *io, fi_handle handle);
 
-/**
-Attach one FIMD_ANIMATION tag, description included, the way PluginGIF.cpp does
-for the animation tags it writes.
-*/
 static BOOL
 WebP_SetAnimTag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
 	BOOL bResult = FALSE;
@@ -256,14 +238,12 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	state->frame_count = 1;
 
 	if(read) {
-		// read the input file and put it in memory. It stays there for as long as this
-		// object lives: the mux is told to link to it rather than copy it (which also
-		// halves what a large file costs), and the animation decoder reads it directly.
+		// read the input file and put it in memory
 		if(!ReadFileToWebPData(io, handle, &state->bitstream)) {
 			free(state);
 			return NULL;
 		}
-		// create the MUX object, linked to the bitstream above
+		// create the MUX object
 		state->mux = WebPMuxCreate(&state->bitstream, 0);
 		if(state->mux == NULL) {
 			free((void*)state->bitstream.bytes);
@@ -272,8 +252,6 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			return NULL;
 		}
 
-		// an animation has as many pages as it has frames, drawn on the canvas the
-		// VP8X chunk declares; a still image is a single page and has no canvas
 		uint32_t webp_flags = 0;
 		if(WebPMuxGetFeatures(state->mux, &webp_flags) == WEBP_MUX_OK) {
 			state->is_animation = (webp_flags & ANIMATION_FLAG) ? TRUE : FALSE;
@@ -291,17 +269,11 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 				state->canvas_width = 0;
 				state->canvas_height = 0;
 			}
-			// without a canvas there is nothing to composite onto, so such a file is
-			// read as a plain sequence of frames
+			// no canvas: a plain sequence of frames
 			if((state->canvas_width <= 0) || (state->canvas_height <= 0)) {
 				state->is_animation = FALSE;
 			}
-			// The mux is the more forgiving of the two readers: it will hand out frames
-			// of a file the demuxer refuses - one whose frame runs past the canvas, say -
-			// and the frame decoder is built on the demuxer. Ask it now, once, so that a
-			// file whose frames cannot be composited is presented as the single image it
-			// can actually serve rather than as pages that all fail to load. This parses
-			// the container again and decodes nothing.
+			// the demuxer is stricter than the mux: if it refuses, serve one image
 			if(state->is_animation) {
 				WebPDemuxer *demux = WebPDemux(&state->bitstream);
 				if(demux == NULL) {
@@ -333,16 +305,13 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		return;
 	}
 
-	// An animation is one container holding every frame, so this is where it is
-	// written: Save() has been collecting the frames, and only now are they all in.
-	// A lone still image has already been written by Save() itself, which is the one
-	// path that can still report a failure to its caller.
+	// write a collected animation; a still image was written by Save()
 	if(state->write && !state->written && (state->out_pages > 0) && (io != NULL) && (handle != NULL)) {
 		WebP_FinishAnimation(state, io, handle);
 	}
 	WebPDataClear(&state->pending);
 
-	// the decoder and the mux both point into bitstream, so both go first
+	// both point into bitstream: free them first
 	if(state->anim != NULL) {
 		WebPAnimDecoderDelete(state->anim);
 	}
@@ -490,24 +459,9 @@ DecodeImage(WebPData *webp_image, int flags) {
 	}
 }
 
-/**
-Build the fully composited canvas for a frame of an animation - the picture a
-viewer shows at that point, rather than the rectangle the file stores.
-libwebp's animation decoder does the compositing, which is more than GIF's:
-besides the dispose method it has a blend method, and blending here means real
-alpha compositing of the frame over what is already on the canvas. It only ever
-moves forwards, though, so asking for a frame behind the one it has reached
-means rewinding it and replaying from the start. The frame it last produced is
-kept, so playing an animation in order costs one frame of work per frame, and
-asking again for the frame already on screen costs none; anything else costs the
-replay, exactly as the GIF plugin behaves.
-@param state Plugin state, holding the decoder and the cached frame
-@param page Frame to produce
-@return Returns a 32-bit dib the caller owns, or NULL
-*/
+// composited canvas of frame 'page'; the caller owns it
 static FIBITMAP *
 DecodeCompositedFrame(WebPPluginData *state, int page) {
-	// the frame already on hand
 	if((state->cached_frame != NULL) && (state->cached_page == page)) {
 		return FreeImage_Clone(state->cached_frame);
 	}
@@ -518,8 +472,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 			FreeImage_OutputMessageProc(s_format_id, "Library version mismatch");
 			return NULL;
 		}
-		// MODE_BGRA is the order the copy below reads; the FI_RGBA_* indices it
-		// writes to are what make that correct on a big-endian machine as well
+		// BGRA; the FI_RGBA_* indices below keep big-endian right
 		options.color_mode = MODE_BGRA;
 		options.use_threads = 1;
 		state->anim = WebPAnimDecoderNew(&state->bitstream, &options);
@@ -530,7 +483,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 		state->anim_next = 0;
 	}
 
-	// the decoder only moves forwards: rewind it when the frame wanted is behind it
+	// forward-only decoder: rewind to go back
 	if((state->anim_next < 0) || (page < state->anim_next)) {
 		WebPAnimDecoderReset(state->anim);
 		state->anim_next = 0;
@@ -540,8 +493,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 	int timestamp = 0;
 	while(state->anim_next <= page) {
 		if(!WebPAnimDecoderHasMoreFrames(state->anim) || !WebPAnimDecoderGetNext(state->anim, &frame_rgba, &timestamp)) {
-			// leave the counter in a state that rewinds on the next call rather than
-			// one that would quietly hand out the wrong frame
+			// force a rewind on the next call
 			state->anim_next = -1;
 			FreeImage_OutputMessageProc(s_format_id, "Failed to decode animation frame %d", page);
 			return NULL;
@@ -549,7 +501,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 		state->anim_next++;
 	}
 
-	// frame_rgba belongs to the decoder and only lives until the next call into it
+	// frame_rgba is valid until the next decoder call
 	FIBITMAP *dib = FreeImage_Allocate(state->canvas_width, state->canvas_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 	if(dib == NULL) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_DIB_MEMORY);
@@ -568,8 +520,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 		}
 	}
 
-	// keep it, so that this frame again and the frame after it are cheap. Failing to
-	// is not an error: the cache stays empty and playback stays as slow as it was.
+	// cache it; a failure here is harmless
 	WebP_ClearFrameCache(state);
 	state->cached_frame = FreeImage_Clone(dib);
 	if(state->cached_frame != NULL) {
@@ -579,15 +530,7 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 	return dib;
 }
 
-/**
-Describe a frame with the same tags the GIF plugin uses, so that a caller can walk
-a WebP animation with the code it already has for GIF: FrameTime is milliseconds
-(which is what WebP stores, where GIF stores hundredths), and DisposalMethod uses
-GIF's numbering - 1 to leave the canvas alone, 2 to restore the frame's rectangle
-to the background. BlendMethod has no GIF equivalent, GIF having one fully
-transparent colour where WebP blends with alpha, and matters only to a caller that
-composites the raw frames itself.
-*/
+// GIF convention: FrameTime in ms, DisposalMethod 1 = leave, 2 = background
 static void
 SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameInfo *webp_frame, int page) {
 	LONG duration = (LONG)webp_frame->duration;
@@ -602,12 +545,7 @@ SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameI
 	WebP_SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
 	WebP_SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
-	// The canvas and the loop count belong to the file rather than to any one frame,
-	// and every frame is drawn on that canvas - so every frame is told about it, not
-	// just the first. PluginGIF.cpp puts them on page 0 alone, which is enough to
-	// describe a file but not to edit one: deleting the first page of an animation
-	// would take the only copy of its canvas with it, and the file written back would
-	// shrink to whatever the surviving frames happen to cover.
+	// on every frame, so deleting page 0 keeps the canvas
 	if(state->is_animation) {
 		WORD logicalwidth = (WORD)state->canvas_width;
 		WORD logicalheight = (WORD)state->canvas_height;
@@ -618,12 +556,7 @@ SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameI
 	}
 }
 
-/**
-Read one FIMD_ANIMATION tag, insisting on the type SetFrameMetadata() wrote it with.
-A tag of the wrong type is not a tag: FreeImage stores whatever the caller set, and a
-"FrameLeft" written as FIDT_LONG when this reader wants FIDT_SHORT would otherwise be
-taken apart as the wrong width.
-*/
+// a tag of the wrong type counts as absent
 static BOOL
 WebP_GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, LONG *value) {
 	FITAG *tag = NULL;
@@ -654,21 +587,14 @@ WebP_GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, LONG *va
 	}
 }
 
-/**
-Does this bitmap describe a frame of an animation rather than a lone image?
-FrameTime is the tag that decides it: a page read back out of an animation always
-carries one, a bitmap that was never part of one does not.
-*/
+// FrameTime marks a page of an animation
 static BOOL
 WebP_IsFrame(FIBITMAP *dib) {
 	LONG value = 0;
 	return WebP_GetAnimTag(dib, "FrameTime", FIDT_LONG, &value);
 }
 
-/**
-Turn a frame's FIMD_ANIMATION tags back into what the mux wants - the exact inverse of
-SetFrameMetadata(), which is what the loader hands out.
-*/
+// inverse of SetFrameMetadata()
 static void
 WebP_ReadFrameInfo(FIBITMAP *dib, WebPMuxFrameInfo *frame) {
 	LONG value = 0;
@@ -681,16 +607,14 @@ WebP_ReadFrameInfo(FIBITMAP *dib, WebPMuxFrameInfo *frame) {
 	if(WebP_GetAnimTag(dib, "FrameTime", FIDT_LONG, &value)) {
 		frame->duration = (int)value;
 	}
-	// WebP stores frame offsets in even pixels only - the mux snaps an odd one with
-	// "offset &= ~1", so round here too, or what comes back would not be what went in
+	// WebP offsets are even; the mux rounds down too
 	if(WebP_GetAnimTag(dib, "FrameLeft", FIDT_SHORT, &value)) {
 		frame->x_offset = ((int)value) & ~1;
 	}
 	if(WebP_GetAnimTag(dib, "FrameTop", FIDT_SHORT, &value)) {
 		frame->y_offset = ((int)value) & ~1;
 	}
-	// GIF's numbering, as the loader documents: 2 restores the frame's rectangle to
-	// the background, anything else leaves the canvas alone
+	// GIF numbering: 2 = background, else leave
 	if(WebP_GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &value)) {
 		frame->dispose_method = (value == 2) ? WEBP_MUX_DISPOSE_BACKGROUND : WEBP_MUX_DISPOSE_NONE;
 	}
@@ -715,14 +639,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	try {
-		// get the plugin state, and the MUX object inside it
+		// get the MUX object
 		state = (WebPPluginData*)data;
 		if(!state || !state->mux) {
 			throw (1);
 		}
 		mux = state->mux;
 
-		// FreeImage_Load asks for page -1, meaning the one image it expects
+		// FreeImage_Load passes -1
 		if(page == -1) {
 			page = 0;
 		}
@@ -731,9 +655,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
-		// WEBP_PLAYBACK asks for the composited canvas rather than the stored frame.
-		// A still image has nothing to composite, so the flag does nothing to it and
-		// such a file loads exactly as it always has.
 		const BOOL playback = (state->is_animation && ((flags & WEBP_PLAYBACK) == WEBP_PLAYBACK)) ? TRUE : FALSE;
 
 		// gets the feature flags from the mux object
@@ -743,27 +664,22 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw (1);
 		}
 
-		// get image data. This also carries where the frame sits on the canvas, how
-		// long it lasts and how it is disposed of and blended, which is wanted even
-		// when no pixels are, and costs no decoding.
+		// get image data
 		error_status = WebPMuxGetFrame(mux, page + 1, &webp_frame);
 
 		if(error_status == WEBP_MUX_OK) {
 			if(playback) {
-				// the composited canvas: what a viewer shows at this frame
 				dib = header_only ?
 					FreeImage_AllocateHeader(TRUE, state->canvas_width, state->canvas_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK) :
 					DecodeCompositedFrame(state, page);
 			} else {
-				// the frame as it is stored, at its own size and position
-				// (can be limited to the header if flags uses FIF_LOAD_NOPIXELS)
+				// decode the data (can be limited to the header if flags uses FIF_LOAD_NOPIXELS)
 				dib = DecodeImage(&webp_frame.bitstream, flags);
 			}
 			if(!dib) {
 				throw (1);
 			}
 
-			// describe the frame within the animation
 			if(state->is_animation) {
 				SetFrameMetadata(dib, state, &webp_frame, page);
 			}
@@ -836,11 +752,7 @@ EncodeImage(FIMEMORY *hmem, FIBITMAP *dib, int flags) {
 
 	BOOL bIsFlipped = FALSE;
 
-	// The catch block frees 'picture' whatever went wrong, but two of the paths
-	// that can throw - an unsupported image type, and WebPPictureInit itself
-	// failing on an ABI mismatch - get there before anything has initialized it.
-	// Zeroing it first is what makes WebPPictureFree a no-op in those cases;
-	// without this, saving e.g. an 8-bit bitmap hands free() a stack address.
+	// zeroed so the catch block can always free it
 	memset(&picture, 0, sizeof(picture));
 
 	try {
@@ -960,9 +872,7 @@ EncodeImage(FIMEMORY *hmem, FIBITMAP *dib, int flags) {
 	return FALSE;
 }
 
-/**
-Encode one bitmap into a freshly allocated WebPData the caller owns.
-*/
+// the caller owns 'out'
 static BOOL
 WebP_EncodeToData(FIBITMAP *dib, int flags, WebPData *out) {
 	FIMEMORY *hmem = FreeImage_OpenMemory();
@@ -989,10 +899,7 @@ WebP_EncodeToData(FIBITMAP *dib, int flags, WebPData *out) {
 	return bResult;
 }
 
-/**
-Attach the colour profile and metadata a caller asked to keep. For an animation this
-is done once, from the first frame: the chunks belong to the file, not to a frame.
-*/
+// once per file, from the first frame
 static BOOL
 WebP_SetMetadataChunks(WebPMux *mux, FIBITMAP *dib) {
 	const int copy_data = 1;
@@ -1033,9 +940,6 @@ WebP_SetMetadataChunks(WebPMux *mux, FIBITMAP *dib) {
 	return TRUE;
 }
 
-/**
-Assemble whatever the mux now holds and write it to the stream.
-*/
 static BOOL
 WebP_AssembleAndWrite(WebPMux *mux, FreeImageIO *io, fi_handle handle) {
 	WebPData output_data = { 0 };
@@ -1054,10 +958,7 @@ WebP_AssembleAndWrite(WebPMux *mux, FreeImageIO *io, fi_handle handle) {
 	return bResult;
 }
 
-/**
-Hand the frame that has been waiting to the mux, now that it is known to be one frame
-of an animation rather than a lone image. Does nothing once it has been handed over.
-*/
+// push the held first frame; no-op once pushed
 static BOOL
 WebP_FlushPending(WebPPluginData *state) {
 	WebPMuxError error_status;
@@ -1079,16 +980,7 @@ WebP_FlushPending(WebPPluginData *state) {
 	return TRUE;
 }
 
-/**
-Close the animation: give it a canvas and a loop count, then assemble and write it.
-
-The canvas has to cover every frame. WebPMuxAssemble() refuses an animation whose
-frames run outside the canvas it was given, and it runs from Close(), which cannot
-report anything - so rather than risk that, the canvas declared by the pages
-(LogicalWidth/LogicalHeight) is widened to the bounding box of the frames actually
-written. That also keeps a document whose first page was deleted from shrinking to
-whatever the new first page happens to declare.
-*/
+// widen the canvas to cover every frame: WebPMuxAssemble refuses overflow
 static BOOL
 WebP_FinishAnimation(WebPPluginData *state, FreeImageIO *io, fi_handle handle) {
 	int width = state->out_canvas_width;
@@ -1144,31 +1036,17 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
-	// Everything that can be refused is refused here, while there is still a caller
-	// to return FALSE to: an animation is only assembled in Close(), which returns
-	// void, so a page taken now and found impossible then would leave the caller
-	// believing in a file that was never written.
+	// refuse here: Close() cannot report a failure
 
 	if(!FreeImage_HasPixels(dib)) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
 	}
 
-	// WebP holds 24- or 32-bit pixels and nothing else, and says so through
-	// SupportsExportDepth(). A caller with an 8-bit page is expected to convert it
-	// first: quietly converting here would contradict what the plugin advertises, and
-	// FreeImage_Save() of an 8-bit bitmap has always been refused.
 	if((FreeImage_GetImageType(dib) != FIT_BITMAP) || !SupportsExportDepth(FreeImage_GetBPP(dib))) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
 	}
-
-	// A lone still image is written as one, exactly as it always was - and so that
-	// FreeImage_Save() still reports a failed write. A page of a multi-page save, and
-	// a single image that carries a frame's worth of FIMD_ANIMATION (which is what a
-	// page round-tripping through the multi-page cache looks like), become frames of
-	// an animation instead: a still WebP has nowhere to keep a frame's duration or
-	// its position on the canvas, so writing one would throw them away.
 
 	const BOOL as_frame = (page >= 0) || WebP_IsFrame(dib);
 
@@ -1182,7 +1060,6 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		if(!WebP_SetMetadataChunks(state->mux, dib)) {
 			goto done;
 		}
-		// write it now rather than in Close(), which could not report a failure
 		bResult = WebP_AssembleAndWrite(state->mux, io, handle);
 		state->written = TRUE;
 		goto done;
@@ -1209,10 +1086,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 		}
 
-		// The canvas and the loop count describe the file, and the loader puts them on
-		// every frame, so take them from whichever pages carry them rather than from
-		// the first alone - the first page of a save is not necessarily the first page
-		// of the animation it came from.
+		// canvas and loop may come from any page
 		{
 			LONG value = 0;
 			if(WebP_GetAnimTag(dib, "LogicalWidth", FIDT_SHORT, &value) && ((int)value > state->out_canvas_width)) {
@@ -1227,22 +1101,19 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 
 		if(state->out_pages == 0) {
-			// The first frame is held rather than pushed: on its own it is a still
-			// image, and only the arrival of a second makes the output an animation.
-			// Its colour profile and metadata belong to the file.
+			// hold the first frame: alone it is a still image
 			if(!WebP_SetMetadataChunks(state->mux, dib)) {
 				goto done;
 			}
 
 			state->pending = bitstream;
 			state->pending_info = frame;
-			memset(&bitstream, 0, sizeof(bitstream));	// owned by the state now
+			memset(&bitstream, 0, sizeof(bitstream));	// owned by the state
 			state->out_pages = 1;
 			bResult = TRUE;
 			goto done;
 		}
 
-		// the held frame goes in first, now that it is known to be one of several
 		if(!WebP_FlushPending(state)) {
 			goto done;
 		}

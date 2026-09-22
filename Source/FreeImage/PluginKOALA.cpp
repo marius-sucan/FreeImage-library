@@ -148,11 +148,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		// if the load address is correct, skip it. otherwise ignore the load address
-		//
-		// koala_t is 10001 bytes, has no initialiser, and every one of them becomes
-		// a pixel below.  None of these reads was checked, so a file shorter than
-		// that handed the caller an image made of the process's own stack - a
-		// two-byte .koa was enough, and it decoded differently every time.
 
 		if ((load_address[0] != 0x00) || (load_address[1] != 0x60)) {
 			((BYTE *)&image)[0] = load_address[0];
@@ -201,10 +196,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 					switch (pixel) {
 						case 0: // Background
-							// every other branch takes a nibble; this took the whole byte,
-							// and the (found_color << 4) | found_color below then packed
-							// two different palette indices into one 4-bpp byte for what
-							// is one colour - a background of 0x35 came out as 0x75
 							found_color = image.background & 0x0f;
 							break;
 							

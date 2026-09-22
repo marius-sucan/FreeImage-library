@@ -1,29 +1,5 @@
-/*
- * FreeImage 3 - JPEG robustness test
- *
- * Feeds damaged JPEG data to the plugin and to the lossless transforms. Every
- * input here may load or be refused; none of them may crash, read out of
- * bounds or leak. A plain run only catches the crashes - the other two are
- * the sanitizer's to find, so run it under AddressSanitizer: "make asan-run" in this
- * directory rebuilds Source/LibJPEG, PluginJPEG.cpp and JPEGTransform.cpp with
- * the sanitizer into a private copy of the library - which is the point of the
- * test: a JPEG decoder is reachable from untrusted input in every program that
- * links FreeImage, and libjpeg 10 rewrote both DCTs and most of the decoder's
- * sample handling.
- *
- * The damage patterns are the ones that historically break JPEG readers:
- *   - truncation, which leaves the entropy decoder short of data mid-MCU;
- *   - junk appended past EOI;
- *   - single byte corruptions, which mostly land in the entropy stream but
- *     sometimes rewrite a marker or a table entry;
- *   - wiped regions, which take out whole tables and headers;
- *   - rewritten segment length fields, the classic way to make a parser walk
- *     off the end of a buffer;
- *   - the dimensions in SOF set to zero or to values that would overflow a
- *     size computation.
- *
- * Everything is decoded from memory so that nothing touches the filesystem.
- */
+/* JPEG robustness test: damaged input may fail, never crash or leak */
+/* run it under AddressSanitizer: make asan-run */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -47,7 +23,6 @@ static void DLL_CALLCONV quiet(FREE_IMAGE_FORMAT fif, const char *msg) {
     (void)fif; (void)msg;
 }
 
-/* Decode one damaged buffer with every load flag that reaches different code. */
 static void try_buffer(const BYTE *buf, long len) {
     static const int flags[] = {
         JPEG_DEFAULT, JPEG_ACCURATE, JPEG_CMYK, JPEG_GREYSCALE,
@@ -58,7 +33,6 @@ static void try_buffer(const BYTE *buf, long len) {
         FIMEMORY *m = FreeImage_OpenMemory((BYTE *)buf, (DWORD)len);
         FIBITMAP *d;
         if (!m) return;
-        /* format detection runs on the damaged bytes too */
         FreeImage_GetFileTypeFromMemory(m, 0);
         FreeImage_SeekMemory(m, 0, SEEK_SET);
         d = FreeImage_LoadFromMemory(FIF_JPEG, m, flags[f]);
@@ -95,7 +69,7 @@ int main(void) {
         work = (BYTE *)malloc((size_t)len + 4096);
         if (!work) { free(orig); continue; }
 
-        /* 1. every truncation, on a stride that keeps the run bounded */
+        /* 1. truncations */
         for (n = 1; n < len; n += (len / 200) + 1)
             try_buffer(orig, n);
         try_buffer(orig, len - 1);
@@ -123,15 +97,14 @@ int main(void) {
             try_buffer(work, len);
         }
 
-        /* 4. 64-byte regions wiped: takes out whole tables and headers */
+        /* 4. 64-byte regions wiped */
         for (n = 0; n + 64 <= len; n += (len / 60) + 1) {
             memcpy(work, orig, (size_t)len);
             memset(work + n, 0, 64);
             try_buffer(work, len);
         }
 
-        /* 5. rewritten segment lengths: walk the marker chain and give each
-              segment a nonsense length, both far too big and far too small */
+        /* 5. nonsense segment lengths */
         {
             long p = 2;
             while (p < len - 3 && orig[p] == 0xFF) {
@@ -140,21 +113,20 @@ int main(void) {
                 if (m == 0xD9 || m == 0xDA) break;
                 seg = (orig[p + 2] << 8) | orig[p + 3];
                 memcpy(work, orig, (size_t)len);
-                work[p + 2] = 0xFF; work[p + 3] = 0xFF;   /* 65535 */
+                work[p + 2] = 0xFF; work[p + 3] = 0xFF;
                 try_buffer(work, len);
                 memcpy(work, orig, (size_t)len);
-                work[p + 2] = 0x00; work[p + 3] = 0x00;   /* 0 */
+                work[p + 2] = 0x00; work[p + 3] = 0x00;
                 try_buffer(work, len);
                 memcpy(work, orig, (size_t)len);
-                work[p + 2] = 0x00; work[p + 3] = 0x01;   /* 1 */
+                work[p + 2] = 0x00; work[p + 3] = 0x01;
                 try_buffer(work, len);
                 if (seg <= 0) break;
                 p += 2 + seg;
             }
         }
 
-        /* 6. the dimensions in SOF: zero, and large enough that width*height
-              *bytes overflows a 32-bit computation */
+        /* 6. SOF dimensions: zero, and large enough to overflow */
         {
             long p = 2;
             while (p < len - 9 && orig[p] == 0xFF) {
@@ -176,7 +148,6 @@ int main(void) {
                         work[p + 8] = (BYTE)(dims[k][0] & 0xFF);
                         try_buffer(work, len);
                     }
-                    /* and a component count of zero and of the maximum */
                     memcpy(work, orig, (size_t)len);
                     work[p + 9] = 0;
                     try_buffer(work, len);
@@ -195,7 +166,7 @@ int main(void) {
         free(orig);
     }
 
-    /* 7. buffers that are not JPEG at all, and degenerate ones */
+    /* 7. non-JPEG and degenerate buffers */
     {
         static const BYTE soi_only[]  = { 0xFF, 0xD8 };
         static const BYTE soi_eoi[]   = { 0xFF, 0xD8, 0xFF, 0xD9 };
@@ -212,8 +183,7 @@ int main(void) {
         printf("  %-32s done\n", "degenerate buffers");
     }
 
-    /* 8. the lossless transform path over damaged input: transupp.c parses the
-          coefficient arrays itself, so it has its own exposure */
+    /* 8. lossless transforms over damaged input */
     {
         long len;
         BYTE *orig = slurp("data/fi_jpeg_420.jpg", &len);

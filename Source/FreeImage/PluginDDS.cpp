@@ -594,18 +594,11 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 
 	const DDPIXELFORMAT *ddspf = &(desc->ddspf);
 
-	// the header stores these unsigned, so anything that does not fit a positive
-	// int is a lie: the casts below would keep a value the allocated bitmap does
-	// not match, and everything computed from them - the line length above all -
-	// would describe a different image
 	if ((desc->dwWidth == 0) || (desc->dwWidth > (DWORD)INT_MAX) ||
 		(desc->dwHeight == 0) || (desc->dwHeight > (DWORD)INT_MAX)) {
 		return NULL;
 	}
 
-	// dwRGBBitCount reaches FreeImage_Allocate() directly, and that silently
-	// coerces a depth it does not know to 8 - after which this function's own
-	// idea of the bit depth and the bitmap's no longer agree
 	switch (ddspf->dwRGBBitCount) {
 		case 8:
 		case 16:
@@ -616,12 +609,7 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 			return NULL;
 	}
 
-	// A DDS surface is stored uncompressed, so its pixel data cannot occupy less
-	// than width * height * dwRGBBitCount bits.  Relate the declared size to the
-	// bytes that are actually there: without this a 131-byte file declaring
-	// dwHeight = 0x00FFFFFF allocates 268 MB and then runs its row loop sixteen
-	// million times over a stream that ended long ago.  The division avoids
-	// overflowing the product for large declared dimensions.
+	// uncompressed: the file must hold every declared pixel
 	{
 		const long pos = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
@@ -661,14 +649,7 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 	// read the file
 	// -------------------------------------------------------------------------
 
-	// How many bytes a row occupies IN THE FILE.  This is not the bitmap's line
-	// length: a 16-bit surface is expanded into a 24-bit bitmap, so
-	// FreeImage_GetBPP(dib) reports 24 where the file stores 16, and using it
-	// here made every 16-bit row consume three bytes per pixel instead of two.
-	// With DDSD_PITCH that went unnoticed, because filePitch - line then came
-	// out negative and the seek below happened to wind the stream back by
-	// exactly the difference; without it, delta was 0 and each row swallowed
-	// half of the next one.
+	// row size in the file; 16-bit rows expand to 24 bits in the dib
 	const int fileLine = CalculateLine(width, bpp);
 	const int line = CalculateLine(width, FreeImage_GetBPP(dib));
 	const int filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (int)desc->dwPitchOrLinearSize : fileLine;
@@ -689,8 +670,6 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 		free(pixels);
 	}
 	else {
-		// for every other depth the bitmap matches the file, so fileLine == line
-		// and the read fills exactly one scanline
 		for (int y = 0; y < height; y++) {
 			BYTE *pixels = FreeImage_GetScanLine(dib, height - y - 1);
 			io->read_proc(pixels, 1, fileLine, handle);
@@ -908,11 +887,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	SwapHeader(&header);
 #endif
 
-	// Validate() makes these checks, but it only runs from
-	// FreeImage_GetFileType().  An application that names the format itself -
-	// which is what happens whenever it is picked from the file extension -
-	// arrives here directly, and used to reach LoadRGB()/LoadDXT() with
-	// whatever the first 128 bytes happened to contain.
+	// Validate() is skipped when the caller names the format
 	if (header.dwMagic != MAKEFOURCC('D', 'D', 'S', ' ')) {
 		return NULL;
 	}

@@ -165,8 +165,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				throw "Failed to setup the decoder\n";
 			}
 
-			// decode on every core (the pool is created here and freed with the codec);
-			// a header-only load never reaches the stages that use it
 			if(!header_only) {
 				opj_codec_set_threads(d_codec, opj_get_num_cpus());
 			}
@@ -279,7 +277,6 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				throw "Failed to setup the encoder\n";
 			}
 
-			// encode on every core (the pool is created here and freed with the codec)
 			opj_codec_set_threads(c_codec, opj_get_num_cpus());
 
 			// encode the image

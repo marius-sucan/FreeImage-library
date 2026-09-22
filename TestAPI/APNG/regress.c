@@ -1,30 +1,5 @@
-/*
- * FreeImage 3 - APNG round-trip and multi-page test
- *
- * Covers the APNG plugin (Source/FreeImage/PluginAPNG.cpp) through the API a
- * caller actually uses for an animation: FreeImage_OpenMultiBitmap and
- * AppendPage/InsertPage/DeletePage to build one, FreeImage_LockPage to read it
- * back, and FreeImage_Save/FreeImage_Load for the single-image case.
- *
- * What is asserted:
- *
- *   - what went in comes back. Every frame written is compared, pixel for
- *     pixel, against the canvas APNG_PLAYBACK produces for it. The writer is
- *     allowed to store a frame as the rectangle that changed rather than whole
- *     - that is the point of it - so the raw pages are checked for being that
- *     rectangle, and the composited ones for being identical to the input.
- *   - a single page is written as a plain PNG, palette, bit depth and all,
- *     because an animation of one frame is not an animation.
- *   - the animation metadata (delays, placement, disposal, blending, loop
- *     count and canvas) survives a round trip.
- *   - editing a multi-page file - inserting, deleting, reordering - produces
- *     the frames in the order asked for.
- *   - the memory stream and the file agree.
- *
- * Scratch files go to $APNG_TEST_TMP, or the current directory.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - APNG round-trip and multi-page test */
+/* scratch files: $APNG_TEST_TMP or the current directory */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -52,8 +27,7 @@ static void ok(const char *fmt, ...) {
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
 
-/* Several of the tests hold two scratch paths at once, so these rotate rather
-   than share one buffer. */
+/* rotating buffers: some tests hold two paths at once */
 static char tmpbuf[4][4096];
 static int tmpnext = 0;
 
@@ -66,9 +40,7 @@ static const char *scratch(const char *name) {
 
 /* ------------------------------------------------------------------ */
 
-/* A frame whose every pixel is a function of (x, y, seed), so that two frames
-   with different seeds differ everywhere, plus a solid block at (bx, by) that
-   moves - which is what the writer's difference region has to find. */
+/* pixels depend on (x, y, seed), plus a moving block at (bx, by) */
 static FIBITMAP *make_frame(unsigned w, unsigned h, int seed, int bx, int by, int alpha) {
 	FIBITMAP *dib = FreeImage_Allocate(w, h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 	unsigned x, y;
@@ -88,8 +60,7 @@ static FIBITMAP *make_frame(unsigned w, unsigned h, int seed, int bx, int by, in
 	return dib;
 }
 
-/* A frame identical to another apart from one square, so the writer's
-   difference region has a known right answer. */
+/* src with one square changed */
 static FIBITMAP *patch(FIBITMAP *src, int px, int py, int pw, int ph) {
 	FIBITMAP *dib = FreeImage_Clone(src);
 	unsigned h = FreeImage_GetHeight(dib);
@@ -105,7 +76,6 @@ static FIBITMAP *patch(FIBITMAP *src, int px, int py, int pw, int ph) {
 	return dib;
 }
 
-/* Every pixel equal, once both are 32-bit. Returns the number that are not. */
 static int pixel_diff(FIBITMAP *a, FIBITMAP *b) {
 	FIBITMAP *ra = FreeImage_ConvertTo32Bits(a), *rb = FreeImage_ConvertTo32Bits(b);
 	unsigned w, h, x, y;
@@ -138,8 +108,7 @@ static long tag_long(FIBITMAP *dib, const char *key, long missing) {
 	}
 }
 
-/* The ANIMTAG_* ids live in a private header; FIMD_ANIMATION is keyed by name,
-   which is what both PluginGIF.cpp and PluginAPNG.cpp read, so 0 will do. */
+/* FIMD_ANIMATION is read by key, so the id can be 0 */
 static void set_tag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD len, const void *val) {
 	FITAG *tag = FreeImage_CreateTag();
 	if (!tag) return;
@@ -153,7 +122,6 @@ static void set_tag(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE t
 	FreeImage_DeleteTag(tag);
 }
 
-/* Write frames[0..n) as one APNG, through the multi-page API. */
 static int write_animation(const char *path, FIBITMAP **frames, int n) {
 	FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
 	int i;
@@ -199,7 +167,7 @@ static void test_roundtrip(void) {
 	if (!bad) ok("all five composited frames are identical to what went in");
 	FreeImage_CloseMultiBitmap(mb, 0);
 
-	/* the same file read backwards: the playback cache has to rewind, not drift */
+	/* read backwards: the playback cache must rewind */
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
 	if (mb) {
 		bad = 0;
@@ -231,7 +199,7 @@ static void test_difference_region(void) {
 	frames[2] = FreeImage_Clone(frames[1]);		/* identical to the one before it */
 	if (!write_animation(path, frames, 3)) { fail("could not write %s", path); goto out; }
 
-	/* without APNG_PLAYBACK the pages are the rectangles the file stores */
+	/* raw pages are the stored rectangles */
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
 	if (!mb) { fail("cannot reopen %s", path); goto out; }
 
@@ -268,7 +236,7 @@ static void test_difference_region(void) {
 		FreeImage_CloseMultiBitmap(mb, 0);
 	}
 
-	/* and composited, all three must still be what went in */
+	/* composited: identical to the input */
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
 	if (mb) {
 		int bad = 0;
@@ -314,7 +282,7 @@ static void test_single_page(void) {
 		}
 	}
 
-	/* a palette has to survive too - that is the reason for the special case */
+	/* a palette must survive */
 	if (pal && FreeImage_Save(FIF_APNG, pal, path, 0)) {
 		back = FreeImage_Load(FIF_PNG, path, 0);
 		if (!back) fail("the paletted single image did not load");
@@ -411,7 +379,7 @@ out:
 	remove(path);
 }
 
-/* The page order after editing, read back from each frame's first pixel. */
+/* page order, from each frame's first pixel */
 static void check_order(const char *path, const int *want, int n, const char *what) {
 	FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
 	int i, bad = 0;
@@ -454,7 +422,6 @@ static void test_multipage_editing(void) {
 	if (!write_animation(path, frames, 4)) { fail("could not write %s", path); goto out; }
 	check_order(path, want4, 4, "four appended pages come back in order");
 
-	/* insert a fifth frame at position 1 */
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, FALSE, FALSE, 0);
 	if (!mb) { fail("cannot reopen for editing"); goto out; }
 	{
@@ -465,7 +432,6 @@ static void test_multipage_editing(void) {
 	FreeImage_CloseMultiBitmap(mb, 0);
 	check_order(path, want5, 5, "InsertPage put the new frame at position 1");
 
-	/* and delete what is now page 2 */
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, FALSE, FALSE, 0);
 	if (!mb) { fail("cannot reopen for deleting"); goto out; }
 	FreeImage_DeletePage(mb, 2);
@@ -489,7 +455,6 @@ static void test_memory_stream(void) {
 	for (i = 0; i < 3; i++) frames[i] = make_frame(48, 32, i * 3, i * 4, 2, -1);
 	if (!write_animation(path, frames, 3)) { fail("could not write %s", path); goto out; }
 
-	/* copy the file into a memory stream through the multi-page API */
 	hmem = FreeImage_OpenMemory(NULL, 0);
 	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
 	if (!hmem || !mb) { fail("could not set up the memory copy"); goto out; }
@@ -657,9 +622,7 @@ out:
 	remove(one);
 }
 
-/* The file is only assembled in Close(), which cannot fail out loud, so anything
-   that cannot be written has to be refused by Save() while FreeImage_Save() is
-   still listening - otherwise it answers TRUE and leaves its output in place. */
+/* Close() cannot fail, so Save() must refuse what it cannot write */
 static void test_refusals(void) {
 	const char *path = scratch("apng_refuse.png");
 	const char *seed = scratch("apng_refuse_seed.png");
@@ -693,8 +656,7 @@ static void test_refusals(void) {
 		ok("a 16-bit bitmap is refused, as SupportsExportDepth says");
 	}
 
-	/* FreeImage_SaveToHandle stops a header-only image itself; this is the path
-	   that does not - the one FreeImage_SaveMultiBitmapToHandle takes */
+	/* FreeImage_SaveMultiBitmapToHandle does not pre-check header-only pages */
 	if (!header || FreeImage_HasPixels(header)) {
 		fail("could not make a header-only bitmap to try");
 	} else {

@@ -1,23 +1,11 @@
-# JPEG regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan       build them with AddressSanitizer (recommended for robust)
-#   make asan-run   rebuild the bundled LibJPEG, the plugin and the lossless
-#                   transform with AddressSanitizer into a private copy of the
-#                   library and run the tests against that
-#
-# Scratch files go to $JPEG_TEST_TMP, or the current directory.
+# JPEG tests; build the library first (make -f Makefile.gnu dist)
+# make [run|asan|asan-run]; scratch files go to $JPEG_TEST_TMP
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust
-# oracle is a comparison tool, not a test: it asserts nothing, so "run" leaves
-# it alone. See its header for how it is used across an upgrade.
+# oracle compares two builds; it is not a test
 TOOLS   = oracle
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
@@ -27,7 +15,6 @@ default: all
 all: $(TESTS)
 tools: $(TOOLS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
 $(TESTS) $(TOOLS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
@@ -35,28 +22,17 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters for robust: it rebuilds what this upgrade actually replaced - the
-# whole of Source/LibJPEG, PluginJPEG.cpp and JPEGTransform.cpp - with
-# AddressSanitizer into a private copy of the library. Mixing instrumented and
-# plain objects is fine.
-#
-# A JPEG decoder is reached from untrusted input by every program that links
-# FreeImage, and libjpeg 10 rewrote both DCTs and most of the decoder's
-# sample-handling; a sanitized run over damaged input is what would catch a
-# mistake in that rewrite.
+# asan-run instruments LibJPEG, PluginJPEG and JPEGTransform too
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C and C++ files with
+# the library's own compile flags
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 ASAN        = -fsanitize=address -fno-omit-frame-pointer
 
-# Only the LibJPEG files the library is actually built from: the directory also
-# holds cjpeg.c, djpeg.c, jpegtran.c and the rd*/wr* helpers, which are
-# upstream's sample applications and have a main() of their own.
+# only the LibJPEG files in Makefile.srcs (not the sample programs)
 JPEG_C   = $(patsubst %,../../%,$(shell grep -o 'Source/LibJPEG/[A-Za-z0-9_]*\.c' ../../Makefile.srcs | sort -u))
 JPEG_CXX = ../../Source/FreeImage/PluginJPEG.cpp ../../Source/FreeImageToolkit/JPEGTransform.cpp
 

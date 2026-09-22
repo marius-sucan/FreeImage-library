@@ -67,15 +67,7 @@ public:
 		return _io->read_proc(buffer, (unsigned)size, (unsigned)count, _handle);
 	}
 
-	/**
-	LibRaw counts from the start of the stream it was handed, and that start is
-	wherever the handle stood when the plugin was entered: FreeImage_LoadFromHandle
-	may be called on a stream that already holds something else, which is why
-	size() has always been measured from that point rather than from the end of
-	the file.  FreeImageIO's SEEK_SET, on the other hand, is absolute in the
-	handle, so the two have to be bridged here - otherwise LibRaw's offsets land
-	in front of the image and nothing is recognised.
-	*/
+	// LibRaw offsets are relative to where the stream started
     int seek(INT64 offset, int origin) { 
 		INT64 target;
 
@@ -91,7 +83,6 @@ public:
 				target = (INT64)_io->tell_proc(_handle) + offset;
 				break;
 		}
-		// the bytes in front of the stream belong to whoever opened it
 		if(target < (INT64)_start) {
 			return -1;
 		}
@@ -107,17 +98,7 @@ public:
 		return _fsize;
 	}
 
-	/**
-	One byte as a value from 0 to 255, or -1 at the end of the stream: that is
-	the contract LibRaw's own datastreams keep, and it matters everywhere -
-	var_defines.h makes getc() and fgetc() macros for this method, so the whole
-	of the dcraw-derived decoding reads through it.
-	The byte has to be read into a one-byte object.  Reading it into an int put
-	it at whichever end of the int the platform's byte order chose, so on a
-	big-endian machine every byte came back shifted left by 24.  And that object
-	has to be unsigned, or 0xFF would come back as -1 and be taken for the end
-	of the stream.
-	*/
+	// 0..255 or -1 at EOF, via an unsigned char (not an int)
     int get_char() { 
 		unsigned char c = 0;
 		if (!_io->read_proc(&c, 1, 1, _handle)) {
@@ -171,22 +152,13 @@ public:
 
 // ----------------------------------------------------------
 
-/**
-LibRaw reports a damaged file by calling the data-error callback installed on
-the LibRaw object, and the one it installs by default writes the message to
-stderr.  FreeImage delivers every message through the function registered with
-FreeImage_SetOutputMessage, so route LibRaw's there instead: a library has no
-business writing to the standard error of the program that links it.
-@param data Unused callback context
-@param file Name of the file being read, or NULL for a stream
-@param offset Offset the error was found at, or -1 for an unexpected EOF
-*/
+// LibRaw data errors go to the output message, not stderr
 static void
 libraw_data_error_handler(void *data, const char *file, const INT64 offset) {
 	if (offset < 0) {
 		FreeImage_OutputMessageProc(s_format_id, "LibRaw : unexpected end of file");
 	} else {
-		// FreeImage_OutputMessageProc understands %d, but its %d is an int
+		// OutputMessageProc's %d is only an int
 		char position[32];
 		sprintf(position, "%lld", (long long)offset);
 		FreeImage_OutputMessageProc(s_format_id, "LibRaw : data corrupted at offset %s", position);
@@ -696,7 +668,6 @@ Validate(FreeImageIO *io, fi_handle handle) {
 		if(RawProcessor) {
 			BOOL bSuccess = TRUE;
 
-			// send LibRaw's data errors to FreeImage_SetOutputMessage, not to stderr
 			RawProcessor->set_dataerror_handler(libraw_data_error_handler, NULL);
 
 			// wrap the input datastream
@@ -754,7 +725,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw FI_MSG_ERROR_MEMORY;
 		}
 
-		// send LibRaw's data errors to FreeImage_SetOutputMessage, not to stderr
 		RawProcessor->set_dataerror_handler(libraw_data_error_handler, NULL);
 
 		// wrap the input datastream

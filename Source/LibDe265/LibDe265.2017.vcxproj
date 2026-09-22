@@ -276,7 +276,7 @@
     <ClCompile Include="libde265\x86\sse-intrapred.cc" />
     <ClCompile Include="libde265\x86\sse-motion.cc" />
     <ClCompile Include="libde265\x86\sse.cc" />
-    <!-- FreeImage: the AVX2/AVX-512 kernels (libde265\x86\transform-avx*.cc) are left out on purpose: libde265 dispatches them with GCC/clang builtins only, so with MSVC they would never run -->
+    <!-- FreeImage: AVX kernels omitted, only GCC/clang dispatch them -->
     <ClCompile Include="extra\win32cond.c">
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>

@@ -12,7 +12,7 @@ fuzzer file that expands to a gigabyte-sized image does not exhaust memory.
 import sys, os
 import numpy as np
 
-CHUNK_ROWS = 1 << 20   # rows per step are chosen so a chunk stays around 16M samples
+CHUNK_ROWS = 1 << 20
 
 def read_fi_raw(path):
     with open(path, 'rb') as f:

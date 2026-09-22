@@ -1,27 +1,4 @@
-/*
- * FreeImage 3 - HEIF third-party sample test (thirdparty)
- *
- * Runs the HEIF plugin over files other encoders wrote: Nokia's example image sequences and
- * image collections, and the image-sequence files of the MPEG file-format conformance suite.
- * They are not part of the repository (see samples/README.md for why and where they come
- * from): "sh fetch_samples.sh" downloads them into samples/, checking each against the MD5
- * sum these expectations were recorded with, and "make thirdparty-run" does both steps.
- *
- * For every file: the page count, the size and type of every page, "FrameTime" and "Loop"
- * of an image sequence, the eight animation tags every frame carries (and none on a still
- * image), and a checksum over the pixels of every page. A sequence is also read backwards
- * and at random, header-only, under HEIF_PLAYBACK and from memory, and must give the same
- * pages each way.
- *
- * The expected values were recorded from the first passing run after checking them
- * against ffmpeg 8 (through PyAV), which decodes the same tracks independently: the same
- * frame counts, frame order and durations, and the same pictures - the decoded luma planes
- * are bit-identical on the four Nokia sequences, on C001, C026, C027, C028 and on C041's
- * displayed frames. Two files differ from ffmpeg on purpose, both where libheif does: C029's edit
- * list plays its first five samples twice (ffmpeg: 13 frames, here every sample once, 8),
- * and C041 marks its first sample as not for display (ffmpeg: 8 frames, here 9, the first
- * of which is the same picture as the fifth).
- */
+/* HEIF third-party sample test; get the files with fetch_samples.sh */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,14 +10,12 @@ typedef struct {
     int pages;
     int width, height;          /* every page */
     int bpp;                    /* every page is FIT_BITMAP */
-    long frametime;             /* every frame's, ms; -1 = a still image, no animation tags */
+    long frametime;             /* ms; -1 = still image, no tags */
     long loop;
-    unsigned long long sum;     /* over the pixels of every page, in order */
+    unsigned long long sum;     /* over every page, in order */
 } Expected;
 
-/* The nine MPEG files built on the same eight-frame bitstream (C001, C026, C029-C032,
- * C036-C038) share a checksum: however the container around it is arranged, the frames are
- * the same. */
+/* the nine MPEG files on one bitstream share a checksum */
 static const Expected EXPECTED[] = {
     /* Nokia (https://nokiatech.github.io/heif/examples.html) */
     {"nokia/starfield_animation.heic", "animation, a cover image too, major brand msf1", 120, 256, 144, 24, 40, 1, 0x767c3bbdffcd1a3fULL},
@@ -107,7 +82,6 @@ static long anim_tag(FIBITMAP *d, const char *key, FREE_IMAGE_MDTYPE type) {
     }
 }
 
-/* the page's description: size, type and, for a frame, the eight animation tags */
 static void check_page(const Expected *e, FIBITMAP *d, int page, const char *how) {
     char what[200];
     if ((int)FreeImage_GetWidth(d) != e->width || (int)FreeImage_GetHeight(d) != e->height) {
@@ -166,7 +140,7 @@ static void run(const Expected *e) {
         FreeImage_UnlockPage(mb, d, FALSE);
     }
 
-    /* the last pages backwards, then some at random: each one a fresh start of the track */
+    /* backwards, then at random: each a fresh start of the track */
     for (p = n - 1; mb && p >= 0 && p >= n - 3; p--) {
         FIBITMAP *d = FreeImage_LockPage(mb, p);
         if (!d || sum_pixels(d) != sums[p]) { snprintf(what, sizeof(what), "backwards: page %d differs", p); fail(e->file, what); }
@@ -213,7 +187,7 @@ static void run(const Expected *e) {
         FreeImage_CloseMemory(mem);
     }
 
-    /* C041: the sample not for display is shown, and it is the same picture as the fifth */
+    /* C041: the non-display sample is shown; same picture as the fifth */
     if (strcmp(e->file, "mpeg/C041.heic") == 0 && n == 9 && sums[0] != sums[4]) fail(e->file, "the first page is not the fifth's picture");
 
     printf("    {\"%s\", %d pages %dx%d, sum 0x%llxULL}\n", e->file, n, e->width, e->height, all);

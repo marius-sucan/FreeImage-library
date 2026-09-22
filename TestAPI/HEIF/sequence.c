@@ -1,32 +1,4 @@
-/*
- * FreeImage 3 - HEIF image sequence test
- *
- * An image sequence (animated HEIC, the 'msf1' / 'hevc' brands) opens as a multi-page bitmap
- * with one page per frame, like GIF, APNG, WebP and AVIF. This checks, on the seq-* files of
- * data/ (see data/mkseqdata.sh for how each was made and what it is for):
- *
- * - the frame count, size and bitmap type, and the FIMD_ANIMATION tags on every page -
- *   "FrameTime" from the track's own sample tables, not the duration libheif attaches to a
- *   decoded frame (which belongs to a later one), "Loop" from the edit list, the canvas,
- *   and the constant position, disposal and blend of a frame that is a whole picture;
- * - that a page is the same picture however it is reached: libheif decodes a track forwards
- *   only, so the plugin keeps its place and starts the track over to go back, and pages read
- *   in order, backwards, at random, twice over, one per session or from memory must agree;
- * - header-only pages (FIF_LOAD_NOPIXELS), which describe a page without decoding a frame;
- * - HEIF_PLAYBACK: every frame as 32-bit, equal to the plain page converted;
- * - which track and which pages a file gets: a thumbnail track written first is not the
- *   animation, a file holding both a still image and a sequence is read as its major brand
- *   says, a frame padded by its encoder is cropped to the size the sample entry declares;
- * - an ICC profile in the sample entry, which libheif does not read for a track;
- * - damage: a decoder configuration that yields no frame must fail the page rather than
- *   keep libheif pushing samples forever, a file claiming more frames than the plugin allows
- *   is refused at once, and a file cut short fails its missing frames and still serves the
- *   ones before them;
- * - the page API end to end: the frames and their tags rebuilt as an animated WebP.
- *
- * Standalone: build with the Makefile in this directory, run from it. Scratch files go to
- * $HEIF_TEST_TMP, or the current directory.
- */
+/* HEIF image sequence test (animated HEIC as multi-page) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,18 +16,11 @@ typedef struct {
     long loop;
     int icc;                    /* ICC profile size, 0 = none */
     long frametime[MAXF];       /* milliseconds, one per frame */
-    unsigned long long sum;     /* checksum over every page's pixels, in order */
+    unsigned long long sum;     /* over every page, in order */
 } Expected;
 
-/* Recorded from the first passing run, after checking every file against an independent
- * decoder: ffmpeg 8 (through PyAV) decodes the same tracks to the same number of frames, in the
- * same order, with the same durations - ffmpeg honours the sample tables that libheif's decode
- * gets wrong - and to the same pictures, compared in luma to within the rounding of the colour
- * conversion (the luma planes are bit-identical where they could be compared exactly). The
- * files are written by pillow-heif's libheif and x265, not by the bundled libheif. */
 static const Expected EXPECTED[] = {
-    /* 200, 600, 1000, 1200 and 2000 ticks of 30000 Hz: libheif's own decode attaches
-     * 33, 40, 67, 7 and 7 ms to these frames; no edit list, so one play */
+    /* 200-2000 ticks of 30000 Hz, one play; libheif's own durations are wrong */
     {"seq-vardelay.heics",   5, 64, 64, FIT_BITMAP, 24, 1, 0, {7, 20, 33, 40, 67}, 0xb664b8c27d6f88a3ULL},
     /* B-frames: shown in another order than decoded; looping forever */
     {"seq-bframes.heics",   10, 64, 64, FIT_BITMAP, 24, 0, 0, {33, 33, 33, 33, 33, 33, 33, 33, 33, 33}, 0x41324ba7c88582a6ULL},
@@ -65,14 +30,14 @@ static const Expected EXPECTED[] = {
     {"seq-10bit.heics",      4, 64, 64, FIT_RGB16,  48, 3, 0, {50, 50, 50, 50}, 0x2500528303a0de1aULL},
     /* monochrome, all intra */
     {"seq-mono.heics",       4, 64, 64, FIT_BITMAP,  8, 1, 0, {40, 40, 40, 40}, 0xb83aebcf51486dabULL},
-    /* coded as 64 x 64, declared 64 x 48 (with alpha) and 33 x 17: cropped to the declared size */
+    /* coded 64x64, declared 64x48 / 33x17: cropped */
     {"seq-crop.heics",       3, 64, 48, FIT_BITMAP, 32, 0, 0, {100, 100, 100}, 0xb5ff266c35caa1c4ULL},
     {"seq-odd.heics",        3, 33, 17, FIT_BITMAP, 24, 0, 0, {100, 100, 100}, 0x3e529a9120e1a9aeULL},
     /* seq-vardelay with an ICC profile in its sample entry */
     {"seq-icc.heics",        5, 64, 64, FIT_BITMAP, 24, 1, 132, {7, 20, 33, 40, 67}, 0xb664b8c27d6f88a3ULL},
-    /* the thumbnail track (32 x 32) comes first and has the lower ID: the pages are the main track's */
+    /* thumbnail track first: pages are the main track's */
     {"seq-thumbfirst.heic",  4, 64, 64, FIT_BITMAP, 24, 1, 0, {250, 250, 250, 250}, 0xfc0388df9669ab34ULL},
-    /* a still image as well, but the major brand is 'hevc': the frames */
+    /* still image too, major brand 'hevc': the frames */
     {"seq-with-still.heic",  4, 64, 64, FIT_BITMAP, 24, 1, 0, {250, 250, 250, 250}, 0xfc0388df9669ab34ULL},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
@@ -124,7 +89,7 @@ static int icc_size(FIBITMAP *d) {
     return (p && p->data) ? (int)p->size : 0;
 }
 
-/* an animation tag, -1 when absent or not of the type the plugins agree on */
+/* -1 when absent or of the wrong type */
 static long anim_tag(FIBITMAP *d, const char *key, FREE_IMAGE_MDTYPE type) {
     FITAG *tag = NULL;
     if (!FreeImage_GetMetadata(FIMD_ANIMATION, d, key, &tag) || !tag) return -1;
@@ -141,7 +106,6 @@ static int count_anim_tags(FIBITMAP *d) {
     return FreeImage_GetMetadataCount(FIMD_ANIMATION, d);
 }
 
-/* the eight tags of a frame, as the GIF, APNG, WebP and AVIF plugins write them */
 static void check_tags(const Expected *e, FIBITMAP *d, int page, const char *how) {
     char what[160];
     const long ft = anim_tag(d, "FrameTime", FIDT_LONG);
@@ -167,7 +131,6 @@ static BYTE *read_file(const char *path, long *size) {
     return buf;
 }
 
-/* the largest difference between two 32-bit bitmaps of one size, per channel sample */
 static int max_diff32(FIBITMAP *a, FIBITMAP *b) {
     unsigned x, y; int m = 0;
     if (FreeImage_GetWidth(a) != FreeImage_GetWidth(b) || FreeImage_GetHeight(a) != FreeImage_GetHeight(b)) return 999;
@@ -208,7 +171,7 @@ static void run(const Expected *e, int tolerance) {
         FreeImage_UnlockPage(mb, d, FALSE);
     }
 
-    /* --- the same pages backwards, at random and twice over, in the same session --- */
+    /* --- backwards, at random, twice over --- */
     for (p = n - 1; p >= 0; p--) {
         FIBITMAP *d = FreeImage_LockPage(mb, p);
         if (!d || sum_pixels(d) != sums[p]) { snprintf(what, sizeof(what), "backwards: page %d differs", p); fail(e->file, what); }
@@ -230,7 +193,7 @@ static void run(const Expected *e, int tolerance) {
     }
     FreeImage_CloseMultiBitmap(mb, 0);
 
-    /* --- one session per page: nothing kept, every page decoded from the first frame --- */
+    /* --- one session per page --- */
     for (p = 0; p < n; p++) {
         FIMULTIBITMAP *one = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, 0);
         FIBITMAP *d = one ? FreeImage_LockPage(one, p) : NULL;
@@ -246,7 +209,7 @@ static void run(const Expected *e, int tolerance) {
         if (d) FreeImage_Unload(d);
     }
 
-    /* --- header only: the same description, no pixels, no decoding --- */
+    /* --- header only --- */
     mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, FIF_LOAD_NOPIXELS);
     for (p = 0; mb && p < n; p++) {
         FIBITMAP *d = FreeImage_LockPage(mb, p);
@@ -259,7 +222,7 @@ static void run(const Expected *e, int tolerance) {
     }
     if (mb) FreeImage_CloseMultiBitmap(mb, 0); else fail(e->file, "header-only open failed");
 
-    /* --- HEIF_PLAYBACK: 32-bit frames, the plain page converted --- */
+    /* --- HEIF_PLAYBACK: the plain page converted to 32-bit --- */
     mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, HEIF_PLAYBACK);
     for (p = 0; mb && p < n; p++) {
         FIMULTIBITMAP *plain_mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, 0);
@@ -281,7 +244,7 @@ static void run(const Expected *e, int tolerance) {
     if (mb) FreeImage_CloseMultiBitmap(mb, 0); else fail(e->file, "playback open failed");
     if (worst > tolerance) { snprintf(what, sizeof(what), "a playback frame differs from the converted plain frame by %d", worst); fail(e->file, what); }
 
-    /* header only under playback: the 32-bit page, still without pixels */
+    /* header only under playback */
     mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, HEIF_PLAYBACK | FIF_LOAD_NOPIXELS);
     if (mb) {
         FIBITMAP *d = FreeImage_LockPage(mb, n - 1);
@@ -310,7 +273,7 @@ static void run(const Expected *e, int tolerance) {
     if (e->sum && all != e->sum) fail(e->file, "pixel checksum");
 }
 
-/* a file with a still image and a sequence whose major brand says images: the still image */
+/* image major brand beats a sequence: the still image */
 static void check_still_wins(void) {
     const char *path = "data/seq-with-still-heic.heic";
     FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, 0);
@@ -327,7 +290,7 @@ static void check_still_wins(void) {
     if (mb) FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/* a decoder configuration that yields no frame: every page fails, and fails promptly */
+/* undecodable configuration: every page fails, promptly */
 static void check_corrupt(void) {
     const char *path = "data/seq-corrupt.heics";
     FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, 0);
@@ -344,14 +307,12 @@ static void check_corrupt(void) {
         printf("    {\"seq-corrupt.heics\", %d pages, %d loaded, %.0f ms of CPU}\n", n, loaded, elapsed);
         if (n != 6) fail(path, "page count");
         if (loaded != 0) fail(path, "a frame of a track with no decodable configuration loaded");
-        /* before the read budget, libheif pushed samples for as long as the edit list repeats the
-           track - forever here, capped only at FI_HEIF_MAX_FRAMES samples, i.e. minutes a page */
         if (elapsed > 10000.0) fail(path, "the failing pages took too long: the read budget did not stop libheif");
     }
     if (mb) FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/* more frames than libheif may build tables for: refused before any is allocated */
+/* over FI_HEIF_MAX_FRAMES: refused before allocating */
 static void check_limit(void) {
     const char *path = "data/seq-frames-limit.heics";
     FIMULTIBITMAP *mb;
@@ -365,13 +326,7 @@ static void check_limit(void) {
     if (d) { fail(path, "a track of 2592001 frames was loaded"); FreeImage_Unload(d); }
 }
 
-/* cut short in the middle of the media data: the frames before the cut still load, the ones
-   after it fail, and going back to the start afterwards works (the track is started over).
-   seq-vardelay's five samples end at 1844, 3313, 4700, 6281 and 7544 bytes: a cut at three
-   quarters, 5658, leaves three whole ones and half of the fourth - and two frames, because
-   libde265 hands a frame back once the next sample has arrived. (seq-alpha would not do: its
-   alpha track's samples all come after the colour ones, so any cut into the media data takes
-   away every frame's alpha.) */
+/* cut at 5658 of 7544 bytes: 2 frames load (libde265 lags one sample) */
 static void check_truncated(void) {
     const char *path = "data/seq-vardelay.heics";
     long size = 0;
@@ -407,8 +362,7 @@ static void check_truncated(void) {
     free(data);
 }
 
-/* the page API end to end: the frames of seq-vardelay, played, appended to an animated WebP,
-   which keeps their number, their durations, and their disposal and blend */
+/* seq-vardelay played into an animated WebP: frames and tags survive */
 static void check_webp_scenario(void) {
     const char *out = tmppath("fi_heif_seq.webp");
     static const long frametime[5] = {7, 20, 33, 40, 67};
@@ -447,9 +401,7 @@ int main(int argc, char **argv) {
     if (FreeImage_GetFIFFromFilename("x.heifs") != FIF_HEIF) fail("plugin", "GetFIFFromFilename(.heifs)");
     printf("--- sequences ---\n");
     for (i = 0; i < NEXPECTED; i++) {
-        /* a 10-bit frame played is libheif's own conversion to 8 bits, done before the one to
-           RGB, where FreeImage_ConvertTo32Bits takes the top byte of the 16 bits the plain page
-           scales to: the two differ by up to 2 levels (up to 3 for a still image, see decode) */
+        /* 10-bit: libheif's 8-bit conversion differs from ConvertTo32Bits by <= 3 */
         const int tolerance = (EXPECTED[i].type == FIT_BITMAP) ? 0 : 3;
         run(&EXPECTED[i], tolerance);
     }

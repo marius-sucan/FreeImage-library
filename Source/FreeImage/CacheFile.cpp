@@ -30,8 +30,6 @@
 // ----------------------------------------------------------
 
 #ifdef _WIN32
-// Widen plain ASCII - a mode string, or a suffix FIFileName::append() adds. Every
-// ASCII character is the same number in wchar_t, so this is exact.
 static std::wstring
 WidenASCII(const char *s) {
 	std::wstring ws;
@@ -49,12 +47,7 @@ FIFileName::FIFileName(const char *name) : m_name(name) {
 
 #ifdef _WIN32
 FIFileName::FIFileName(const wchar_t *name) : m_wname(name) {
-	// Messages are char, and a message is all this rendering is for, so it keeps
-	// ASCII and shows '?' for the rest. Converting to the ANSI code page instead
-	// would print a different, perfectly valid name wherever that code page has a
-	// look-alike, and UTF-8 would turn to gibberish in the ANSI debugger output
-	// FreeImage_OutputMessageProc() also writes to. '?' is not allowed in a Windows
-	// filename, so the rendering cannot be mistaken for a file that exists either.
+	// char rendering for messages: non-ASCII becomes '?'
 	m_name.reserve(m_wname.size());
 
 	for (size_t i = 0; i < m_wname.size(); i++) {
@@ -65,7 +58,7 @@ FIFileName::FIFileName(const wchar_t *name) : m_wname(name) {
 		} else {
 			m_name += '?';
 
-			// a character outside the BMP takes two UTF-16 units, and is still one character
+			// a surrogate pair is one character
 			if ((c >= 0xD800) && (c <= 0xDBFF) && (i + 1 < m_wname.size())
 				&& (m_wname[i + 1] >= 0xDC00) && (m_wname[i + 1] <= 0xDFFF)) {
 				i++;
@@ -123,14 +116,7 @@ m_free_pages(),
 m_page_cache_mem(),
 m_page_cache_disk(),
 m_page_map(),
-// Block numbers start at 1, not 0. Block::next == 0 is what marks the end of a
-// chain, so a block really numbered 0 means two things at once: while it happened
-// to be the head of its chain nobody noticed, but as soon as it was freed and handed
-// out again as a *continuation*, readFile() read the block before it, saw next == 0
-// and stopped - returning a page with its tail missing, which then failed to decode
-// and cost the caller the whole document. Giving up the first BLOCK_SIZE of the
-// cache file is the entire price of never having to tell the two apart.
-// It also makes writeFile()'s 0 an unambiguous failure return.
+// block 0 is reserved: next == 0 ends a chain
 m_page_count(1),
 m_current_block(NULL),
 m_keep_in_memory(TRUE) {
@@ -190,7 +176,6 @@ CacheFile::cleanupMemCache() {
 			// flush the least used block to file
 
 			Block *old_block = m_page_cache_mem.back();
-			// (long) before the multiply - see lockBlock()
 			fseek(m_file, (long)old_block->nr * BLOCK_SIZE, SEEK_SET);
 			fwrite(old_block->data, BLOCK_SIZE, 1, m_file);
 
@@ -243,21 +228,14 @@ CacheFile::lockBlock(int nr) {
 			if (m_current_block->data == NULL) {
 				m_current_block->data = new BYTE[BLOCK_SIZE];
 
-				// (long) before the multiply: nr is unsigned and BLOCK_SIZE an int,
-				// so the product was worked out in 32 bits and wrapped once the cache
-				// passed 4 GB, seeking to an offset belonging to another block
+				// (long) first: a 32-bit product wraps past 4 GB
 				fseek(m_file, (long)m_current_block->nr * BLOCK_SIZE, SEEK_SET);
 				if (fread(m_current_block->data, BLOCK_SIZE, 1, m_file) == 1) {
 					m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_disk, it->second);
 					m_page_map[nr] = m_page_cache_mem.begin();
 				}
 				else {
-					// Put the block back as it was found: it is still the disk list's,
-					// and a block with data sitting in that list breaks the rule
-					// deleteBlock() relies on to know which list to take it out of.
-					// Leaving m_current_block set, as this path used to, also made
-					// every later lockBlock() return NULL - one failed read and the
-					// cache was wedged for good.
+					// back to the disk list: deleteBlock() expects no data there
 					delete [] m_current_block->data;
 					m_current_block->data = NULL;
 					m_current_block = NULL;
@@ -299,14 +277,7 @@ CacheFile::deleteBlock(int nr) {
 	if (it != m_page_map.end()) {
 		Block *block = *(it->second);
 
-		// Take the block out of the list that holds it. Only the map entry used to
-		// go, which left the block itself sitting in the memory cache with nothing
-		// pointing at it: the number is about to be handed out again, and the next
-		// cleanupMemCache() would flush that stale block to the file at an offset
-		// belonging to whichever page now owns the number. It also never got freed
-		// before close().
-		// A block that has been swapped out has no data and lives in the disk list;
-		// one that still has data lives in the memory list.
+		// swapped-out blocks (no data) are in the disk list, others in memory
 		if (block->data != NULL) {
 			m_page_cache_mem.erase(it->second);
 			delete [] block->data;
@@ -340,18 +311,12 @@ CacheFile::readFile(BYTE *data, int nr, int size) {
 
 		Block *block = lockBlock(copy_nr);
 
-		// lockBlock() returns NULL for a number that is not in the map and when the
-		// read of a swapped-out block fails. Neither was checked, so a chain that
-		// did not lead where it said it did was a null dereference.
 		if (block == NULL) {
 			return FALSE;
 		}
 
 		block_nr = block->next;
 
-		// Never copy past the end of the caller's buffer. The old arithmetic went
-		// negative once s ran past size - a chain longer than the page it holds
-		// turned "size - s" into a huge size_t and the memcpy into a heap overflow.
 		const int copy_size = (size - s < BLOCK_SIZE) ? (size - s) : BLOCK_SIZE;
 
 		memcpy(data + s, block->data, copy_size);
@@ -361,17 +326,12 @@ CacheFile::readFile(BYTE *data, int nr, int size) {
 		s += copy_size;
 	} while ((block_nr != 0) && (s < size));
 
-	// A chain that ends early has not delivered the page, and handing back a
-	// half-filled buffer as a success is how a truncated block chain used to reach
-	// the decoder as a corrupt file.
 	return (s == size) ? TRUE : FALSE;
 }
 
 int
 CacheFile::writeFile(BYTE *data, int size) {
 	if ((data) && (size > 0)) {
-		// round up, rather than always adding one: a page whose length was an exact
-		// multiple of BLOCK_SIZE used to claim a block it had nothing to put in
 		int nr_blocks_required = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
 		int count = 0;
 		int s = 0;

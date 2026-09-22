@@ -110,12 +110,7 @@ template <>
 class PSDGetValue<2> {
 public:
 	static inline WORD get(const BYTE * iprBuffer) {
-		// iprBuffer points at a field inside a byte buffer and carries no
-		// alignment guarantee - the PSD header alone puts its two 4-byte fields
-		// at offsets 14 and 18.  Casting to a wider type and dereferencing is a
-		// misaligned load: undefined in C++, and a fault on targets that require
-		// natural alignment.  memcpy is the portable spelling and compiles to
-		// the same single unaligned load where the hardware allows one.
+		// may be misaligned: memcpy, not a cast
 		WORD v;
 		memcpy(&v, iprBuffer, sizeof(v));
 #ifndef FREEIMAGE_BIGENDIAN
@@ -197,8 +192,6 @@ public:
 template <>
 class PSDSetValue<4> {
 public:
-	// takes a writable buffer: this stores into it.  It was declared const and
-	// wrote through a cast that discarded the qualifier.
 	static inline void set(BYTE * iprBuffer, DWORD v) {
 #ifndef FREEIMAGE_BIGENDIAN
 		SwapLong(&v);
@@ -346,11 +339,6 @@ bool psdHeaderInfo::Read(FreeImageIO *io, fi_handle handle) {
 			if (_Version == 1 && (_Width > 30000 || _Height > 30000)) {
 				return false;
 			}
-			// The format defines four depths and no others.  Everything downstream
-			// computes with this number - the source line size, the bytes per
-			// sample, the bit depth handed to the allocator - while the allocator
-			// silently rounds a depth it does not know up to the next one it does,
-			// so an unlisted value puts the two out of step for the whole decode.
 			switch (_BitsPerChannel) {
 				case 1:
 				case 8:
@@ -409,11 +397,6 @@ bool psdColourModeData::Read(FreeImageIO *io, fi_handle handle) {
 }
 
 bool psdColourModeData::Write(FreeImageIO *io, fi_handle handle) {
-	// the length is a big-endian field in the file, and Read() above decodes it
-	// with psdGetValue.  Writing the int straight out of memory emitted it in
-	// host order, so on a little-endian machine every indexed PSD the library
-	// produced declared a colour table of 0x00030000 bytes instead of 0x300 -
-	// and the library's own reader then failed on it with "Error in Image Data".
 	BYTE Length[4];
 	psdSetValue(Length, sizeof(Length), (DWORD)_Length);
 
@@ -1297,15 +1280,7 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 
 }
 
-/**
-Scatter one channel's worth of a source line into a destination scanline.
-
-dst_line_end is the end of that scanline - not of the whole bitmap.  lineSize is
-a count of SOURCE bytes and the destination advances by dstBpp for each sample,
-so the two are only in step when the header's depth, the channel count and the
-bit depth the allocator settled on all agree; where they do not, the source line
-is the longer and it is the row that has to stop it.
-*/
+// dst_line_end ends this scanline; lineSize counts source bytes
 void psdParser::ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes, const BYTE* dst_line_end) {
 	switch (bytes) {
 		case 4:
@@ -1369,11 +1344,6 @@ void psdParser::UnpackRLE(BYTE* line, const BYTE* rle_line, BYTE* line_end, unsi
 			// (len + 1) bytes of data are copied
 			++len;
 
-			// Clamp against BOTH ends.  Only the destination row was bounded
-			// here, so a packet claiming more bytes than the compressed line
-			// actually holds read straight off the end of rle_line's buffer -
-			// and "srcSize -= len" then underflowed, which left srcSize huge and
-			// defeated the loop's own guard as well.
 			const unsigned taken = (srcSize < (unsigned)len) ? srcSize : (unsigned)len;
 			const size_t room = (size_t)(line_end - line);
 			const size_t written = (taken < room) ? (size_t)taken : room;
@@ -1391,8 +1361,6 @@ void psdParser::UnpackRLE(BYTE* line, const BYTE* rle_line, BYTE* line_end, unsi
 			len ^= 0xFF; // same as (-len + 1) & 0xFF
 			len += 2;    //
 
-			// the byte to repeat has to be there: the opcode may have been the
-			// last byte of the compressed line
 			if (srcSize < 1) {
 				break;
 			}
@@ -2076,11 +2044,7 @@ FIBITMAP* psdParser::Load(FreeImageIO *io, fi_handle handle, int s_format_id, in
 			psd_read_exif_profile(Bitmap, _exif1._Data, _exif1._Size);
 			psd_read_exif_profile_raw(Bitmap, _exif1._Data, _exif1._Size);
 		} else if(NULL != _exif3._Data) {
-			// The original author had not found a file with this resource and left an
-			// assert(false) here to say so. That is not a guard - the two lines below
-			// handle the case perfectly well - and since no makefile but Makefile.mingw
-			// defines NDEBUG, it aborted the whole process on a file this parser can
-			// read. Assume that we only want one Exif resource.
+			// Assume that we only want one Exif resource.
 			psd_read_exif_profile(Bitmap, _exif3._Data, _exif3._Size);
 			psd_read_exif_profile_raw(Bitmap, _exif3._Data, _exif3._Size);
 		}
@@ -2183,15 +2147,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 	_colourModeData._Length = 0;
 	_colourModeData._plColourData = NULL;
 
-	// Only an indexed image carries a colour table, and PSD defines it as a
-	// fixed 768-byte block - 256 reds, then 256 greens, then 256 blues - which
-	// is also the only length this library's own reader accepts.
-	//
-	// This used to allocate GetColorsUsed() * 3 bytes and then index it with a
-	// hard-coded stride of 256, so any palette with fewer than 256 entries
-	// overran it: saving a 1-bpp image (GetColorsUsed() == 2) allocated six
-	// bytes and wrote at offsets 256, 257, 512 and 513.  Bitmap mode has no
-	// colour table at all, so that case is simply gone.
+	// indexed only: 768 bytes, 256 reds, then greens, then blues
 	if (colourMode == PSDP_INDEXED) {
 		RGBQUAD *pal = FreeImage_GetPalette(dib);
 
@@ -2242,11 +2198,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 		return false;
 	}
 
-	// (Photoshop 6.0) Indexed Color Table Count - the number of entries in the
-	// colour table that are actually defined.  ReadImageData() will not use the
-	// colour table unless this resource is present, so an indexed PSD written
-	// without it came back with a default greyscale palette in place of the one
-	// it was saved with.
+	// (Photoshop 6.0) Indexed Color Table Count
 	if (colourMode == PSDP_INDEXED) {
 		psdImageResource res;
 		BYTE ShortValue[2];

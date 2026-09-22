@@ -37,26 +37,14 @@ static int s_format_id;
 
 /**
 JXR wrapper for FreeImage I/O handle
-
-FreeImageIO addresses a stream with a 'long' offset (@see FI_SeekProc, FI_TellProc),
-which is only 32 bits wide on LLP64 platforms such as Win64. Asking the handle where
-it is would therefore cap a JPEG XR file at 2 GB, well below what the format allows,
-so the wrapper tracks the position itself in a 64-bit size_t and reaches far positions
-with a rewind followed by relative steps.
-The container's own 32-bit IFD offsets still cap a JXR file at 4 GB; that limit is
-enforced by the encoder (@see PKImageEncode_EncodeContent).
 */
 typedef struct tagFreeImageJXRIO {
     FreeImageIO *io;
 	fi_handle handle;
-	size_t pos;			//! stream position, tracked in 64-bit
+	size_t pos;			//! own 64-bit position (long is 32-bit on Win64)
 } FreeImageJXRIO;
 
-/**
-Largest offset a single FreeImageIO seek can express. It is 'long' that makes the
-stepped seek in _jxr_io_SetPos necessary, so the bound is overridable at build time:
-where 'long' is 64 bits that path is unreachable and could not otherwise be tested.
-*/
+// largest single seek; override to test the stepped path
 #ifndef FI_JXR_SEEK_STEP_MAX
 #define FI_JXR_SEEK_STEP_MAX LONG_MAX
 #endif
@@ -93,8 +81,7 @@ _jxr_io_SetPos(WMPStream* pWS, size_t offPos) {
 			return WMP_errFileIO;
 		}
 	} else {
-		// a single absolute seek cannot express this offset: rewind, then walk
-		// forward in steps small enough to pass through a 'long'
+		// too far for one seek: rewind, then step
 		size_t remaining = offPos;
 		if(fio->io->seek_proc(fio->handle, 0, SEEK_SET) != 0) {
 			return WMP_errFileIO;
@@ -123,8 +110,7 @@ _jxr_io_EOS(WMPStream* pWS) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
 	const size_t currentPos = fio->pos;
 	BYTE byte = 0;
-	// ask whether one more byte can be read instead of comparing the position against
-	// the file length: tell_proc cannot report a length beyond 2 GB
+	// probe a byte: tell_proc cannot report past 2 GB
 	const Bool bDataRemaining = (fio->io->read_proc(&byte, 1, 1, fio->handle) == 1) ? TRUE : FALSE;
 	_jxr_io_SetPos(pWS, currentPos);
 	return bDataRemaining;
@@ -463,19 +449,15 @@ Read a JPEG-XR IFD as a buffer
 static ERR
 ReadProfile(WMPStream* pStream, unsigned cbByteCount, unsigned uOffset, BYTE **ppbProfile) {
 	if(0 == cbByteCount) {
-		// realloc(p, 0) is allowed to free p and return NULL, which would leave the
-		// caller holding a dangling pointer
+		// realloc(p, 0) may free p
 		return WMP_errFileIO;
 	}
 	// (re-)allocate profile buffer
 	BYTE *pbProfile = (BYTE*)realloc(*ppbProfile, cbByteCount);
 	if(!pbProfile) {
-		// the original block is untouched and still owned by the caller
 		return WMP_errOutOfMemory;
 	}
-	// hand the (possibly moved) block back to the caller straight away: realloc has
-	// freed the old one, so returning an error below must not leave *ppbProfile
-	// pointing at it - the caller frees that pointer on the error path
+	// store at once: the caller frees *ppbProfile on error
 	*ppbProfile = pbProfile;
 	// read the profile
 	if(WMP_errSuccess == pStream->SetPos(pStream, uOffset)) {
@@ -543,11 +525,7 @@ ReadPropVariant(WORD tag_id, const DPKPROPVARIANT & varSrc, FIBITMAP *dib) {
 				break;
 
 			default:
-				// An Exif value type this switch does not handle. The type comes out
-				// of the file, so the assert(FALSE) that used to stand here let a
-				// malformed JXR abort the host process in any build without NDEBUG.
-				// Drop the tag and tell the caller instead; the remaining tags are
-				// read independently of this one.
+				// type comes from the file: drop the tag, do not assert
 				FreeImage_DeleteTag(tag);
 				return FALSE;
 		}
@@ -1024,9 +1002,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		if(jxr_io) {
 			jxr_io->io = io;
 			jxr_io->handle = handle;
-			// seed the tracked position from the handle, so that a stream which is not
-			// at offset zero is reported as such (the JXR container requires zero and
-			// the codec rejects anything else)
+			// seed from the handle, so a nonzero start is detected
 			{
 				const long lOff = io->tell_proc(handle);
 				jxr_io->pos = (lOff > 0) ? (size_t)lOff : 0;
@@ -1136,7 +1112,7 @@ CopyPixels(PKImageDecode *pDecoder, PKPixelFormatGUID out_guid_format, FIBITMAP 
 				error_code = PixelFormatLookup(&pPITo, LOOKUP_FORWARD);
 				JXR_CHECK(error_code);
 
-				// compute in 64-bit: a wide enough image overflows a 32-bit stride
+				// 64-bit: a wide image overflows a 32-bit stride
 				const size_t cbStrideFrom = (size_t)((pPIFrom.cbitUnit + 7) >> 3) * (size_t)width;
 				const size_t cbStrideTo = (size_t)((pPITo.cbitUnit + 7) >> 3) * (size_t)width;
 				const size_t cbStrideMax = MAX(cbStrideFrom, cbStrideTo);
@@ -1149,8 +1125,6 @@ CopyPixels(PKImageDecode *pDecoder, PKPixelFormatGUID out_guid_format, FIBITMAP 
 			}
 
 			// allocate a local decoder / encoder buffer
-			// (the product must be computed in 64-bit: a large image overflows 32 bits
-			//  long before it overflows the size_t that PKAllocAligned takes)
 			error_code = PKAllocAligned((void **) &pb, (size_t)cbStride * (size_t)height, 128);
 			JXR_CHECK(error_code);
 
@@ -1298,7 +1272,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// unload the dib
 		FreeImage_Unload(dib);
 		dib = NULL;
-		// free the decoder - it is still NULL if its creation is what failed
+		// free the decoder
 		if(pDecoder) {
 			pDecoder->Release(&pDecoder);
 		}
@@ -1344,10 +1318,7 @@ SetCompression(CWMIStrCodecParam *wmiSCP, const PKPixelInfo *pixelInfo, unsigned
 		} else {
 			wmiSCP->cfColorFormat = YUV_420;
 		}
-		// the codec refuses subsampled chroma combined with two levels of overlap on an
-		// image only one macroblock wide (@see ValidateArgs in strenc.c). Such an image
-		// has no vertical macroblock boundary for the second level to smooth, so step
-		// the overlap down instead of letting the save fail
+		// the codec refuses 4:2:x with OL_TWO one macroblock wide
 		if((wmiSCP->olOverlap == OL_TWO) &&
 		   ((wmiSCP->cfColorFormat == YUV_420) || (wmiSCP->cfColorFormat == YUV_422)) &&
 		   (((width + 15) >> 4) < 2)) {
@@ -1423,11 +1394,7 @@ SetEncoderParameters(CWMIStrCodecParam *wmiSCP, const PKPixelInfo *pixelInfo, un
 	if((flags & JXR_PROGRESSIVE) == JXR_PROGRESSIVE) {
 		// turn on progressive mode (instead of sequential mode)
 		wmiSCP->bProgressiveMode = TRUE;
-		// a progressive bitstream is one ordered by frequency band: the encoder only
-		// honours bProgressiveMode when the layout is FREQUENCY, so leaving the
-		// default SPATIAL layout in place would make this flag do nothing at all.
-		// Note that frequency ordering makes the encoder buffer each subband
-		// separately - in memory, or in temporary files for very large images
+		// bProgressiveMode needs the FREQUENCY layout
 		wmiSCP->bfBitstreamFormat = FREQUENCY;
 	}
 
@@ -1475,8 +1442,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		unsigned height = FreeImage_GetHeight(dib);
 
 		// check JPEG-XR limits
-		// (the codec pads the image out to whole 16x16 macroblocks itself, so there is
-		//  no lower bound on the dimensions beyond them being non-empty)
+		// (no minimum: the codec pads to 16x16 macroblocks)
 		if((width == 0) || (height == 0)) {
 			FreeImage_OutputMessageProc(s_format_id, "Unsupported image size: width x height = %d x %d", width, height);
 			throw (const char*)NULL;
@@ -1530,7 +1496,6 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// write metadata + pixels on output
 		error_code = pEncoder->WritePixels(pEncoder, height, dib_bits, cbStride);
 		if(error_code == WMP_errBufferOverflow) {
-			// the encoder refused to write a container it could not address
 			FreeImage_OutputMessageProc(s_format_id,
 				"Encoded image is too large for the JPEG XR container: the format stores image and alpha offsets as 32-bit values, so the output file cannot exceed 4 GB. Save at a lower quality, or without JXR_LOSSLESS, to bring the encoded size down.");
 			throw (const char*)NULL;

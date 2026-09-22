@@ -181,15 +181,12 @@ template <class T> void INPLACESWAP(T& a, T& b) {
 }
 
 /// Clamp function
-/// Beware: a NaN compares false against both bounds, so it is returned unchanged.
-/// Use IsFiniteValue() below when NaN must not survive.
+/// NaN is returned unchanged; see IsFiniteValue()
 template <class T> T CLAMP(const T &value, const T &min_value, const T &max_value) {
 	return ((value < min_value) ? min_value : (value > max_value) ? max_value : value);
 }
 
-/// Finiteness test. Integral types are always finite; the floating point
-/// overloads reject NaN and +/-INF. NaN compares false against every bound,
-/// so the range test rejects it as well.
+/// false for NaN and +/-INF
 template <class T> inline bool IsFiniteValue(const T &value) {
 	(void)value;
 	return true;
@@ -301,37 +298,20 @@ CalculatePitch(const unsigned line) {
 	return (line + 3) & ~3;
 }
 
-/**
-Number of *whole* bytes occupied by 'width' pixels of depth 'bitdepth'.
-CalculateLine() rounds up to a whole byte, so at 1 and 4 bits per pixel the bits
-past the last pixel of a row share their byte with whatever comes next.  In an
-ordinary bitmap that is scanline padding and belongs to nobody; in a
-FreeImage_CreateView() result it is the backing image's next pixels, and writing
-it corrupts them.  Code that modifies a row a byte at a time stops here and
-finishes under CalculateRowTailMask().
-@see CalculateRowTailMask, CopyRowPixels
-*/
+/// whole bytes of a row; at 1/4 bpp the tail byte may be shared (views)
 inline unsigned
 CalculateWholeRowBytes(const unsigned width, const unsigned bitdepth) {
 	return (unsigned)( ((unsigned long long)width * bitdepth) / 8 );
 }
 
-/**
-Mask of the bits that belong to this row inside the byte CalculateWholeRowBytes()
-stops at, or 0 when the row ends on a byte boundary. Always 0 above 4 bpp.
-@see CalculateWholeRowBytes
-*/
+/// bits of the tail byte that belong to the row (0 if byte-aligned)
 inline BYTE
 CalculateRowTailMask(const unsigned width, const unsigned bitdepth) {
 	const unsigned remainder = (unsigned)( ((unsigned long long)width * bitdepth) % 8 );
 	return remainder ? (BYTE)(0xFF << (8 - remainder)) : (BYTE)0;
 }
 
-/**
-Copy 'width' pixels from one row to another, leaving any bits of the final byte
-that lie past the last pixel exactly as they were in the destination.
-@see CalculateRowTailMask
-*/
+/// copy a row, keeping the destination's bits past the last pixel
 inline void
 CopyRowPixels(BYTE *dst, const BYTE *src, const unsigned width, const unsigned bitdepth) {
 	const unsigned whole = CalculateWholeRowBytes(width, bitdepth);
@@ -368,13 +348,7 @@ Fast generic assign (faster than for loop)
 */
 inline void 
 AssignPixel(BYTE* dst, const BYTE* src, unsigned bytesperpixel) {
-	// A constant-size memcpy rather than a cast through WORD*, DWORD* or float*.
-	// At 3, 6 and 12 bytes per pixel two pixels out of every three start at an
-	// address that is not a multiple of the type being cast to, and a misaligned
-	// load or store is undefined behaviour: it traps on SPARC and on the older
-	// ARMs this tree still carries makefiles for, and UBSan reports it on x86
-	// even though the hardware tolerates it.  GCC, Clang and MSVC all lower a
-	// constant-size memcpy to the same unaligned move, so nothing is given up.
+	// memcpy, not a cast to WORD/DWORD/float pointers: pixels may be misaligned
 	switch (bytesperpixel) {
 		case 1:	// FIT_BITMAP (8-bit)
 			*dst = *src;

@@ -1,29 +1,5 @@
-/*
- * FreeImage 3 - OpenEXR data window test
- *
- * An EXR header states the size of the picture in its data window, and a file
- * that lies about it used to be caught only by the allocation failing: the
- * plugin asked FreeImage for a bitmap of whatever the header claimed, which for
- * one flipped byte is tens of gigabytes. On a machine that overcommits, that
- * allocation can even succeed, and the memset behind it then walks all of it.
- *
- * This test patches the data window of a good file into shapes no file that
- * size could hold, and checks that each one is refused - with a message, and
- * without the allocation being attempted, both for a full load and for a
- * header-only one. The last part is what running it under AddressSanitizer
- * adds, so run it that way too:
- *
- *     make asan-run        # ASAN_OPTIONS deliberately does NOT set
- *                          # allocator_may_return_null for this one, so a huge
- *                          # request aborts instead of quietly returning NULL
- *
- * The control cases at the end matter as much: a large data window is perfectly
- * legal when the file backs it up, and the check is derived from the length of
- * the stream rather than from a fixed maximum size precisely so that those
- * still load.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- */
+/* FreeImage 3 - OpenEXR data window test */
+/* impossible windows must be refused before any allocation */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,10 +13,7 @@ static void collect(FREE_IMAGE_FORMAT fif, const char *msg) {
     snprintf(message, sizeof message, "%s", msg ? msg : "");
 }
 
-/* the attribute is "dataWindow" then the type "box2i", a 4-byte size, then
- * xmin, ymin, xmax, ymax as little-endian int32 */
-/* "dataWindow" NUL "box2i" NUL - 17 bytes, the string literal's own terminator
- * supplying the second NUL - then a 4-byte attribute size, then the corners */
+/* "dataWindow\0box2i\0", a 4-byte size, 4 LE int32 corners */
 static const char MARKER[] = "dataWindow\0box2i";
 #define MARKER_LEN ((long)sizeof(MARKER))
 
@@ -70,10 +43,7 @@ static void expect(const BYTE *src, long len, const char *what,
     FIMEMORY *mem = FreeImage_OpenMemory(buf, (DWORD)len);
     FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_EXR, mem, 0);
 
-    /* the same verdict has to come out of a header-only load. The check runs
-     * before FreeImage_AllocateHeaderT either way, so FIF_LOAD_NOPIXELS is not
-     * a way past it - which is the point: a caller probing the dimensions of a
-     * corrupt file should be told it is corrupt, not handed its claim. */
+    /* a header-only load must be refused too */
     FreeImage_SeekMemory(mem, 0, SEEK_SET);
     FIBITMAP *hdr = FreeImage_LoadFromMemory(FIF_EXR, mem, FIF_LOAD_NOPIXELS);
 
@@ -110,27 +80,20 @@ int main(void) {
     printf("template: %s, %ld bytes, 64x48\n\n", template_file, len);
 
     printf("must be refused\n");
-    /* both dimensions huge: caught by the chunk table, which alone would need
-     * more bytes than the whole file has */
+    /* both huge: the chunk-table test catches it */
     expect(src, len, "60001 x 60001",      0, 0, 60000, 60000,      0);
     /* height only: same, 4 million chunks */
     expect(src, len, "1 x 67108865",       0, 0, 0, 67108864,       0);
-    /* width only: three chunks, so the chunk table says nothing - this is the
-     * one the pixel-data-against-file-size test has to catch */
+    /* width only: only the pixel-size test catches it */
     expect(src, len, "268435457 x 48",     0, 0, 268435456, 47,     0);
     /* inverted and empty windows */
     expect(src, len, "inverted (max<min)", 100, 100, 10, 10,        0);
     expect(src, len, "empty (max=min-1)",  0, 0, -1, -1,            0);
-    /* corners at the extremes: the width computation must not overflow an int */
+    /* extreme corners: width must not overflow an int */
     expect(src, len, "extreme corners",    -1073741823, -1073741823, 1073741823, 1073741823, 0);
 
     printf("\nmust still load\n");
     expect(src, len, "64 x 48 (untouched)", 0, 0, 63, 47,           1);
-    /* Only the window itself can be moved here: the chunks in the file carry
-     * the scanline y coordinates they were written with, so shifting the window
-     * would make OpenEXR reject the file for a reason that has nothing to do
-     * with the check under test. A data window away from the origin is covered
-     * by data/fi_exr_offset.exr in decode.c, which is written that way. */
 
     printf("\n%d failure%s\n", failures, failures == 1 ? "" : "s");
     free(src);

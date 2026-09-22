@@ -1,24 +1,4 @@
-/*
- * FreeImage 3 - HEIF regression test
- *
- * Loads every file of the corpus in data/ (libheif's test images and fuzzing
- * corpus, pillow-heif's synthetic images, and six files derived from three of
- * libheif's, see data/README.md) and checks what the plugin is responsible for:
- * format detection (an AVIF is left to the AVIF plugin; HEVC, JPEG and uncompressed
- * payloads decode, while a HEIF whose codec FreeImage cannot decode - AVC or VVC -
- * is claimed and then refused with a message), the
- * bitmap type picked for each pixel format (8-bit to 24/32-bit, 10/12-bit to
- * FIT_RGB16/FIT_RGBA16, monochrome to 8-bit or FIT_UINT16), the geometry after
- * the clap/irot/imir transforms and the direction of the transforms, the
- * metadata (ICC, Exif, XMP), the 'thmb' thumbnail, multi-page access, header-only
- * loads, memory streams, a truncated stream, and a pixel checksum per file. One
- * line per file; anything that deviates from the expected table prints
- * "*** MISMATCH" and the program exits non-zero.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- * "./decode --png" also writes every decoded page as fi_heif_<file>_<page>.png
- * (to $HEIF_TEST_TMP, or the current directory) so the results can be eyeballed.
- */
+/* HEIF regression test; "./decode --png" also saves every page as PNG */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -27,24 +7,17 @@
 typedef struct {
     const char *file;
     FREE_IMAGE_FORMAT detect;   /* what FreeImage_GetFileType must say */
-    int pages;                  /* page count; 0 = detected as HEIF but must be refused when loading */
+    int pages;                  /* 0 = detected, but must fail to load */
     int width, height;          /* page 0, after the transforms */
     FREE_IMAGE_TYPE type;
     int bpp;
     int icc;                    /* ICC profile size, 0 = none */
     int exif;                   /* number of FIMD_EXIF_MAIN tags */
-    int xmp;                    /* 1 when an XMP packet is attached */
+    int xmp;                    /* 1 = XMP attached */
     int thumb_w, thumb_h;       /* FreeImage_GetThumbnail size, 0 = none */
     unsigned long long sum;     /* pixel checksum of page 0 */
 } Expected;
 
-/* Recorded from the first passing run after checking every value against
- * libheif's own view of the file (handle size, depth, alpha, metadata and
- * thumbnail counts) and, for the pixels, against libheif decoding the same file
- * at its native depth into an independently written comparison (all exact).
- * example.heic was eyeballed as well. The rainbow_* files pin the transforms:
- * rainbow_irot1 must equal rainbow_irot0 turned by FreeImage_Rotate(90), i.e.
- * anti-clockwise, imir0 its vertical and imir1 its horizontal flip. */
 static const Expected EXPECTED[] = {
     /* libheif tests/data and examples */
     {"clap_cropped.heic",               FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x82c4f02d23133209ULL},
@@ -52,7 +25,7 @@ static const Expected EXPECTED[] = {
     {"rainbow-451x461.heic",            FIF_HEIF, 1,  451,  461, FIT_BITMAP, 24, 672,  0, 1,   0,   0, 0x4e9b6fbd675d7801ULL},
     {"with-alpha-512x512.heic",         FIF_HEIF, 1,  512,  512, FIT_BITMAP, 32, 672,  0, 0,   0,   0, 0xf988382349a0dfc5ULL},
     {"example.heic",                    FIF_HEIF, 2, 1280,  854, FIT_BITMAP, 24,   0,  0, 0, 320, 212, 0x618bed750c918eaaULL},
-    /* derived from rainbow-451x461.heic: its clap box rewritten as irot / imir */
+    /* rainbow-451x461.heic with clap rewritten as irot / imir */
     {"rainbow_irot0.heic",              FIF_HEIF, 1,  452,  462, FIT_BITMAP, 24, 672,  0, 1,   0,   0, 0x99739efb6c7e587ULL},
     {"rainbow_irot1.heic",              FIF_HEIF, 1,  462,  452, FIT_BITMAP, 24, 672,  0, 1,   0,   0, 0xa9ce7204f2066137ULL},
     {"rainbow_imir0.heic",              FIF_HEIF, 1,  452,  462, FIT_BITMAP, 24, 672,  0, 1,   0,   0, 0x554a59ca9df78a6fULL},
@@ -64,21 +37,10 @@ static const Expected EXPECTED[] = {
     {"colors-with-alpha-thumbnail.heic",FIF_HEIF, 1,   72,   72, FIT_BITMAP, 32,   0,  0, 0,  64,  64, 0xcbc3046549fe9d83ULL},
     {"hevc32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x845e97485c2b2315ULL},
     {"hevc32-mini.heif",                FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
-    /* the same file with an Exif block added (data/miniexif.py): a MinimizedImageBox stores
-     * one from its TIFF header on, without the exif_tiff_header_offset that an Exif item of a
-     * regular file starts with, and the plugin has to read it all the same - hence the same
-     * picture as above, and six tags. */
+    /* hevc32-mini + Exif without the A.2.1 offset (data/miniexif.py) */
     {"hevc32-mini-exif.heif",           FIF_HEIF, 1,   64,   64, FIT_BITMAP, 24,   0,  6, 0,   0,   0, 0x5c248d9cf2aef1f7ULL},
     {"avif32.heif",                     FIF_AVIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
-    /* The same 32x32 image in five codecs. HEVC and JPEG decode (JPEG through the
-     * bundled LibJPEG), the zlib-compressed uncompressed 'unci' image through the
-     * bundled ZLib, and JPEG 2000 through Source/LibOpenJPEG; only AVC is refused,
-     * needing an H.264 decoder (OpenH264) that is not bundled.
-     *   j2k32.heif is a fuzzing-corpus file and does NOT hold the picture the
-     * others do: its tile-part carries 32 bytes of packet data for a 32x32 RGB
-     * image, so it decodes to a near-flat gradient, and its checksum pins that,
-     * not fidelity. j2k32-lossless.heif is what pins fidelity - see data/README.md
-     * - and decodes back to unci32's picture within one level. */
+    /* one 32x32 image, five codecs; avc refused; j2k32 is a flat fuzz file */
     {"avc32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
     {"jpeg32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xdf80f91a274d4f7eULL},
     {"j2k32.heif",                      FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x720697d25f1aa223ULL},
@@ -217,7 +179,6 @@ static void run(const Expected *e) {
         return;
     }
     if (e->detect != FIF_HEIF) {
-        /* another plugin's file: the HEIF plugin must not claim it, that is all */
         printf("    {\"%s\", detected as %s, not HEIF -> ok}\n", e->file, fifname(fif));
         return;
     }
@@ -225,7 +186,6 @@ static void run(const Expected *e) {
 
     d = FreeImage_Load(FIF_HEIF, path, 0);
     if (e->pages == 0) {
-        /* a HEIF whose payload FreeImage cannot decode: the message above says why */
         printf("    {\"%s\", refused -> %s}\n", e->file, d ? "LOADED" : "ok");
         if (d) { fail(e->file, "a file with an unsupported payload was loaded"); FreeImage_Unload(d); }
         m = load_from_memory(path, NULL, 0);
@@ -236,7 +196,7 @@ static void run(const Expected *e) {
     observe(d, &o);
     save_png(d, e->file, 0);
 
-    /* header only: same geometry, type, metadata and thumbnail, no pixels */
+    /* header only: same description, no pixels */
     h = FreeImage_Load(FIF_HEIF, path, FIF_LOAD_NOPIXELS);
     if (!h) fail(e->file, "header-only load returned NULL");
     else {
@@ -254,11 +214,11 @@ static void run(const Expected *e) {
     if (!m) fail(e->file, "FreeImage_LoadFromMemory returned NULL");
     else { if (msum != o.sum) fail(e->file, "memory load differs from file load"); FreeImage_Unload(m); }
 
-    /* truncated stream: must fail cleanly (an AddressSanitizer target) */
+    /* truncated stream: must fail cleanly */
     m = load_from_memory(path, NULL, 100);
     if (m) { fail(e->file, "a file cut at 100 bytes loaded"); FreeImage_Unload(m); }
 
-    /* multi-page access: page 0 equals the plain load, every page decodes */
+    /* multi-page: page 0 equals the plain load */
     mb = FreeImage_OpenMultiBitmap(FIF_HEIF, path, FALSE, TRUE, TRUE, 0);
     if (!mb) fail(e->file, "FreeImage_OpenMultiBitmap returned NULL");
     else {
@@ -289,8 +249,7 @@ static void run(const Expected *e) {
     if (o.sum != e->sum) fail(e->file, "pixel checksum");
 }
 
-/* the transforms: irot 1 is a quarter turn anti-clockwise (FreeImage_Rotate(+90)),
- * imir 0 exchanges top and bottom, imir 1 left and right */
+/* irot 1 = FreeImage_Rotate(+90); imir 0 = vertical flip, imir 1 = horizontal */
 static void check_transform(const char *base, const char *derived, const char *op) {
     char path[512]; FIBITMAP *a, *b, *t; int ok;
     snprintf(path, sizeof(path), "data/%s", base);

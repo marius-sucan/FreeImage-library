@@ -42,9 +42,6 @@ IsVisualGreyscaleImage(FIBITMAP *dib) {
 			unsigned ncolors = FreeImage_GetColorsUsed(dib);
 			RGBQUAD *rgb = FreeImage_GetPalette(dib);
 			for (unsigned i = 0; i< ncolors; i++) {
-				// rgb[i], not rgb: the loop tested entry 0 ncolors times, so any
-				// palette whose first entry happened to be grey was reported as a
-				// greyscale one whatever the other entries held
 				if ((rgb[i].rgbRed != rgb[i].rgbGreen) || (rgb[i].rgbRed != rgb[i].rgbBlue)) {
 					return FALSE;
 				}
@@ -196,12 +193,7 @@ GetAlphaBlendedColor(const RGBQUAD *bgcolor, const RGBQUAD *fgcolor, RGBQUAD *bl
 	BYTE alpha = fgcolor->rgbReserved;
 	BYTE not_alpha = ~alpha;
 	
-	// ~alpha is 255 - alpha, so the two weights sum to 255 and the shift divided
-	// by 256.  FreeImage_Composite has the same expression and special-cases the
-	// two ends; this one does not, because it is only ever reached with
-	// 0 < alpha < 255 (:262 returns early at 0, :272 skips the block at 255) - so
-	// it was *always* one level dark.  Blending a colour over itself returned
-	// that colour minus one.
+	// alpha + ~alpha == 255: divide by 255, not >> 8
 	blended->rgbRed = (BYTE)( ((WORD)fgcolor->rgbRed * alpha + not_alpha * (WORD)bgcolor->rgbRed + 127)   / 255 );
 	blended->rgbGreen = (BYTE)( ((WORD)fgcolor->rgbGreen * alpha + not_alpha * (WORD)bgcolor->rgbGreen + 127) / 255) ;
 	blended->rgbBlue = (BYTE)(((WORD)fgcolor->rgbBlue * alpha + not_alpha * (WORD)bgcolor->rgbBlue + 127) / 255);
@@ -233,12 +225,7 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	}
 	
 	const RGBQUAD *color_intl = color;
-	// bgcolor and blend are used only inside the alpha-blending block below, but
-	// color_intl is made to point at blend there and is read from that block all
-	// the way to the end of the function - through GetPaletteIndex for a
-	// palettised image and through the 16-, 24- and 32-bit cases of the scanline
-	// switch.  Declaring them inside the block left color_intl pointing at a dead
-	// stack object (AddressSanitizer: stack-use-after-scope).
+	// declared here: color_intl may point at blend until the end
 	RGBQUAD bgcolor;
 	RGBQUAD blend;
 	unsigned bpp = FreeImage_GetBPP(dib);
@@ -255,13 +242,7 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	
 	// Check for RGBA case if bitmap supports alpha 
 	// blending (8-bit greyscale, 24- or 32-bit images)
-	//
-	// FI_COLOR_ALPHA_IS_INDEX excludes this: it says rgbReserved is a palette
-	// index, not an alpha value, and GetPaletteIndex below reads it that way.
-	// Blending anyway discarded the index and substituted the blend's own
-	// rgbReserved, which GetAlphaBlendedColor always sets to 0xFF - so
-	// FreeImage_AllocateEx(w, h, 8, &grey, FI_COLOR_IS_RGBA_COLOR), which sets
-	// both flags on its way here, filled with white whatever grey was asked for.
+	// not with FI_COLOR_ALPHA_IS_INDEX: rgbReserved is an index then
 	if (supports_alpha && applyAlpha == 0 && (options & FI_COLOR_IS_RGBA_COLOR)
 			&& !(options & FI_COLOR_ALPHA_IS_INDEX)) {
 		
@@ -301,10 +282,6 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 		return FALSE;
 	}
 
-   // applyAlpha is an int here but is stored in a BYTE below, so 256 would have
-   // meant a fully transparent fill and 511 an opaque one.  Zero keeps its
-   // documented meaning - use the default, which is the alpha-blending path
-   // above and an opaque alpha in the 32-bit scanline.
    if ((applyAlpha <= 0) || (applyAlpha > 0xFF)) {
       applyAlpha = 0xFF;
    }
@@ -330,10 +307,6 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 		case 4: {
 			unsigned bytes = (width / 2);
 			memset(dst_bits, (index | (index << 4)), bytes);
-			// a row ends on a half byte when the *width* is odd, not when the byte
-			// count is.  The two agree only for width % 4 == 3, so widths of 1, 5,
-			// 9 ... left their last pixel unfilled and widths of 2, 6, 10 ... wrote
-			// a nibble into the scanline padding instead.
 			if (width & 1) {
 				dst_bits[bytes] &= 0x0F;
 				dst_bits[bytes] |= (index << 4);
@@ -377,12 +350,7 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	// 'src_bits' is a pointer to the first scanline and is already
 	// set up correctly.
 	if (src_bits) {
-		// A memcpy of FreeImage_GetLine() bytes carried more than the pixels: that
-		// length is rounded up to a whole byte, so at 1 and 4 bpp the bits past the
-		// last pixel went across too.  In a FreeImage_CreateView() result those are
-		// the backing image's next pixels, and every row after the first overwrote
-		// them with line 0's copy.  The switch above already takes this care when it
-		// builds line 0; CopyRowPixels takes it here.
+		// copy pixels, not GetLine() bytes: a view shares the last byte
 		unsigned pitch = FreeImage_GetPitch(dib);
 		dst_bits = src_bits + pitch;
 		for (unsigned y = 1; y < height; y++) {
@@ -556,8 +524,6 @@ FreeImage_AllocateExT(FREE_IMAGE_TYPE type, int width, int height, int bpp, cons
 
 	FIBITMAP *bitmap = FreeImage_AllocateT(type, width, height, bpp, red_mask, green_mask, blue_mask);
 	if (!bitmap) {
-		// the palette branch below runs before the colour branch's own NULL test,
-		// and memcpy may not be handed a null destination even with a length of 0
 		return NULL;
 	}
 	
@@ -645,9 +611,6 @@ FreeImage_AllocateExT(FREE_IMAGE_TYPE type, int width, int height, int bpp, cons
 				// 8-bit implies FIT_BITMAP so, get a RGBQUAD color
 				RGBQUAD *rgb = (RGBQUAD *)color;
 				RGBQUAD *pal = FreeImage_GetPalette(bitmap);
-				// value-initialised, as in the 1- and 4-bit cases above: only
-				// rgbReserved is set below, and GetAlphaBlendedColor reads the
-				// other three if the caller asked for an RGBA fill
 				RGBQUAD rgbq = RGBQUAD();
 
 				if (palette != NULL) {
@@ -836,13 +799,6 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 	int width = FreeImage_GetWidth(src);
 	int height = FreeImage_GetHeight(src);
 
-	// The new size is the image plus all four borders, so the sum is what has to
-	// be checked - not each border on its own, which is all the test below does.
-	// Every clause there is "< 0", so two large positive borders walked straight
-	// through it and wrapped width + left + right to a small positive number: the
-	// allocation succeeded at that size and the memcpy loop further down then
-	// wrote a full-width row into a bitmap a few pixels wide.  INT64 also makes
-	// the negations safe, which they are not in int, -INT_MIN being undefined.
 	const INT64 newWidth64  = (INT64)width  + (INT64)left + (INT64)right;
 	const INT64 newHeight64 = (INT64)height + (INT64)top  + (INT64)bottom;
 
@@ -855,9 +811,6 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 	// bottom are smaller than or equal zero. The color pointer may be
 	// NULL in this case.
 	if ((left <= 0) && (right <= 0) && (top <= 0) && (bottom <= 0)) {
-		// -left and -top are in range: all four borders are <= 0 here and the
-		// sums above are positive, so each one on its own is greater than -width
-		// or -height.
 		return FreeImage_Copy(src, (int)-(INT64)left, (int)-(INT64)top, width + right, height + bottom);
 	}
 
@@ -913,10 +866,6 @@ FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom,
 
 	} else {
 
-		// the row offsets are products of a border and the pixel size, and a
-		// border is only bounded by the size checks above - which allow it up to
-		// INT_MAX.  In int, left * bytespp overflows well before the allocation
-		// that bounds it in practice would have failed.
 		const INT64 bytespp = bpp / 8;
 		BYTE *srcPtr = FreeImage_GetScanLine(src, height - 1 - ((top >= 0) ? 0 : -top));
 		BYTE *dstPtr = FreeImage_GetScanLine(dst, newHeight - 1 - ((top <= 0) ? 0 : top));

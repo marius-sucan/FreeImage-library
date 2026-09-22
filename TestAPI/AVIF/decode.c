@@ -1,18 +1,5 @@
-/*
- * FreeImage 3 - AVIF regression test
- *
- * Loads every file of the corpus in data/ (libavif's own test images, BSD-2)
- * and checks what the plugin is responsible for: format detection, the bitmap
- * type picked for each pixel format, the clap/irot/imir transforms, the
- * metadata, multi-page access, header-only loads and memory streams. One line
- * per file; anything that deviates from the expected table prints
- * "*** MISMATCH" and the program exits non-zero.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- * "./decode --png" also writes every decoded page as fi_avif_<file>_<page>.png
- * (to $AVIF_TEST_TMP, or the current directory) so the transforms can be
- * eyeballed.
- */
+/* AVIF regression test: data/ against the table below */
+/* "./decode --png" also writes each page as a PNG */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,7 +7,7 @@
 
 typedef struct {
     const char *file;
-    int pages;                  /* page count */
+    int pages;
     int width, height;          /* page 0, after the transforms */
     FREE_IMAGE_TYPE type;
     int bpp;
@@ -31,12 +18,7 @@ typedef struct {
     unsigned long long sum;     /* pixel checksum of page 0 */
 } Expected;
 
-/* Recorded from the first passing run and checked against libavif's own view
- * of each container (dimensions, depth, alpha, frame count, repetition count,
- * metadata sizes, transforms) and, for the rotated files, against the PNG
- * exports: "abc" rotated by irot angle 1 reads bottom-to-top, i.e. 90 degrees
- * anti-clockwise. A page count of 0 means the file must be refused: libavif
- * rejects a 'clap' that is not marked essential, whatever the strictness. */
+/* pages == 0: the file must be refused */
 static const Expected EXPECTED[] = {
     {"white_1x1.avif",                              1,    1,    1, FIT_BITMAP, 24,     0,  0, 0,   -1, -1, 0x80ad7f4f245a2ae8ULL},
     {"alpha_noispe.avif",                           1,   80,   80, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x4f9e52edf7b38f7ULL},
@@ -47,8 +29,7 @@ static const Expected EXPECTED[] = {
     {"colors-animated-8bpc.avif",                   5,  150,  150, FIT_BITMAP, 24,     0,  0, 0,   33,  1, 0xc5df0a8a8f4c5913ULL},
     {"colors-animated-8bpc-alpha-exif-xmp.avif",    5,  150,  150, FIT_BITMAP, 32,     0,  9, 1,  167,  0, 0x74d8a883f5163043ULL},
     {"colors-animated-12bpc-keyframes-0-2-3.avif",  5,   64,   64, FIT_RGBA16, 64,     0,  0, 0, 1000,  0, 0xab529faec3d54383ULL},
-    /* the same pixels as colors-animated-8bpc.avif, retimed so that no two frames last
-     * the same time and no frame lasts a whole number of milliseconds (see data/retime.py) */
+    /* colors-animated-8bpc.avif retimed (data/retime.py) */
     {"colors-animated-8bpc-variable-delays.avifs",  5,  150,  150, FIT_BITMAP, 24,     0,  0, 0,    7,  1, 0xc5df0a8a8f4c5913ULL},
     {"paris_icc_exif_xmp.avif",                     1,  403,  302, FIT_BITMAP, 24,   596,  9, 1,   -1, -1, 0x2ad7a668c73089dfULL},
     {"sofa_grid1x5_420.avif",                       1, 1024,  770, FIT_BITMAP, 24,     0,  0, 0,   -1, -1, 0x7701ca0843b52fc3ULL},
@@ -57,8 +38,7 @@ static const Expected EXPECTED[] = {
     {"draw_points_idat.avif",                       1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
     {"draw_points_idat_two_ipma.avif",              1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
     {"circle_custom_properties.avif",               1,  100,   60, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x58f31c4067b13045ULL},
-    /* MinimizedImageBox files (brand 'mif3'), which libavif reads only when it is built
-     * with AVIF_ENABLE_EXPERIMENTAL_MINI. The three carry the same 256x256 tile. */
+    /* 'mif3' files: need AVIF_ENABLE_EXPERIMENTAL_MINI */
     {"simple_osm_tile_meta.avif",                   1,  256,  256, FIT_BITMAP, 24,   672, 10, 1,   -1, -1, 0xa3054d39d9bb88bULL},
     {"simple_osm_tile_alpha.avif",                  1,  256,  256, FIT_BITMAP, 32,   672,  0, 0,   -1, -1, 0xcbcec88ea8d79b7cULL},
     {"mini_size_zero.avif",                         1,  256,  256, FIT_BITMAP, 32,   672,  0, 0,   -1, -1, 0xcbcec88ea8d79b7cULL},
@@ -169,8 +149,7 @@ static FIBITMAP *load_from_memory(const char *path, unsigned long long *sum, int
 
 /* --- FIMD_ANIMATION ------------------------------------------------------- */
 
-/* One animation tag, insisting on the type the convention gives it: a tag of the wrong
- * type is not the tag a GIF, APNG or WebP writer reads back. */
+/* a tag of the wrong type counts as absent */
 static int anim_tag(FIBITMAP *d, const char *key, FREE_IMAGE_MDTYPE type, long *value) {
     FITAG *tag = NULL;
     if (!FreeImage_GetMetadata(FIMD_ANIMATION, d, key, &tag) || !tag) return 0;
@@ -193,13 +172,7 @@ static int any_anim_tag(FIBITMAP *d) {
     return 0;
 }
 
-/* Every page of a sequence describes its frame the way GIF, APNG and WebP describe
- * theirs: its own duration, where it sits on the canvas, how the canvas is treated, and
- * the canvas and loop count of the file. An AVIF frame is the whole canvas, so the
- * position is 0,0, the disposal is 1 (leave) and the blend is 1 (source); what differs
- * from page to page is the duration. A still image is not an animation and says nothing.
- * 'expected_times' is the per-page duration in milliseconds, or NULL to take page 0's
- * from the table and leave the rest unchecked. */
+/* expected_times: per-page ms, or NULL to check page 0 only */
 static void check_anim_tags(const Expected *o, const char *path, const long *expected_times) {
     FIMULTIBITMAP *mb;
     int pages, p;
@@ -242,9 +215,7 @@ static void check_anim_tags(const Expected *o, const char *path, const long *exp
                " + canvas %dx%d and Loop %ld}\n", o->file, pages, o->width, o->height, first_loop);
 }
 
-/* The tags exist so that another animated format can be written from these pages. Build
- * an animated WebP out of the AVIF's frames through the page API and read the durations
- * back: what survives the round trip is what the WebP writer found in FIMD_ANIMATION. */
+/* AVIF frames -> animated WebP; the durations must survive */
 static void check_webp_roundtrip(const char *file, const long *times, int n) {
     char path[512];
     const char *out = tmppath("fi_avif_anim.webp");
@@ -274,8 +245,7 @@ static void check_webp_roundtrip(const char *file, const long *times, int n) {
         if (!pg) { fail(file, "a WebP frame failed to load"); break; }
         if (!anim_tag(pg, "FrameTime", FIDT_LONG, &v) || v != times[p])
             fail(file, "a frame's duration did not survive AVIF -> WebP");
-        /* and the frame is still a replacement rather than something blended onto what
-         * came before: without a BlendMethod tag to read, the WebP writer blends */
+        /* without BlendMethod the WebP writer blends */
         if (!anim_tag(pg, "BlendMethod", FIDT_BYTE, &v) || v != 1)
             fail(file, "the frames are blended in the WebP, not replaced");
         if (!anim_tag(pg, "DisposalMethod", FIDT_BYTE, &v) || v != 1)
@@ -288,8 +258,7 @@ static void check_webp_roundtrip(const char *file, const long *times, int n) {
 
 /* --- AVIF_PLAYBACK -------------------------------------------------------- */
 
-/* Largest per-channel difference between two 32-bit bitmaps of the same size,
- * -1 when they cannot be compared at all. */
+/* -1 when not comparable */
 static int max_channel_delta(FIBITMAP *a, FIBITMAP *b) {
     unsigned y, x, w, h;
     int worst = 0;
@@ -309,19 +278,13 @@ static int max_channel_delta(FIBITMAP *a, FIBITMAP *b) {
     return worst;
 }
 
-/* AVIF_PLAYBACK hands every frame of an image sequence back as a 32-bit bitmap,
- * whatever the file's depth, and a still image ignores it. Each page still has to
- * be the picture the plain load gives: for an 8-bit file that is libavif doing the
- * same conversion into a fourth channel, for a 10/12-bit one it is the same picture
- * quantized by two different routes (libavif rounds 12 bits to 8, FreeImage_ConvertTo32Bits
- * takes the top byte of the 16 the plain load scales to), so a channel may differ by one. */
+/* 10/12-bit files may differ by one per channel (two quantizations) */
 static void check_playback(const Expected *o, const char *path) {
     FIMULTIBITMAP *mb, *raw;
     FIBITMAP *hdr;
     int pages, p, worst = 0, bound;
 
-    /* the flag has to reach the header-only path too, or FIF_LOAD_NOPIXELS would
-     * describe a page in one format and the pixel load produce another */
+    /* the header-only path must honour the flag too */
     hdr = FreeImage_Load(FIF_AVIF, path, FIF_LOAD_NOPIXELS | AVIF_PLAYBACK);
     if (!hdr) fail(o->file, "header-only playback load returned NULL");
     else {
@@ -336,7 +299,7 @@ static void check_playback(const Expected *o, const char *path) {
     }
 
     if (o->pages <= 1) {
-        /* nothing to play: the page must be exactly what it is without the flag */
+        /* still image: the flag changes nothing */
         FIBITMAP *still = FreeImage_Load(FIF_AVIF, path, AVIF_PLAYBACK);
         if (!still) fail(o->file, "loading a still image with AVIF_PLAYBACK returned NULL");
         else {
@@ -385,11 +348,7 @@ static void check_playback(const Expected *o, const char *path) {
     FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/* FreeImage_OpenMultiBitmap() with read_only FALSE asks for a document that can be
- * written back to its file, and AVIF has no writer: the pages come out all the same,
- * so an animation can still be played, and the close reports that nothing could be
- * saved. FreeImage_LoadMultiBitmapFromMemory() passes read_only FALSE itself and has
- * no file behind it, so it is not held to the same test. */
+/* read_only FALSE: pages load, the close reports the failed save */
 static void check_readwrite_close(const char *file) {
     char path[512];
     FIMULTIBITMAP *mb;
@@ -452,7 +411,6 @@ static void run(const Expected *e) {
 
     d = FreeImage_Load(FIF_AVIF, path, 0);
     if (e->pages == 0) {
-        /* a file the decoder must refuse: the message above says why */
         printf("    {\"%s\", refused -> %s}\n", e->file, d ? "LOADED" : "ok");
         if (d) { fail(e->file, "a file libavif rejects was loaded"); FreeImage_Unload(d); }
         m = load_from_memory(path, NULL, 0);
@@ -480,7 +438,7 @@ static void run(const Expected *e) {
     if (!m) fail(e->file, "FreeImage_LoadFromMemory returned NULL");
     else { if (msum != o.sum) fail(e->file, "memory load differs from file load"); FreeImage_Unload(m); }
 
-    /* truncated stream: must fail cleanly (an AddressSanitizer target) */
+    /* truncated stream: must fail cleanly */
     m = load_from_memory(path, NULL, 100);
     if (m) { fail(e->file, "a file cut at 100 bytes loaded"); FreeImage_Unload(m); }
 
@@ -535,8 +493,7 @@ int main(int argc, char **argv) {
     if (FreeImage_GetFileType("../sample.png", 0) == FIF_AVIF) fail("plugin", "a PNG was detected as AVIF");
     check_readwrite_close("colors-animated-8bpc.avif");
     {
-        /* 200, 600, 1000, 1200 and 2000 ticks of a 30000 Hz timescale: 6.67, 20, 33.33,
-         * 40 and 66.67 ms, none of them a whole millisecond but the second and fourth */
+        /* 200..2000 ticks at 30000 Hz, rounded to ms */
         static const long times[] = {7, 20, 33, 40, 67};
         const char *name = "colors-animated-8bpc-variable-delays.avifs";
         size_t k;

@@ -1,18 +1,6 @@
-# RAW regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make data       regenerate data/ from mkdata.py (deterministic)
-#   make asan       build them with AddressSanitizer (recommended for robust)
-#   make asan-run   rebuild the bundled LibRaw and the plugin with
-#                   AddressSanitizer into a private copy of the library and run
-#                   the tests against that
+# RAW tests; build the library first (make -f Makefile.gnu dist)
 
-# The library is built with OpenMP - LibRaw's demosaicing uses it - so
-# libfreeimage.a carries undefined GOMP_*/omp_* symbols and linking it needs
-# the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust
@@ -23,33 +11,22 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 default: all
 all: $(TESTS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
 run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
-# data/ is generated, not kept: LibRaw only decodes, so unlike the WebP corpus
-# nothing in these files depends on the library version. The table in decode.c
-# is the oracle; this target only has to reproduce the same bytes.
+# deterministic; decode.c's TABLE is the oracle
 data:
 	python3 mkdata.py data
 
 # --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters for robust: it rebuilds what this upgrade actually replaced - the
-# whole of Source/LibRawLite and PluginRAW.cpp - with AddressSanitizer into a
-# private copy of the library. Mixing instrumented and plain objects is fine.
-#
-# RAW files are parsed metadata first and decoded second, across some seventy
-# vendor-specific paths, which is where LibRaw's own release notes spend most
-# of their bug fixes. A sanitized run over damaged input is the shape of test
-# that catches their like.
+# asan-run also instruments LibRaw and PluginRAW
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C++ files with
+# as Makefile.gnu compiles the library
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 ASAN        = -fsanitize=address -fno-omit-frame-pointer

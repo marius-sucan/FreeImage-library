@@ -3,23 +3,15 @@
 
 include Makefile.srcs
 
-# OpenMP: parallel resize & rotate (FreeImageToolkit) and RAW demosaic (LibRaw).
-# Off by default - the iOS toolchain ships no OpenMP runtime. If yours does,
-# build with "make -f Makefile.iphone OPENMP=1".
+# off: the iOS toolchain has no OpenMP runtime (OPENMP=1 to enable)
 OPENMP ?= 0
 include Makefile.openmp
 
-# libheif / libde265 (Source/LibHEIF, Source/LibDe265): .cc sources, C++17/20, per-library flags
 include Makefile.heif
 
-# OpenEXR (Source/OpenEXR): the library's own sources need a newer C++ standard
-# than the rest of FreeImage is compiled with
 include Makefile.openexr
 
-# -std=gnu99 rather than c99: OpenEXRCore needs the POSIX declarations a strict
-# -std= hides.  See Makefile.gnu.
-# -DWEBP_EXTERN=extern keeps libwebp's and sharpyuv's symbols out of the
-# library; without it WEBP_EXTERN overrides -fvisibility=hidden.  See Makefile.gnu.
+# gnu99 for OpenEXRCore; WEBP_EXTERN=extern keeps libwebp's symbols hidden
 CFLAGS =  -g -O2 -Wall -Wmissing-prototypes -std=gnu99 -ffast-math -fno-strict-aliasing -DOPJ_STATIC -DMUTEX_pthread -DAVIF_CODEC_DAV1D=1 -DAVIF_ENABLE_EXPERIMENTAL_MINI=1 -DWEBP_EXTERN=extern
 CXXFLAGS =  -g -O2 -Wall -fno-strict-aliasing -DWEBP_EXTERN=extern
 

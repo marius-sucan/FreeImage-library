@@ -154,13 +154,7 @@
 
 // Whether the user configured the library to have symbol visibility
 // tagged
-//
-// FreeImage: deliberately left undefined, for the reason spelled out in
-// OpenEXRConfig.h - see the note on OPENEXR_ENABLE_API_VISIBILITY there.  Imath
-// has its own switch because it is a separate upstream project.  The comment
-// just below is upstream's own: not defining these is a supported build, and it
-// is the one a bundled static copy wants.  Keep this undefined when the bundle
-// is updated.
+// FreeImage: left undefined to keep Imath symbols hidden
 // #define IMATH_ENABLE_API_VISIBILITY
 
 // MSVC does not do the same visibility attributes, and when we are

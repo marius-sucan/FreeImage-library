@@ -8,17 +8,7 @@
 
 #include "ImfForward.h"
 
-/*
- * FreeImage: included by relative path.  Upstream installs the C++ headers
- * and the OpenEXRCore ones side by side into one include directory, where a
- * bare "openexr.h" resolves; here they stay in the two directories they
- * occupy in the source tree, so this single include is the only thing
- * OpenEXR 3.3 would otherwise add to the include path of every build.
- * Spelling it out keeps every project file that built 3.1.3 building 3.3
- * unchanged - including the ones outside this repository, which no change
- * to the bundled .vcxproj files can reach.
- * Keep this when updating OpenEXR.
- */
+/* FreeImage: relative path, so no extra include directory */
 #include "../OpenEXRCore/openexr.h"
 
 OPENEXR_IMF_INTERNAL_NAMESPACE_HEADER_ENTER

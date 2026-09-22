@@ -71,13 +71,6 @@ public:
 	*/
 	~CWeightsTable();
 
-	/**
-	Whether the table was built<br>
-	The constructor allocates one array of weights per destination pixel and has
-	no way of its own to report a failure.  A caller that does not test this
-	reads and writes through whatever malloc returned, NULL included.
-	@return Returns TRUE if the table is complete and usable
-	*/
 	BOOL isValid() const {
 		return m_bValid;
 	}

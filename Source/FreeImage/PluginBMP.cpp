@@ -506,7 +506,6 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
       }
    }
 
-   // the whole height was decoded, even though RLE_ENDOFBITMAP was never reached
    return TRUE;
 }
 
@@ -1399,8 +1398,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// we need to recalculate the dst pitch here
 		const UINT64 dst_bpp = FreeImage_GetBPP(dib);
 		const UINT64 dst_pitch = CalculatePitch(CalculateLine(dst_width, dst_bpp));
-		// ...but stepping from one row to the next must use the dib's own stride:
-		// for a view (or a wrapped raw buffer) that is the backing image's pitch, not dst_pitch
+		// ...but rows step by the dib's own pitch (a view's is its parent's)
 		const UINT64 src_pitch = FreeImage_GetPitch(dib);
 
 		BITMAPFILEHEADER bitmapfileheader;

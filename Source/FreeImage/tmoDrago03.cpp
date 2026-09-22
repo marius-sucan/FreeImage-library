@@ -91,9 +91,7 @@ ToneMappingDrago03(FIBITMAP *dib, const float maxLum, const float avgLum, float 
 	biasP = log(biasParam)/LOG05;
 
 	if(!(Lmax > 0) || !(divider > 0)) {
-		// a uniformly black scene: Lmax is zero, so the division by
-		// log10(Lmax + 1) = log10(1) = 0 below would turn every pixel into an
-		// infinity or a NaN. Black in, black out.
+		// black scene: log10(Lmax + 1) is 0; black in, black out
 		BYTE *zbits = (BYTE*)FreeImage_GetBits(dib);
 		for(y = 0; y < height; y++) {
 			FIRGBF *zpixel = (FIRGBF*)zbits;
@@ -282,8 +280,7 @@ FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
 	dib = FreeImage_ConvertToRGBF(src);
 	if(!dib) return NULL;
 
-	// negative radiance would reach pow() in the bias function below, and
-	// pow() of a negative base with a fractional exponent is a NaN
+	// pow() in the bias function is NaN for negative input
 	ClampNegativeRGBF(dib);
 
 	// default algorithm parameters
@@ -294,7 +291,6 @@ FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
 	ConvertInPlaceRGBFToYxy(dib);
 	// get the luminance
 	if(!LuminanceFromYxy(dib, &maxLum, &minLum, &avgLum)) {
-		// nothing usable in the image: the statistics would be undefined
 		FreeImage_Unload(dib);
 		return NULL;
 	}

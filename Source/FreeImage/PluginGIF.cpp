@@ -65,29 +65,20 @@ struct GIFinfo {
 	std::vector<size_t> comment_extension_offsets;
 	std::vector<size_t> graphic_control_extension_offsets;
 	std::vector<size_t> image_descriptor_offsets;
-	//the canvas and the loop count belong to the file and are attached to every
-	//frame, so they are worked out once here rather than re-read for each page:
-	//finding the loop count means walking the application extensions, and doing
-	//that per frame would be quadratic in a file that carries a lot of them
+	//canvas and loop count, computed once per file
 	BOOL canvas_cached;
 	WORD canvas_width;
 	WORD canvas_height;
 	LONG loop_count;
 	//only really used when writing
-	long lsd_offset;			// stream offset of the header written by Open(); the Logical Screen Descriptor follows it
-	BOOL lsd_written;			// TRUE once page 0 has written the Logical Screen Descriptor
-	unsigned logical_width;		// logical screen size written by page 0 (host byte order)
+	long lsd_offset;			// header offset; the LSD follows it
+	BOOL lsd_written;			// page 0 has written the LSD
+	unsigned logical_width;		// as written by page 0 (host order)
 	unsigned logical_height;
-	unsigned max_right;			// largest (left + width) and (top + height) of the frames written so far
+	unsigned max_right;			// frame extents written so far
 	unsigned max_bottom;
 
-	//GIF_PLAYBACK cache. Reading frame n used to mean replaying the animation from
-	//the last frame that fully repaints the screen, so walking a file of n frames in
-	//order cost O(n^2) - the complaint behind the slow FreeImage_LockPage() reports.
-	//Keeping the canvas of the frame just handed out turns that into one frame of work
-	//per step. previous_canvas is the canvas as it was before that frame drew its own
-	//pixels; only a frame disposing with GIF_DISPOSAL_PREVIOUS ever needs it, so it is
-	//only kept for those, and an ordinary file holds one spare canvas rather than two.
+	//GIF_PLAYBACK cache: the last canvas handed out
 	struct PlaybackCache {
 		PlaybackCache() : valid(false), page(-1), frame(GIF_DISPOSAL_LEAVE, 0, 0, 0, 0), delay_time(0), canvas(NULL), previous_canvas(NULL)
 		{
@@ -112,7 +103,7 @@ struct GIFinfo {
 		PageInfo frame;				//that page's disposal method and rectangle
 		int delay_time;
 		FIBITMAP *canvas;			//composited result for page
-		FIBITMAP *previous_canvas;	//canvas before page drew, kept only when frame.disposal_method is GIF_DISPOSAL_PREVIOUS
+		FIBITMAP *previous_canvas;	//canvas before page drew; only for GIF_DISPOSAL_PREVIOUS
 	} playback;
 
 	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
@@ -302,7 +293,7 @@ int StringTable::CompressEnd(BYTE *buf)
 {
 	int len = 0;
 
-	//flush the whole bytes that may still be pending from a flush that ran out of output buffer
+	//flush whole bytes left pending by an earlier flush
 	while( m_partialSize >= 8 ) {
 		*buf++ = (BYTE)m_partial;
 		m_partial >>= 8;
@@ -330,10 +321,7 @@ int StringTable::CompressEnd(BYTE *buf)
 		len++;
 	}
 
-	//most this can be is 6 bytes: up to 23 bits may be pending when a flush ran out of
-	//output buffer and a clear code was added (2 bytes), then 7 bits + 12 for the last
-	//code (2 bytes), then 3 bits + 12 for the end code (2 bytes). The caller must
-	//provide at least 6 bytes.
+	//at most 6 bytes: the caller's buffer must hold them
 	return len;
 }
 
@@ -380,7 +368,7 @@ bool StringTable::Compress(BYTE *buf, int *len)
 					m_partial |= m_clearCode << m_partialSize;
 					m_partialSize += m_codeSize;
 					ClearCompressorTable();
-					//flush what fits in the output buffer so that pending bits don't pile up
+					//flush what fits so pending bits don't pile up
 					while( m_partialSize >= 8 && bufpos - buf < *len ) {
 						*bufpos++ = (BYTE)m_partial;
 						m_partial >>= 8;
@@ -714,9 +702,7 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		BYTE b = GIF_BLOCK_TRAILER;
 		io->write_proc(&b, 1, 1, handle);
 
-		//Logical Screen Descriptor fix-up: page 0 wrote the logical screen size before the other
-		//pages were known. If a page extends beyond it, enlarge it now, otherwise the file is
-		//invalid and decoders (including our own GIF_PLAYBACK mode) may misbehave on it.
+		//enlarge the Logical Screen Descriptor to fit every frame
 		if( info->lsd_written && (info->max_right > info->logical_width || info->max_bottom > info->logical_height) ) {
 			bool patched = false;
 			if( info->lsd_offset >= 0 ) {
@@ -757,15 +743,13 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 //   GIF_PLAYBACK helpers
 // ----------------------------------------------------------
 
-//How much of a frame's width lands on the logical screen. A malformed GIF may place a
-//frame beyond the right edge or let it run past it; rows below the screen are dealt
-//with by the scanidx test in the two loops below.
+//frame width clipped to the logical screen
 static int
 GifPlaybackDrawWidth(const PageInfo &frame, int logicalwidth) {
 	return (frame.left < logicalwidth) ? MIN((int)frame.width, logicalwidth - (int)frame.left) : 0;
 }
 
-//Fill a frame's rectangle with a flat colour, for GIF_DISPOSAL_BACKGROUND.
+//for GIF_DISPOSAL_BACKGROUND
 static void
 GifPlaybackFillRect(FIBITMAP *canvas, const PageInfo &frame, int logicalwidth, int logicalheight, const RGBQUAD &color) {
 	const int draw_width = GifPlaybackDrawWidth(frame, logicalwidth);
@@ -781,8 +765,7 @@ GifPlaybackFillRect(FIBITMAP *canvas, const PageInfo &frame, int logicalwidth, i
 	}
 }
 
-//Draw a decoded frame onto the canvas at its own position, honouring transparency, and
-//report its delay time through delay_time when that is not NULL.
+//delay_time may be NULL
 static void
 GifPlaybackCompositeFrame(FIBITMAP *canvas, FIBITMAP *pagedib, const PageInfo &frame, int logicalwidth, int logicalheight, int *delay_time) {
 	RGBQUAD *pal = FreeImage_GetPalette(pagedib);
@@ -826,9 +809,7 @@ GifPlaybackCompositeFrame(FIBITMAP *canvas, FIBITMAP *pagedib, const PageInfo &f
 	}
 }
 
-//Read one frame's disposal method and rectangle exactly as the backward scan in Load()
-//does, an absent Graphic Control Extension included: its offset is 0 then, and the
-//frame is treated as GIF_DISPOSAL_LEAVE rather than read from the start of the file.
+//as Load() reads it; no GCE (offset 0) means GIF_DISPOSAL_LEAVE
 static PageInfo
 GifPlaybackReadPageInfo(FreeImageIO *io, fi_handle handle, GIFinfo *info, int page) {
 	int disposal_method = GIF_DISPOSAL_LEAVE;
@@ -876,11 +857,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		BYTE packed, b;
 		WORD w;
 
-		//FIF_LOAD_NOPIXELS. Everything a page says about itself - the rectangle it
-		//covers, its palette, how long it lasts, how it is disposed of, the canvas it
-		//belongs to - is read from positions this plugin recorded while parsing the
-		//file, and none of it needs the image data. A header-only load reads all of it
-		//and leaves the LZW stream where it lies, which is the whole cost of a GIF.
 		const BOOL header_only = ((flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS) ? TRUE : FALSE;
 
 		//playback pages to generate what the user would see for this frame
@@ -895,11 +871,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			SwapShort(&logicalheight);
 #endif
 
-			//A header-only playback page is the canvas a frame would be drawn on, with
-			//nothing drawn on it. The one tag a composited page carries is the frame's
-			//delay, and that is in this frame's own Graphic Control Extension - so
-			//neither this frame nor any of the frames before it has to be decoded to
-			//answer, which is what playback would otherwise cost.
+			//header-only playback: an empty canvas with this frame's delay
 			if( header_only ) {
 				dib = FreeImage_AllocateHeader(TRUE, logicalwidth, logicalheight, 32);
 				if( dib == NULL ) {
@@ -932,9 +904,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 			background.rgbReserved = 0;
 
-			//If the frame before this one is still cached, this frame is that canvas with
-			//the cached frame's disposal applied and this frame's own pixels drawn on top.
-			//Only when neither shortcut fits does the reconstruction below run.
 			GIFinfo::PlaybackCache &cache = info->playback;
 
 			//the same frame again
@@ -958,8 +927,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 					const PageInfo thisframe = GifPlaybackReadPageInfo(io, handle, info, page);
 
-					//only a frame that disposes with GIF_DISPOSAL_PREVIOUS is ever restored to,
-					//so only those pay for the extra copy
 					FIBITMAP *previous_canvas = (thisframe.disposal_method == GIF_DISPOSAL_PREVIOUS) ? FreeImage_Clone(canvas) : NULL;
 
 					delay_time = 0;
@@ -1013,7 +980,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			std::vector<PageInfo> pageinfo;
 			int start = page, end = page;
 			while( start >= 0 ) {
-				//Graphic Control Extension (may be absent, see the single frame path below)
+				//Graphic Control Extension
 				if( info->graphic_control_extension_offsets[start] != 0 ) {
 					io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[start] + 1), SEEK_SET);
 					io->read_proc(&packed, 1, 1, handle);
@@ -1073,8 +1040,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 
-				//the canvas as it is before the last frame draws its own pixels, which the
-				//next frame needs only if this one disposes with GIF_DISPOSAL_PREVIOUS
+				//snapshot for GIF_DISPOSAL_PREVIOUS, before the last frame draws
 				if( page == end && info.disposal_method == GIF_DISPOSAL_PREVIOUS ) {
 					previous_canvas_snapshot = FreeImage_Clone(dib);
 				}
@@ -1090,9 +1056,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			//setup frame time
 			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
 
-			//seed the cache so the next frame can take the shortcut above. pageinfo[0]
-			//describes page `end`, the frame this canvas ends on. Failing to clone is not
-			//an error: the cache simply stays empty and playback stays as slow as it was.
+			//seed the cache; pageinfo[0] describes page end
 			cache.clear();
 			cache.canvas = FreeImage_Clone(dib);
 			if( cache.canvas != NULL ) {
@@ -1184,9 +1148,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 		}
 
-		//The pixels - the one part of a page that costs anything to read. A header-only
-		//load stops here: the frame's own description is on the bitmap already, and the
-		//rest of it below is reached by seeking rather than by decoding.
 		if( !header_only ) {
 			//LZW Minimum Code Size
 			io->read_proc(&b, 1, 1, handle);
@@ -1239,13 +1200,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			delete stringtable;
 		}
 
-		// The canvas and the loop count describe the file rather than any one frame,
-		// and every frame is drawn on that canvas - so every frame is told about them,
-		// not just the first. Attaching them to page 0 alone is enough to describe an
-		// animation and not enough to edit one: deleting the first page would take the
-		// only record of the canvas with it, and the file written back would shrink to
-		// whatever the surviving frames happen to cover. PluginAPNG.cpp and
-		// PluginWebP.cpp attach them to every frame for the same reason.
+		// canvas and loop count go on every frame, so deleting page 0 keeps them
 		if( !info->canvas_cached ) {
 			//Logical Screen Descriptor
 			io->seek_proc(handle, 6, SEEK_SET);
@@ -1295,9 +1250,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
 		}
 
-		//The global palette and the comments below belong to the file too, but they
-		//stay with page 0: the palette can be a kilobyte per frame, and a writer that
-		//no longer has it can emit local palettes instead.
+		//global palette and comments stay on page 0
 		if( page == 0 ) {
 			size_t idx;
 
@@ -1420,7 +1373,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			disposal_method = *(BYTE *)FreeImage_GetTagValue(tag);
 		}
 
-		//frame extent in host byte order, see Close(): the logical screen is enlarged if a frame exceeds it
+		//frame extent (host byte order), for Close()
 		const unsigned frame_right = (unsigned)left + (unsigned)width;
 		const unsigned frame_bottom = (unsigned)top + (unsigned)height;
 
@@ -1449,7 +1402,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 #endif
 			}
 			{
-				//remember the logical screen size (host byte order) so that Close() can enlarge it if needed
+				//logical screen size (host byte order), for Close()
 				WORD lw = logicalwidth, lh = logicalheight;
 #ifdef FREEIMAGE_BIGENDIAN
 				SwapShort(&lw);
@@ -1689,7 +1642,6 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		b = 0;
 		io->write_proc(&b, 1, 1, handle);
 
-		//remember the frame extent so that Close() can enlarge the logical screen if needed
 		info->max_right = MAX(info->max_right, frame_right);
 		info->max_bottom = MAX(info->max_bottom, frame_bottom);
 

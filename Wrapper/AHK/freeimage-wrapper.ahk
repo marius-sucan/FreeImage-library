@@ -978,13 +978,7 @@ FreeImage_GetTagType(fiTag) {
 }
 
 FreeImage_GetTagValue(fiTag) {
-; Returns a pointer to the value of the tag. The value belongs to the tag,
-; so do not free it and do not use it once the tag is gone.
-; Read it with NumGet() according to FreeImage_GetTagType(); a FIDT_LONG (4)
-; holds a single 32-bit unsigned integer:
-;    pValue := FreeImage_GetTagValue(fiTag)
-;    value := NumGet(pValue+0, 0, "UInt")
-; The function returns 0 when the tag carries no value.
+; Returns a pointer owned by the tag, or 0; read it with NumGet().
 
    Return DllCall(getFIMfunc("GetTagValue"), "UPtr", fiTag, "UPtr")
 }
@@ -1107,23 +1101,17 @@ FreeImage_GetMetadataCount(metaModel, hImage) {
 }
 
 FreeImage_GetMetadata(hImage, metaModel, key, ByRef fiTag) {
-; Retrieves a single tag by its key from the given metadata model.
-; See FreeImage_SetMetadata() for what the metaModel values mean.
-; On success, fiTag receives the FITAG. It belongs to hImage, so do not delete
-; it, and do not use it after the image was unloaded or the page unlocked.
-; What is in it is read with FreeImage_GetTagType() and FreeImage_GetTagValue().
-; The function returns TRUE when the tag was found and returns FALSE otherwise.
+; fiTag receives a FITAG owned by hImage; returns TRUE if the key was found.
 
    fiTag := 0
    Return DllCall(getFIMfunc("GetMetadata"), "Int", metaModel, "UPtr", hImage, "astr", key, "uptr*", fiTag)
 }
 
 ; === Animation helpers ===
-; Not FreeImage API functions, but the two things a player wants from an
-; animation before it wants any of its pictures.
+; Not FreeImage API functions.
 
 FreeImage_GetFrameTime(hImage) {
-; How long this frame of an animation stays on screen, in milliseconds.
+; Frame duration in milliseconds.
 ;
 ; GIF, APNG, MNG, animated WebP, HEIF and AVIF image sequences all describe
 ; a frame with the same FIMD_ANIMATION tags, in the "FrameTime" value.
@@ -1144,17 +1132,11 @@ FreeImage_GetFrameTime(hImage) {
 }
 
 FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
-; The duration of every frame of an animation, and nothing else: the timeline a
-; player needs to say how long the thing runs, to draw a scrubber, or to decide
+; Every frame's duration, to tell the animation's length and
 ; which frame belongs to a moment.
 ;
-; delaysArray is filled with one duration in milliseconds per frame, indexed by
-; the frame number FreeImage_LockPage() takes - so the first frame is at index
-; 0 and delaysArray.Length() is not the number of frames; use the returned
-; count for that. totalTime receives how long one pass of the animation lasts.
-;
-; The function returns the number of frames, or -1 when the file could not be
-; read. A still image is a single page, so an ordinary .gif returns 1.
+; delaysArray[1] is the first frame; totalTime is one pass, in ms.
+; Returns the frame count, or -1 if the file cannot be read.
 
    Static FIF_LOAD_NOPIXELS := 0x8000
 
@@ -1176,7 +1158,7 @@ FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
       delaysArray[A_Index] := thisDelay
       totalTime += thisDelay
       If hImage
-         FreeImage_UnlockPage(hMultiImg, hImage, 0) ; 0: nothing was changed
+         FreeImage_UnlockPage(hMultiImg, hImage, 0) ; 0: unchanged
    }
 
    FreeImage_CloseMultiBitmap(hMultiImg, 0)

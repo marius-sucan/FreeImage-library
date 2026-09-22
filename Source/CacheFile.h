@@ -54,18 +54,7 @@ struct Block {
 
 // ----------------------------------------------------------
 
-// The name of a file, in the width the caller spelled it: char for
-// FreeImage_OpenMultiBitmap(), wchar_t for FreeImage_OpenMultiBitmapU().
-//
-// A multi-bitmap does not open its file once and forget the name, the way
-// FreeImage_LoadU() does. It keeps the name until FreeImage_CloseMultiBitmap(),
-// makes two more files beside it - the page cache and the spool the document is
-// rewritten in - and at the end renames the spool over the original. On Windows
-// every one of those has to go through the CRT's wide call: narrowed to the ANSI
-// code page, the name loses each character that code page cannot spell, so the
-// file would open and the edits then be saved under some other name, or nowhere.
-// A wide name therefore stays wide all the way down to _wfopen(), _wremove() and
-// _wrename(), and so does every name made from it.
+// a file name in the caller's width; wide names stay wide down to _wfopen()
 class FIFileName {
 public :
 	FIFileName() {}
@@ -76,24 +65,22 @@ public :
 
 	bool empty() const { return m_name.empty(); }
 
-	// Add to the end of the name. The cache and the spool only ever add plain
-	// ASCII, which reads the same in either width.
+	// ASCII suffixes only
 	void append(const char *suffix);
 
 	FILE *openFile(const char *mode) const;
 	int removeFile() const;
-	// rename this file to dst_name, which has to be spelled in the same width
+	// dst_name must have the same width
 	int renameFile(const FIFileName& dst_name) const;
 
-	// The name as a message can show it. FreeImage_OutputMessageProc() only takes
-	// char, so a wide name comes out with a '?' for each character outside ASCII.
+	// for messages: non-ASCII shows as '?'
 	const char *display() const { return m_name.c_str(); }
 
 private :
-	// the name itself - or, for a wide name, the rendering display() returns
+	// the name, or display()'s rendering of a wide one
 	std::string m_name;
 #ifdef _WIN32
-	// the name itself when it was given in wchar_t, empty otherwise
+	// the wide name, or empty
 	std::wstring m_wname;
 #endif
 };

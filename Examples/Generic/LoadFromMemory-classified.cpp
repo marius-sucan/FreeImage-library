@@ -25,9 +25,7 @@
 
 #include "FreeImage.h"
 
-// The four callbacks are static members, so DLL_CALLCONV has to appear on the
-// declarations and the definitions alike or the types will not match the
-// FreeImageIO fields they are assigned to.
+// DLL_CALLCONV on declarations and definitions alike
 
 class MemIO : public FreeImageIO {
 public :
@@ -50,7 +48,7 @@ public :
 private:
     BYTE * const _start;
     BYTE *_cp;
-    long _size;			// how much there is, so a seek to the end can be answered
+    long _size;			// buffer size, for SEEK_END
 };
 
 
@@ -58,9 +56,7 @@ unsigned DLL_CALLCONV
 MemIO::_ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
     MemIO *memIO = (MemIO*)handle;
 
-    // stop at the end of the buffer and say how many whole items came out: a
-    // plugin may ask for more than is left, and reading past the buffer is not
-    // an answer
+    // stop at the end of the buffer; return whole items read
     long remaining = memIO->_size - (memIO->_cp - memIO->_start);
 
     if ((size == 0) || (remaining <= 0)) {
@@ -107,9 +103,7 @@ MemIO::_TellProc(fi_handle handle) {
 }
 
 // ----------------------------------------------------------
-// The class in use. Note what is passed to FreeImage_LoadFromHandle: the MemIO
-// is both the FreeImageIO (it derives from it) and the handle the callbacks
-// get back, which is how the static members find the buffer again.
+// the MemIO is both the FreeImageIO and the handle
 // ----------------------------------------------------------
 
 int
@@ -135,7 +129,7 @@ main(int argc, char *argv[]) {
 
 			FREE_IMAGE_FORMAT fif = FreeImage_GetFileTypeFromHandle(&memIO, (fi_handle)&memIO, 0);
 
-			// the format probe left the read position wherever it stopped
+			// rewind after the format probe
 			memIO.Reset();
 
 			FIBITMAP *fbmp = FreeImage_LoadFromHandle(fif, &memIO, (fi_handle)&memIO);

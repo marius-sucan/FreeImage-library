@@ -42,8 +42,6 @@
 #include <string.h>
 #include <stdlib.h>
 
-// Listing a directory is the one thing here that is not portable. <io.h> and
-// _findfirst are Microsoft's; everywhere else it is <dirent.h> and opendir.
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -128,12 +126,7 @@ void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message) {
 #define MAX_PATH	260
 #endif
 
-/** Convert one file of the input directory to a numbered PNG
-	@param input_dir Directory being scanned, with its trailing separator
-	@param name File name within that directory
-	@param id Number to use for the output file; incremented on success
-	@param log_file Log to write the outcome to
-*/
+// converts one file to a numbered PNG
 static void ConvertOne(const char *input_dir, const char *name, int *id, FILE *log_file) {
 	char directory[MAX_PATH];
 	char unique[128];
@@ -171,7 +164,7 @@ static void ConvertOne(const char *input_dir, const char *name, int *id, FILE *l
 int 
 main(int argc, char *argv[]) {
 
-	// the directory to scan, with a trailing separator
+	// needs a trailing separator
 	const char *input_dir = (argc > 1) ? argv[1] : "images/";
 	int id = 1;
 
@@ -196,7 +189,7 @@ main(int argc, char *argv[]) {
 	// batch convert all supported bitmaps
 
 #ifdef _WIN32
-	// Microsoft's walk wants a pattern rather than a directory
+	// _findfirst takes a pattern
 	_finddata_t finddata;
 	intptr_t handle;
 	char image_path[MAX_PATH];
@@ -211,15 +204,13 @@ main(int argc, char *argv[]) {
 		_findclose(handle);
 	}
 #else
-	// everywhere else, the directory itself
 	DIR *dir = opendir(input_dir);
 
 	if (dir != NULL) {
 		struct dirent *entry;
 
 		while ((entry = readdir(dir)) != NULL) {
-			// GenericLoader will refuse "." and ".." along with anything else
-			// that is not an image, so there is nothing else to filter here
+			// GenericLoader skips "." and ".."
 			ConvertOne(input_dir, entry->d_name, &id, log_file);
 		}
 

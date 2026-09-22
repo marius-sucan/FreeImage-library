@@ -118,18 +118,10 @@ FreeImage_SetOutputMessageStdCall(FreeImage_OutputMessageFunctionStdCall omf) {
 }
 
 // ----------------------------------------------------------
-// Quick Picto Viewer: every message is also mirrored to the debugger output (Sysinternals
-// DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message", whether or not
-// the application registered a handler, so the DLL can be watched without any glue code.
-// The formatter below is the original one, made bounds-safe because it now runs for every
-// message: no append can run past the 512-byte buffer, and a NULL %s prints as "(null)".
+// qpv: every message also goes to the debugger output ("qpv: fim: ...")
 // ----------------------------------------------------------
 
-/**
-Append text to message, which holds *length characters and can hold capacity bytes.
-The copy stops at the end of the text or one byte before the end of the buffer, and the
-buffer is always left terminated.
-*/
+// bounded append; the buffer is always terminated
 static void
 FreeImage_AppendMessage(char *message, int *length, int capacity, const char *text) {
 	if (text == NULL) {
@@ -246,7 +238,7 @@ FreeImage_OutputMessageProc(int fif, const char *fmt, ...) {
 		va_end(arg);
 
 #ifdef _WIN32
-		// mirror the message to the debugger, tagged so that DebugView can filter on it
+		// mirror to the debugger (DebugView)
 
 		{
 			char line[MSG_SIZE + 64];

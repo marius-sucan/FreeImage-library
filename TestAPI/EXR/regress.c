@@ -1,24 +1,5 @@
-/*
- * FreeImage 3 - OpenEXR save/reload regression test
- *
- * Round-trips the three pixel types the EXR plugin can export (FIT_FLOAT,
- * FIT_RGBF, FIT_RGBAF) across a range of sizes and every EXR_* save flag,
- * through a file and through a memory stream. Prints the encoded size and the
- * checksum of the reloaded pixels for each combination.
- *
- * The assertions are: every save and every reload must work; the file and the
- * memory stream must give the same pixels; and the lossless flags (DEFAULT,
- * NONE, ZIP, PIZ, and their FLOAT variants) must all reload to the same
- * checksum as each other, since they are the same pixels through different
- * compressors. PXR24, B44 and LC are lossy and only have to reload - which
- * EXR_LC could not do at all until 2026-09-15, see lc.c.
- * Encoded sizes change legitimately when the compressor changes - they moved
- * for ZIP and PXR24 when OpenEXR 3.3 replaced zlib with libdeflate - so they
- * are reported, not asserted. The FAIL lines and the tally are the assertions.
- *
- * Standalone: build with the Makefile in this directory, run from it.
- * Scratch files go to $EXR_TEST_TMP, or the current directory.
- */
+/* FreeImage 3 - OpenEXR save/reload regression test */
+/* lossless flags must agree; encoded sizes are only reported */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +24,7 @@ static unsigned long long checksum(FIBITMAP *dib) {
     return h;
 }
 
-/* A picture whose values survive half-float exactly, so that the lossless
- * flags really are lossless and can be compared against each other. */
+/* values exact in half float */
 static FIBITMAP *make(FREE_IMAGE_TYPE type, int w, int h) {
     FIBITMAP *dib = FreeImage_AllocateT(type, w, h, 0, 0, 0, 0);
     if (!dib) return NULL;
@@ -108,9 +88,7 @@ int main(void) {
             FIBITMAP *src = make(TYPES[ti].t, w, h);
             if (!src) { printf("FAIL allocate %s %dx%d\n", TYPES[ti].n, w, h); failures++; continue; }
 
-            /* PluginEXR documents two conditions on EXR_LC: the image must be
-             * RGB[A]F, and both dimensions must be even. A refused save is the
-             * right answer outside those, so it is not counted as a failure. */
+            /* EXR_LC needs RGB[A]F and even dimensions */
             int lc_ok = (TYPES[ti].t != FIT_FLOAT) && (w % 2 == 0) && (h % 2 == 0);
 
             printf("\n--- %s %dx%d ---\n", TYPES[ti].n, w, h);

@@ -132,19 +132,7 @@ static int
 get_rlechar(FreeImageIO *io, fi_handle handle, RLEStatus *pstatus) {
 	if (!pstatus->cnt) {
 		int cnt = 0;
-		// An opcode whose low seven bits are zero carries no pixels.  This loop
-		// already skipped a bare 0x00; 0x80 went through it, gave a run length of
-		// zero, and the unconditional cnt-- below then took the counter to -1 - at
-		// which point "if (!cnt)" is false forever, no opcode is ever read again,
-		// and with val still -1 the decoder emits the rest of the stream as
-		// literal bytes.  One such byte silently garbles everything after it.
-		//
-		// The format's own reading of a zero count is "end of scanline", but this
-		// decoder does not have that option open to it: it reaches every row
-		// through the offset table and always writes exactly width pixels, so
-		// ending early would leave the rest of the row undefined.  Skipping is
-		// what it already does for 0x00, and what FreeImage's PICT decoder does
-		// for the same opcode ("Apple says ignore").
+		// a zero count carries no pixels: skip 0x80 like 0x00
 		while (0 == (cnt & 0x7F)) {
 			BYTE packed = 0;
 			if(io->read_proc(&packed, sizeof(BYTE), 1, handle) < 1) {
@@ -271,10 +259,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			height = sgiHeader.ysize;
 		}
 		
-		// zsize is a raw WORD out of the file, and nothing looked at it until the
-		// switch further down - which is after the multiplication and the malloc
-		// below.  65535 * 65535 overflows an int, and the file was then rejected
-		// for the wrong reason, by the oversized allocation failing.
 		if (zsize < 1 || zsize > 4) {
 			throw SGI_INVALID_CHANNEL_COUNT;
 		}
@@ -381,11 +365,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						packed = (BYTE)ch;
 					}
 					else {
-						// read_proc returns a count of items - 0 or 1 - and never EOF,
-						// so the end-of-file test this shared with the branch above
-						// could not fire for an uncompressed image: a truncated one
-						// kept "reading" nothing and the rest of the picture came out
-						// black, with no error reported.
 						if (io->read_proc(&packed, sizeof(BYTE), 1, handle) != 1) {
 							throw SGI_EOF_IN_IMAGE_DATA;
 						}

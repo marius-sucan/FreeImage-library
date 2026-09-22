@@ -283,11 +283,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 		return FALSE;
 	}
 
-	// An animated PNG is still a PNG, and this loader still reads one: it returns the
-	// default image, which is what any decoder that knows nothing of APNG shows. That
-	// is not the answer a caller asking FreeImage_GetFileType() what the file *is*
-	// wants, though, so leave those files to FIF_APNG, which can read every frame of
-	// them. FreeImage_Load(FIF_PNG, ...) is unaffected - it never asks.
+	// animated PNGs are identified as FIF_APNG
 	if (start >= 0) {
 		io->seek_proc(handle, start, SEEK_SET);
 		if (APNG_IsAnimatedStream(io, handle)) {

@@ -58,10 +58,7 @@ it under the terms of the one of two licenses as you choose:
 #include <unistd.h>
 #include <utime.h>
 #include <netinet/in.h>
-/* FreeImage: INT64/UINT64 have to be the same types FreeImage.h gives them,
-   and FreeImage.h uses the <stdint.h> ones.  On LP64 int64_t is "long", not
-   "long long", so upstream's spelling makes the two headers collide wherever
-   both are included.  Keep this through LibRaw updates. */
+/* FreeImage: INT64 must match FreeImage.h (int64_t) */
 #include <stdint.h>
 typedef int64_t INT64;
 typedef uint64_t UINT64;

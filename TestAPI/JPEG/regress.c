@@ -1,33 +1,4 @@
-/*
- * FreeImage 3 - JPEG round trip and lossless transform test
- *
- * Covers the writing half of the JPEG plugin and the lossless transforms of
- * FreeImageToolkit/JPEGTransform.cpp, which are the parts an upgrade of the
- * bundled LibJPEG can move without any decode test noticing.
- *
- * What it asserts, and why each one is here:
- *
- *  - every exportable depth round trips through a file and through a memory
- *    stream, and the two agree byte for byte: the plugin has a separate source
- *    and destination manager for each and they have drifted apart before;
- *  - the depths JPEG cannot carry are refused rather than mangled or crashed;
- *  - the quantisation tables actually emitted match a recorded table. This is
- *    the one that matters across a libjpeg upgrade: 9e changed the sample
- *    chrominance DC entry from 17 to 16 "for lossless support", and since
- *    FreeImage went straight from 9d to 10 that is the only thing in the whole
- *    move that changes the bytes FreeImage writes. Recording the emitted
- *    entries makes the next such change loud instead of silent;
- *  - a greyscale save emits one quantisation table and a colour save two,
- *    which is what makes the chrominance change invisible to greyscale;
- *  - the lossless transforms keep their contract. On an MCU-aligned image an
- *    operation followed by its inverse returns the original pixels exactly,
- *    with no DCT round trip. On a ragged one, perfect=TRUE refuses everything
- *    that would have to discard the partial edge MCU, and perfect=FALSE trims
- *    to the MCU grid once and is exact from then on;
- *  - metadata survives a default save and is dropped by JPEG_BASELINE.
- *
- * Scratch files go to $JPEG_TEST_TMP, or the current directory.
- */
+/* JPEG write and lossless transform test; scratch in $JPEG_TEST_TMP */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -91,8 +62,7 @@ static BYTE *slurp(const char *path, long *len) {
 }
 
 /* ---- quantisation tables actually written ---------------------------- */
-/* Returns the number of DQT tables in the stream; fills dc[] with each
-   table's DC (zig-zag index 0) entry, which is the one libjpeg 10 changed. */
+/* returns the DQT count; dc[] gets each table's DC entry */
 static int read_dqt(const BYTE *d, long n, int *dc, int maxt) {
     long i = 2;
     int found = 0;
@@ -117,17 +87,15 @@ static int read_dqt(const BYTE *d, long n, int *dc, int maxt) {
     return found;
 }
 
-/* The DC entry of each quantisation table FreeImage writes at a given quality.
-   Luminance base is 16, chrominance base is 16 since libjpeg 9e (17 before),
-   scaled by libjpeg's quality curve and clamped to at least 1. */
+/* DC entry per table at each quality: base 16, clamped to >= 1 */
 typedef struct { int quality; int ntables; int dc0, dc1; } QExpect;
 static const QExpect QTABLE[] = {
-    { 100, 2,  1,  1 },   /* JPEG_QUALITYSUPERB: everything clamps to 1     */
-    {  90, 2,  3,  3 },   /* the two bases still meet here                  */
-    {  75, 2,  8,  8 },   /* JPEG_QUALITYGOOD: 9/8 under 9d, 8/8 under 10   */
-    {  50, 2, 16, 16 },   /* JPEG_QUALITYNORMAL: 16/17 under 9d             */
-    {  25, 2, 32, 32 },   /* JPEG_QUALITYAVERAGE                            */
-    {  10, 2, 80, 80 },   /* JPEG_QUALITYBAD                                */
+    { 100, 2,  1,  1 },   /* JPEG_QUALITYSUPERB */
+    {  90, 2,  3,  3 },
+    {  75, 2,  8,  8 },   /* JPEG_QUALITYGOOD */
+    {  50, 2, 16, 16 },   /* JPEG_QUALITYNORMAL */
+    {  25, 2, 32, 32 },   /* JPEG_QUALITYAVERAGE */
+    {  10, 2, 80, 80 },   /* JPEG_QUALITYBAD */
 };
 #define NQ ((int)(sizeof(QTABLE) / sizeof(QTABLE[0])))
 
@@ -145,8 +113,7 @@ int main(void) {
     grey = FreeImage_ConvertToGreyscale(src);
     pal  = FreeImage_ColorQuantize(src, FIQ_WUQUANT);
     rgba = FreeImage_ConvertTo32Bits(src);
-    /* the one 32-bit form the plugin accepts; FreeImage_Allocate cannot
-       produce it, since FIC_CMYK comes from a flag on the ICC profile */
+    /* the only 32-bit form the plugin accepts */
     cmyk = FreeImage_Load(FIF_JPEG, "data/fi_jpeg_cmyk.jpg", JPEG_CMYK);
 
     /* --- 1. every exportable depth, file vs memory stream --------------- */
@@ -241,7 +208,6 @@ int main(void) {
             else
                 ok("%-12s refused: %s", bad[b].n, msgbuf[0] ? msgbuf : "(no message)");
         }
-        /* 32-bit CMYK is the one 32-bit form the plugin does accept */
         tmppath(path, sizeof path, "fi_jpeg_rt_cmyk.jpg");
         if (!cmyk || FreeImage_GetColorType(cmyk) != FIC_CMYK) {
             fail("32-bit CMYK", "could not build a FIC_CMYK bitmap to save");
@@ -312,8 +278,7 @@ int main(void) {
             { "ROTATE_90",  FIJPEG_OP_ROTATE_90,  FIJPEG_OP_ROTATE_270 },
             { "ROTATE_270", FIJPEG_OP_ROTATE_270, FIJPEG_OP_ROTATE_90 },
         };
-        /* 256x192 is a whole number of 4:2:0 MCUs and 33x17 is not, which is
-           the whole of the difference between the two cases below. */
+        /* 256x192 is whole 4:2:0 MCUs, 33x17 is not */
         static const char *ALIGNED = "data/fi_jpeg_420.jpg";
         static const char *RAGGED  = "data/fi_jpeg_odd.jpg";
         int p2;
@@ -360,17 +325,7 @@ int main(void) {
             if (orig) FreeImage_Unload(orig);
         }
 
-        /* On a ragged image the contract is different, and it is the contract
-           that has to be pinned down rather than losslessness:
-
-           perfect=TRUE refuses any operation that would have to discard the
-           partial edge MCU - every one except TRANSPOSE, which is symmetric
-           about the diagonal and so needs no particular alignment.
-
-           perfect=FALSE performs them anyway and trims the image to the MCU
-           grid, so the FIRST pass loses the ragged edge on purpose. What must
-           hold is that this happens once: the trimmed image is MCU aligned, so
-           every pass after it is exact. */
+        /* ragged: TRUE refuses all but TRANSPOSE; FALSE trims once, then exact */
         {
             FIBITMAP *a, *b;
             int refused = 0, accepted = 0, trimmed = 0, stable = 0;
@@ -441,7 +396,6 @@ int main(void) {
                (int)(sizeof pairs / sizeof pairs[0]));
         }
 
-        /* a crop is the other transupp entry point the toolkit exposes */
         tmppath(path, sizeof path, "fi_jpeg_xf_crop.jpg");
         if (!FreeImage_JPEGCrop("data/fi_jpeg_420.jpg", path, 16, 16, 144, 112)) {
             fail("crop", "FreeImage_JPEGCrop refused");

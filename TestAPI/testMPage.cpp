@@ -178,13 +178,7 @@ void testLockDeleteMultiPage(const char *input) {
 
 // --------------------------------------------------------------------------
 
-/**
-FreeImage_OpenMultiBitmapU: create, read and edit a document under a name that no
-ANSI code page can spell. The page cache, and the spool FreeImage_CloseMultiBitmap()
-rewrites the file in, are made beside it under that name as well, so the edit only
-survives when every one of those went through the wide calls.
-Like the other ...U functions this is Windows-only; anywhere else it returns NULL.
-*/
+// FreeImage_OpenMultiBitmapU with a name no ANSI code page can spell
 static void testMultiPageU(const char *lpszPathName) {
 	printf("testMultiPageU ...\n");
 
@@ -214,7 +208,7 @@ static void testMultiPageU(const char *lpszPathName) {
 	assert(FreeImage_GetPageCount(mpage) == 3);
 	FreeImage_CloseMultiBitmap(mpage, 0);
 
-	// edit it, the page cache on disk again: invert the second page, delete the first
+	// edit: invert page 2, delete page 1
 	mpage = FreeImage_OpenMultiBitmapU(FIF_TIFF, filename, FALSE, FALSE, FALSE);
 	assert(mpage != NULL);
 	FIBITMAP *dib = FreeImage_LockPage(mpage, 1);
@@ -226,7 +220,7 @@ static void testMultiPageU(const char *lpszPathName) {
 	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
 	assert(bResult);
 
-	// the file under its wide name is the edited document
+	// verify the edit
 	mpage = FreeImage_OpenMultiBitmapU(FIF_TIFF, filename, FALSE, TRUE, TRUE);
 	assert(mpage != NULL);
 	assert(FreeImage_GetPageCount(mpage) == 2);
@@ -241,9 +235,7 @@ static void testMultiPageU(const char *lpszPathName) {
 	FreeImage_UnlockPage(mpage, dib, FALSE);
 	FreeImage_CloseMultiBitmap(mpage, 0);
 
-	// and nothing is left beside it. The cache and the spool are named after the file
-	// and each has its own extension, which is spelled out here: to FindFirstFile,
-	// "name.*" also matches "name" itself
+	// no companions left; "name.*" would also match the file itself
 	const wchar_t *companions[] = {
 		L"mpage-\u0219\u021b-\u4e2d\u6587-\U0001F600.tif.*.ficache",
 		L"mpage-\u0219\u021b-\u4e2d\u6587-\U0001F600.tif.*.fispool"

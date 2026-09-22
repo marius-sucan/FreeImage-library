@@ -1,15 +1,7 @@
-# JPEG XR regression tests. Each one is a standalone program that prints a report
-# and exits non-zero on failure. Build the library first: make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make asan       build them with AddressSanitizer (recommended for edge/meta)
-#   make run        build and run everything except bigfile
-#   make bigfile-run  the 2 GiB test: ~4.5 GB RAM, ~2.4 GB disk, ~2 minutes
-#
-# Scratch files go to $JXR_TEST_TMP, or the current directory.
+# JPEG XR tests; build the library first (make -f Makefile.gnu dist)
+# bigfile-run needs ~4.5 GB RAM and ~2.4 GB disk
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = regress edge narrowio meta bigfile
@@ -17,7 +9,6 @@ CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
-# Makefile.srcs omits this one, so libfreeimage.a is missing TIFFHashSet*
 HASHSET = tif_hash_set.o
 
 default: all
@@ -48,9 +39,7 @@ clean: clean-bin
 
 .PHONY: default all asan run bigfile-run narrowio-step clean clean-bin
 
-# Also exercise the stepped seek in _jxr_io_SetPos, which is unreachable where
-# 'long' is 64-bit. Rebuilds PluginJXR.o with a tiny step into a private copy of
-# the library, so the installed one is untouched.
+# PluginJXR with a 4 KiB seek step, to reach the stepped seek
 narrowio-step: narrowio.c $(HASHSET)
 	cp ../../Dist/libfreeimage.a libfreeimage-narrowstep.a
 	g++ -c -std=c++0x -O1 -g -w -fPIC -fexceptions -D__ANSI__ -DFI_JXR_SEEK_STEP_MAX=4096 $(OPENMP_CFLAGS) \

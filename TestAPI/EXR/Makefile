@@ -1,18 +1,7 @@
-# OpenEXR regression tests. Each one is a standalone program that prints a
-# report and exits non-zero on failure. Build the library first:
-# make -f Makefile.gnu dist
-#
-#   make            build every test
-#   make run        build and run everything
-#   make asan       build them with AddressSanitizer (recommended for robust)
-#   make data       regenerate data/ - needs a C++17 compiler and the bundled
-#                   OpenEXR headers; only do this deliberately, the recorded
-#                   checksums in decode.c are tied to these exact files
-#
-# Scratch files go to $EXR_TEST_TMP, or the current directory.
+# OpenEXR tests; build the library first (make -f Makefile.gnu dist)
+# make data rewrites data/, which decode.c's checksums are tied to
 
-# The library is built with OpenMP, so libfreeimage.a carries undefined
-# GOMP_*/omp_* symbols: linking it needs the OpenMP runtime as well.
+# libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
 TESTS   = decode regress robust lc bombs
@@ -23,27 +12,15 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 default: all
 all: $(TESTS)
 
-# the library is a prerequisite so a rebuilt libfreeimage.a relinks the tests
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
 # --- AddressSanitizer -------------------------------------------------------
-# "make asan" instruments only the tests. "make asan-run" is the one that
-# matters: it rebuilds the code this upgrade actually introduced - OpenEXRCore,
-# the bundled libdeflate, OpenEXR's C++ readers and PluginEXR - with
-# AddressSanitizer into a private copy of the library, and runs the tests
-# against it. Mixing instrumented and plain objects is fine.
-#
-# allocator_may_return_null=1 is needed for robust: a mutation can still leave a
-# header the data window check passes and the decoder then asks a lot of, and
-# the refusal of that allocation is a path worth testing rather than aborting
-# on. bombs is deliberately run WITHOUT it: its whole point is that a corrupted
-# data window must be refused before anything is allocated, so a huge request
-# there has to abort the test rather than quietly return NULL.
+# asan-run also instruments OpenEXR; bombs must abort on huge allocs
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
-# the flags Makefile.gnu compiles the library's C and C++ files with
+# as Makefile.gnu compiles the library
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
 LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
 LIBCXXFLAGS = -std=c++17 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
@@ -55,7 +32,7 @@ EXR_C    += $(addprefix ../../Source/LibDeflate/lib/,adler32.c deflate_compress.
               x86/cpu_features.c arm/cpu_features.c)
 EXR_CXX   = $(wildcard ../../Source/OpenEXR/OpenEXR/*.cpp ../../Source/OpenEXR/Iex/*.cpp \
               ../../Source/OpenEXR/IlmThread/*.cpp ../../Source/OpenEXR/Imath/*.cpp)
-# generators with a main() of their own, never part of the library
+# generator programs, not library code
 EXR_CXX  := $(filter-out %dwaLookups.cpp %b44ExpLogTable.cpp %toFloat.cpp,$(EXR_CXX))
 EXR_CXX  += ../../Source/FreeImage/PluginEXR.cpp
 
@@ -85,9 +62,6 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- corpus -----------------------------------------------------------------
-# mkdata.cpp writes data/ with the bundled OpenEXR itself, which is the only
-# encoder here that can produce RLE, ZIPS, B44A, DWAA, DWAB, tiled, mipmapped
-# and luminance/chroma files - FreeImage's own save flags reach none of those.
 EXRINC = -I../../Source/OpenEXR -I../../Source/OpenEXR/Iex \
          -I../../Source/OpenEXR/IlmThread -I../../Source/OpenEXR/Imath \
          -I../../Source/OpenEXR/OpenEXR -I../../Source/OpenEXR/OpenEXRCore
