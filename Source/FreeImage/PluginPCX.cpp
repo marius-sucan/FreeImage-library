@@ -591,6 +591,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (unsigned x = 0; x < width / 2; x++) {
 					bits[x] = (buffer[2*x] << 4) | buffer[2*x+1];
 				}
+				if (width & 1) {
+					bits[width / 2] = (BYTE)(buffer[width - 1] << 4);
+				}
 
 				bits -= pitch;
 			}
