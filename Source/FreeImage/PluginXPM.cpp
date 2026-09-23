@@ -329,20 +329,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 		}
 
-		//read in pixel data
+		//read in pixel data; a cut file keeps its rows, a short row its pixels, and the rest is blank
+		int rows = 0, short_rows = 0;
 		for(int y = 0; y < height; y++ ) {
 			BYTE *line = FreeImage_GetScanLine(dib, height - y - 1);
 			str = ReadString(io, handle);
-			if(!str)
-				throw "Error reading pixel strings";
+			if(!str) {
+				if(y == 0)
+					throw "Error reading pixel strings";
+				FreeImage_OutputMessageProc(s_format_id, "Error reading pixel strings");
+				break;
+			}
+			rows++;
+			int pixels = width;
 			if( strlen(str) < (size_t)width * (size_t)cpp ) {
-				free(str);
-				str = NULL;
-				throw "Pixel string is shorter than the declared image width";
+				if(short_rows++ == 0)
+					FreeImage_OutputMessageProc(s_format_id, "Pixel string is shorter than the declared image width");
+				pixels = (int)(strlen(str) / cpp);
 			}
 			char *pixel_ptr = str;
 
-			for(int x = 0; x < width; x++ ) {
+			for(int x = 0; x < pixels; x++ ) {
 				//locate the chars in the color map
 				std::string chrs(pixel_ptr,cpp);
 				FILE_RGBA rgba = rawpal[chrs];
@@ -364,6 +371,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			str = NULL;
 		}
 		//done reading pixel data
+
+		if(short_rows) {
+			DamagedImageWarning(s_format_id);
+		} else if(rows < height) {
+			PartialImageWarning(s_format_id, rows, height);
+		}
 
 		return dib;
 	} catch(const char *text) {
