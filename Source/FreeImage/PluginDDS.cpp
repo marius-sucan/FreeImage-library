@@ -609,20 +609,16 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 			return NULL;
 	}
 
-	// uncompressed: the file must hold every declared pixel
+	// uncompressed: a short file cannot claim a huge image
 	{
 		const long pos = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
 		const long end = io->tell_proc(handle);
 		io->seek_proc(handle, pos, SEEK_SET);
 
-		if (end > pos) {
-			const size_t avail = (size_t)(end - pos);
-			const size_t fileLine = ((size_t)desc->dwWidth * ddspf->dwRGBBitCount + 7) / 8;
-
-			if ((fileLine == 0) || (fileLine > avail) || ((size_t)desc->dwHeight > avail / fileLine)) {
-				return NULL;
-			}
+		const UINT64 raster = (((UINT64)desc->dwWidth * ddspf->dwRGBBitCount + 7) / 8) * desc->dwHeight;
+		if (!PlausibleImageSize(raster, (end > pos) ? (UINT64)(end - pos) : 0, 1)) {
+			return NULL;
 		}
 	}
 
@@ -655,13 +651,18 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 	const int filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (int)desc->dwPitchOrLinearSize : fileLine;
 	const long delta = (long)filePitch - (long)fileLine;
 
+	// a cut file keeps the rows it holds
+	int y = 0;
+
 	if (bpp == 16) {
 		BYTE *pixels = (BYTE*)malloc(fileLine * sizeof(BYTE));
 		if (pixels) {
-			for (int y = 0; y < height; y++) {
+			for (; y < height; y++) {
 				BYTE *dst_bits = FreeImage_GetScanLine(dib, height - y - 1);
 				// get the 16-bit RGB pixels
-				io->read_proc(pixels, 1, fileLine, handle);
+				if (io->read_proc(pixels, 1, fileLine, handle) != (unsigned)fileLine) {
+					break;
+				}
 				io->seek_proc(handle, delta, SEEK_CUR);
 				// convert to 24-bit
 				ConvertLine16To24(dst_bits, (const WORD*)pixels, format16, width);
@@ -670,11 +671,22 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 		free(pixels);
 	}
 	else {
-		for (int y = 0; y < height; y++) {
+		for (; y < height; y++) {
 			BYTE *pixels = FreeImage_GetScanLine(dib, height - y - 1);
-			io->read_proc(pixels, 1, fileLine, handle);
+			if (io->read_proc(pixels, 1, fileLine, handle) != (unsigned)fileLine) {
+				memset(pixels, 0, fileLine);
+				break;
+			}
 			io->seek_proc(handle, delta, SEEK_CUR);
 		}
+	}
+
+	if (y < height) {
+		if (y == 0) {
+			FreeImage_Unload(dib);
+			return NULL;
+		}
+		PartialImageWarning(s_format_id, y, height);
 	}
 
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_RGB
@@ -711,7 +723,7 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 @param width Image width
 @param height Image height
 */
-template <class DECODER> static void 
+template <class DECODER> static int 
 LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int height) {
 	typedef typename DECODER::INFO INFO;
 	typedef typename INFO::Block Block;
@@ -721,7 +733,7 @@ LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int 
 
 	Block *input_buffer = new(std::nothrow) Block[(width + 3) / 4];
 	if (!input_buffer) {
-		return;
+		return 0;
 	}
 
 	const int widthRest = (int) width & 3;
@@ -731,20 +743,24 @@ LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int 
 
 	if (height >= 4) {
 		for (; y < height; y += 4) {
-			io->read_proc (input_buffer, sizeof(typename INFO::Block), inputLine, handle);
+			const int blocks = (int)io->read_proc (input_buffer, sizeof(typename INFO::Block), inputLine, handle);
 			// TODO: probably need some endian work here
 			const BYTE *pbSrc = (BYTE *)input_buffer;
 			BYTE *pbDst = FreeImage_GetScanLine (dib, height - y - 1);
 
 			if (width >= 4) {
-				for (int x = 0; x < width; x += 4) {
+				for (int x = 0; x < width && x / 4 < blocks; x += 4) {
 					DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, 4, 4);
 					pbSrc += INFO::bytesPerBlock;
 					pbDst += 16;	// 4 * 4;
 				}
 			}
-			if (widthRest) {
+			if (widthRest && (blocks == inputLine)) {
 				DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, widthRest, 4);
+			}
+			if (blocks < inputLine) {
+				delete [] input_buffer;
+				return y;
 			}
 		}
 	}
@@ -768,6 +784,7 @@ LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int 
 	}
 
 	delete [] input_buffer;
+	return height;
 }
 
 /**
@@ -789,20 +806,30 @@ LoadDXT(int decoder_type, const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle
 	}
 
 	// select the right decoder, then decode the image
+	int rows = height;
 	switch (decoder_type) {
 		case 1:
-			LoadDXT_Helper<DXT_BLOCKDECODER_1>(io, handle, dib, width, height);
+			rows = LoadDXT_Helper<DXT_BLOCKDECODER_1>(io, handle, dib, width, height);
 			break;
 		case 3:
-			LoadDXT_Helper<DXT_BLOCKDECODER_3>(io, handle, dib, width, height);
+			rows = LoadDXT_Helper<DXT_BLOCKDECODER_3>(io, handle, dib, width, height);
 			break;
 		case 5:
-			LoadDXT_Helper<DXT_BLOCKDECODER_5>(io, handle, dib, width, height);
+			rows = LoadDXT_Helper<DXT_BLOCKDECODER_5>(io, handle, dib, width, height);
 			break;
 		default:
 			break;
 	}
-	
+
+	// a cut file keeps the block rows it holds
+	if (rows < height) {
+		if (rows == 0) {
+			FreeImage_Unload(dib);
+			return NULL;
+		}
+		PartialImageWarning(s_format_id, rows, height);
+	}
+
 	return dib;
 }
 // ==========================================================
@@ -887,11 +914,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	SwapHeader(&header);
 #endif
 
-	// Validate() is skipped when the caller names the format
-	if (header.dwMagic != MAKEFOURCC('D', 'D', 'S', ' ')) {
-		return NULL;
-	}
-	if (header.surfaceDesc.dwSize != sizeof(header.surfaceDesc) || header.surfaceDesc.ddspf.dwSize != sizeof(header.surfaceDesc.ddspf)) {
+	// Validate() is skipped when the caller names the format; a damaged magic or damaged sizes alone are tolerated
+	if ((header.dwMagic != MAKEFOURCC('D', 'D', 'S', ' ')) &&
+		(header.surfaceDesc.dwSize != sizeof(header.surfaceDesc) || header.surfaceDesc.ddspf.dwSize != sizeof(header.surfaceDesc.ddspf))) {
 		return NULL;
 	}
 
