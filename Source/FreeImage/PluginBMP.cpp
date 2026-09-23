@@ -215,25 +215,31 @@ Load uncompressed image pixels for 1-, 4-, 8-, 16-, 24- and 32-bit dib
 @param height Image height
 @param pitch Image pitch
 @param bit_count Image bit-depth (1-, 4-, 8-, 16-, 24- or 32-bit)
-@return Returns TRUE if successful, returns FALSE otherwise
+@param bounded TRUE: a cut file that holds too few bytes for the size it claims returns 0 rows
+@return Returns the rows read: fewer than the height for a cut file
 */
-static BOOL 
-LoadPixelData(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int height, unsigned pitch, unsigned bit_count) {
-	unsigned count = 0;
-
+static int
+LoadPixelData(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int height, unsigned pitch, unsigned bit_count, BOOL bounded = FALSE) {
 	// Load pixel data
 	// NB: height can be < 0 for BMP data
 	BYTE *scan0 = FreeImage_GetBits(dib);
 	INT64 positiveHeight = abs(height);
+	// a row that lacks only its padding is complete
+	const unsigned used = FreeImage_GetLine(dib);
+	int rows = (int)positiveHeight;
 	BYTE *line = NULL;
 	for (INT64 c = 0; c < positiveHeight; c++) {
 		if (height>0)
 		   line = (BYTE*)((unsigned long long)scan0 + (unsigned long long)pitch * c);
 		else
 		   line = (BYTE*)((unsigned long long)scan0 + (unsigned long long)pitch * (positiveHeight - c - 1));
-		count = io->read_proc(line, pitch, 1, handle);
-		if(count != 1) {
-			return FALSE;
+		const unsigned got = io->read_proc(line, 1, pitch, handle);
+		if(got < pitch) {
+			rows = (int)c + ((got >= used) ? 1 : 0);
+			if (bounded && !PlausibleImageSize((UINT64)pitch * positiveHeight, (UINT64)pitch * c + got, 1)) {
+				return 0;
+			}
+			break;
 		}
 	}
 
@@ -262,7 +268,7 @@ LoadPixelData(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int height, unsi
 	}
 #endif
 
-	return TRUE;
+	return rows;
 }
 
 /**
@@ -272,9 +278,9 @@ Load image pixels for 4-bit RLE compressed dib
 @param width Image width
 @param height Image height
 @param dib 4-bit image to be loaded 
-@return Returns TRUE if successful, returns FALSE otherwise
+@return Returns the rows decoded: fewer than the height for a cut or damaged file, -1 on error
 */
-static BOOL 
+static int
 LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
 	int status_byte = 0;
 	BYTE second_byte = 0;
@@ -285,6 +291,11 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 	try {
 		height = abs(height);
 
+		// a cut file keeps the rows it holds; a full row still waiting for its end-of-line counts
+		int rows = height;
+		int scanline = 0;
+		const long start = io->tell_proc(handle);
+
 		pixels = (BYTE*)malloc((unsigned long long)width * height * sizeof(BYTE));
 		if (!pixels) {
 			throw(1);
@@ -294,18 +305,18 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 		BYTE *q = pixels;
 		BYTE *end = pixels + height * width;
 
-		for (int scanline = 0; scanline < height; ) {
+		for (; scanline < height; ) {
 			if (q < pixels || q  >= end) {
 				break;
 			}
 			if(io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
-				throw(1);
+				goto cut;
 			}
 			if (status_byte != 0)	{
 				status_byte = (int)MIN((size_t)status_byte, (size_t)(end - q));
 				// Encoded mode
 				if(io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
-					throw(1);
+					goto cut;
 				}
 				for (int i = 0; i < status_byte; i++)	{
 					*q++ = (BYTE)((i & 0x01) ? (second_byte & 0x0f) : ((second_byte >> 4) & 0x0f));
@@ -315,7 +326,7 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 			else {
 				// Escape mode
 				if(io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
-					throw(1);
+					goto cut;
 				}
 				switch (status_byte) {
 					case RLE_ENDOFLINE:
@@ -339,10 +350,10 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 						BYTE delta_y = 0;
 
 						if(io->read_proc(&delta_x, sizeof(BYTE), 1, handle) != 1) {
-							throw(1);
+							goto cut;
 						}
 						if(io->read_proc(&delta_y, sizeof(BYTE), 1, handle) != 1) {
-							throw(1);
+							goto cut;
 						}
 
 						// apply them
@@ -359,22 +370,32 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 						for (int i = 0; i < status_byte; i++) {
 							if ((i & 0x01) == 0) {
 								if(io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
-									throw(1);
+									goto cut;
 								}
 							}
 							*q++ = (BYTE)((i & 0x01) ? (second_byte & 0x0f) : ((second_byte >> 4) & 0x0f));
+							bits++;
 						}
-						bits += status_byte;
 						// Read pad byte
 						if (((status_byte & 0x03) == 1) || ((status_byte & 0x03) == 2)) {
 							BYTE padding = 0;
 							if(io->read_proc(&padding, sizeof(BYTE), 1, handle) != 1) {
-								throw(1);
+								goto cut;
 							}
 						}
 					}
 					break;
 				}
+			}
+		}
+		
+		if (false) {
+cut:
+			rows = scanline + ((bits >= width) ? 1 : 0);
+			// nothing is kept of a huge claim a few bytes long
+			const long stop = io->tell_proc(handle);
+			if (!PlausibleImageSize(((UINT64)width * height + 1) / 2, (stop > start) ? (UINT64)(stop - start) : 0, 64)) {
+				rows = 0;
 			}
 		}
 		
@@ -404,13 +425,13 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 
 		free(pixels);
 
-		return TRUE;
+		return rows;
 
 	} catch(int) {
 		if (pixels) {
 			free(pixels);
 		}
-		return FALSE;
+		return -1;
 	}
 }
 
@@ -421,10 +442,10 @@ Load image pixels for 8-bit RLE compressed dib
 @param width Image width
 @param height Image height
 @param dib 8-bit image to be loaded 
-@return Returns TRUE if successful, returns FALSE otherwise
+@return Returns the rows decoded: fewer than the height for a cut or damaged file
 */
-static BOOL 
-LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
+static int
+DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
    BYTE status_byte = 0;
    BYTE second_byte = 0;
    int scanline = 0;
@@ -434,15 +455,16 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
    BYTE delta_y = 0;
 
    height = abs(height);
-   
+
+   // a cut or damaged file keeps the rows before it; a full row still waiting for its end-of-line counts
    while(scanline < height) {
       if (io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
-         return FALSE;
+         return scanline + ((bits >= width) ? 1 : 0);
       }
 
       if (status_byte == RLE_COMMAND) {
          if (io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
-            return FALSE;
+            return scanline + ((bits >= width) ? 1 : 0);
          }
 
          switch (status_byte) {
@@ -452,17 +474,17 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
                break;
 
             case RLE_ENDOFBITMAP:
-               return TRUE;
+               return height;
 
             case RLE_DELTA:
                // read the delta values
                delta_x = 0;
                delta_y = 0;
                if (io->read_proc(&delta_x, sizeof(BYTE), 1, handle) != 1) {
-                  return FALSE;
+                  return scanline;
                }
                if (io->read_proc(&delta_y, sizeof(BYTE), 1, handle) != 1) {
-                  return FALSE;
+                  return scanline;
                }
                // apply them
                bits += delta_x;
@@ -473,19 +495,19 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
                // absolute mode
                count = MIN((int)status_byte, width - bits);
                if (count < 0) {
-                  return FALSE;
+                  return scanline;
                }
                BYTE *sline = FreeImage_GetScanLine(dib, scanline);
                if (io->read_proc((void *)(sline + bits), sizeof(BYTE) * count, 1, handle) != 1) {
-                  return FALSE;
+                  return scanline;
                }
+               bits += status_byte;            
                // align run length to even number of bytes
                if ((status_byte & 1) == 1) {
                   if (io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
-                     return FALSE;
+                     return scanline + ((bits >= width) ? 1 : 0);
                   }
                }
-               bits += status_byte;            
                break;
 
          } // switch (status_byte)
@@ -493,11 +515,11 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
       else {
          count = MIN((int)status_byte, width - bits);
          if (count < 0) {
-            return FALSE;
+            return scanline;
          }
          BYTE *sline = FreeImage_GetScanLine(dib, scanline);
          if (io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
-            return FALSE;
+            return scanline;
          }
          for (int i = 0; i < count; i++) {
             *(sline + bits) = second_byte;
@@ -506,7 +528,42 @@ LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
       }
    }
 
-   return TRUE;
+   return height;
+}
+
+// as DecodeRLE8(), but nothing is kept of a huge claim a few bytes long
+static int
+LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
+	const long start = io->tell_proc(handle);
+	const int rows = DecodeRLE8(io, handle, width, height, dib);
+	const long stop = io->tell_proc(handle);
+	if ((rows < abs(height)) && !PlausibleImageSize((UINT64)width * abs(height), (stop > start) ? (UINT64)(stop - start) : 0, 128)) {
+		return 0;
+	}
+	return rows;
+}
+
+// the rows a cut or damaged file holds are kept, with the error and a warning; none at all refuses the file
+static BOOL
+KeptRows(int rows, int height, const char *error) {
+	height = abs(height);
+	if (rows < 1) {
+		return FALSE;
+	}
+	if (rows < height) {
+		FreeImage_OutputMessageProc(s_format_id, error);
+		PartialImageWarning(s_format_id, rows, height);
+	}
+	return TRUE;
+}
+
+// a cut file keeps what it holds, as it always did here, now with a warning
+static void
+WarnRows(int rows, int height) {
+	height = abs(height);
+	if (rows < height) {
+		PartialImageWarning(s_format_id, (rows > 0) ? rows : 0, height);
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -598,7 +655,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 
 				switch (compression) {
 					case BI_RGB :
-						if( LoadPixelData(io, handle, dib, height, pitch, bit_count) ) {
+						if( KeptRows(LoadPixelData(io, handle, dib, height, pitch, bit_count, TRUE), height, "Error encountered while decoding BMP data") ) {
 							return dib;
 						} else {
 							throw "Error encountered while decoding BMP data";
@@ -606,7 +663,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 						break;
 
 					case BI_RLE4 :
-						if( (bit_count == 4) && LoadPixelDataRLE4(io, handle, width, height, dib) ) {
+						if( (bit_count == 4) && KeptRows(LoadPixelDataRLE4(io, handle, width, height, dib), height, "Error encountered while decoding RLE4 BMP data") ) {
 							return dib;
 						} else {
 							throw "Error encountered while decoding RLE4 BMP data";
@@ -614,7 +671,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 						break;
 
 					case BI_RLE8 :
-						if( (bit_count == 8) && LoadPixelDataRLE8(io, handle, width, height, dib) ) {
+						if( (bit_count == 8) && KeptRows(LoadPixelDataRLE8(io, handle, width, height, dib), height, "Error encountered while decoding RLE8 BMP data") ) {
 							return dib;
 						} else {
 							throw "Error encountered while decoding RLE8 BMP data";
@@ -668,7 +725,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 				io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				return dib;
 			}
@@ -725,7 +782,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 
 				// read in the bitmap bits
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				// check if the bitmap contains transparency, if so enable it in the header
 
@@ -847,11 +904,11 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				switch (compression) {
 					case BI_RGB :
 						// load pixel data 
-						LoadPixelData(io, handle, dib, height, pitch, bit_count);						
+						WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 						return dib;
 
 					case BI_RLE4 :
-						if ((bit_count == 4) && LoadPixelDataRLE4(io, handle, width, height, dib)) {
+						if ((bit_count == 4) && KeptRows(LoadPixelDataRLE4(io, handle, width, height, dib), height, "Error encountered while decoding RLE4 BMP data")) {
 							return dib;
 						}
 						else {
@@ -860,7 +917,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 						break;
 
 					case BI_RLE8 :
-						if ((bit_count == 8) && LoadPixelDataRLE8(io, handle, width, height, dib)) {
+						if ((bit_count == 8) && KeptRows(LoadPixelDataRLE8(io, handle, width, height, dib), height, "Error encountered while decoding RLE8 BMP data")) {
 							return dib;
 						}
 						else {
@@ -903,7 +960,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				}
 
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				return dib;
 			}
@@ -936,10 +993,10 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				if (bitmap_bits_offset > (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
 					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 				}
-				
+
 				// read in the bitmap bits
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				// check if the bitmap contains transparency, if so enable it in the header
 
@@ -1031,8 +1088,8 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				// read the pixel data
 
 				// load pixel data 
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
-						
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
+
 				return dib;
 			}
 
@@ -1054,7 +1111,7 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				}
 
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				return dib;
 			}
@@ -1085,7 +1142,7 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				// A 24 or 32 bit DIB may contain a palette for faster color reduction
 
 				// load pixel data and swap as needed if OS is Big Endian
-				LoadPixelData(io, handle, dib, height, pitch, bit_count);
+				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
 				// check if the bitmap contains transparency, if so enable it in the header
 
