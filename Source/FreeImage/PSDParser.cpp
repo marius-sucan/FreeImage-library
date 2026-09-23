@@ -1851,15 +1851,19 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 		return false;
 	}
 
-	FIBITMAP* cmyk_dib = NULL;
+	// frees the inverted CMYK copy on every return
+	struct DibHolder {
+		FIBITMAP *dib;
+		~DibHolder() { if(dib) FreeImage_Unload(dib); }
+	} cmyk = { NULL };
 
 	if (_headerInfo._ColourMode == PSDP_CMYK) {
 		// CMYK values must be "inverted"
-		cmyk_dib = FreeImage_Clone(dib);
-		if (cmyk_dib == NULL) {
+		cmyk.dib = FreeImage_Clone(dib);
+		if (cmyk.dib == NULL) {
 			return false;
 		}
-		dib = cmyk_dib;
+		dib = cmyk.dib;
 		invertCMYK(dib);
 	}
 
@@ -1898,7 +1902,8 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 	const unsigned srcBpp =  (depth == 1) ? 1 : FreeImage_GetBPP(dib)/8;
 	const unsigned srcLineSize = FreeImage_GetPitch(dib);
 	BYTE* const src_first_line = FreeImage_GetScanLine(dib, nHeight - 1);//<*** flipped
-	BYTE* line_start = new BYTE[lineSize]; //< fileline cache
+	std::vector<BYTE> line(lineSize); //< fileline cache
+	BYTE* line_start = &line[0];
 
 	switch ( nCompression ) {
 		case PSDP_COMPRESSION_NONE: // raw data
@@ -1925,21 +1930,16 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 
 			// later use this array as WORD rleLineSizeList[nChannels][nHeight];
 			// Every 127 bytes needs a length byte.
-			BYTE* rle_line_start = new BYTE[lineSize + ((lineSize + 126) / 127)]; //< RLE buffer
-			DWORD *rleLineSizeList = new (std::nothrow) DWORD[nChannels*nHeight];
-
-			if(!rleLineSizeList) {
-				SAFE_DELETE_ARRAY(line_start);
-				throw std::bad_alloc();
-			}
-			memset(rleLineSizeList, 0, sizeof(DWORD)*nChannels*nHeight);
+			std::vector<BYTE> rle_line(lineSize + ((lineSize + 126) / 127)); //< RLE buffer
+			BYTE* rle_line_start = &rle_line[0];
+			std::vector<DWORD> rleLineSizeList(nChannels*nHeight, 0);
 			const long offsets_pos = io->tell_proc(handle);
 			if(_headerInfo._Version == 1) {
-				if(io->write_proc(rleLineSizeList, nChannels*nHeight*2, 1, handle) != 1) {
+				if(io->write_proc(&rleLineSizeList[0], nChannels*nHeight*2, 1, handle) != 1) {
 					return false;
 				}
 			} else {
-				if(io->write_proc(rleLineSizeList, nChannels*nHeight*4, 1, handle) != 1) {
+				if(io->write_proc(&rleLineSizeList[0], nChannels*nHeight*4, 1, handle) != 1) {
 					return false;
 				}
 			}
@@ -1956,32 +1956,26 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 					}
 				}
 			}
-			SAFE_DELETE_ARRAY(rle_line_start);
 			// Fix length of resource
 			io->seek_proc(handle, offsets_pos, SEEK_SET);
 			if(_headerInfo._Version == 1) {
-				WORD *rleLineSizeList2 = new (std::nothrow) WORD[nChannels*nHeight];
-				if(!rleLineSizeList2) {
-					SAFE_DELETE_ARRAY(line_start);
-					throw std::bad_alloc();
-				}
+				std::vector<WORD> rleLineSizeList2(nChannels*nHeight);
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 					rleLineSizeList2[index] = (WORD)rleLineSizeList[index];
 #ifndef FREEIMAGE_BIGENDIAN
 					SwapShort(&rleLineSizeList2[index]);
 #endif
 				}
-				if(io->write_proc(rleLineSizeList2, nChannels*nHeight*2, 1, handle) != 1) {
+				if(io->write_proc(&rleLineSizeList2[0], nChannels*nHeight*2, 1, handle) != 1) {
 					return false;
 				}
-				SAFE_DELETE_ARRAY(rleLineSizeList2);
 			} else {
 #ifndef FREEIMAGE_BIGENDIAN
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 					SwapLong(&rleLineSizeList[index]);
 				}
 #endif
-				if(io->write_proc(rleLineSizeList, nChannels*nHeight*4, 1, handle) != 1) {
+				if(io->write_proc(&rleLineSizeList[0], nChannels*nHeight*4, 1, handle) != 1) {
 					return false;
 				}
 			}
@@ -1997,12 +1991,6 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 
 		default: // Unknown format
 			break;
-	}
-
-	SAFE_DELETE_ARRAY(line_start);
-
-	if (cmyk_dib != NULL) {
-		FreeImage_Unload(cmyk_dib);
 	}
 
 	return true;
