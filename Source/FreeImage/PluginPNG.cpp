@@ -524,8 +524,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	int bit_depth;
 	int pixel_depth = 0;	// pixel_depth = bit_depth * channels
 
-	FIBITMAP *dib = NULL;
-	png_bytepp row_pointers = NULL;
+	// both change after setjmp(), so they must be volatile to be current after a longjmp
+	FIBITMAP * volatile dib = NULL;
+	png_bytepp volatile row_pointers = NULL;
 
     fi_ioStructure fio;
     fio.s_handle = handle;
