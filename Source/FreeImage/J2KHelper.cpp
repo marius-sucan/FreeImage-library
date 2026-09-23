@@ -474,6 +474,11 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t 
 		if(image_type == FIT_BITMAP) {
 			// standard image ...
 			prec = 8;
+			// the copy below reads 1, 3 or 4 bytes per pixel: 1-, 4- and 16-bit rows are shorter
+			const unsigned bpp = FreeImage_GetBPP(dib);
+			if((bpp != 8) && (bpp != 24) && (bpp != 32)) {
+				throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
+			}
 			switch(FreeImage_GetColorType(dib)) {
 				case FIC_MINISBLACK:
 					numcomps = 1;
