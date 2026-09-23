@@ -359,6 +359,20 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 		return (out != src) ? out : FreeImage_Clone(src);
 	}
 
+	// the filters handle these image types only: any other would come out blank
+	switch (image_type) {
+		case FIT_BITMAP:
+		case FIT_UINT16:
+		case FIT_RGB16:
+		case FIT_RGBA16:
+		case FIT_FLOAT:
+		case FIT_RGBF:
+		case FIT_RGBAF:
+			break;
+		default:
+			return NULL;
+	}
+
 	RGBQUAD pal_buffer[256];
 	RGBQUAD *src_pal = NULL;
 
