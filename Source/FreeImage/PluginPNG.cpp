@@ -49,7 +49,12 @@
 typedef struct {
     FreeImageIO *s_io;
     fi_handle    s_handle;
+    long         s_end;		// end of the stream, -1 when unknown
+    BOOL         s_cut;		// the stream ended inside IDAT data
 } fi_ioStructure, *pfi_ioStructure;
+
+// png_get_io_chunk_type() of an IDAT
+static const png_uint_32 s_idat_chunk = 0x49444154;
 
 // ==========================================================
 // Plugin Interface
@@ -66,8 +71,27 @@ _ReadProc(png_structp png_ptr, unsigned char *data, png_size_t size) {
     pfi_ioStructure pfio = (pfi_ioStructure)png_get_io_ptr(png_ptr);
 	unsigned n = pfio->s_io->read_proc(data, (unsigned int)size, 1, pfio->s_handle);
 	if(size && (n == 0)) {
+#ifdef PNG_IO_STATE_SUPPORTED
+		if(((png_get_io_state(png_ptr) & PNG_IO_MASK_LOC) == PNG_IO_CHUNK_DATA) && (png_get_io_chunk_type(png_ptr) == s_idat_chunk)) {
+			pfio->s_cut = TRUE;
+		}
+#endif
 		throw "Read error: invalid or corrupted PNG file";
 	}
+#ifdef PNG_IO_STATE_SUPPORTED
+	// an IDAT that runs past the end of the stream is shortened to the bytes that are there
+	if((size == 8) && (pfio->s_end >= 0) && ((png_get_io_state(png_ptr) & PNG_IO_MASK_LOC) == PNG_IO_CHUNK_HDR) && (memcmp(data + 4, "IDAT", 4) == 0)) {
+		const long here = pfio->s_io->tell_proc(pfio->s_handle);
+		const png_uint_32 length = ((png_uint_32)data[0] << 24) | ((png_uint_32)data[1] << 16) | ((png_uint_32)data[2] << 8) | (png_uint_32)data[3];
+		if((here >= 0) && (here <= pfio->s_end) && ((unsigned long)(pfio->s_end - here) < (unsigned long)length)) {
+			const png_uint_32 available = (png_uint_32)(pfio->s_end - here);
+			data[0] = (BYTE)(available >> 24);
+			data[1] = (BYTE)(available >> 16);
+			data[2] = (BYTE)(available >> 8);
+			data[3] = (BYTE)available;
+		}
+	}
+#endif
 }
 
 static void
@@ -515,13 +539,76 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 	return TRUE;
 }
 
-// libpng has moved past the last row of the last pass
-static BOOL
-AllRowsDecoded(png_structp png_ptr, png_infop info_ptr) {
-	if (png_get_interlace_type(png_ptr, info_ptr) != PNG_INTERLACE_NONE) {
-		return (png_get_current_pass_number(png_ptr) >= 7) ? TRUE : FALSE;
+// moves to the end of the stream and returns its offset, or -1
+static long
+StreamEnd(FreeImageIO *io, fi_handle handle) {
+	return (io->seek_proc(handle, 0, SEEK_END) == 0) ? io->tell_proc(handle) : -1;
+}
+
+// Adam7 pass of each pixel in an 8x8 block
+static const BYTE s_adam7_pass[8][8] = {
+	{ 0, 5, 3, 5, 1, 5, 3, 5 },
+	{ 6, 6, 6, 6, 6, 6, 6, 6 },
+	{ 4, 5, 4, 5, 4, 5, 4, 5 },
+	{ 6, 6, 6, 6, 6, 6, 6, 6 },
+	{ 2, 5, 3, 5, 2, 5, 3, 5 },
+	{ 6, 6, 6, 6, 6, 6, 6, 6 },
+	{ 4, 5, 4, 5, 4, 5, 4, 5 },
+	{ 6, 6, 6, 6, 6, 6, 6, 6 }
+};
+
+// libpng stopped at image row 'row' of 'pass': earlier passes and that pass above 'row' are decoded
+static inline BOOL
+IsDecoded(unsigned x, unsigned y, int pass, unsigned row) {
+	const int owner = s_adam7_pass[y & 7][x & 7];
+	return ((owner < pass) || ((owner == pass) && (y < row))) ? TRUE : FALSE;
+}
+
+static inline void
+CopyPixel(BYTE *dst, unsigned x, const BYTE *src, unsigned sx, unsigned bpp) {
+	if (bpp >= 8) {
+		const unsigned bytes = bpp / 8;
+		memcpy(dst + x * bytes, src + sx * bytes, bytes);
+	} else {
+		// 1 or 4 bits, leftmost pixel in the high bits
+		const unsigned per_byte = 8 / bpp;
+		const unsigned mask = (1U << bpp) - 1;
+		const unsigned src_shift = (per_byte - 1 - sx % per_byte) * bpp;
+		const unsigned dst_shift = (per_byte - 1 - x % per_byte) * bpp;
+		const unsigned value = (src[sx / per_byte] >> src_shift) & mask;
+		dst[x / per_byte] = (BYTE)((dst[x / per_byte] & ~(mask << dst_shift)) | (value << dst_shift));
 	}
-	return (png_get_current_row_number(png_ptr) >= png_get_image_height(png_ptr, info_ptr)) ? TRUE : FALSE;
+}
+
+// an interrupted Adam7 decode: each missing pixel takes the nearest decoded one of its block
+static void
+FillInterlaceGaps(FIBITMAP *dib, int pass, unsigned row) {
+	// pixel spacing once passes 0 to q are decoded
+	static const unsigned grid_x[7] = { 8, 4, 4, 2, 2, 1, 1 };
+	static const unsigned grid_y[7] = { 8, 8, 4, 4, 2, 2, 1 };
+
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const unsigned bpp = FreeImage_GetBPP(dib);
+
+	for (unsigned y = 0; y < height; y++) {
+		BYTE *dst = FreeImage_GetScanLine(dib, height - 1 - y);
+		const unsigned fine_y = y - y % grid_y[pass];
+		const BYTE *fine = FreeImage_GetScanLine(dib, height - 1 - fine_y);
+		const BYTE *coarse = (pass > 0) ? FreeImage_GetScanLine(dib, height - 1 - (y - y % grid_y[pass - 1])) : NULL;
+
+		for (unsigned x = 0; x < width; x++) {
+			if (IsDecoded(x, y, pass, row)) {
+				continue;
+			}
+			const unsigned fine_x = x - x % grid_x[pass];
+			if (IsDecoded(fine_x, fine_y, pass, row)) {
+				CopyPixel(dst, x, fine, fine_x, bpp);
+			} else if (coarse) {
+				CopyPixel(dst, x, coarse, x - x % grid_x[pass - 1], bpp);
+			}
+		}
+	}
 }
 
 static void
@@ -541,8 +628,41 @@ FinishImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 	ReadMetadata(png_ptr, info_ptr, dib);
 }
 
-static FIBITMAP * DLL_CALLCONV
-Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+// keeps what libpng decoded before an error; FALSE when no row was decoded
+static BOOL
+SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
+	const png_uint_32 height = png_get_image_height(png_ptr, info_ptr);
+	const int pass = png_get_current_pass_number(png_ptr);
+	const png_uint_32 row = png_get_current_row_number(png_ptr);
+
+	if (png_get_interlace_type(png_ptr, info_ptr) != PNG_INTERLACE_NONE) {
+		// pass 7: libpng has moved past the last row of the last pass
+		if (pass < 7) {
+			if ((pass == 0) && (row == 0)) {
+				return FALSE;
+			}
+			FillInterlaceGaps(dib, pass, row);
+			FreeImage_OutputMessageProc(s_format_id, "Warning: the image data is cut short or damaged; %d of 7 interlace passes complete, the image is shown at lower detail", pass);
+			FinishImage(png_ptr, info_ptr, dib);
+			return TRUE;
+		}
+	} else if (row < height) {
+		if (row == 0) {
+			return FALSE;
+		}
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the image data is cut short or damaged; %u of %u rows decoded, the rest is blank", row, height);
+		FinishImage(png_ptr, info_ptr, dib);
+		return TRUE;
+	}
+
+	FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short or damaged, but the image is complete");
+	FinishImage(png_ptr, info_ptr, dib);
+	return TRUE;
+}
+
+// end >= 0: an IDAT the stream cuts off is read as far as it goes; *cut: a cut worth reading again that way
+static FIBITMAP *
+LoadPNG(FreeImageIO *io, fi_handle handle, int flags, long end, BOOL *cut) {
 	png_structp png_ptr = NULL;
 	png_infop info_ptr = NULL;
 	png_uint_32 width, height;
@@ -557,6 +677,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
     fi_ioStructure fio;
     fio.s_handle = handle;
 	fio.s_io = io;
+	fio.s_end = end;
+	fio.s_cut = FALSE;
     
 	if (handle) {
 		BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
@@ -813,11 +935,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 
 		} catch (const char *text) {
-			// every pixel is decoded: keep the image, lose only what follows it
-			const BOOL salvage = (dib && png_ptr && AllRowsDecoded(png_ptr, info_ptr)) ? TRUE : FALSE;
-			if (salvage) {
-				FinishImage(png_ptr, info_ptr, dib);
+			const BOOL retry = (cut && fio.s_cut) ? TRUE : FALSE;
+			if (retry) {
+				*cut = TRUE;
+			} else if (NULL != text) {
+				FreeImage_OutputMessageProc(s_format_id, text);
 			}
+			const BOOL salvage = (!retry && dib && png_ptr && FreeImage_HasPixels(dib) && SalvageImage(png_ptr, info_ptr, dib)) ? TRUE : FALSE;
 			if (png_ptr) {
 				png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 			}
@@ -827,15 +951,33 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if (dib && !salvage) {
 				FreeImage_Unload(dib);
 			}
-			if (NULL != text) {
-				FreeImage_OutputMessageProc(s_format_id, text);
-			}
 			
 			return salvage ? dib : NULL;
 		}
 	}			
 
 	return NULL;
+}
+
+static FIBITMAP * DLL_CALLCONV
+Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+	if (!handle) {
+		return NULL;
+	}
+	// where to read the image again if the stream cuts it off; header-only loads read no image data
+	const long start = (flags & FIF_LOAD_NOPIXELS) ? -1 : io->tell_proc(handle);
+	BOOL cut = FALSE;
+	FIBITMAP *dib = LoadPNG(io, handle, flags, -1, (start >= 0) ? &cut : NULL);
+	if (cut) {
+		// the stream ends inside the image data: read it again, the last IDAT shortened to the bytes that are there
+		const long end = StreamEnd(io, handle);
+		if (io->seek_proc(handle, start, SEEK_SET) == 0) {
+			dib = LoadPNG(io, handle, flags, (end > start) ? end : -1, NULL);
+		} else {
+			FreeImage_OutputMessageProc(s_format_id, "Read error: invalid or corrupted PNG file");
+		}
+	}
+	return dib;
 }
 
 // --------------------------------------------------------------------------
@@ -856,6 +998,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	fi_ioStructure fio;
     fio.s_handle = handle;
 	fio.s_io = io;
+	fio.s_end = -1;
+	fio.s_cut = FALSE;
 
 	// a 555/565 row is shorter than the 8-bit RGB row libpng reads, and other types have no PNG layout
 	if (dib) {
