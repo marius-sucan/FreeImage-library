@@ -515,6 +515,32 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 	return TRUE;
 }
 
+// libpng has moved past the last row of the last pass
+static BOOL
+AllRowsDecoded(png_structp png_ptr, png_infop info_ptr) {
+	if (png_get_interlace_type(png_ptr, info_ptr) != PNG_INTERLACE_NONE) {
+		return (png_get_current_pass_number(png_ptr) >= 7) ? TRUE : FALSE;
+	}
+	return (png_get_current_row_number(png_ptr) >= png_get_image_height(png_ptr, info_ptr)) ? TRUE : FALSE;
+}
+
+static void
+FinishImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
+	// check if the bitmap contains transparency, if so enable it in the header
+
+	if (FreeImage_GetBPP(dib) == 32) {
+		if (FreeImage_GetColorType(dib) == FIC_RGBALPHA) {
+			FreeImage_SetTransparent(dib, TRUE);
+		} else {
+			FreeImage_SetTransparent(dib, FALSE);
+		}
+	}
+
+	// get possible metadata (it can be located both before and after the image data)
+
+	ReadMetadata(png_ptr, info_ptr, dib);
+}
+
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	png_structp png_ptr = NULL;
@@ -766,16 +792,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			png_set_benign_errors(png_ptr, 1);
 			png_read_image(png_ptr, row_pointers);
 
-			// check if the bitmap contains transparency, if so enable it in the header
-
-			if (FreeImage_GetBPP(dib) == 32) {
-				if (FreeImage_GetColorType(dib) == FIC_RGBALPHA) {
-					FreeImage_SetTransparent(dib, TRUE);
-				} else {
-					FreeImage_SetTransparent(dib, FALSE);
-				}
-			}
-				
 			// cleanup
 
 			if (row_pointers) {
@@ -787,9 +803,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			png_read_end(png_ptr, info_ptr);
 
-			// get possible metadata (it can be located both before and after the image data)
-
-			ReadMetadata(png_ptr, info_ptr, dib);
+			FinishImage(png_ptr, info_ptr, dib);
 
 			if (png_ptr) {
 				// clean up after the read, and free any memory allocated - REQUIRED
@@ -799,20 +813,25 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 
 		} catch (const char *text) {
+			// every pixel is decoded: keep the image, lose only what follows it
+			const BOOL salvage = (dib && png_ptr && AllRowsDecoded(png_ptr, info_ptr)) ? TRUE : FALSE;
+			if (salvage) {
+				FinishImage(png_ptr, info_ptr, dib);
+			}
 			if (png_ptr) {
 				png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 			}
 			if (row_pointers) {
 				free(row_pointers);
 			}
-			if (dib) {
+			if (dib && !salvage) {
 				FreeImage_Unload(dib);
 			}
 			if (NULL != text) {
 				FreeImage_OutputMessageProc(s_format_id, text);
 			}
 			
-			return NULL;
+			return salvage ? dib : NULL;
 		}
 	}			
 
