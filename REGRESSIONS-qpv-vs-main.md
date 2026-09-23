@@ -357,11 +357,16 @@ Several turned out wider than first recorded.
   - 1-pixel-wide or -tall PCX, including Pillow's 1x1 files, was refused (3ea9b2e).
 - **`audit/crashes/png_PluginPNG.cpp-790.png`** (16adb5f): a double free. libpng longjmps out of `png_read_end`
   (bad IEND CRC) after `row_pointers` was freed, and a non-volatile local held the stale pointer.
-- **A PNG damaged after its image data was refused** (83061ac), although every pixel had been decoded: no IEND,
-  a cut or bad-CRC IEND, garbage or a cut chunk after the last IDAT, a missing last IDAT CRC. The image now loads
-  with its transparency and the metadata read so far, and the error is still reported. All 6,224 such copies of
-  778 PNGs load pixel-identical to the intact file; a file cut inside its compressed data still fails.
-  `png_PluginPNG.cpp-790.png` now loads.
+- **A cut or damaged PNG was refused**, however much of it had been decoded.
+  - Damaged after its image data (83061ac): no IEND, a cut or bad-CRC IEND, garbage or a cut chunk after the last
+    IDAT, a missing last IDAT CRC. All 6,224 such copies of 778 PNGs now load pixel-identical to the intact file,
+    `png_PluginPNG.cpp-790.png` included.
+  - Cut inside its image data (f61c4bf): the rows decoded so far load and the rest is zero; an interlaced image
+    fills the missing pixels from coarser Adam7 passes. libpng drops a read piece of up to 8 KiB that the stream
+    cuts short, so the PNG is read once more with that IDAT shortened to the bytes present. All 8,112 cuts match
+    an oracle that inflates the bytes present with libpng's row loop. Decoded bytes zlib still holds when the
+    input runs out stay lost (at most 1,025 here).
+  - The error is still reported, then a warning says what was kept; DebugView gets both on Windows.
 - **Deleting a page from Pillow's mixed-mode multi-page TIFF** (daa370c). The real bug: every 8-bit grey or
   palette TIFF without a SamplesPerPixel tag failed to load ("Image is corrupted"), which includes all of
   Pillow's L and P TIFFs; 44 more corpus files now decode. Found with it: 16-bit colormaps written as v << 8
@@ -383,6 +388,12 @@ Also found while fixing, and fixed:
   header-only crashed in `CloseMultiBitmap`. The pages are now reloaded with pixels.
 
 Found, not fixed (each needs a decision, or is out of scope):
+- The `asan-lib` targets of TestAPI's APNG, EXR, JPEG, MNG, RAW and WebP suites add their ASan objects under new
+  names next to the originals, and the linker takes whichever member it meets first for each symbol. The MNG
+  suite's ASan binary gets an instrumented MNGHelper but the original PluginMNG, PluginPNG and libpng, so its
+  ASan runs checked allocations, not the plugins' reads and writes; the other five may be the same. AVIF and
+  HEIF replace their plugin object (same name) and duplicate only the bundled decoder objects. Linking
+  `asan-obj/*.o` ahead of the archive gives a fully instrumented test binary.
 - `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
   but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
 - JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no
@@ -426,5 +437,7 @@ Found, not fixed (each needs a decision, or is out of scope):
   - `probe.cpp`: every type per writer, header-only multi-page saves, TIFF thumbnails, mixed multi-page TIFF.
   - `wdiff` with `cmp_w.py`: supported cases write the same bytes, unsupported ones are refused.
   - `gen_png` + `gen_trunc.py` + `pngload` + `cmp_png.py`: 10,747 damaged copies of 778 PNGs; `pngasan` loads
-    them all in one ASan/LSan process (archive from `TestAPI/MNG`'s `asan-lib`).
+    them all in one ASan/LSan process, linked with `TestAPI/MNG/asan-obj/*.o` ahead of `Dist/libfreeimage.a`.
+  - `partial/`: `gen_cuts.py` cuts inside the image data, `zoracle` gives libpng's stopping point, `partcheck`
+    compares pixel by pixel, `offpng` loads at a stream offset, `view` draws a contact sheet.
   - `psdfloat` + `psdcheck.py`: psd-tools (installed in `refuse/pylib`) as an independent PSD reader.
