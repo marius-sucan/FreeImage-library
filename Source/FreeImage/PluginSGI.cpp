@@ -219,6 +219,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 	LONG *pRowIndex = NULL;
 
+	// the RLE offset table counts from the start of the image, which is not always the start of the stream
+	const long start_pos = io->tell_proc(handle);
+
 	try {
 		// read the header
 		memset(&sgiHeader, 0, sizeof(SGIHeader));
@@ -353,7 +356,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				BYTE *p = pRow;
 				if (bIsRLE) {
 					my_rle_status.cnt = 0;
-					io->seek_proc(handle, *pri, SEEK_SET);
+					io->seek_proc(handle, start_pos + *pri, SEEK_SET);
 				}
 				for (int k = 0; k < width; k++, p += numChannels) {
 					BYTE packed = 0;
