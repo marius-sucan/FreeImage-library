@@ -202,53 +202,52 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 	int width	= FreeImage_GetWidth(dib);
 	int height = FreeImage_GetHeight(dib);
 
-	// <=: an exact fit is cloned, keeping its pixel format
-	if((width <= max_pixel_size) && (height <= max_pixel_size)) {
-		// image is no larger than the requested thumbnail
-		return FreeImage_Clone(dib);
-	}
-
-	if(width > height) {
-		new_width = max_pixel_size;
-		// change image height with the same ratio
-		double ratio = ((double)new_width / (double)width);
-		new_height = (int)(height * ratio + 0.5);
-		if(new_height == 0) new_height = 1;
-	} else {
-		new_height = max_pixel_size;
-		// change image width with the same ratio
-		double ratio = ((double)new_height / (double)height);
-		new_width = (int)(width * ratio + 0.5);
-		if(new_width == 0) new_width = 1;
-	}
-
 	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
 
-	// perform downsampling using a bilinear interpolation
-
-	switch(image_type) {
-		case FIT_BITMAP:
-		case FIT_UINT16:
-		case FIT_RGB16:
-		case FIT_RGBA16:
-		case FIT_FLOAT:
-		case FIT_RGBF:
-		case FIT_RGBAF:
-		{
-			FREE_IMAGE_FILTER filter = FILTER_BILINEAR;
-			thumbnail = FreeImage_Rescale(dib, new_width, new_height, filter);
+	if((width <= max_pixel_size) && (height <= max_pixel_size)) {
+		// no larger than the thumbnail: cloned, not resampled
+		thumbnail = FreeImage_Clone(dib);
+	} else {
+		if(width > height) {
+			new_width = max_pixel_size;
+			// change image height with the same ratio
+			double ratio = ((double)new_width / (double)width);
+			new_height = (int)(height * ratio + 0.5);
+			if(new_height == 0) new_height = 1;
+		} else {
+			new_height = max_pixel_size;
+			// change image width with the same ratio
+			double ratio = ((double)new_height / (double)height);
+			new_width = (int)(width * ratio + 0.5);
+			if(new_width == 0) new_width = 1;
 		}
-		break;
 
-		case FIT_INT16:
-		case FIT_UINT32:
-		case FIT_INT32:
-		case FIT_DOUBLE:
-		case FIT_COMPLEX:
-		default:
-			// cannot rescale this kind of image
-			thumbnail = NULL;
+		// perform downsampling using a bilinear interpolation
+
+		switch(image_type) {
+			case FIT_BITMAP:
+			case FIT_UINT16:
+			case FIT_RGB16:
+			case FIT_RGBA16:
+			case FIT_FLOAT:
+			case FIT_RGBF:
+			case FIT_RGBAF:
+			{
+				FREE_IMAGE_FILTER filter = FILTER_BILINEAR;
+				thumbnail = FreeImage_Rescale(dib, new_width, new_height, filter);
+			}
 			break;
+
+			case FIT_INT16:
+			case FIT_UINT32:
+			case FIT_INT32:
+			case FIT_DOUBLE:
+			case FIT_COMPLEX:
+			default:
+				// cannot rescale this kind of image
+				thumbnail = NULL;
+				break;
+		}
 	}
 
 	if((thumbnail != NULL) && (image_type != FIT_BITMAP) && convert) {
