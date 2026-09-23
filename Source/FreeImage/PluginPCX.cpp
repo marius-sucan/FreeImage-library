@@ -121,9 +121,11 @@ Note that a scanline always has an even number of bytes
 @param bIsRLE
 @param ReadBuf
 @param ReadPos
+@param ReadEnd bytes of ReadBuf the file filled
+@return FALSE when the file ended before the line did
 */
-static void
-readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL bIsRLE, BYTE * ReadBuf, int * ReadPos) {
+static BOOL
+readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL bIsRLE, BYTE * ReadBuf, int * ReadPos, int * ReadEnd) {
 	BYTE count = 0;
 	BYTE value = 0;
 	unsigned written = 0;
@@ -141,10 +143,13 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 						*ReadBuf = ReadBuf[PCX_IO_BUF_SIZE - 1];
 						got = io->read_proc(ReadBuf + 1, 1, PCX_IO_BUF_SIZE - 1, handle);
 						memset(ReadBuf + 1 + got, 0, PCX_IO_BUF_SIZE - 1 - got);
+						// the byte carried over is file data only if the last refill was whole
+						*ReadEnd = (*ReadEnd == PCX_IO_BUF_SIZE) ? 1 + (int)got : 0;
 					} else {
 						// read the complete buffer
 						got = io->read_proc(ReadBuf, 1, PCX_IO_BUF_SIZE, handle);
 						memset(ReadBuf + got, 0, PCX_IO_BUF_SIZE - got);
+						*ReadEnd = (int)got;
 					}
 
 					*ReadPos = 0;
@@ -170,10 +175,14 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 			*(buffer + written++) = value;
 		}
 
+		return (*ReadPos <= *ReadEnd) ? TRUE : FALSE;
+
 	} else {
 		// normal read, zeros past the end of the file
 		const unsigned got = io->read_proc(buffer, 1, length, handle);
 		memset(buffer + got, 0, length - got);
+
+		return (got == length) ? TRUE : FALSE;
 	}
 }
 
@@ -407,14 +416,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		if(!header_only) {
-			// a 2-byte run yields at most 63 bytes, so a short file cannot hold a huge raster
+			// a 2-byte run yields at most 63 bytes, so a short file cannot claim a huge raster
 			const long data_pos = start_pos + (long)sizeof(PCXHEADER);
 			io->seek_proc(handle, 0, SEEK_END);
 			const long data_end = io->tell_proc(handle);
 			io->seek_proc(handle, data_pos, SEEK_SET);
 			const UINT64 raster = (UINT64)header.bytes_per_line * header.planes * height;
 			const UINT64 data = (data_end > data_pos) ? (UINT64)(data_end - data_pos) : 0;
-			if(raster * 2 > data * 63) {
+			if(!PlausibleImageSize(raster, data, 32)) {
 				throw FI_MSG_ERROR_CORRUPTED_IMAGE;
 			}
 		}
@@ -500,9 +509,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				}
 
-				// wrong palette ID, perhaps a gray scale is needed ?
+				// no palette (perhaps a cut file): grey rather than black
 
-				else if (header.palette_info == 2) {
+				else {
 					pal = FreeImage_GetPalette(dib);
 
 					for(int i = 0; i < 256; i++) {
@@ -549,15 +558,24 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		bits = FreeImage_GetScanLine(dib, height - 1);
 
 		int ReadPos = PCX_IO_BUF_SIZE;
+		int ReadEnd = PCX_IO_BUF_SIZE;
+
+		// a cut file keeps the rows it holds; the one the cut falls in is kept too
+		unsigned rows = height;
 
 		if ((header.planes == 1) && ((header.bpp == 1) || (header.bpp == 8))) {
 			for (unsigned y = 0; y < height; y++) {
 				// do a safe copy of the scanline into 'line'
-				readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
+				const BOOL complete = readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos, &ReadEnd);
 				// sometimes (already encountered), PCX images can have a lineLength > pitch
 				memcpy(bits, line, MIN(pitch, lineLength));
 
 				bits -= pitch;
+
+				if (!complete) {
+					rows = y;
+					break;
+				}
 			}
 		} else if ((header.planes == 4) && (header.bpp == 1)) {
 			BYTE bit,  mask;
@@ -570,7 +588,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			for (unsigned y = 0; y < height; y++) {
-				readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
+				const BOOL complete = readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos, &ReadEnd);
 
 				// build a nibble using the 4 planes
 
@@ -596,6 +614,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 
 				bits -= pitch;
+
+				if (!complete) {
+					rows = y;
+					break;
+				}
 			}
 
 			free(buffer);
@@ -604,7 +627,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BYTE *pLine;
 
 			for (unsigned y = 0; y < height; y++) {
-				readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
+				const BOOL complete = readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos, &ReadEnd);
 
 				// convert the plane stream to BGR (RRRRGGGGBBBB -> BGRBGRBGRBGR)
 				// well, now with the FI_RGBA_x macros, on BIGENDIAN we convert to RGB
@@ -628,9 +651,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				pLine += header.bytes_per_line;
 
 				bits -= pitch;
+
+				if (!complete) {
+					rows = y;
+					break;
+				}
 			}
 		} else {
 			throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
+		}
+
+		// some writers leave out the last row's padding, so a cut in the last row is no damage
+		if (rows + 1 < height) {
+			PartialImageWarning(s_format_id, rows, height);
 		}
 
 		free(line);
