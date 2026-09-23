@@ -247,8 +247,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			size -= 8;
 
+			// a chunk that runs past the end the FORM declares is still read, as the last one
 			if (ch_size > size)
-				break;
+				size = ch_size;
 
 			unsigned ch_end = io->tell_proc(handle) + ch_size;
 
@@ -312,8 +313,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					// NON INTERLACED (LBM)
 
 					unsigned line = FreeImage_GetLine(dib) + 1 & ~1;
-					
-					for (unsigned i = 0; i < FreeImage_GetHeight(dib); i++) {
+
+					// a cut file keeps the rows it holds
+					unsigned rows = FreeImage_GetHeight(dib);
+
+					for (unsigned i = 0; i < FreeImage_GetHeight(dib) && rows == FreeImage_GetHeight(dib); i++) {
 						BYTE *bits = FreeImage_GetScanLine(dib, FreeImage_GetHeight(dib) - i - 1);
 
 						if (comp == 1) {
@@ -326,12 +330,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							// bound every packet by the row, but still consume its bytes
 							while (number_of_bytes_written < line) {
 								if (io->read_proc(&rle_count, 1, 1, handle) != 1) {
+									rows = i;
 									break;
 								}
 
 								if (rle_count < 128) {
 									for (int k = 0; k < rle_count + 1; k++) {
 										if (io->read_proc(&byte, 1, 1, handle) != 1) {
+											rows = i;
 											break;
 										}
 
@@ -341,6 +347,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 									}
 								} else if (rle_count > 128) {
 									if (io->read_proc(&byte, 1, 1, handle) != 1) {
+										rows = i;
 										break;
 									}
 
@@ -353,12 +360,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 									}
 								}
 								// 128 is a PackBits no-op
+
+								if (rows != FreeImage_GetHeight(dib)) {
+									break;
+								}
 							}
 						} else {
 							// don't use compression
 
-							io->read_proc(bits, line, 1, handle);
+							if (io->read_proc(bits, line, 1, handle) != 1) {
+								rows = i;
+							}
 						}
+					}
+
+					// some writers leave out the last row's padding, so a cut in the last row is no damage
+					if (rows + 1 < FreeImage_GetHeight(dib)) {
+						PartialImageWarning(s_format_id, rows, FreeImage_GetHeight(dib));
 					}
 
 					return dib;
@@ -378,20 +396,29 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 					dest += FreeImage_GetPitch(dib) * height;
 
+					// a cut file keeps the rows it holds; bytes missing from the row it ends in are zero
+					unsigned rows = height;
+
 					for (unsigned y = 0; y < height; y++) {
 						dest -= FreeImage_GetPitch(dib);
 
 						// read all planes in one hit,
 						// 'coz PSP compresses across planes...
 
+						unsigned got = src_size;
+
 						if (comp) {
 							// unpacker algorithm
 
 							for(unsigned x = 0; x < src_size;) {
+								got = x;
 								// read the next source byte into t
 								signed char t = 0;
-								io->read_proc(&t, 1, 1, handle);
-								
+								if (io->read_proc(&t, 1, 1, handle) != 1) {
+									rows = y;
+									break;
+								}
+
 								if (t >= 0) {
 									// t = [0..127] => copy the next t+1 bytes literally
 									unsigned size_to_read = t + 1;
@@ -399,16 +426,25 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 									if((size_to_read + x) > src_size) {
 										// sanity check for buffer overruns 
 										size_to_read = src_size - x;
-										io->read_proc(src + x, size_to_read, 1, handle);
+										if (io->read_proc(src + x, size_to_read, 1, handle) != 1) {
+											rows = y;
+											break;
+										}
 										x += (t + 1);
 									} else {
-										io->read_proc(src + x, size_to_read, 1, handle);
+										if (io->read_proc(src + x, size_to_read, 1, handle) != 1) {
+											rows = y;
+											break;
+										}
 										x += size_to_read;
 									}
 								} else if (t != -128) {
 									// t = [-1..-127]  => replicate the next byte -t+1 times
 									BYTE b = 0;
-									io->read_proc(&b, 1, 1, handle);
+									if (io->read_proc(&b, 1, 1, handle) != 1) {
+										rows = y;
+										break;
+									}
 									unsigned size_to_copy = (unsigned)(-(int)t + 1);
 
 									if((size_to_copy + x) > src_size) {
@@ -424,7 +460,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 								// t = -128 => noop
 							}
 						} else {
-							io->read_proc(src, src_size, 1, handle);
+							got = io->read_proc(src, 1, src_size, handle);
+							if (got != src_size) {
+								rows = y;
+							}
+						}
+
+						if (rows != height) {
+							if (got == 0) {
+								break;
+							}
+							memset(src + got, 0, src_size - got);
 						}
 
 						// lazy planar->chunky...
@@ -444,9 +490,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 #endif
+
+						if (rows != height) {
+							break;
+						}
 					}
 
 					free(src);
+
+					if (rows + 1 < height) {
+						PartialImageWarning(s_format_id, rows, height);
+					}
 
 					return dib;
 				}
