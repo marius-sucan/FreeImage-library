@@ -785,12 +785,16 @@ tiff_read_iptc_profile(TIFF *tiff, FIBITMAP *dib) {
 	BYTE *profile = NULL;
 	uint32_t profile_size = 0;
 
-    if(TIFFGetField(tiff,TIFFTAG_RICHTIFFIPTC, &profile_size, &profile) == 1) {
-		if (TIFFIsByteSwapped(tiff) != 0) {
-			TIFFSwabArrayOfLong((uint32_t *) profile, (unsigned long)profile_size);
+	// libtiff counts the tag in bytes, whether the file stored it as UNDEFINED or as LONG
+	if(TIFFGetField(tiff,TIFFTAG_RICHTIFFIPTC, &profile_size, &profile) == 1) {
+		// libtiff swaps a LONG-typed tag from a byte-swapped file, which reverses the stream in 4-byte groups
+		if(TIFFIsByteSwapped(tiff) && (profile_size >= 4) && ((profile_size & 3) == 0) && (profile[0] != 0x1C) && (profile[3] == 0x1C)) {
+			std::vector<BYTE> stream(profile, profile + profile_size);
+			TIFFSwabArrayOfLong((uint32_t*)&stream[0], (tmsize_t)(profile_size / 4));
+			return read_iptc_profile(dib, &stream[0], profile_size);
 		}
 
-		return read_iptc_profile(dib, profile, 4 * profile_size);
+		return read_iptc_profile(dib, profile, profile_size);
 	}
 
 	return FALSE;
@@ -895,22 +899,9 @@ tiff_write_iptc_profile(TIFF *tiff, FIBITMAP *dib) {
 		uint32_t profile_size = 0;
 		// create a binary profile
 		if(write_iptc_profile(dib, &profile, &profile_size)) {
-			uint32_t iptc_size = profile_size;
-			iptc_size += (4-(iptc_size & 0x03)); // Round up for long word alignment
-			BYTE *iptc_profile = (BYTE*)malloc(iptc_size);
-			if(!iptc_profile) {
-				free(profile);
-				return FALSE;
-			}
-			memset(iptc_profile, 0, iptc_size);
-			memcpy(iptc_profile, profile, profile_size);
-			if (TIFFIsByteSwapped(tiff)) {
-				TIFFSwabArrayOfLong((uint32_t *) iptc_profile, (unsigned long)iptc_size/4);
-			}
-			// Tag is type TIFF_LONG so byte length is divided by four
-			TIFFSetField(tiff, TIFFTAG_RICHTIFFIPTC, iptc_size/4, iptc_profile);
+			// libtiff writes the tag as UNDEFINED and counts bytes
+			TIFFSetField(tiff, TIFFTAG_RICHTIFFIPTC, profile_size, profile);
 			// release the profile data
-			free(iptc_profile);
 			free(profile);
 
 			return TRUE;
