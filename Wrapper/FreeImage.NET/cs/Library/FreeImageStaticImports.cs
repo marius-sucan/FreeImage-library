@@ -490,7 +490,7 @@ namespace FreeImageAPI
 
 		/// <summary>
 		/// Registers a new plugin to be used in FreeImage. The plugin is residing in a DLL.
-		/// The Init function must be called ìInitî and must use the stdcall calling convention.
+		/// The Init function must be called ‚ÄúInit‚Äù and must use the stdcall calling convention.
 		/// </summary>
 		/// <param name="path">Complete path to the dll file hosting the plugin.</param>
 		/// <param name="format">A string describing the format of the plugin.</param>
@@ -1835,7 +1835,7 @@ namespace FreeImageAPI
 
 		/// <summary>
 		/// This function rotates a 1-, 8-bit greyscale or a 24-, 32-bit color image by means of 3 shears.
-		/// 1-bit images rotation is limited to integer multiple of 90∞.
+		/// 1-bit images rotation is limited to integer multiple of 90¬∞.
 		/// <c>null</c> is returned for other values.
 		/// </summary>
 		/// <param name="dib">Handle to a FreeImage bitmap.</param>

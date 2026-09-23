@@ -3,7 +3,7 @@
 //
 // Design and implementation by
 // - Simon Beavis
-// - Peter Byström
+// - Peter BystrÃ¶m
 // - Anatoliy Pulyaevskiy (xvel84@rambler.ru)
 //
 // Contributors:

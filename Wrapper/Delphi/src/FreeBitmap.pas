@@ -10,7 +10,7 @@ unit FreeBitmap;
 // Contributors:
 // - Enzo Costantini (enzocostantini@libero.it)
 // - Lorenzo Monti (LM)  lomo74@gmail.com
-// - Maurício (MAU)      mauricio_box@yahoo.com - see also http://sourceforge.net/projects/tcycomponents/
+// - MaurÃ­cio (MAU)      mauricio_box@yahoo.com - see also http://sourceforge.net/projects/tcycomponents/
 //
 // Revision history
 // When        Who   What

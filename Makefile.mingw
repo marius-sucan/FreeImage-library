@@ -17,28 +17,28 @@ RCFILE = FreeImage.rc
 # Default: SHARED
 #FREEIMAGE_LIBRARY_TYPE = STATIC
 
-# Redefine the compiler (CC defaults to ´cc´ for MinGW's make,
-# however there's only ´gcc´ available with MinGW).
+# Redefine the compiler (CC defaults to Â´ccÂ´ for MinGW's make,
+# however there's only Â´gccÂ´ available with MinGW).
 CC = gcc
 
-# Redefine the linker (we use ´g++´ for linking, since MinGW's
-# command ´ld´ comes with wrong (Linux) standard library search
+# Redefine the linker (we use Â´g++Â´ for linking, since MinGW's
+# command Â´ldÂ´ comes with wrong (Linux) standard library search
 # paths).
 LD = g++
 
-#Define the ´dlltool´ command.
+#Define the Â´dlltoolÂ´ command.
 DLLTOOL = dlltool
 
 #Define the resource compiler.
 RC = windres
 
-# Define the ´copy´ command.
+# Define the Â´copyÂ´ command.
 CP = cp
 
-# Define the ´mkdir´ command.
+# Define the Â´mkdirÂ´ command.
 MD = mkdir
 
-# Define the ´remove´ command.
+# Define the Â´removeÂ´ command.
 RM = rm
 
 # OPENMP=0 builds single-threaded
