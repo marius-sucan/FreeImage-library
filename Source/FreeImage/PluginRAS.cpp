@@ -111,28 +111,40 @@ SkipBytes(FreeImageIO *io, fi_handle handle, DWORD n) {
 	return TRUE;
 }
 
-static void
+// FALSE when the file ends first; what it does not hold is zero
+static BOOL
 ReadData(FreeImageIO *io, fi_handle handle, BYTE *buf, DWORD length, BOOL rle, RASRLEState *run) {
 	// Read either Run-Length Encoded or normal image data
-
+	
 	if (rle) {
 		// Run-length encoded read
-
+	
 		while(length--) {
 			if (run->remaining) {
 				run->remaining--;
 				*(buf++)= run->repchar;
 			} else {
-				io->read_proc(&run->repchar, 1, 1, handle);
-
+				if (io->read_proc(&run->repchar, 1, 1, handle) != 1) {
+					memset(buf, 0, length + 1);
+					return FALSE;
+				}
+	
 				if (run->repchar == RESC) {
-					io->read_proc(&run->remaining, 1, 1, handle);
-
+					if (io->read_proc(&run->remaining, 1, 1, handle) != 1) {
+						run->remaining = 0;
+						memset(buf, 0, length + 1);
+						return FALSE;
+					}
+	
 					if (run->remaining == 0) {
 						*(buf++)= RESC;
 					} else {
-						io->read_proc(&run->repchar, 1, 1, handle);
-
+						if (io->read_proc(&run->repchar, 1, 1, handle) != 1) {
+							run->remaining = 0;
+							memset(buf, 0, length + 1);
+							return FALSE;
+						}
+	
 						*(buf++)= run->repchar;
 					}
 				} else {
@@ -143,8 +155,14 @@ ReadData(FreeImageIO *io, fi_handle handle, BYTE *buf, DWORD length, BOOL rle, R
 	} else {
 		// Normal read
 	
-		io->read_proc(buf, length, 1, handle);
+		const unsigned got = io->read_proc(buf, 1, length, handle);
+		if (got < length) {
+			memset(buf + got, 0, length - got);
+			return FALSE;
+		}
 	}
+	
+	return TRUE;
 }
 
 // ==========================================================
@@ -400,8 +418,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		unsigned pitch = FreeImage_GetPitch(dib);
 
+		// a cut file keeps its rows, the rest is blank; a row that lacks only its pad byte is complete
+		unsigned rows = header.height;
+
 		// Read the image data
-		
+
 		switch(header.depth) {
 			case 1:
 			case 8:
@@ -409,12 +430,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				bits = FreeImage_GetBits(dib) + (header.height - 1) * pitch;
 
 				for (y = 0; y < header.height; y++) {
-					ReadData(io, handle, bits, linelength, rle, &run);
+					if (!ReadData(io, handle, bits, linelength, rle, &run)) {
+						rows = y;
+						break;
+					}
 
 					bits -= pitch;
 
-					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle, &run);
+					if (fill && !ReadData(io, handle, &fillchar, fill, rle, &run)) {
+						rows = y + 1;
+						break;
 					}
 				}
 
@@ -433,7 +458,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
 
-					ReadData(io, handle, buf, header.width * 3, rle, &run);
+					if (!ReadData(io, handle, buf, header.width * 3, rle, &run)) {
+						rows = y;
+					}
 
 					bp = buf;
 
@@ -455,8 +482,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						}
 					}
 
-					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle, &run);
+					if (rows < header.height) {
+						break;
+					}
+					if (fill && !ReadData(io, handle, &fillchar, fill, rle, &run)) {
+						rows = y + 1;
+						break;
 					}
 				}
 
@@ -476,7 +507,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (y = 0; y < header.height; y++) {
 					bits = FreeImage_GetBits(dib) + (header.height - 1 - y) * pitch;
 
-					ReadData(io, handle, buf, header.width * 4, rle, &run);
+					if (!ReadData(io, handle, buf, header.width * 4, rle, &run)) {
+						rows = y;
+					}
 
 					bp = buf;
 
@@ -501,15 +534,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							bp += 4;
 						}
 					}
-
-					if (fill) {
-						ReadData(io, handle, &fillchar, fill, rle, &run);
+		
+					if (rows < header.height) {
+						break;
+					}
+					if (fill && !ReadData(io, handle, &fillchar, fill, rle, &run)) {
+						rows = y + 1;
+						break;
 					}
 				}
-
+		
 				free(buf);
 				break;
 			}
+		}
+		
+		if (rows < header.height) {
+			PartialImageWarning(s_format_id, rows, header.height);
 		}
 		
 		return dib;
