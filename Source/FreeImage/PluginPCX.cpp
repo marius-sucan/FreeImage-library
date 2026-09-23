@@ -121,9 +121,8 @@ Note that a scanline always has an even number of bytes
 @param bIsRLE
 @param ReadBuf
 @param ReadPos
-@return
 */
-static unsigned
+static void
 readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL bIsRLE, BYTE * ReadBuf, int * ReadPos) {
 	BYTE count = 0;
 	BYTE value = 0;
@@ -172,12 +171,10 @@ readLine(FreeImageIO *io, fi_handle handle, BYTE *buffer, unsigned length, BOOL 
 		}
 
 	} else {
-		// normal read
-
-		written = io->read_proc(buffer, length, 1, handle);
+		// normal read, zeros past the end of the file
+		const unsigned got = io->read_proc(buffer, 1, length, handle);
+		memset(buffer + got, 0, length - got);
 	}
-
-	return written;
 }
 
 #ifdef FREEIMAGE_BIGENDIAN
@@ -554,29 +551,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		int ReadPos = PCX_IO_BUF_SIZE;
 
 		if ((header.planes == 1) && ((header.bpp == 1) || (header.bpp == 8))) {
-			BYTE skip;
-			unsigned written;
-
 			for (unsigned y = 0; y < height; y++) {
 				// do a safe copy of the scanline into 'line'
-				written = readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
+				readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
 				// sometimes (already encountered), PCX images can have a lineLength > pitch
 				memcpy(bits, line, MIN(pitch, lineLength));
-
-				// skip trailing garbage at the end of the scanline
-
-				for (unsigned count = written; count < lineLength; count++) {
-					if (ReadPos < PCX_IO_BUF_SIZE) {
-						ReadPos++;
-					} else {
-						io->read_proc(&skip, sizeof(BYTE), 1, handle);
-					}
-				}
 
 				bits -= pitch;
 			}
 		} else if ((header.planes == 4) && (header.bpp == 1)) {
-			BYTE bit,  mask, skip;
+			BYTE bit,  mask;
 			unsigned index;
 			BYTE *buffer;
 
@@ -586,7 +570,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			for (unsigned y = 0; y < height; y++) {
-				unsigned written = readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
+				readLine(io, handle, line, lineLength, bIsRLE, ReadBuf, &ReadPos);
 
 				// build a nibble using the 4 planes
 
@@ -606,16 +590,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				for (unsigned x = 0; x < width / 2; x++) {
 					bits[x] = (buffer[2*x] << 4) | buffer[2*x+1];
-				}
-
-				// skip trailing garbage at the end of the scanline
-
-				for (unsigned count = written; count < lineLength; count++) {
-					if (ReadPos < PCX_IO_BUF_SIZE) {
-						ReadPos++;
-					} else {
-						io->read_proc(&skip, sizeof(BYTE), 1, handle);
-					}
 				}
 
 				bits -= pitch;
