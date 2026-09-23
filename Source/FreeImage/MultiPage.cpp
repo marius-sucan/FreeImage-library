@@ -116,6 +116,7 @@ struct MULTIBITMAPHEADER {
 		, load_flags(0)
 		, failed(FALSE)
 		, read_data(NULL)
+		, start(0)
 	{
 		SetDefaultIO(&io);
 	}
@@ -150,6 +151,8 @@ struct MULTIBITMAPHEADER {
 	std::map<int, FIBITMAP *> page_metadata;
 	// plugin decoder state, from the first LockPage until close
 	void *read_data;
+	// handle position where the image starts; a stream need not hold it at 0
+	long start;
 };
 
 // =====================================================================
@@ -419,7 +422,7 @@ FreeImage_CanHoldAnotherPage(FIMULTIBITMAP *bitmap) {
 static void *
 FreeImage_GetReadData(MULTIBITMAPHEADER *header) {
 	if ((header->read_data == NULL) && (header->handle != NULL)) {
-		header->io.seek_proc(header->handle, 0, SEEK_SET);
+		header->io.seek_proc(header->handle, header->start, SEEK_SET);
 		header->read_data = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
 	}
 	return header->read_data;
@@ -596,6 +599,7 @@ FreeImage_OpenMultiBitmapFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_h
 					header->node = node;
 					header->fif = fif;
 					header->handle = handle;						
+					header->start = MAX(io->tell_proc(handle), 0L);
 					header->read_only = read_only;	
 					header->cache_fif = fif;
 					header->load_flags = flags;
@@ -668,7 +672,7 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 			
 			if(header->handle) {
 				// open src
-				header->io.seek_proc(header->handle, 0, SEEK_SET);
+				header->io.seek_proc(header->handle, header->start, SEEK_SET);
 				data_read = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
 			}
 			
@@ -1328,6 +1332,7 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 						header->fif = fif;
 						SetMemoryIO(&header->io);
 						header->handle = (fi_handle)stream;						
+						header->start = MAX(FreeImage_TellMemory(stream), 0L);
 						header->read_only = read_only;
 						header->cache_fif = fif;
 						header->load_flags = flags;
