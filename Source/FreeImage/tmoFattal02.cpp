@@ -517,6 +517,8 @@ static FIBITMAP* tmoFattal02(FIBITMAP *Y, float alpha, float beta) {
 			nlevels++;
 			minsize /= 2;
 		}
+		// PhiMatrix needs at least one pyramid level
+		if(nlevels == 0) throw(1);
 
 		// create the Gaussian pyramid
 		pyramid = (FIBITMAP**)malloc(nlevels * sizeof(FIBITMAP*));
