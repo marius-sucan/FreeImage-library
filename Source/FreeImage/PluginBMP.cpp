@@ -1294,7 +1294,7 @@ RLEEncodeLine(BYTE *target, BYTE *source, int size) {
 						target_pos += buffer_size;
 
 						if ((buffer_size & 1) == 1)
-							target_pos++;
+							target[target_pos++] = 0;
 
 						break;
 				}
@@ -1371,7 +1371,7 @@ RLEEncodeLine(BYTE *target, BYTE *source, int size) {
 			target_pos += buffer_size;
 
 			if ((buffer_size & 1) == 1)
-				target_pos++;
+				target[target_pos++] = 0;
 
 			break;			
 	}
