@@ -687,9 +687,9 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 						{
 							for (int j = i->getStart(); j <= i->getEnd(); j++) {
 
-								// load the original source data
+								// load the original source data, with pixels even if the bitmap was opened header-only
 								FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ?
-									header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags, data_read) : NULL;
+									header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
 
 								if (dib == NULL) {
 									success = FALSE;
