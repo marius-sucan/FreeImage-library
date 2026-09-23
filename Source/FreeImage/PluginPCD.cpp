@@ -190,7 +190,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if (io->read_proc(y1, width, 1, handle) != 1 ||
 			    io->read_proc(y2, width, 1, handle) != 1 ||
 			    io->read_proc(cbcr, width, 1, handle) != 1) {
-				throw "Truncated PCD image data";
+				if (y == 0) {
+					throw "Truncated PCD image data";
+				}
+				// a cut file keeps the rows it holds
+				FreeImage_OutputMessageProc(s_format_id, "Truncated PCD image data");
+				PartialImageWarning(s_format_id, 2 * y, height);
+				break;
 			}
 
 			for (int i = 0; i < 2; i++) {
