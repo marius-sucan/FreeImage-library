@@ -946,7 +946,8 @@ MimeType() {
 
 static BOOL DLL_CALLCONV
 Validate(FreeImageIO *io, fi_handle handle) {
-	if(io->seek_proc(handle, 522, SEEK_SET) == 0) {
+	// the caller restores the position; the picture need not start at byte 0
+	if(io->seek_proc(handle, 522, SEEK_CUR) == 0) {
 		BYTE pict_signature[] = { 0x00, 0x11, 0x02, 0xFF, 0x0C, 0X00 };
 		BYTE signature[6];
 
@@ -989,6 +990,8 @@ static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	char outputMessage[ outputMessageSize ] = "";
 	FIBITMAP* dib = NULL;
+	// version 2 opcodes are word-aligned from the start of the picture
+	const long start = io->tell_proc(handle);
 	try {		
 		// Skip empty 512 byte header.
 		if ( !io->seek_proc(handle, 512, SEEK_CUR) == 0 )
@@ -1041,7 +1044,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// get the current stream position (used to avoid infinite loops)
 			currentPos = io->tell_proc(handle);
 			
-			if ((version == 1) || ((io->tell_proc( handle ) % 2) != 0)) {
+			if ((version == 1) || (((io->tell_proc( handle ) - start) % 2) != 0)) {
 				// align to word for version 2
 				opcode = Read8( io, handle );
 			}
