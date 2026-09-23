@@ -2726,12 +2726,28 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 	} 
 }
 
+static BOOL
+CanStore(FIBITMAP *dib) {
+	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+	return FreeImage_HasPixels(dib) && SupportsExportType(image_type) && ((image_type != FIT_BITMAP) || SupportsExportDepth(FreeImage_GetBPP(dib)));
+}
+
 static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
 	BOOL bResult = FALSE;
+
+	if(dib && !CanStore(dib)) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+		return FALSE;
+	}
 	
 	// handle thumbnail as SubIFD
-	const BOOL bHasThumbnail = (FreeImage_GetThumbnail(dib) != NULL);
+	FIBITMAP *thumbnail = FreeImage_GetThumbnail(dib);
+	if(thumbnail && !CanStore(thumbnail)) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_WARNING_INVALID_THUMBNAIL);
+		thumbnail = NULL;
+	}
+	const BOOL bHasThumbnail = (thumbnail != NULL);
 	const unsigned ifdCount = bHasThumbnail ? 2 : 1;
 	
 	FIBITMAP *bitmap = dib;
@@ -2739,7 +2755,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	for(unsigned ifd = 0; ifd < ifdCount; ifd++) {
 		// redirect dib to thumbnail for the second pass
 		if(ifd == 1) {
-			bitmap = FreeImage_GetThumbnail(dib);
+			bitmap = thumbnail;
 		}
 
 		bResult = SaveOneTIFF(io, bitmap, handle, page, flags, data, ifd, ifdCount);
