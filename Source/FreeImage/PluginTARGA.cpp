@@ -210,11 +210,12 @@ class IOCache
 {
 public:
 	IOCache(FreeImageIO *io, fi_handle handle, size_t size) :
-		_ptr(NULL), _begin(NULL), _end(NULL), _size(size), _io(io), _handle(handle)	{
+		_ptr(NULL), _begin(NULL), _end(NULL), _valid(NULL), _eof(FALSE), _size(size), _io(io), _handle(handle)	{
 		  assert(size);
 			_begin = (BYTE*)malloc(size);
 			if (_begin) {
 			_end = _begin + _size;
+			_valid = _end;
 			_ptr = _end;	// will force refill on first access
 		}
 	}
@@ -231,8 +232,7 @@ public:
 	BYTE getByte() {
 		if (_ptr >= _end) {
 			// need refill
-			_ptr = _begin;
-			_io->read_proc(_ptr, sizeof(BYTE), (unsigned)_size, _handle);	//### EOF - no problem?
+			refill(0);
 		}
 
 		BYTE result = *_ptr;
@@ -252,13 +252,7 @@ public:
 			// 'count' bytes might span two cache bounds,
 			// SEEK back to add the remains of the current cache again into the new one
 
-			long read = long(_ptr - _begin);
-			long remaining = long(_size - read);
-
-			_io->seek_proc(_handle, -remaining, SEEK_CUR);
-
-			_ptr = _begin;
-			_io->read_proc(_ptr, sizeof(BYTE), (unsigned)_size, _handle);	//### EOF - no problem?
+			refill((size_t)(_end - _ptr));
 		}
 
 		BYTE *result = _ptr;
@@ -266,6 +260,29 @@ public:
 		_ptr += count;
 
 		return result;
+	}
+
+	/// the decoder has used bytes past the end of the file
+	BOOL isEOF() const {
+		return _eof || (_ptr > _valid);
+	}
+
+private:
+	void refill(size_t remaining) {
+		if (_valid < _end) {
+			// the last refill reached the end of the file
+			_eof = TRUE;
+			memset(_begin, 0, _size);
+		} else {
+			if (remaining) {
+				_io->seek_proc(_handle, -(long)remaining, SEEK_CUR);
+			}
+			const unsigned got = _io->read_proc(_begin, sizeof(BYTE), (unsigned)_size, _handle);
+			_valid = _begin + got;
+			// bytes past the end of the file are zero, not stale
+			memset(_valid, 0, (size_t)(_end - _valid));
+		}
+		_ptr = _begin;
 	}
 
 private:
@@ -276,6 +293,8 @@ private:
 	BYTE *_ptr;
 	BYTE *_begin;
 	BYTE *_end;
+	BYTE *_valid;	// end of the file's bytes in the cache
+	BOOL _eof;
 	const size_t _size;
 	const FreeImageIO *_io;	
 	const fi_handle _handle;	
@@ -468,8 +487,9 @@ SupportsNoPixels() {
 
 /**
 Used for all 32 and 24 bit loading of uncompressed images
+@return the rows the file holds
 */
-static void 
+static int 
 loadTrueColor(FIBITMAP* dib, int width, int height, int file_pixel_size, FreeImageIO* io, fi_handle handle, BOOL as24bit) {
 	const int pixel_size = as24bit ? 3 : file_pixel_size;
 
@@ -480,10 +500,14 @@ loadTrueColor(FIBITMAP* dib, int width, int height, int file_pixel_size, FreeIma
 		throw FI_MSG_ERROR_MEMORY;
 	}
 
-	for (int y = 0; y < height; y++) {
+	int y = 0;
+	for (; y < height; y++) {
 		BYTE *bits = FreeImage_GetScanLine(dib, y);
 		// bytes past the end of the file are zero, not stale
 		const unsigned got = io->read_proc(file_line, 1, width * file_pixel_size, handle);
+		if (got == 0) {
+			break;
+		}
 		memset(file_line + got, 0, width * file_pixel_size - got);
 		BYTE *bgra = file_line;
 
@@ -501,9 +525,15 @@ loadTrueColor(FIBITMAP* dib, int width, int height, int file_pixel_size, FreeIma
 
 			bits += pixel_size;
 		}
+
+		if (got < (unsigned)(width * file_pixel_size)) {
+			break;
+		}
 	}
 
 	free(file_line);
+
+	return y;
 }
 
 /**
@@ -571,9 +601,10 @@ _assignPixel<32>(BYTE* bits, BYTE* val, BOOL as24bit) {
 
 /**
 Generic RLE loader
+@return the rows decoded before the data ran out or went bad
 */
 template<int bPP>
-static void 
+static int 
 loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle, long eof, BOOL as24bit) {
 	const int file_pixel_size = bPP/8;
 	const int pixel_size = as24bit ? 3 : file_pixel_size;
@@ -593,7 +624,7 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 	// Compute the rough size of a line...
 	const long pixels_offset = io->tell_proc(handle);
 	const long remaining_size = (eof - pixels_offset);
-	if (remaining_size < height) {
+	if (remaining_size <= 0) {
 		throw FI_MSG_ERROR_CORRUPTED;
 	}
 	long sz = (remaining_size / height);
@@ -608,7 +639,7 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 	if(cache.isNull()) {
 		FreeImage_Unload(dib);
 		dib = NULL;
-		return;
+		return 0;
 	}
 		
 	int x = 0, y = 0;
@@ -630,7 +661,7 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 		if ((line_bits+x) + packet_count*pixel_size > dib_end) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_CORRUPTED);
 			// return what is left from the bitmap
-			return;
+			return y;
 		}
 
 		if (has_rle) {
@@ -682,8 +713,14 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 			} //< packet_count
 		} //< has_rle
 
+		// a cut file keeps the rows before the cut
+		if (cache.isEOF()) {
+			return y;
+		}
+
 	} //< while height
 
+	return height;
 }
 
 // --------------------------------------------------------------------------
@@ -761,13 +798,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		int fliphoriz = (header.is_image_descriptor & 0x10) ? 1 : 0;
 		int flipvert = (header.is_image_descriptor & 0x20) ? 1 : 0;
 
+		// rows a cut file holds
+		int rows = header.is_height;
+
 		if(!header_only) {
-			// an RLE packet of 1 + pixel bytes holds at most 128 pixels, so a short file cannot claim a huge image
+			// an RLE packet holds at most 128 pixels, so a short file cannot claim a huge image
 			const long data_pos = start_offset + (long)sizeof(tagTGAHEADER) + header.id_length
 				+ ((header.color_map_type != 0) ? (long)((header.cm_size + 7) / 8) * header.cm_length : 0);
-			const UINT64 packets = ((UINT64)header.is_width * header.is_height + 127) / 128;
+			const UINT64 raster = (UINT64)header.is_width * header.is_height * ((header.is_pixel_depth + 7) / 8);
 			const UINT64 data = (eof > data_pos) ? (UINT64)(eof - data_pos) : 0;
-			if(packets * (1 + (header.is_pixel_depth + 7) / 8) > data) {
+			if(!PlausibleImageSize(raster, data, 128)) {
 				throw FI_MSG_ERROR_CORRUPTED;
 			}
 		}
@@ -891,14 +931,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 						for (unsigned count = 0; count < header.is_height; count++) {
 							bits = FreeImage_GetScanLine(dib, count);
-							io->read_proc(bits, sizeof(BYTE), line, handle);
+							if (io->read_proc(bits, sizeof(BYTE), line, handle) != (unsigned)line) {
+								rows = (int)count;
+								break;
+							}
 						}
 					}
 					break;
 
 					case TGA_RLECMAP:
 					case TGA_RLEMONO: { //(8 bit)
-						loadRLE<8>(dib, header.is_width, header.is_height, io, handle, eof, FALSE);
+						rows = loadRLE<8>(dib, header.is_width, header.is_height, io, handle, eof, FALSE);
 					}
 					break;
 
@@ -981,6 +1024,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							
 							BYTE *bits = FreeImage_GetScanLine(dib, y);
 							const unsigned got = io->read_proc(in_line, 1, header.is_width * src_pixel_size, handle);
+							if (got < header.is_width * src_pixel_size) {
+								rows = y;
+								if (got == 0) {
+									break;
+								}
+							}
 							memset(in_line + got, 0, header.is_width * src_pixel_size - got);
 							
 							BYTE *val = in_line;
@@ -990,6 +1039,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 								val += src_pixel_size;
 							}
+
+							if (rows < h) {
+								break;
+							}
 						}
 
 						free(in_line);
@@ -997,7 +1050,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					break;
 
 					case TGA_RLERGB: { //(16 bit)
-						loadRLE<16>(dib, header.is_width, header.is_height, io, handle, eof, TARGA_LOAD_RGB888 & flags);
+						rows = loadRLE<16>(dib, header.is_width, header.is_height, io, handle, eof, TARGA_LOAD_RGB888 & flags);
 					}
 					break;
 
@@ -1031,12 +1084,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				switch (header.image_type) {
 					case TGA_RGB: { //(24 bit)
 						//uncompressed
-						loadTrueColor(dib, header.is_width, header.is_height, pixel_size,io, handle, TRUE);
+						rows = loadTrueColor(dib, header.is_width, header.is_height, pixel_size,io, handle, TRUE);
 					}
 					break;
 
 					case TGA_RLERGB: { //(24 bit)
-						loadRLE<24>(dib, header.is_width, header.is_height, io, handle, eof, TRUE);
+						rows = loadRLE<24>(dib, header.is_width, header.is_height, io, handle, eof, TRUE);
 					}
 					break;
 
@@ -1082,12 +1135,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				switch (header.image_type) {
 					case TGA_RGB: { //(32 bit)
 						// uncompressed
-						loadTrueColor(dib, header.is_width, header.is_height, 4 /*file_pixel_size*/, io, handle, TARGA_LOAD_RGB888 & flags);
+						rows = loadTrueColor(dib, header.is_width, header.is_height, 4 /*file_pixel_size*/, io, handle, TARGA_LOAD_RGB888 & flags);
 					}
 					break;
 
 					case TGA_RLERGB: { //(32 bit)
-						loadRLE<32>(dib, header.is_width, header.is_height, io, handle, eof, TARGA_LOAD_RGB888 & flags);
+						rows = loadRLE<32>(dib, header.is_width, header.is_height, io, handle, eof, TARGA_LOAD_RGB888 & flags);
 					}
 					break;
 
@@ -1099,6 +1152,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			break; // header.is_pixel_depth == 32
 
 		} // switch(header.is_pixel_depth)
+
+		if (dib && (rows < header.is_height)) {
+			PartialImageWarning(s_format_id, (unsigned)rows, header.is_height);
+		}
 
 		if (flipvert) {
 			FreeImage_FlipVertical(dib);
