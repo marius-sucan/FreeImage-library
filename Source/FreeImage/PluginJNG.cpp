@@ -118,7 +118,8 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
-	long offset = JNG_SIGNATURE_SIZE;	// move to skip first 8 bytes of signature
+	// the chunks follow the 8-byte signature, wherever the JNG starts in the stream
+	const long offset = io->tell_proc(handle) + JNG_SIGNATURE_SIZE;
 
 	// check the signature (8 bytes)
 	if(Validate(io, handle) == FALSE) {

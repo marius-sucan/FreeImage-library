@@ -586,12 +586,12 @@ FindObject(std::vector<MNGObject>& objects, WORD id) {
 // ==========================================================
 
 static BOOL
-ParseStream(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
+ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 	const long file_length = MNG_GetFileLength(io, handle);
-	if(file_length <= MNG_SIGNATURE_SIZE) {
+	if(file_length <= start + MNG_SIGNATURE_SIZE) {
 		return FALSE;
 	}
-	io->seek_proc(handle, MNG_SIGNATURE_SIZE, SEEK_SET);
+	io->seek_proc(handle, start + MNG_SIGNATURE_SIZE, SEEK_SET);
 
 	MNGFramingState framing;
 	MNGObjectState object;
@@ -1807,13 +1807,14 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 
 	info->read = TRUE;
 
-	io->seek_proc(handle, 0, SEEK_SET);
+	// the MNG need not start at byte 0 of the stream
+	const long start = io->tell_proc(handle);
 	if(!Validate(io, handle)) {
 		delete info;
 		return NULL;
 	}
 
-	if(!ParseStream(io, handle, info)) {
+	if(!ParseStream(io, handle, start, info)) {
 		delete info;
 		return NULL;
 	}
