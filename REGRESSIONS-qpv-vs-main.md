@@ -289,10 +289,16 @@ the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "p
   - LibJXR reads 4 bytes past `gSignificantRunBin` (`segdec.c:352`, `DecodeSignificantRun`) on every cut or
     damaged JXR copy tried, 23 of 23 under ASan; the intact files are clean. It is in the bundled library, same
     in main and qpv, and not fixed here.
-  - The size bound stops a huge, mostly blank image from being *returned*. Most loaders still allocate before
-    they read the data, as before: the 114-byte `audit/crashes/bmp_da39a3ee5e6b.bmp` (17 x 2^31 rows) allocates
-    and zeroes 8 GB for 17 s before it is refused, in main and qpv alike. Checking the file size before
-    allocating, only for images over 64 MB, would stop that without costing ordinary files anything. Not done.
+  - The size bound stops a huge, mostly blank image from being *returned*, but most loaders allocate before
+    they read the data. The 114-byte `audit/crashes/bmp_da39a3ee5e6b.bmp` (17 x 2^31 rows) allocated and zeroed
+    8 GB for 9-17 s before it was refused, in main too. **Fixed in 0fe40ec** for BMP:
+    - A raster over 64 MB is checked against the pixel data the file holds before anything is allocated (one
+      seek to the end, only for such rasters). An RLE stream that ends with its end-of-bitmap code still loads
+      however sparse it is.
+    - The rule now covers 16-, 24- and 32-bit BMPs too: one over 64 MB holding less than 1/64 of its pixels is
+      refused (a 75 MB 24-bit image cut to 1% loaded 49 rows; cut to 2% it loads).
+    - 11 crafted files over every BMP path now take 0.01 s and 7 MB instead of 4-9 s and 3.5-8.8 GB.
+    - The other loaders still allocate first.
 
   Verified:
   - 3,299 cut and damaged copies of 41 kinds of file (cut at 5-95% and one byte short, 16 bytes overwritten at
@@ -475,6 +481,10 @@ Also found while fixing, and fixed:
   `asan-run` pass with no report and the same output as `run`.
 
 Found, not fixed (each needs a decision, or is out of scope):
+- **BMPs with a V4, V5 or OS/2 2.x header do not load** ("Invalid file format"), in main too.
+  `CheckBitmapInfoHeader` (upstream r1836, dfd2640) accepts only a 40-byte BITMAPINFOHEADER, although
+  `LoadWindowsBMP` handles the 52-, 56-, 108- and 124-byte headers and `LoadOS22XBMP` the 64-byte one.
+  `/usr/share/pixmaps/debian-logo.bmp` (48x48 RGBA, V5) fails; Pillow reads it.
 - `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
   but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
 - JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no

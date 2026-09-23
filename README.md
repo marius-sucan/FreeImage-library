@@ -48,6 +48,7 @@ Fixes:
 - fixed 8-bit ICO images with a short palette decoding with wrong colours and random ICO_MAKEALPHA alpha;
 - fixed BMP RLE saves writing uninitialised heap memory into the file, 32-bit float PSD saves that could not be read back, and a crash when saving a multi-page document opened with FIF_LOAD_NOPIXELS;
 - fixed interlaced GIF frames 2 to 4 rows tall losing every row but the first;
+- fixed a crafted BMP of a few bytes allocating gigabytes before it was refused;
 - and many other fixes
 
 Changes:
