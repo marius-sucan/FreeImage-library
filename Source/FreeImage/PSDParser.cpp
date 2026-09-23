@@ -1376,6 +1376,11 @@ void psdParser::UnpackRLE(BYTE* line, const BYTE* rle_line, BYTE* line_end, unsi
 			// Do nothing
 		}
 	}//< rle_line
+
+	// packets that stop short leave the rest of the line black, not stale
+	if (line < line_end) {
+		memset(line, 0, (size_t)(line_end - line));
+	}
 }
 
 FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
@@ -1522,7 +1527,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 				}
 
 				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= dstLineSize) {//<*** flipped
-					io->read_proc(line_start, lineSize, 1, handle);
+					const unsigned got = io->read_proc(line_start, 1, lineSize, handle);
+					memset(line_start + got, 0, lineSize - got);
 					ReadImageLine(dst_line_start, line_start, limitLineSize, dstBpp, bytes,
 					              dst_line_start - channelOffset + dstLineSize);
 				} //< h
@@ -1555,7 +1561,9 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 					SAFE_DELETE_ARRAY(line_start);
 					throw std::bad_alloc();
 				}
-				io->read_proc(rleLineSizeList2, 2, nChannels * nHeight, handle);
+				// counts past the end of the file are 0
+				const unsigned got = io->read_proc(rleLineSizeList2, 2, nChannels * nHeight, handle);
+				memset(rleLineSizeList2 + got, 0, (nChannels * nHeight - got) * sizeof(WORD));
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 #ifndef FREEIMAGE_BIGENDIAN
 					SwapShort(&rleLineSizeList2[index]);
@@ -1564,7 +1572,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 				}
 				SAFE_DELETE_ARRAY(rleLineSizeList2);
 			} else {
-				io->read_proc(rleLineSizeList, 4, nChannels * nHeight, handle);
+				const unsigned got = io->read_proc(rleLineSizeList, 4, nChannels * nHeight, handle);
+				memset(rleLineSizeList + got, 0, (nChannels * nHeight - got) * sizeof(DWORD));
 #ifndef FREEIMAGE_BIGENDIAN
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 					SwapLong(&rleLineSizeList[index]);
@@ -1607,9 +1616,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 					// - read and uncompress line -
 
-					const DWORD rleLineSize = rleLineSizeList[index];
-
-					io->read_proc(rle_line_start, rleLineSize, 1, handle);
+					// only the bytes the file holds are unpacked
+					const unsigned rleLineSize = io->read_proc(rle_line_start, 1, rleLineSizeList[index], handle);
 
 					// - write line to destination -
 
