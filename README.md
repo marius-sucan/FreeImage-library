@@ -47,12 +47,14 @@ Fixes:
 - fixed a double free in the PNG loader on a damaged end of file, a heap overflow in 16-bit RLE PSD saves, and memory leaks in PSD saves;
 - fixed 8-bit ICO images with a short palette decoding with wrong colours and random ICO_MAKEALPHA alpha;
 - fixed BMP RLE saves writing uninitialised heap memory into the file, 32-bit float PSD saves that could not be read back, and a crash when saving a multi-page document opened with FIF_LOAD_NOPIXELS;
+- fixed interlaced GIF frames 2 to 4 rows tall losing every row but the first;
 - and many other fixes
 
 Changes:
 - FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha. FreeImage_FillBackground() keeps the three parameters of FreeImage 3.18;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - a PNG that is cut short or damaged now loads with what was decoded instead of failing: every row decoded so far, an interlaced image at lower detail, the rest blank; a warning message, mirrored to DebugView, says what was kept;
+- the other loaders do the same: a cut or damaged APNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JNG, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest blank, with the same warning. A file far too short for the image its header claims is still refused. 2-bit ICO icons now load, as 4-bit images. JPEG, JXR and G3 already kept what they decoded; a cut RAW, HEIF or AVIF file is still refused, because LibRaw, libheif and libavif stop at the end of the data; a cut animated WebP keeps its whole frames;
 - JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";

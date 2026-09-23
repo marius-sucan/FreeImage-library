@@ -17,7 +17,8 @@ Fixed crashes on malformed files are not regressions. A stricter refusal of a *v
 | R7 | CMYK PSDs load with the K channel reversed (colours black, pure K white) and save it uninverted | **regression**, fixed in fd94d28 | 8464e74 (C5) | yes: every 8/16-bit CMYK PSD |
 | R8 | A PSD with an unusable thumbnail fails to load; a good 1033 + bad 1036 thumbnail pair segfaults | **regression** (crash), fixed in 1f7cf71 | 6e64300 | yes, for such files |
 | C1 | `FreeImage_FillBackground` had a 4th parameter: C callers broke, Win32 export `@16`, stale x64 register | **ABI break**, fixed in e96b0fe | 5112d61 | yes: its new-image fill; apply `qpv.patch` |
-| C2-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
+| C7 | Cut or malformed files that main decoded (as garbage) were refused | **stricter**, fixed in fdf4e87..24b8aa7: every loader but RAW, HEIF and AVIF now keeps what a cut or damaged file holds | various | yes: any damaged or partly downloaded file |
+| C2-C6, C8-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
 
 Nothing else in the differential runs came out worse on qpv for a valid input. R7 and R8 were found while fixing
 the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "plausible, not reproduced".
@@ -238,7 +239,8 @@ the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "p
   - Main left a 0-byte or partial file behind.
   - The writer matrix found no plugin that returns FALSE after writing a readable file, so no valid output is
     lost that way.
-- **C7. Stricter refusals, all of malformed files.** Main produced garbage for these; qpv returns NULL:
+- **C7. Stricter refusals, all of malformed files.** **Fixed in fdf4e87..24b8aa7.** Main produced garbage for
+  these; qpv returned NULL:
   - truncated SGI, PCD and Koala;
   - 2-bpp ICO (main decoded them as 8-bit garbage);
   - XPM rows shorter than the declared width;
@@ -246,6 +248,75 @@ the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "p
   - an unterminated HDR header line.
 
   Also, `OpenMultiBitmap` on a file with no readable page now returns NULL instead of a 0-page handle.
+
+  Every loader but RAW, HEIF and AVIF now keeps what a cut or damaged file holds, as the PNG loader does since
+  f61c4bf:
+  - The rows, blocks of lines or frames decoded before the cut or the damage load, and the rest is zero. A warning
+    says what was kept ("N of M rows decoded, the rest is blank", or "… interlace passes complete …"); DebugView
+    gets it on Windows.
+  - NULL only when no row could be decoded. Nothing that earlier qpv loaded is refused. A file of which main
+    showed only garbage, with not one real row, stays refused. Pixels change for a file earlier qpv loaded in one
+    case: a cut RAS image. Past the cut, earlier builds repeated the last byte read (RLE) or left uninitialised
+    heap bytes (raw, so `LockPage` could disagree with `Load`); that part is now zero.
+  - A file whose header claims far more than its bytes can hold is still refused (`PlausibleImageSize`: never
+    below 64 MB, above that each format's best-case expansion), so a 100-byte file cannot allocate gigabytes.
+  - SGI and PSD store alpha as a plane after the colours, so a file cut before it gets opaque alpha and the
+    decoded colours show. A JNG cut inside its alpha data drops the alpha for the same reason.
+  - A cut interlaced GIF fills its missing rows from the passes decoded, like an Adam7 PNG.
+  - Only FreeImage's own sources changed (`Source/FreeImage/`, `Source/Utilities.h`; `TestAPI/APNG/robust.c`
+    for two expectations). No bundled library was touched: OpenJPEG's strict mode is switched off through its
+    API, and WebP uses libwebp's incremental decoder.
+
+  The C7 cases: SGI (a639a01; each RLE row keeps its own offset), PCD (b79bb14), Koala (c7da09a; loads once its
+  colour data starts), ICO (3758910; 2-bit icons load as 4-bit with their 4 colours), XPM (1ad8ada; a short row
+  keeps its pixels), DDS (f33e02a; a wrong magic loads when both header sizes are right, and wrong sizes when the
+  magic is), HDR (3388793; a long header line keeps its start). Two stay as they are:
+  - A DDS width of 2^31 or more (the "negative" one): the field is a DWORD, and no such image has pixels to show.
+  - `OpenMultiBitmap` on a file with no readable page returns NULL: there is nothing to keep.
+
+  The same now holds for BMP (≤ 8-bit and RLE), CUT, EXR (block by block), GIF, IFF, J2K/JP2, JNG, MNG, APNG,
+  PCX, PFM, PNM, PSD, RAS, TGA, TIFF (every load path), WBMP, WebP and XBM. Main refused most of these too.
+  Not changed:
+  - JPEG, JXR and G3 already returned what they decoded.
+  - RAW, HEIF and AVIF: LibRaw throws at the end of the data, and libheif and libavif decode whole items with
+    codecs that give all or nothing. Salvaging them would mean changing those libraries.
+  - A cut animated WebP keeps its whole frames only, because libwebp composites whole frames.
+  - A frame that the file ends inside and that decodes no row is still a page, and fails to lock (APNG, GIF,
+    MNG); a single-frame file like that is refused.
+
+  Found with it:
+  - Interlaced GIF frames 2-4 rows tall lost every row but the first (1e3db05; main too).
+  - LibJXR reads 4 bytes past `gSignificantRunBin` (`segdec.c:352`, `DecodeSignificantRun`) on every cut or
+    damaged JXR copy tried, 23 of 23 under ASan; the intact files are clean. It is in the bundled library, same
+    in main and qpv, and not fixed here.
+  - The size bound stops a huge, mostly blank image from being *returned*. Most loaders still allocate before
+    they read the data, as before: the 114-byte `audit/crashes/bmp_da39a3ee5e6b.bmp` (17 x 2^31 rows) allocates
+    and zeroes 8 GB for 17 s before it is refused, in main and qpv alike. Checking the file size before
+    allocating, only for images over 64 MB, would stop that without costing ordinary files anything. Not done.
+
+  Verified:
+  - 3,299 cut and damaged copies of 41 kinds of file (cut at 5-95% and one byte short, 16 bytes overwritten at
+    40% and 70%): qpv before the fix (9add96c) returned an image for 1,517, and now does for 2,372. None that
+    loaded before is refused. In 10, 9add96c matched the intact file in a few more rows. In each case it kept
+    stale buffer bytes or repeated the last value where the file ended, and on these smooth test images that
+    happened to be right. Those pixels are now blank.
+  - The 2,341-file intact corpus decodes as before, apart from 18 audit PoCs: 8 C7 files now load, 7 only gained
+    the warning, and the 3 RAS files above.
+  - Speed: 38 images of 3000x2000, in every format whose loader changed, decode in the same time (4,370 vs
+    4,383 ms in total). JP2 varied by ±10% between runs, and J2K with the same codestream was faster. The
+    bounds add no seek to the end of the file (SGI's is in its cut branch). Seven loaders (BMP RLE, CUT, HDR,
+    PFM, PNM, XBM, XPM) read their position once at the start of the pixel data, as PNG does (under a
+    microsecond). GIF counts the bytes it reads rather than asking per frame, and BMP RLE8 reads its position a
+    second time only for a short image.
+  - ASan: all 5,784 cut, damaged and intact files, except the 8 GB BMP above, which the OOM killer stopped.
+    Nothing in FreeImage's code; the LibJXR over-read above.
+    The only failed allocation is `audit/poc/xpm_nulldib.xpm` asking for 2e9 x 2e9 pixels: the request fails
+    at once and the file is refused, as before.
+  - Every TestAPI suite passes: APNG, MNG, WebP, J2K, JPEG, JXR, EXR, RAW, HEIF, AVIF and testAPI. The WebP
+    robustness test decodes 4,400 of its 6,566 damaged inputs (9add96c: 2,094), and the six crafted bombs are
+    refused.
+  - With `glibc.malloc.perturb=165` every cut and damaged copy decodes exactly as without it, so no blank part
+    holds uninitialised memory.
 - **C8. Flags that used to be ignored now act.**
   - GIF honours `FIF_LOAD_NOPIXELS` (main decoded the pixels anyway).
   - `MNG_PLAYBACK` (2) and `WEBP_PLAYBACK` (1) now return a composited 32-bit canvas.
