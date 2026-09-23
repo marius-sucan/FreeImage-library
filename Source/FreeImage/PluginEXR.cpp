@@ -61,10 +61,13 @@ class C_IStream : public Imf::IStream {
 private:
     FreeImageIO *_io;
 	fi_handle _handle;
+	long _start;	// OpenEXR positions count from here
 
 public:
 	C_IStream (FreeImageIO *io, fi_handle handle) : 
-	  Imf::IStream(""), _io (io), _handle(handle) {
+	  Imf::IStream(""), _io (io), _handle(handle), _start(0) {
+		const long start = io->tell_proc(handle);
+		_start = (start > 0) ? start : 0;
 	}
 
 	virtual bool read (char c[/*n*/], int n) {
@@ -72,11 +75,11 @@ public:
 	}
 
 	virtual uint64_t tellg() {
-		return _io->tell_proc(_handle);
+		return (uint64_t)(_io->tell_proc(_handle) - _start);
 	}
 
 	virtual void seekg(uint64_t pos) {
-		_io->seek_proc(_handle, (unsigned)pos, SEEK_SET);
+		_io->seek_proc(_handle, _start + (long)pos, SEEK_SET);
 	}
 
 	virtual void clear() {
@@ -93,10 +96,13 @@ class C_OStream : public Imf::OStream {
 private:
     FreeImageIO *_io;
 	fi_handle _handle;
+	long _start;	// OpenEXR positions count from here
 
 public:
 	C_OStream (FreeImageIO *io, fi_handle handle) : 
-	  Imf::OStream(""), _io (io), _handle(handle) {
+	  Imf::OStream(""), _io (io), _handle(handle), _start(0) {
+		const long start = io->tell_proc(handle);
+		_start = (start > 0) ? start : 0;
 	}
 
 	virtual void write(const char c[/*n*/], int n) {
@@ -106,11 +112,11 @@ public:
 	}
 
 	virtual uint64_t tellp() {
-		return _io->tell_proc(_handle);
+		return (uint64_t)(_io->tell_proc(_handle) - _start);
 	}
 
 	virtual void seekp(uint64_t pos) {
-		_io->seek_proc(_handle, (unsigned)pos, SEEK_SET);
+		_io->seek_proc(_handle, _start + (long)pos, SEEK_SET);
 	}
 };
 
