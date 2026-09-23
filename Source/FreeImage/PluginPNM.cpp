@@ -85,8 +85,9 @@ GetInt(FreeImageIO *io, fi_handle handle) {
 		}
         i = (i * 10) + digit;
 
+		// the end of the file ends the number too
 		if(!io->read_proc(&c, 1, 1, handle)) {
-			throw FI_MSG_ERROR_PARSING;
+			break;
 		}
 
 		if (c < '0' || c > '9') {
@@ -95,6 +96,19 @@ GetInt(FreeImageIO *io, fi_handle handle) {
     }
 
     return i;
+}
+
+// a raw image that ends early
+static const char *PNM_EOF = "End of file in the image data";
+
+// read one byte of a raw image
+static inline BYTE
+ReadByte(FreeImageIO *io, fi_handle handle) {
+	BYTE value = 0;
+	if(io->read_proc(&value, 1, 1, handle) != 1) {
+		throw PNM_EOF;
+	}
+	return value;
 }
 
 // read one ASCII sample, clamped to maxval
@@ -117,7 +131,9 @@ Read a WORD value taking into account the endianess issue
 static inline WORD 
 ReadWord(FreeImageIO *io, fi_handle handle) {
 	WORD level = 0;
-	io->read_proc(&level, 2, 1, handle); 
+	if(io->read_proc(&level, 2, 1, handle) != 1) {
+		throw PNM_EOF;
+	}
 #ifndef FREEIMAGE_BIGENDIAN
 	SwapShort(&level);	// PNM uses the big endian convention
 #endif
@@ -233,8 +249,11 @@ SupportsNoPixels() {
 static FIBITMAP * DLL_CALLCONV
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	char id_one = 0, id_two = 0;
-	int x, y;
+	int x = 0, y = 0;
 	FIBITMAP *dib = NULL;
+	// a cut or damaged image keeps the rows read before it
+	BOOL reading_pixels = FALSE;
+	long pixels_start = 0;
 	RGBQUAD *pal;	// pointer to dib palette
 	int i;
 
@@ -348,6 +367,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// Read the image...
 
+		reading_pixels = TRUE;
+		pixels_start = io->tell_proc(handle);
+
 		switch(id_two)  {
 			case '1':
 			case '4':
@@ -371,9 +393,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
 						for (x = 0; x < line; x++) {
-							io->read_proc(&bits[x], 1, 1, handle);
-
-							bits[x] = ~bits[x];
+							bits[x] = ~ReadByte(io, handle);
 						}
 					}
 				}
@@ -403,7 +423,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
 							for (x = 0; x < width; x++) {
-								io->read_proc(&level, 1, 1, handle);
+								level = ReadByte(io, handle);
 								bits[x] = (BYTE)((255 * (int)level) / maxval);
 							}
 						}
@@ -468,13 +488,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
 							for (x = 0; x < width; x++) {
-								io->read_proc(&level, 1, 1, handle); 
+								level = ReadByte(io, handle);
 								bits[FI_RGBA_RED] = (BYTE)((255 * (int)level) / maxval);	// R
 
-								io->read_proc(&level, 1, 1, handle);
+								level = ReadByte(io, handle);
 								bits[FI_RGBA_GREEN] = (BYTE)((255 * (int)level) / maxval);	// G
 
-								io->read_proc(&level, 1, 1, handle);
+								level = ReadByte(io, handle);
 								bits[FI_RGBA_BLUE] = (BYTE)((255 * (int)level) / maxval);	// B
 
 								bits += 3;
@@ -522,6 +542,30 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 	} catch (const char *text)  {
+		// raw data always kept what it read; ASCII data needs a whole row, and no huge claim for a few bytes
+		if(dib && reading_pixels && ((text == PNM_EOF) || ((y > 0) &&
+			PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * FreeImage_GetHeight(dib), (UINT64)(io->tell_proc(handle) - pixels_start), 2)))) {
+			if((id_two == '1') || (id_two == '4')) {
+				// a bitmap's blank is white, the paper
+				const int line = (int)FreeImage_GetLine(dib);
+				for(int row = y; row < (int)FreeImage_GetHeight(dib); row++) {
+					BYTE *bits = FreeImage_GetScanLine(dib, FreeImage_GetHeight(dib) - 1 - row);
+					const int from = (row > y) ? 0 : ((id_two == '4') ? x : x / 8);
+					if((row == y) && (id_two == '1')) {
+						for(int p = x; p < (int)FreeImage_GetWidth(dib) && (p & 7); p++) {
+							bits[p >> 3] |= (BYTE)(0x80 >> (p & 7));
+						}
+						memset(bits + (x + 7) / 8, 0xFF, line - (x + 7) / 8);
+					} else {
+						memset(bits + from, 0xFF, line - from);
+					}
+				}
+			}
+			FreeImage_OutputMessageProc(s_format_id, text);
+			PartialImageWarning(s_format_id, (unsigned)y, (unsigned)FreeImage_GetHeight(dib));
+			return dib;
+		}
+
 		if(dib) FreeImage_Unload(dib);
 
 		if(NULL != text) {
