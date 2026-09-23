@@ -709,6 +709,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		FreeImage_OutputMessageProc(s_format_id, "Unsupported icon size: width x height = %d x %d", w, h);
 		return FALSE;
 	}
+	if(!SupportsExportType(FreeImage_GetImageType(dib)) || !SupportsExportDepth(FreeImage_GetBPP(dib))) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+		return FALSE;
+	}
 
 	if (page == -1) {
 		page = 0;
@@ -789,8 +793,16 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			icon_dib = (FIBITMAP*)vPages[k];
 			
 			if((icon_list[k].bWidth == 0) && (icon_list[k].bHeight == 0)) {
-				// Vista icon support
-				FreeImage_SaveToHandle(FIF_PNG, icon_dib, io, handle, PNG_DEFAULT);
+				// Vista icon support, as PNG, which has no 16-bit RGB
+				FIBITMAP *png_dib = (FreeImage_GetBPP(icon_dib) == 16) ? FreeImage_ConvertTo24Bits(icon_dib) : icon_dib;
+				const BOOL saved = png_dib && FreeImage_SaveToHandle(FIF_PNG, png_dib, io, handle, PNG_DEFAULT);
+				if(png_dib != icon_dib) {
+					FreeImage_Unload(png_dib);
+				}
+				if(!saved) {
+					free(icon_list);
+					throw "Unable to write a 256x256 icon as PNG";
+				}
 			}
 			else {
 				// standard icon support
