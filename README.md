@@ -40,27 +40,19 @@ Fixes:
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
 - fixed loading from a stream that does not start at byte zero in the SGI, TGA, PICT, TIFF, EXR, JXR, MNG and JNG plugins and in multi-page documents opened from a handle or memory; TIFF, EXR, JXR and TGA also save correctly there;
-- fixed 8-bit greyscale and palette TIFFs without a SamplesPerPixel tag failing to load, such as every one Pillow writes, and palette colours one level too dark;
 - fixed TIFF IPTC metadata being cut to a quarter on save and read past its buffer on load; big-endian TIFFs with IPTC crashed;
 - fixed CMYK PSD files loading and saving with the black channel reversed, and a bad PSD thumbnail failing or crashing the whole load;
 - fixed PCX, TGA and PSD files that are short or damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
-- fixed a double free in the PNG loader on a damaged end of file, a heap overflow in 16-bit RLE PSD saves, and memory leaks in PSD saves;
-- fixed 8-bit ICO images with a short palette decoding with wrong colours and random ICO_MAKEALPHA alpha;
-- fixed BMP RLE saves writing uninitialised heap memory into the file, 32-bit float PSD saves that could not be read back, and a crash when saving a multi-page document opened with FIF_LOAD_NOPIXELS;
-- fixed interlaced GIF frames 2 to 4 rows tall losing every row but the first;
-- fixed a crafted BMP of a few bytes allocating gigabytes before it was refused;
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - and many other fixes
 
 Changes:
-- FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha. FreeImage_FillBackground() keeps the three parameters of FreeImage 3.18;
+- FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
-- a PNG that is cut short or damaged now loads with what was decoded instead of failing: every row decoded so far, an interlaced image at lower detail, the rest blank; a warning message, mirrored to DebugView, says what was kept;
-- the other loaders do the same: a cut or damaged APNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JNG, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest blank, with the same warning. A file far too short for the image its header claims is still refused. 2-bit ICO icons now load, as 4-bit images. JPEG, JXR and G3 already kept what they decoded; a cut RAW, HEIF or AVIF file is still refused, because LibRaw, libheif and libavif stop at the end of the data; a cut animated WebP keeps its whole frames;
-- JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;
+- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
-- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
+- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
 - added FreeImage_AppendPageEx(), FreeImage_InsertPageEx(), FreeImage_RemovePageEx(), which return TRUE or FALSE;
 - added FreeImage_RescaleRawBits();
@@ -76,8 +68,8 @@ Changes:
 - updated ZLib library to version 1.3.2, from the 1.2.13 of October 2022;
 - updated OpenEXR library to version 3.3.14, from version 2.2.0. OpenEXR no longer uses ZLib for EXR data since 3.2. ZIP and DWA compression modes use libdeflate;
 - updated OpenJPEG library to version 2.5.4, from a March 2014 trunk snapshot labelled 2.0.0;
+- almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 Bugs or limitations identified:
 - saving WEBP files is extremely slow at 16000 x 16000 px;
-- creating multi-paged TIFFs causes crashes under certain circumstances;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;
