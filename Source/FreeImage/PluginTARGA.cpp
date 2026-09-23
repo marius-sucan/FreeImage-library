@@ -368,9 +368,9 @@ isTARGA20(FreeImageIO *io, fi_handle handle) {
 	// get the end-of-file
 	io->seek_proc(handle, 0, SEEK_END);
 	const long eof = io->tell_proc(handle);
-	// read the signature
-	const long start_of_signature = start_offset + eof - sizeofSig;
-	if (start_of_signature > 0) {
+	// read the signature, which ends the stream
+	const long start_of_signature = eof - sizeofSig;
+	if (start_of_signature >= start_offset) {
 		io->seek_proc(handle, start_of_signature, SEEK_SET);
 		io->read_proc(&signature, 1, sizeofSig, handle);
 	}
@@ -711,9 +711,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		TargaThumbnail thumbnail;
 		if(isTARGA20(io, handle)) {
 			TGAFOOTER footer;
-			const long footer_offset = start_offset + eof - sizeof(footer);
+			// the footer ends the stream; its offsets count from the start of the image
+			const long footer_offset = eof - (long)sizeof(footer) - start_offset;
 			
-			io->seek_proc(handle, footer_offset, SEEK_SET);
+			io->seek_proc(handle, start_offset + footer_offset, SEEK_SET);
 			io->read_proc(&footer, sizeof(tagTGAFOOTER), 1, handle);
 			
 #ifdef FREEIMAGE_BIGENDIAN
@@ -722,7 +723,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BOOL hasExtensionArea = footer.extension_offset > 0;
 			if(hasExtensionArea) { 
 				TGAEXTENSIONAREA extensionarea;
-				io->seek_proc(handle, footer.extension_offset, SEEK_SET);
+				io->seek_proc(handle, start_offset + (long)footer.extension_offset, SEEK_SET);
 				io->read_proc(&extensionarea, sizeof(extensionarea), 1, handle);
 				
 #ifdef FREEIMAGE_BIGENDIAN
@@ -732,7 +733,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				DWORD postage_stamp_offset = extensionarea.postage_stamp_offset;
 				BOOL hasThumbnail = (postage_stamp_offset > 0) && (postage_stamp_offset < (DWORD)footer_offset);
 				if(hasThumbnail) {
-					io->seek_proc(handle, postage_stamp_offset, SEEK_SET);
+					io->seek_proc(handle, start_offset + (long)postage_stamp_offset, SEEK_SET);
 					thumbnail.read(io, handle, footer_offset - postage_stamp_offset);
 				}
 			}
@@ -949,8 +950,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					garblen = 0;
 				}
 
-				io->seek_proc(handle, start_offset, SEEK_SET);
-				io->seek_proc(handle, sizeof(tagTGAHEADER) + header.id_length + garblen, SEEK_SET);
+				io->seek_proc(handle, start_offset + (long)sizeof(tagTGAHEADER) + header.id_length + garblen, SEEK_SET);
 
 				// read in the bitmap bits
 
@@ -1363,6 +1363,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
+	// the footer's offsets count from here
+	const long start_offset = io->tell_proc(handle);
+
 	// write the file header
 
 	TGAHEADER header;
@@ -1537,7 +1540,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	if(hasValidThumbnail(dib)) {
 		// write extension area
 		
-		extension_offset = io->tell_proc(handle);
+		extension_offset = io->tell_proc(handle) - start_offset;
 		
 		TGAEXTENSIONAREA ex;
 		memset(&ex, 0, sizeof(ex));
@@ -1545,6 +1548,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		assert(sizeof(ex) == 495);
 		ex.extension_size = sizeof(ex);
 		ex.postage_stamp_offset = extension_offset + ex.extension_size + 0 /*< no Scan Line Table*/;
+		const long postage_stamp_offset = (long)ex.postage_stamp_offset;
 		ex.attributes_type = FreeImage_GetBPP(dib) == 32 ? 3 /*< useful Alpha channel data*/ : 0 /*< no Alpha data*/;
 		
 #ifdef FREEIMAGE_BIGENDIAN
@@ -1557,7 +1561,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		
 		// write thumbnail
 		
-		io->seek_proc(handle, ex.postage_stamp_offset, SEEK_SET);
+		io->seek_proc(handle, start_offset + postage_stamp_offset, SEEK_SET);
 		
 		FIBITMAP* thumbnail = FreeImage_GetThumbnail(dib);
 		BYTE width = (BYTE)FreeImage_GetWidth(thumbnail);
