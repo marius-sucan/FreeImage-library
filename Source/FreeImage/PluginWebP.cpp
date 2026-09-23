@@ -115,7 +115,8 @@ ReadFileToWebPData(FreeImageIO *io, fi_handle handle, WebPData * const bitstream
 	  io->seek_proc(handle, 0, SEEK_END);
 	  size_t file_length = (size_t)(io->tell_proc(handle) - start_pos);
 	  io->seek_proc(handle, start_pos, SEEK_SET);
-	  raw_data = (uint8_t*)malloc(file_length * sizeof(uint8_t));
+	  // one byte spare: a cut image chunk may need a pad byte
+	  raw_data = (uint8_t*)malloc(file_length + 1);
 	  if(!raw_data) {
 		  throw FI_MSG_ERROR_MEMORY;
 	  }
@@ -139,6 +140,53 @@ ReadFileToWebPData(FreeImageIO *io, fi_handle handle, WebPData * const bitstream
 	  }
 	  return FALSE;
   }
+}
+
+static inline size_t
+WebP_GetLE32(const uint8_t *p) {
+	return (size_t)p[0] | ((size_t)p[1] << 8) | ((size_t)p[2] << 16) | ((size_t)p[3] << 24);
+}
+
+static inline void
+WebP_PutLE32(uint8_t *p, size_t value) {
+	p[0] = (uint8_t)value;
+	p[1] = (uint8_t)(value >> 8);
+	p[2] = (uint8_t)(value >> 16);
+	p[3] = (uint8_t)(value >> 24);
+}
+
+// a cut or damaged file: the RIFF ends after its last whole chunk, a cut image chunk keeps its bytes; FALSE if nothing changes
+static BOOL
+WebP_TrimToWholeChunks(WebPData *bitstream) {
+	uint8_t *data = (uint8_t*)bitstream->bytes;
+	const size_t size = bitstream->size;
+	if((data == NULL) || (size < 20) || (memcmp(data, "RIFF", 4) != 0) || (memcmp(data + 8, "WEBP", 4) != 0)) {
+		return FALSE;
+	}
+	size_t pos = 12;
+	while(pos + 8 <= size) {
+		const size_t room = size - pos - 8;
+		const size_t length = WebP_GetLE32(data + pos + 4);
+		if((length > room) || (length + (length & 1) > room)) {
+			if((memcmp(data + pos, "VP8 ", 4) == 0) || (memcmp(data + pos, "VP8L", 4) == 0)) {
+				// a whole payload lacking only its pad byte gets the spare one; a cut one keeps an even count, none made up
+				const size_t have = (length <= room) ? length : (room & ~(size_t)1);
+				WebP_PutLE32(data + pos + 4, have);
+				if(have & 1) {
+					data[size] = 0;
+				}
+				pos += 8 + have + (have & 1);
+			}
+			break;
+		}
+		pos += 8 + length + (length & 1);
+	}
+	if((pos <= 12) || ((pos == size) && (WebP_GetLE32(data + 4) == pos - 8))) {
+		return FALSE;
+	}
+	WebP_PutLE32(data + 4, pos - 8);
+	bitstream->size = pos;
+	return TRUE;
 }
 
 // ----------------------------------------------------------
@@ -243,8 +291,14 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			free(state);
 			return NULL;
 		}
-		// create the MUX object
+		// create the MUX object; a cut or damaged file is read as far as its whole chunks go
 		state->mux = WebPMuxCreate(&state->bitstream, 0);
+		if((state->mux == NULL) && WebP_TrimToWholeChunks(&state->bitstream)) {
+			state->mux = WebPMuxCreate(&state->bitstream, 0);
+			if(state->mux != NULL) {
+				FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short or damaged; the frames it holds are kept");
+			}
+		}
 		if(state->mux == NULL) {
 			free((void*)state->bitstream.bytes);
 			free(state);
@@ -401,8 +455,28 @@ DecodeImage(WebPData *webp_image, int flags) {
 		// decode the input stream, taking 'config' into account. 
 		
 		webp_status = WebPDecode(data, data_size, &decoder_config);
+		unsigned rows = height;
 		if(webp_status != VP8_STATUS_OK) {
-			throw FI_MSG_ERROR_PARSING;
+			// the rows before a cut or damage: fed in pieces, short of the last byte, the incremental decoder keeps each piece's rows
+			rows = 0;
+			WebPIDecoder *idec = WebPIDecode(NULL, 0, &decoder_config);
+			if(idec != NULL) {
+				for(size_t fed = 0; fed + 1 < data_size; ) {
+					fed = MIN(fed + 4096, data_size - 1);
+					const VP8StatusCode status = WebPIUpdate(idec, data, fed);
+					int last_y = 0;
+					if(WebPIDecGetRGB(idec, &last_y, NULL, NULL, NULL) != NULL) {
+						rows = (unsigned)MAX(last_y, 0);
+					}
+					if(status != VP8_STATUS_SUSPENDED) {
+						break;
+					}
+				}
+				WebPIDelete(idec);
+			}
+			if(rows == 0) {
+				throw FI_MSG_ERROR_PARSING;
+			}
 		}
 
 		// fill the dib with the decoded data
@@ -412,7 +486,7 @@ DecodeImage(WebPData *webp_image, int flags) {
 
 		switch(bpp) {
 			case 24:
-				for(unsigned y = 0; y < height; y++) {
+				for(unsigned y = 0; y < rows; y++) {
 					const BYTE *src_bits = src_bitmap + y * src_pitch;						
 					BYTE *dst_bits = (BYTE*)FreeImage_GetScanLine(dib, height-1-y);
 					for(unsigned x = 0; x < width; x++) {
@@ -425,7 +499,7 @@ DecodeImage(WebPData *webp_image, int flags) {
 				}
 				break;
 			case 32:
-				for(unsigned y = 0; y < height; y++) {
+				for(unsigned y = 0; y < rows; y++) {
 					const BYTE *src_bits = src_bitmap + y * src_pitch;						
 					BYTE *dst_bits = (BYTE*)FreeImage_GetScanLine(dib, height-1-y);
 					for(unsigned x = 0; x < width; x++) {
@@ -442,6 +516,10 @@ DecodeImage(WebPData *webp_image, int flags) {
 
 		// Free the decoder
 		WebPFreeDecBuffer(output_buffer);
+
+		if(rows < height) {
+			PartialImageWarning(s_format_id, rows, height);
+		}
 
 		return dib;
 
