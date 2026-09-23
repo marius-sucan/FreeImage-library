@@ -568,6 +568,34 @@ WarnRows(int rows, int height) {
 	}
 }
 
+// nothing is allocated for a raster over 64 MB that the pixel data the file holds could not fill
+static BOOL
+PixelDataCanFill(FreeImageIO *io, fi_handle handle, unsigned bitmap_bits_offset, UINT64 width, UINT64 height, unsigned bit_count, unsigned compression) {
+	const UINT64 pitch = (((width * bit_count) + 7) / 8 + 3) & ~(UINT64)3;
+	const UINT64 raster = (height && (pitch > ~(UINT64)0 / height)) ? ~(UINT64)0 : pitch * height;
+	// under the 64 MB floor the file size is not needed
+	if (PlausibleImageSize(raster, 0, 1)) {
+		return TRUE;
+	}
+	const long here = io->tell_proc(handle);
+	io->seek_proc(handle, 0, SEEK_END);
+	const long end = io->tell_proc(handle);
+	const UINT64 data = ((end > 0) && ((UINT64)end > bitmap_bits_offset)) ? (UINT64)end - bitmap_bits_offset : 0;
+	// RLE8 expands up to 128 times, RLE4 64 times, except where it skips pixels
+	BOOL plausible = PlausibleImageSize(raster, data, (compression == BI_RLE8) ? 128 : (compression == BI_RLE4) ? 64 : 1) ? TRUE : FALSE;
+	if (!plausible && ((compression == BI_RLE8) || (compression == BI_RLE4)) && (data >= 4)) {
+		// an RLE image that ends with its end-of-bitmap code, maybe padded, is whole however little it holds
+		BYTE tail[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+		io->seek_proc(handle, end - 4, SEEK_SET);
+		if (io->read_proc(tail, 1, 4, handle) == 4) {
+			plausible = ((tail[2] == RLE_COMMAND) && (tail[3] == RLE_ENDOFBITMAP)) ||
+				((tail[0] == RLE_COMMAND) && (tail[1] == RLE_ENDOFBITMAP) && (tail[2] == 0) && (tail[3] == 0));
+		}
+	}
+	io->seek_proc(handle, here, SEEK_SET);
+	return plausible;
+}
+
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
@@ -600,6 +628,10 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 		unsigned bit_count		= bih.biBitCount;
 		unsigned compression		= bih.biCompression;
 		unsigned long pitch		= CalculatePitch(CalculateLine(width, bit_count));
+
+		if (!header_only && !PixelDataCanFill(io, handle, bitmap_bits_offset, (UINT64)width, (UINT64)((height < 0) ? -height : height), bit_count, compression)) {
+			throw "The file holds too little data for its size";
+		}
 
 		switch (bit_count) {
 			case 1 :
@@ -839,6 +871,10 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 		unsigned compression	= bih.biCompression;
 		unsigned pitch			= CalculatePitch(CalculateLine(width, bit_count));
 		
+		if (!header_only && !PixelDataCanFill(io, handle, bitmap_bits_offset, (UINT64)width, (UINT64)((height < 0) ? -(INT64)height : height), bit_count, compression)) {
+			throw "The file holds too little data for its size";
+		}
+
 		switch (bit_count) {
 			case 1 :
 			case 4 :
@@ -1044,6 +1080,10 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 		unsigned bit_count	= bios2_1x.biBitCount;
 		unsigned pitch		= CalculatePitch(CalculateLine(width, bit_count));
 		
+		if (!header_only && !PixelDataCanFill(io, handle, bitmap_bits_offset, width, height, bit_count, BI_RGB)) {
+			throw "The file holds too little data for its size";
+		}
+
 		switch (bit_count) {
 			case 1 :
 			case 4 :
