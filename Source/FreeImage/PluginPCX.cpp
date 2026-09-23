@@ -404,6 +404,24 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		const unsigned height = bottom - top + 1;
 		const unsigned bitcount = header.bpp * header.planes;
 
+		// a plane's scanline must hold the whole width
+		if(header.bytes_per_line < (width * header.bpp + 7) / 8) {
+			throw FI_MSG_ERROR_PARSING;
+		}
+
+		if(!header_only) {
+			// a 2-byte run yields at most 63 bytes, so a short file cannot hold a huge raster
+			const long data_pos = start_pos + (long)sizeof(PCXHEADER);
+			io->seek_proc(handle, 0, SEEK_END);
+			const long data_end = io->tell_proc(handle);
+			io->seek_proc(handle, data_pos, SEEK_SET);
+			const UINT64 raster = (UINT64)header.bytes_per_line * header.planes * height;
+			const UINT64 data = (data_end > data_pos) ? (UINT64)(data_end - data_pos) : 0;
+			if(raster * 2 > data * 63) {
+				throw FI_MSG_ERROR_CORRUPTED_IMAGE;
+			}
+		}
+
 		// allocate a new dib
 		switch(bitcount) {
 			case 1:
