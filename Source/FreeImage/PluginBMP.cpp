@@ -144,19 +144,9 @@ Check if a BITMAPINFOHEADER is valid
 */
 static BOOL
 CheckBitmapInfoHeader(BITMAPINFOHEADER *bih) {
-	if (bih->biSize != sizeof(BITMAPINFOHEADER)) {
-		// The size, in bytes, of the image.This may be set to zero for BI_RGB bitmaps.
-		// If biCompression is BI_JPEG or BI_PNG, biSizeImage indicates the size of the JPEG or PNG image buffer, respectively.
-		if ((bih->biSize == 0) && (bih->biCompression != BI_RGB)) {
-			return FALSE;
-		}
-		else if ((bih->biCompression == BI_JPEG) || (bih->biCompression == BI_PNG)) {
-			// JPEG or PNG is not yet supported
-			return FALSE;
-		}
-		else {
-			return FALSE;
-		}
+	// the 40-byte header, or a larger one that extends it (V2 to V5, OS/2 2.x)
+	if (bih->biSize < sizeof(BITMAPINFOHEADER)) {
+		return FALSE;
 	}
 	if (bih->biWidth < 0) {
 		return FALSE;
@@ -720,17 +710,12 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 
 			case 16 :
 			{
+				// the masks a larger header holds count only with BI_BITFIELDS
 				int use_bitfields = 0;
 				if (bih.biCompression == BI_BITFIELDS) {
 					use_bitfields = 3;
 				}
 				else if (bih.biCompression == BI_ALPHABITFIELDS) {
-					use_bitfields = 4;
-				}
-				else if (type == 52) {
-					use_bitfields = 3;
-				}
-				else if (type >= 56) {
 					use_bitfields = 4;
 				}
 				
@@ -768,17 +753,12 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 			case 24 :
 			case 32 :
 			{
+				// the masks a larger header holds count only with BI_BITFIELDS
 				int use_bitfields = 0;
 				if (bih.biCompression == BI_BITFIELDS) {
 					use_bitfields = 3;
 				}
 				else if (bih.biCompression == BI_ALPHABITFIELDS) {
-					use_bitfields = 4;
-				}
-				else if (type == 52) {
-					use_bitfields = 3;
-				}
-				else if (type >= 56) {
 					use_bitfields = 4;
 				}
 
@@ -846,6 +826,8 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 
 	try {
 		BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
+		// the palette follows the header, wherever the file starts in the stream
+		const long header_start = io->tell_proc(handle);
 
 		// load the info header
 		BITMAPINFOHEADER bih;
@@ -897,17 +879,22 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				
 				// load the palette
 				// note that it may contain RGB or RGBA values : we will calculate this
-				unsigned pal_size = (bitmap_bits_offset - sizeof(BITMAPFILEHEADER) - bih.biSize) / used_colors; 
+				const INT64 pal_bytes = (INT64)bitmap_bits_offset - header_start - (INT64)bih.biSize;
+				unsigned pal_size = (pal_bytes > 0) ? (unsigned)(pal_bytes / used_colors) : 0;
 
-				io->seek_proc(handle, sizeof(BITMAPFILEHEADER) + bih.biSize, SEEK_SET);
+				io->seek_proc(handle, header_start + (long)bih.biSize, SEEK_SET);
 
 				RGBQUAD *pal = FreeImage_GetPalette(dib);
 
-				if(pal_size == 4) {
+				// 4-byte entries are OS/2 2.x's own; more room is padding
+				if(pal_size >= 4) {
 					for (unsigned count = 0; count < used_colors; count++) {
 						FILE_BGRA bgra;
 
-						io->read_proc(&bgra, sizeof(FILE_BGRA), 1, handle);
+						// the entries a cut palette does not reach keep their default grey
+						if (io->read_proc(&bgra, sizeof(FILE_BGRA), 1, handle) != 1) {
+							break;
+						}
 						
 						pal[count].rgbRed	= bgra.r;
 						pal[count].rgbGreen = bgra.g;
@@ -917,7 +904,10 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 					for (unsigned count = 0; count < used_colors; count++) {
 						FILE_BGR bgr;
 
-						io->read_proc(&bgr, sizeof(FILE_BGR), 1, handle);
+						// the entries a cut palette does not reach keep their default grey
+						if (io->read_proc(&bgr, sizeof(FILE_BGR), 1, handle) != 1) {
+							break;
+						}
 						
 						pal[count].rgbRed	= bgr.r;
 						pal[count].rgbGreen = bgr.g;
@@ -942,8 +932,10 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				switch (compression) {
 					case BI_RGB :
 						// load pixel data 
-						WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
-						return dib;
+						if (KeptRows(LoadPixelData(io, handle, dib, height, pitch, bit_count, TRUE), height, "Error encountered while decoding BMP data")) {
+							return dib;
+						}
+						throw "Error encountered while decoding BMP data";
 
 					case BI_RLE4 :
 						if ((bit_count == 4) && KeptRows(LoadPixelDataRLE4(io, handle, width, height, dib), height, "Error encountered while decoding RLE4 BMP data")) {
@@ -1110,7 +1102,10 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				for (unsigned count = 0; count < used_colors; count++) {
 					FILE_BGR bgr;
 
-					io->read_proc(&bgr, sizeof(FILE_BGR), 1, handle);
+					// the entries a cut palette does not reach keep their default grey
+					if (io->read_proc(&bgr, sizeof(FILE_BGR), 1, handle) != 1) {
+						break;
+					}
 					
 					pal[count].rgbRed	= bgr.r;
 					pal[count].rgbGreen = bgr.g;
