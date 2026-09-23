@@ -594,6 +594,28 @@ static FIBITMAP* tmoFattal02(FIBITMAP *Y, float alpha, float beta) {
 	}
 }
 
+/**
+NaN becomes +INF, which the luminance statistics skip like any non-finite sample
+*/
+static void NaNToInfinity(FIBITMAP *src) {
+	const unsigned width  = FreeImage_GetWidth(src);
+	const unsigned height = FreeImage_GetHeight(src);
+	const unsigned pitch  = FreeImage_GetPitch(src);
+	const float infinity  = (float)HUGE_VAL;
+
+	BYTE *bits = (BYTE*)FreeImage_GetBits(src);
+	for(unsigned y = 0; y < height; y++) {
+		float *pixel = (float*)bits;
+		for(unsigned x = 0; x < width * 3; x++) {
+			if(pixel[x] != pixel[x]) {
+				pixel[x] = infinity;
+			}
+		}
+		// next line
+		bits += pitch;
+	}
+}
+
 // ----------------------------------------------------------
 //  Main algorithm
 // ----------------------------------------------------------
@@ -624,6 +646,7 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 		src = FreeImage_ConvertToRGBF(dib);
 		if(!src) throw(1);
 
+		NaNToInfinity(src);
 		ClampNegativeRGBF(src);
 
 		// get the luminance channel

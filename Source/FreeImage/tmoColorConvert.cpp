@@ -584,7 +584,7 @@ LuminanceFromY(FIBITMAP *dib, float *maxLum, float *minLum, float *Lav, float *L
 }
 
 /**
-Luminance range of Y, outliers excluded
+Luminance range of Y: maximum without outliers, darkest finite sample as minimum
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 BOOL
@@ -598,7 +598,7 @@ LuminanceRange(FIBITMAP *Y, float *maxLum, float *minLum) {
 		return FALSE;
 	}
 	*maxLum = stats.maxLum;
-	*minLum = stats.minLumRobust;
+	*minLum = stats.minLum;
 
 	return TRUE;
 }
