@@ -320,18 +320,19 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 	int width  = bmih.biWidth;
 	int height = bmih.biHeight / 2; // height == xor + and mask
 	unsigned bit_count = bmih.biBitCount;
-	
-	// no 2 bpp: FreeImage cannot allocate it
-	if (bit_count != 1 && bit_count != 4 && bit_count != 8 && bit_count != 16 && bit_count != 24 && bit_count != 32) {
+
+	// 2 bpp (Windows CE) loads as 4 bpp: FreeImage has no 2-bit bitmap
+	if (bit_count != 1 && bit_count != 2 && bit_count != 4 && bit_count != 8 && bit_count != 16 && bit_count != 24 && bit_count != 32) {
 		// Fix for CVE-2020-24292 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2020-24292.patch
 		return NULL;
 	}
 
+	// the file's row
 	unsigned line   = CalculateLine(width, bit_count);
 	unsigned pitch  = CalculatePitch(line);
 
 	// allocate memory for one icon
-	dib = FreeImage_AllocateHeader(header_only, width, height, bit_count);
+	dib = FreeImage_AllocateHeader(header_only, width, height, (bit_count == 2) ? 4 : bit_count);
 
 	if (dib == NULL) {
 		return NULL;
@@ -357,8 +358,36 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 		return dib;
 	}
 
-	// read the icon
-	io->read_proc(FreeImage_GetBits(dib), height * pitch, 1, handle);
+	// read the icon; a cut file keeps the rows it holds
+	int rows = height;
+	if (bit_count == 2) {
+		std::vector<BYTE> row(pitch);
+		for (int y = 0; y < height; y++) {
+			const unsigned got = io->read_proc(&row[0], 1, pitch, handle);
+			if (got == 0) {
+				rows = y;
+				break;
+			}
+			memset(&row[got], 0, pitch - got);
+			BYTE *bits = FreeImage_GetScanLine(dib, y);
+			for (int x = 0; x < width; x++) {
+				const BYTE index = (BYTE)((row[x >> 2] >> (6 - 2 * (x & 3))) & 3);
+				bits[x >> 1] |= (x & 1) ? index : (BYTE)(index << 4);
+			}
+			if (got < pitch) {
+				rows = y;
+				break;
+			}
+		}
+	} else {
+		const unsigned got = io->read_proc(FreeImage_GetBits(dib), 1, height * pitch, handle);
+		if (got < height * pitch) {
+			rows = (int)(got / pitch);
+		}
+	}
+	if (rows < height) {
+		PartialImageWarning(s_format_id, rows, height);
+	}
 
 #ifdef FREEIMAGE_BIGENDIAN
 	if (bit_count == 16) {
