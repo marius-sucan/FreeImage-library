@@ -393,7 +393,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		const int bottom	= window[3];
 
 		// check image size
-		if((left >= right) || (top >= bottom)) {
+		if((left > right) || (top > bottom)) {
 			throw FI_MSG_ERROR_PARSING;
 		}
 
