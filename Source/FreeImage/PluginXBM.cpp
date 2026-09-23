@@ -84,10 +84,11 @@ Read an XBM file into a buffer
 @param widthP (return value) Pointer to the bitmap width
 @param heightP (return value) Pointer to the bitmap height
 @param dataP (return value) Pointer to the bitmap buffer
+@param rowsP (return value) Rows read before an error in the data; the rest of the buffer is zero
 @return Returns NULL if OK, returns an error message otherwise
 */
 static const char* 
-readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char **dataP) {
+readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char **dataP, int *rowsP) {
 	char line[MAX_LINE], name_and_type[MAX_LINE];
 	char* ptr;
 	char* t;
@@ -102,8 +103,10 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	 or whatever line)
 	 */
 	BOOL eof;	// we've encountered end of file while searching file
+	const char *error = NULL;
 
 	*widthP = *heightP = -1;
+	*rowsP = 0;
 
 	found_declaration = FALSE;    // haven't found it yet; haven't even looked
 	eof = FALSE;                  // haven't encountered end of file yet 
@@ -190,41 +193,55 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	hex_table['e'] = 14;
 	hex_table['f'] = 15;
 
+	ptr = *dataP;
+
 	if(version == 10) {
-		for( bytes = 0, ptr = *dataP; bytes < raster_length; bytes += 2 ) {
+		for( bytes = 0; bytes < raster_length; bytes += 2 ) {
 			while( ( c1 = readChar(io, handle) ) != 'x' ) {
-				if ( c1 == EOF )
-					return( ERR_XBM_EOFREAD );
+				if ( c1 == EOF ) {
+					error = ERR_XBM_EOFREAD;
+					goto data_end;
+				}
 			}
 
 			c1 = readChar(io, handle);
 			c2 = readChar(io, handle);
-			if( c1 == EOF || c2 == EOF )
-				return( ERR_XBM_EOFREAD );
+			if( c1 == EOF || c2 == EOF ) {
+				error = ERR_XBM_EOFREAD;
+				goto data_end;
+			}
 			value1 = ( hex_table[c1] << 4 ) + hex_table[c2];
-			if ( value1 >= 256 )
-				return( ERR_XBM_SYNTAX );
+			if ( value1 >= 256 ) {
+				error = ERR_XBM_SYNTAX;
+				goto data_end;
+			}
 			c1 = readChar(io, handle);
 			c2 = readChar(io, handle);
-			if( c1 == EOF || c2 == EOF )
-				return( ERR_XBM_EOFREAD );
+			if( c1 == EOF || c2 == EOF ) {
+				error = ERR_XBM_EOFREAD;
+				goto data_end;
+			}
 			value2 = ( hex_table[c1] << 4 ) + hex_table[c2];
-			if ( value2 >= 256 )
-				return( ERR_XBM_SYNTAX );
+			if ( value2 >= 256 ) {
+				error = ERR_XBM_SYNTAX;
+				goto data_end;
+			}
 			*ptr++ = (char)value2;
 			if ( ( ! padding ) || ( ( bytes + 2 ) % bytes_per_line ) )
 				*ptr++ = (char)value1;
 		}
 	}
 	else {
-		for(bytes = 0, ptr = *dataP; bytes < raster_length; bytes++ ) {
+		for(bytes = 0; bytes < raster_length; bytes++ ) {
 			/*
 			** skip until digit is found
 			*/
 			for( ; ; ) {
 				c1 = readChar(io, handle);
-				if ( c1 == EOF )
-					return( ERR_XBM_EOFREAD );
+				if ( c1 == EOF ) {
+					error = ERR_XBM_EOFREAD;
+					goto data_end;
+				}
 				value1 = hex_table[c1];
 				if ( value1 != 256 )
 					break;
@@ -234,18 +251,23 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 			*/
 			for( ; ; ) {
 				c2 = readChar(io, handle);
-				if ( c2 == EOF )
-					return( ERR_XBM_EOFREAD );
+				if ( c2 == EOF ) {
+					error = ERR_XBM_EOFREAD;
+					goto data_end;
+				}
 				value2 = hex_table[c2];
 				if ( value2 != 256 ) {
 					value1 = (value1 << 4) | value2;
-					if ( value1 >= 256 )
-						return( ERR_XBM_SYNTAX );
+					if ( value1 >= 256 ) {
+						error = ERR_XBM_SYNTAX;
+						goto data_end;
+					}
 				}
 				else if ( c2 == 'x' || c2 == 'X' ) {
 					if ( value1 == 0 )
 						continue;
-					else return( ERR_XBM_SYNTAX );
+					error = ERR_XBM_SYNTAX;
+					goto data_end;
 				}
 				else break;
 			}
@@ -253,7 +275,14 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 		}
 	}
 
-	return NULL;
+data_end:
+	// a cut or damaged file keeps the bytes before the damage; the rest is zero (white)
+	if (ptr < *dataP + raster_length) {
+		memset(ptr, 0, (*dataP + raster_length) - ptr);
+	}
+	*rowsP = (bytes_per_line > 0) ? (int)(ptr - *dataP) / bytes_per_line : 0;
+
+	return error;
 }
 
 // ==========================================================
@@ -322,9 +351,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	try {
 
 		// load the bitmap data
-		const char* error = readXBMFile(io, handle, &width, &height, &buffer);
+		int rows = 0;
+		const char* error = readXBMFile(io, handle, &width, &height, &buffer, &rows);
 		// Microsoft doesn't implement throw between functions :(
-		if(error) throw (char*)error;
+		if(error) {
+			// a cut or damaged file keeps its complete rows
+			if(!buffer || rows <= 0) throw (char*)error;
+			FreeImage_OutputMessageProc(s_format_id, error);
+		}
 
 
 		// allocate a new dib
@@ -360,6 +394,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				mask <<= 1;
 			}
 			bP++;
+		}
+
+		if(error) {
+			PartialImageWarning(s_format_id, MIN(rows, height), height);
 		}
 
 		free(buffer);
