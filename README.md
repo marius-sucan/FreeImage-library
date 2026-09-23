@@ -49,6 +49,7 @@ Fixes:
 - fixed BMP RLE saves writing uninitialised heap memory into the file, 32-bit float PSD saves that could not be read back, and a crash when saving a multi-page document opened with FIF_LOAD_NOPIXELS;
 - fixed interlaced GIF frames 2 to 4 rows tall losing every row but the first;
 - fixed a crafted BMP of a few bytes allocating gigabytes before it was refused;
+- fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - and many other fixes
 
 Changes:

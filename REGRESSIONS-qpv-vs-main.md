@@ -480,11 +480,17 @@ Also found while fixing, and fixed:
   suite had lost `AVIF_ENABLE_EXPERIMENTAL_MINI`, which showed once libavif ran instrumented. All eight
   `asan-run` pass with no report and the same output as `run`.
 
+- **BMPs with a V2 to V5 or OS/2 2.x header did not load** (4fe0c6f), in main too: `CheckBitmapInfoHeader`
+  (upstream r1836) accepted only the 40-byte header, although the loaders handle the larger ones. Among them
+  are 32-bit BMPs with alpha, such as `/usr/share/pixmaps/debian-logo.bmp`, which now matches Pillow. The
+  reopened paths had bugs of their own, fixed with it:
+  - 16/24/32-bit `BI_RGB` files took the masks in a larger header, which count only with `BI_BITFIELDS`.
+  - OS/2 2.x read its palette at an absolute position (wrong for a file not at byte 0) and skipped a padded one.
+  - A cut OS/2 palette, 1.x too, repeated its last entry or showed stack bytes; the rest now stays grey.
+  - 88 crafted files over every header size, bit depth and compression decode identically to their 40-byte
+    twins and match Pillow. They load the same from a stream offset and header-only, and are clean under ASan.
+
 Found, not fixed (each needs a decision, or is out of scope):
-- **BMPs with a V4, V5 or OS/2 2.x header do not load** ("Invalid file format"), in main too.
-  `CheckBitmapInfoHeader` (upstream r1836, dfd2640) accepts only a 40-byte BITMAPINFOHEADER, although
-  `LoadWindowsBMP` handles the 52-, 56-, 108- and 124-byte headers and `LoadOS22XBMP` the 64-byte one.
-  `/usr/share/pixmaps/debian-logo.bmp` (48x48 RGBA, V5) fails; Pillow reads it.
 - `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
   but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
 - JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no
