@@ -39,10 +39,19 @@ Fixes:
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
+- fixed loading from a stream that does not start at byte zero in the SGI, TGA, PICT, TIFF, EXR, JXR, MNG and JNG plugins and in multi-page documents opened from a handle or memory; TIFF, EXR, JXR and TGA also save correctly there;
+- fixed 8-bit greyscale and palette TIFFs without a SamplesPerPixel tag failing to load, such as every one Pillow writes, and palette colours one level too dark;
+- fixed TIFF IPTC metadata being cut to a quarter on save and read past its buffer on load; big-endian TIFFs with IPTC crashed;
+- fixed CMYK PSD files loading and saving with the black channel reversed, and a bad PSD thumbnail failing or crashing the whole load;
+- fixed PCX, TGA and PSD files that are short or damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
+- fixed a double free in the PNG loader on a damaged end of file, a heap overflow in 16-bit RLE PSD saves, and memory leaks in PSD saves;
+- fixed 8-bit ICO images with a short palette decoding with wrong colours and random ICO_MAKEALPHA alpha;
 - and many other fixes
 
 Changes:
 - FillBackgroundBitmap() has a new optional parameter: applyAlpha;
+- the TGA, XPM, PNG, ICO, J2K and JP2 writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
+- JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
