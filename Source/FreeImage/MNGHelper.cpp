@@ -824,25 +824,31 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, in
 			}		
 
 			if(mLength > 0) {
-				mChunk = (BYTE*)realloc(mChunk, mLength);
-				if(!mChunk) {
-					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: out of memory", mChunkName);
-					throw (const char*)NULL;
-				}
 				Offset = io->tell_proc(handle);
-				if(Offset + (long)mLength > mLOF) {
+				// a length the file cannot hold allocates nothing; no sum, so a 32-bit long cannot wrap
+				if((Offset < 0) || (Offset > mLOF) || ((INT64)mLength > (INT64)(mLOF - Offset))) {
 					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: unexpected end of file", mChunkName);
-					if((mng_GetChunckType(mChunkName) == JDAT) && (mLOF > Offset)) {
+					BYTE *part = ((mng_GetChunckType(mChunkName) == JDAT) && (Offset >= 0) && (mLOF > Offset)) ? (BYTE*)realloc(mChunk, (size_t)(mLOF - Offset)) : NULL;
+					if(part) {
 						// a JNG cut inside its JPEG data decodes what it holds
+						mChunk = part;
 						const unsigned got = io->read_proc(mChunk, 1, (unsigned)(mLOF - Offset), handle);
 						if(hJpegMemory == NULL) {
 							hJpegMemory = FreeImage_OpenMemory();
 						}
 						FreeImage_WriteMemory(mChunk, 1, got, hJpegMemory);
+					}
+					if(hJpegMemory) {
+						// an alpha channel the file ends inside is dropped, so the colours show
 						if(dib) FreeImage_Unload(dib);
 						dib = mng_LoadFromMemoryHandle(hJpegMemory, flags);
 						break;
 					}
+					throw (const char*)NULL;
+				}
+				mChunk = (BYTE*)realloc(mChunk, mLength);
+				if(!mChunk) {
+					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: out of memory", mChunkName);
 					throw (const char*)NULL;
 				}
 				// read chunk
