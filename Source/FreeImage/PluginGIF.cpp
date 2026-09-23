@@ -1177,7 +1177,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						if( ++x >= width ) {
 							if( interlaced ) {
 								y += g_GifInterlaceIncrement[interlacepass];
-								if( y >= height && ++interlacepass < GIF_INTERLACE_PASSES ) {
+								// a frame under 5 rows has no row in some passes
+								while( y >= height && ++interlacepass < GIF_INTERLACE_PASSES ) {
 									y = g_GifInterlaceOffset[interlacepass];
 								} 						
 							} else {
