@@ -1357,6 +1357,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	RGBQUAD *palette = FreeImage_GetPalette(dib);
 	const unsigned bpp = FreeImage_GetBPP(dib);
 
+	// 8, 16, 24 and 32-bit bitmaps only, no larger than the header's 16-bit fields
+	if ((FreeImage_GetImageType(dib) != FIT_BITMAP) || !SupportsExportDepth(bpp) || (FreeImage_GetWidth(dib) > 0xFFFF) || (FreeImage_GetHeight(dib) > 0xFFFF)) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+		return FALSE;
+	}
+
 	// write the file header
 
 	TGAHEADER header;
