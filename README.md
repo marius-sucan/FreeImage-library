@@ -52,7 +52,7 @@ Fixes:
 Changes:
 - FillBackgroundBitmap() has a new optional parameter: applyAlpha;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
-- a PNG damaged after its image data (no IEND, a bad IEND CRC, garbage after the last IDAT) now loads instead of failing; the error is still reported;
+- a PNG that is cut short or damaged now loads with what was decoded instead of failing: every row decoded so far, an interlaced image at lower detail, the rest blank; a warning message, mirrored to DebugView, says what was kept;
 - JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
