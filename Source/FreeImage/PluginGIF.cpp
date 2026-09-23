@@ -1271,14 +1271,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			delete stringtable;
 
 			if( rows < height ) {
-				// nothing is kept of a huge claim cut a few bytes in
-				if( ended && !PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * height, (UINT64)(io->tell_proc(handle) - data_start), 4096) ) {
+				// nothing is kept of a frame cut before its first row, or of a huge claim cut a few bytes in
+				if( ended && ((rows == 0) || !PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * height, (UINT64)(io->tell_proc(handle) - data_start), 4096)) ) {
 					throw "The frame holds too little data for its size";
 				}
 				if( interlaced ) {
 					GifFillInterlaceGaps(dib, interlacepass, y);
+					FreeImage_OutputMessageProc(s_format_id, "Warning: the image data is cut short or damaged; %d of %d interlace passes complete, the image is shown at lower detail", interlacepass, GIF_INTERLACE_PASSES);
+				} else {
+					PartialImageWarning(s_format_id, rows, height);
 				}
-				PartialImageWarning(s_format_id, rows, height);
 			} else if( info->cut && (page == (int)info->image_descriptor_offsets.size() - 1) ) {
 				PartialImageWarning(s_format_id, rows, height);
 			}
