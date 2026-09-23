@@ -65,6 +65,8 @@ struct GIFinfo {
 	std::vector<size_t> comment_extension_offsets;
 	std::vector<size_t> graphic_control_extension_offsets;
 	std::vector<size_t> image_descriptor_offsets;
+	//the file ends or goes bad after the last frame found
+	BOOL cut;
 	//canvas and loop count, computed once per file
 	BOOL canvas_cached;
 	WORD canvas_width;
@@ -107,7 +109,7 @@ struct GIFinfo {
 	} playback;
 
 	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
-		canvas_cached(FALSE), canvas_width(0), canvas_height(0), loop_count(1),
+		cut(FALSE), canvas_cached(FALSE), canvas_width(0), canvas_height(0), loop_count(1),
 		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0)
 	{
 	}
@@ -514,6 +516,32 @@ void StringTable::ClearDecompressorTable(void)
 	m_oldCode = MAX_LZW_CODE;
 }
 
+// row r of an interlaced frame whose decoding stopped at row next of pass
+static bool
+GifRowDecoded(int r, int pass, int next) {
+	const int p = ((r & 7) == 0) ? 0 : ((r & 7) == 4) ? 1 : ((r & 3) == 2) ? 2 : 3;
+	return (p < pass) || ((p == pass) && (r < next));
+}
+
+// a cut interlaced frame: each missing row repeats the nearest decoded row above it in its 8-row group
+static void
+GifFillInterlaceGaps(FIBITMAP *dib, int pass, int next) {
+	const int height = (int)FreeImage_GetHeight(dib);
+	const unsigned line = FreeImage_GetLine(dib);
+	for( int r = 0; r < height; r++ ) {
+		// the row being decoded when the data ended keeps its pixels
+		if( GifRowDecoded(r, pass, next) || (r == next) ) {
+			continue;
+		}
+		for( int s = r - 1; s >= (r & ~7); s-- ) {
+			if( GifRowDecoded(s, pass, next) ) {
+				memcpy(FreeImage_GetScanLine(dib, height - 1 - r), FreeImage_GetScanLine(dib, height - 1 - s), line);
+				break;
+			}
+		}
+	}
+}
+
 // ==========================================================
 // Plugin Interface
 // ==========================================================
@@ -620,21 +648,27 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			}
 
 			//Scan through all the rest of the blocks, saving offsets
+			//a cut or damaged file keeps the frames whose image data starts before the damage
 			size_t gce_offset = 0;
 			BYTE block = 0;
+			const char *cut = NULL;
+			bool data_started = false;
 			while( block != GIF_BLOCK_TRAILER ) {
 				if( io->read_proc(&block, 1, 1, handle) < 1 ) {
-					throw "EOF reading blocks";
+					cut = "EOF reading blocks";
+					break;
 				}
 				if( block == GIF_BLOCK_IMAGE_DESCRIPTOR ) {
 					info->image_descriptor_offsets.push_back(io->tell_proc(handle));
 					//GCE may be 0, meaning no GCE preceded this ID
 					info->graphic_control_extension_offsets.push_back(gce_offset);
 					gce_offset = 0;
+					data_started = false;
 
 					io->seek_proc(handle, 8, SEEK_CUR);
 					if( io->read_proc(&packed, 1, 1, handle) < 1 ) {
-						throw "EOF reading Image Descriptor";
+						cut = "EOF reading Image Descriptor";
+						break;
 					}
 
 					//Local Color Table
@@ -647,7 +681,8 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 				} else if( block == GIF_BLOCK_EXTENSION ) {
 					BYTE ext;
 					if( io->read_proc(&ext, 1, 1, handle) < 1 ) {
-						throw "EOF reading extension";
+						cut = "EOF reading extension";
+						break;
 					}
 
 					if( ext == GIF_EXT_GRAPHIC_CONTROL ) {
@@ -661,20 +696,40 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 				} else if( block == GIF_BLOCK_TRAILER ) {
 					continue;
 				} else {
-					throw "Invalid GIF block found";
+					cut = "Invalid GIF block found";
+					break;
 				}
 
 				//Data Sub-blocks
 				BYTE len;
 				if( io->read_proc(&len, 1, 1, handle) < 1 ) {
-					throw "EOF reading sub-block";
+					cut = "EOF reading sub-block";
+					break;
 				}
+				data_started = true;
 				while( len != 0 ) {
 					io->seek_proc(handle, len, SEEK_CUR);
 					if( io->read_proc(&len, 1, 1, handle) < 1 ) {
-						throw "EOF reading sub-block";
+						cut = "EOF reading sub-block";
+						break;
 					}
 				}
+				if( cut ) {
+					break;
+				}
+			}
+
+			if( cut ) {
+				// a frame whose image data never starts has nothing to show
+				if( (block == GIF_BLOCK_IMAGE_DESCRIPTOR) && !data_started ) {
+					info->image_descriptor_offsets.pop_back();
+					info->graphic_control_extension_offsets.pop_back();
+				}
+				if( info->image_descriptor_offsets.empty() ) {
+					throw cut;
+				}
+				FreeImage_OutputMessageProc(s_format_id, cut);
+				info->cut = TRUE;
 			}
 		} catch (const char *msg) {
 			FreeImage_OutputMessageProc(s_format_id, msg);
@@ -1150,6 +1205,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		if( !header_only ) {
 			//LZW Minimum Code Size
+			b = 0;
 			io->read_proc(&b, 1, 1, handle);
 			StringTable *stringtable = new(std::nothrow) StringTable;
 			if( stringtable == NULL ) {
@@ -1157,13 +1213,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 			stringtable->Initialize(b);
 
-			//Image Data Sub-blocks
+			//Image Data Sub-blocks; a cut or damaged frame keeps the rows it decoded
 			int x = 0, xpos = 0, y = 0, shift = 8 - bpp, mask = (1 << bpp) - 1, interlacepass = 0;
+			unsigned rows = 0;
 			BYTE *scanline = FreeImage_GetScanLine(dib, height - 1);
 			BYTE buf[4096];
-			io->read_proc(&b, 1, 1, handle);
+			if( io->read_proc(&b, 1, 1, handle) != 1 ) {
+				b = 0;
+			}
 			while( b ) {
-				io->read_proc(stringtable->FillInputBuffer(b), b, 1, handle);
+				const unsigned got = io->read_proc(stringtable->FillInputBuffer(b), 1, b, handle);
+				if( got < b ) {
+					// decode only the bytes read; a smaller size keeps the buffer
+					stringtable->FillInputBuffer((int)got);
+				}
 				int size = sizeof(buf);
 				while( stringtable->Decompress(buf, &size) ) {
 					for( int i = 0; i < size; i++ ) {
@@ -1175,6 +1238,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							shift = 8 - bpp;
 						}
 						if( ++x >= width ) {
+							rows++;
 							if( interlaced ) {
 								y += g_GifInterlaceIncrement[interlacepass];
 								// a frame under 5 rows has no row in some passes
@@ -1195,10 +1259,21 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 					size = sizeof(buf);
 				}
-				io->read_proc(&b, 1, 1, handle);
+				if( (got < b) || (io->read_proc(&b, 1, 1, handle) != 1) ) {
+					break;
+				}
 			}
 
 			delete stringtable;
+
+			if( rows < height ) {
+				if( interlaced ) {
+					GifFillInterlaceGaps(dib, interlacepass, y);
+				}
+				PartialImageWarning(s_format_id, rows, height);
+			} else if( info->cut && (page == (int)info->image_descriptor_offsets.size() - 1) ) {
+				PartialImageWarning(s_format_id, rows, height);
+			}
 		}
 
 		// canvas and loop count go on every frame, so deleting page 0 keeps them
