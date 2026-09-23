@@ -139,8 +139,18 @@ rgbe_GetLine(FreeImageIO *io, fi_handle handle, char *buffer, int length) {
 			break;
 		}
 	}
-	
-	return (i < length - 1) ? TRUE : FALSE;
+
+	if (i == length - 1) {
+		// a line longer than the buffer keeps its start; the rest is skipped
+		char c = 0;
+		do {
+			if (!io->read_proc(&c, 1, 1, handle)) {
+				return FALSE;
+			}
+		} while (c != 0x0A);
+	}
+
+	return TRUE;
 }
 
 /**
@@ -681,12 +691,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// read the image pixels and fill the dib
 
 		if(bYmajor) {
-			// "-Y h +X w": one scanline per row, top row first
+			// "-Y h +X w": one scanline per row, top row first; a cut or damaged file keeps the rows before it
 			for(unsigned y = 0; y < height; y++) {
 				FIRGBF *scanline = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
 				if(!rgbe_ReadPixels_RLE(io, handle, scanline, width, 1)) {
-					FreeImage_Unload(dib);
-					return NULL;
+					if(y == 0) {
+						FreeImage_Unload(dib);
+						return NULL;
+					}
+					PartialImageWarning(s_format_id, y, height);
+					break;
 				}
 			}
 		} else {
@@ -698,9 +712,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			for(unsigned x = 0; x < width; x++) {
 				if(!rgbe_ReadPixels_RLE(io, handle, column, height, 1)) {
-					free(column);
-					FreeImage_Unload(dib);
-					return NULL;
+					if(x == 0) {
+						free(column);
+						FreeImage_Unload(dib);
+						return NULL;
+					}
+					DamagedImageWarning(s_format_id);
+					break;
 				}
 
 				for(unsigned y = 0; y < height; y++) {
