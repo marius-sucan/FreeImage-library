@@ -688,14 +688,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 		}
 
-		// read the image pixels and fill the dib
+		// read the image pixels and fill the dib; nothing is kept of a huge claim a few bytes long
+		const long pixels_start = io->tell_proc(handle);
+		const UINT64 raster = (UINT64)width * height * sizeof(FIRGBF);
 
 		if(bYmajor) {
 			// "-Y h +X w": one scanline per row, top row first; a cut or damaged file keeps the rows before it
 			for(unsigned y = 0; y < height; y++) {
 				FIRGBF *scanline = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
 				if(!rgbe_ReadPixels_RLE(io, handle, scanline, width, 1)) {
-					if(y == 0) {
+					if(y == 0 || !PlausibleImageSize(raster, (UINT64)(io->tell_proc(handle) - pixels_start), 256)) {
 						FreeImage_Unload(dib);
 						return NULL;
 					}
@@ -712,7 +714,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			for(unsigned x = 0; x < width; x++) {
 				if(!rgbe_ReadPixels_RLE(io, handle, column, height, 1)) {
-					if(x == 0) {
+					if(x == 0 || !PlausibleImageSize(raster, (UINT64)(io->tell_proc(handle) - pixels_start), 256)) {
 						free(column);
 						FreeImage_Unload(dib);
 						return NULL;

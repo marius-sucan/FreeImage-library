@@ -399,7 +399,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		if (cut) {
-			if (rows_done == 0) {
+			// nothing is kept of a huge claim a few bytes long
+			io->seek_proc(handle, 0, SEEK_END);
+			const long end = io->tell_proc(handle);
+			if ((rows_done == 0) || !PlausibleImageSize((UINT64)width * height * zsize, (end > start_pos) ? (UINT64)(end - start_pos) : 0, bIsRLE ? 64 : 1)) {
 				throw SGI_EOF_IN_IMAGE_DATA;
 			}
 			// alpha rows the decoder never reached

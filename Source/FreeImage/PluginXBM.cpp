@@ -194,6 +194,7 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	hex_table['f'] = 15;
 
 	ptr = *dataP;
+	const long data_start = io->tell_proc(handle);
 
 	if(version == 10) {
 		for( bytes = 0; bytes < raster_length; bytes += 2 ) {
@@ -281,6 +282,10 @@ data_end:
 		memset(ptr, 0, (*dataP + raster_length) - ptr);
 	}
 	*rowsP = (bytes_per_line > 0) ? (int)(ptr - *dataP) / bytes_per_line : 0;
+	// nothing is kept of a huge claim a few bytes long
+	if (error && !PlausibleImageSize((UINT64)raster_length, (UINT64)(io->tell_proc(handle) - data_start), 1)) {
+		*rowsP = 0;
+	}
 
 	return error;
 }

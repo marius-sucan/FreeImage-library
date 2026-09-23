@@ -1205,6 +1205,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		if( !header_only ) {
 			//LZW Minimum Code Size
+			const long data_start = io->tell_proc(handle);
 			b = 0;
 			io->read_proc(&b, 1, 1, handle);
 			StringTable *stringtable = new(std::nothrow) StringTable;
@@ -1218,8 +1219,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			unsigned rows = 0;
 			BYTE *scanline = FreeImage_GetScanLine(dib, height - 1);
 			BYTE buf[4096];
+			bool ended = false;
 			if( io->read_proc(&b, 1, 1, handle) != 1 ) {
 				b = 0;
+				ended = true;
 			}
 			while( b ) {
 				const unsigned got = io->read_proc(stringtable->FillInputBuffer(b), 1, b, handle);
@@ -1260,6 +1263,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					size = sizeof(buf);
 				}
 				if( (got < b) || (io->read_proc(&b, 1, 1, handle) != 1) ) {
+					ended = true;
 					break;
 				}
 			}
@@ -1267,6 +1271,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			delete stringtable;
 
 			if( rows < height ) {
+				// nothing is kept of a huge claim cut a few bytes in
+				if( ended && !PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * height, (UINT64)(io->tell_proc(handle) - data_start), 4096) ) {
+					throw "The frame holds too little data for its size";
+				}
 				if( interlaced ) {
 					GifFillInterlaceGaps(dib, interlacepass, y);
 				}

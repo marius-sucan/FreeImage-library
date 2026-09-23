@@ -331,11 +331,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		//read in pixel data; a cut file keeps its rows, a short row its pixels, and the rest is blank
 		int rows = 0, short_rows = 0;
+		const long pixels_start = io->tell_proc(handle);
 		for(int y = 0; y < height; y++ ) {
 			BYTE *line = FreeImage_GetScanLine(dib, height - y - 1);
 			str = ReadString(io, handle);
 			if(!str) {
-				if(y == 0)
+				// nothing is kept of a huge claim a few bytes long
+				if(y == 0 || !PlausibleImageSize((UINT64)width * height * ((colors > 256) ? 3 : 1), (UINT64)(io->tell_proc(handle) - pixels_start), 4))
 					throw "Error reading pixel strings";
 				FreeImage_OutputMessageProc(s_format_id, "Error reading pixel strings");
 				break;
