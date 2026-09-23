@@ -16,7 +16,8 @@ Fixed crashes on malformed files are not regressions. A stricter refusal of a *v
 | R6 | Tiled JPEG 2000 with small tiles decodes up to 1.6x (64 px tiles) / 6x (16 px tiles) slower | **performance**, fixed in 2417853 | 03c89f4 | yes, for such files |
 | R7 | CMYK PSDs load with the K channel reversed (colours black, pure K white) and save it uninverted | **regression**, fixed in fd94d28 | 8464e74 (C5) | yes: every 8/16-bit CMYK PSD |
 | R8 | A PSD with an unusable thumbnail fails to load; a good 1033 + bad 1036 thumbnail pair segfaults | **regression** (crash), fixed in 1f7cf71 | 6e64300 | yes, for such files |
-| C1-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
+| C1 | `FreeImage_FillBackground` had a 4th parameter: C callers broke, Win32 export `@16`, stale x64 register | **ABI break**, fixed in e96b0fe | 5112d61 | yes: its new-image fill; apply `qpv.patch` |
+| C2-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
 
 Nothing else in the differential runs came out worse on qpv for a valid input. R7 and R8 were found while fixing
 the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "plausible, not reproduced".
@@ -193,13 +194,21 @@ the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "p
 
 ## Behaviour changes that need a decision (intended, but callers can notice)
 
-- **C1. `FreeImage_FillBackground` gained a 4th parameter** (`5112d61`, `Background.cpp:430`).
+- **C1. `FreeImage_FillBackground` gained a 4th parameter** (`5112d61`, `Background.cpp:430`). **Fixed in e96b0fe.**
   - C source that calls it with 3 arguments no longer compiles (`FI_DEFAULT` is empty in C).
   - Win32: there is no `.def` file, so the stdcall export changes from `_FreeImage_FillBackground@12` to `@16`.
     Old 32-bit binaries fail to load.
   - Win64 and SysV: an old binary leaves garbage in the 4th argument register. If it is non-zero, the
     `FI_COLOR_IS_RGBA_COLOR` blend is skipped; if it is 1..255, it also becomes the 32-bit fill alpha.
-  - A separate `FreeImage_FillBackgroundEx` would have kept the ABI.
+  - **Fix:** the 3.18 prototype and the `@12` export are back. The option `FI_COLOR_SET_ALPHA` (0x08) replaces
+    `applyAlpha`: nothing is blended and a 32-bit image gets `rgbReserved` as its alpha, 0 included.
+    `AllocateEx` and `EnlargeCanvas` pass it through. The AHK, Delphi, VB6 and .NET wrappers are back on 3 parameters.
+  - Verified: every 3-argument fill is byte-identical to before (26,880 cases); the option equals `applyAlpha=A` for
+    A in 1..255 (23,040 cases). FreeImage 3.18 ignores the bit and fills the exact RGB, opaque (also on its real
+    x86/x64 DLLs under Wine). Among the 93 objects that include `FreeImage.h`, only `Background.o` changes.
+  - **QPV:** apply `qpv.patch` (repo root): its wrapper copy and the new-image fill (`…, 8` instead of `…, 1, -1`).
+    The DLL and the script must ship together. At 0% opacity a new image now gets the chosen RGB, where it stayed
+    black before.
 - **C2. Animated PNGs are now `FIF_APNG` (39), not `FIF_PNG` (13)** (`0f9863f`, `PluginPNG.cpp:289`).
   - Code that tests `fif == FIF_PNG` misses them. Single-frame APNGs stay FIF_PNG.
   - For an APNG whose IDAT default image is *not* part of the animation, `FreeImage_Load(GetFileType(f), f, 0)`
