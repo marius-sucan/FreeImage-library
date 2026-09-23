@@ -41,9 +41,9 @@ absolute seek is refused, because the plugin never attempts one past the bound.
 
 - `decode` - one line per file in the form of the `EXPECTED` table, followed by
   `--- 0 failure(s) ---`. The `[AVIF] Cannot parse the file: Truncated data`
-  lines are the truncated-stream check working, and the one
-  `[AVIF] AVIF does not support writing` line is the read-write session being
-  told what it is going to get. `clap_irot_imir_non_essential.avif`
+  lines are the truncated-stream check working, and the two
+  `[AVIF] AVIF does not support writing` lines are the edited read-write session
+  failing to save and the refused new document. `clap_irot_imir_non_essential.avif`
   is reported as `refused -> ok`: libavif rejects a `clap` that is not marked
   essential whatever the strictness setting, and the plugin passes that on.
   Each of the four image sequences also prints a `playback ->` line: its page

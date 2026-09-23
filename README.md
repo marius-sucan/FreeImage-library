@@ -45,7 +45,7 @@ Changes:
 - FillBackgroundBitmap() has a new optional parameter: applyAlpha;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
-- FreeImage_CloseMultiBitmap() returns FALSE when the document was opened by name with read_only=0 in a format that has no writer, such as AVIF or HEIF;
+- FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
 - added FreeImage_AppendPageEx(), FreeImage_InsertPageEx(), FreeImage_RemovePageEx(), which return TRUE or FALSE;
 - added FreeImage_RescaleRawBits();

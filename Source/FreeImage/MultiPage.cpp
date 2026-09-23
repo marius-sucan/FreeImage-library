@@ -489,12 +489,6 @@ FreeImage_OpenMultiBitmapByName(FREE_IMAGE_FORMAT fif, const FIFileName& filenam
 				header->cache_fif = fif;
 				header->load_flags = flags;
 
-				if (!read_only && (node->m_plugin->save_proc == NULL)) {
-					FreeImage_OutputMessageProc(fif, "%s does not support writing: \"%s\" can be read page by page, but nothing can be saved back to it - FreeImage_CloseMultiBitmap() will report the failure",
-						FreeImage_GetFormatFromFIF(fif), filename.display());
-					header->failed = TRUE;
-				}
-
 				// store the MULTIBITMAPHEADER in the surrounding FIMULTIBITMAP structure
 
 				bitmap->data = header.get();

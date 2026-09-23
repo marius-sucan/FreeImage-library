@@ -348,14 +348,14 @@ static void check_playback(const Expected *o, const char *path) {
     FreeImage_CloseMultiBitmap(mb, 0);
 }
 
-/* read_only FALSE: pages load, the close reports the failed save */
+/* read_only FALSE: an untouched close succeeds, an edit AVIF cannot save fails */
 static void check_readwrite_close(const char *file) {
-    char path[512];
+    char path[512], copy[1024];
     FIMULTIBITMAP *mb;
     FIBITMAP *pg;
     FILE *f;
-    long n;
-    BYTE *buf;
+    long n, m;
+    BYTE *buf, *after;
     FIMEMORY *mem;
 
     snprintf(path, sizeof(path), "data/%s", file);
@@ -364,7 +364,25 @@ static void check_readwrite_close(const char *file) {
     if (!mb) fail(file, "read-only OpenMultiBitmap returned NULL");
     else if (!FreeImage_CloseMultiBitmap(mb, 0)) fail(file, "read-only CloseMultiBitmap returned FALSE");
 
-    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, path, FALSE, FALSE, TRUE, AVIF_PLAYBACK);
+    f = fopen(path, "rb");
+    if (!f) { fail(file, "could not open the file"); return; }
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    buf = (BYTE *)malloc(n);
+    if (fread(buf, 1, n, f) != (size_t)n) { fclose(f); free(buf); fail(file, "could not read the file"); return; }
+    fclose(f);
+
+    /* the read-write sessions work on a scratch copy */
+    snprintf(copy, sizeof(copy), "%s", tmppath("fi_avif_readwrite.avif"));
+    f = fopen(copy, "wb");
+    if (!f || fwrite(buf, 1, n, f) != (size_t)n) {
+        if (f) fclose(f);
+        free(buf);
+        fail(file, "could not write the scratch copy");
+        return;
+    }
+    fclose(f);
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, copy, FALSE, FALSE, TRUE, AVIF_PLAYBACK);
     if (!mb) fail(file, "OpenMultiBitmap with read_only FALSE returned NULL");
     else {
         if (FreeImage_GetPageCount(mb) < 2) fail(file, "a writable session lost the animation's pages");
@@ -374,9 +392,28 @@ static void check_readwrite_close(const char *file) {
             if (FreeImage_GetBPP(pg) != 32) fail(file, "a writable session ignored AVIF_PLAYBACK");
             FreeImage_UnlockPage(mb, pg, FALSE);
         }
-        if (FreeImage_CloseMultiBitmap(mb, 0))
-            fail(file, "CloseMultiBitmap returned TRUE for a format that cannot be written");
+        if (!FreeImage_CloseMultiBitmap(mb, 0))
+            fail(file, "CloseMultiBitmap returned FALSE for an untouched session");
     }
+
+    mb = FreeImage_OpenMultiBitmap(FIF_AVIF, copy, FALSE, FALSE, TRUE, 0);
+    if (!mb) fail(file, "OpenMultiBitmap with read_only FALSE returned NULL for the edit");
+    else {
+        if (!FreeImage_DeletePageEx(mb, 0)) fail(file, "DeletePage failed in a writable session");
+        if (FreeImage_CloseMultiBitmap(mb, 0))
+            fail(file, "CloseMultiBitmap returned TRUE for an edit AVIF cannot save");
+    }
+    f = fopen(copy, "rb");
+    if (!f) fail(file, "the failed save removed the file");
+    else {
+        fseek(f, 0, SEEK_END); m = ftell(f); fseek(f, 0, SEEK_SET);
+        after = (BYTE *)malloc(m > 0 ? m : 1);
+        if ((m != n) || (fread(after, 1, m, f) != (size_t)m) || memcmp(after, buf, n))
+            fail(file, "the failed save changed the file");
+        fclose(f);
+        free(after);
+    }
+    remove(copy);
 
     mb = FreeImage_OpenMultiBitmap(FIF_AVIF, tmppath("fi_avif_created.avifs"), TRUE, FALSE, TRUE, 0);
     if (mb) {
@@ -384,20 +421,14 @@ static void check_readwrite_close(const char *file) {
         FreeImage_CloseMultiBitmap(mb, 0);
     }
 
-    f = fopen(path, "rb");
-    if (!f) { fail(file, "could not open the file"); return; }
-    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
-    buf = (BYTE *)malloc(n);
-    if (fread(buf, 1, n, f) == (size_t)n) {
-        mem = FreeImage_OpenMemory(buf, (DWORD)n);
-        mb = FreeImage_LoadMultiBitmapFromMemory(FIF_AVIF, mem, 0);
-        if (!mb) fail(file, "LoadMultiBitmapFromMemory returned NULL");
-        else if (!FreeImage_CloseMultiBitmap(mb, 0))
-            fail(file, "CloseMultiBitmap returned FALSE for a memory stream");
-        FreeImage_CloseMemory(mem);
-    }
-    fclose(f); free(buf);
-    printf("    {\"%s\", read_only=1 close -> TRUE, read_only=0 close -> FALSE, from memory close -> TRUE}\n", file);
+    mem = FreeImage_OpenMemory(buf, (DWORD)n);
+    mb = FreeImage_LoadMultiBitmapFromMemory(FIF_AVIF, mem, 0);
+    if (!mb) fail(file, "LoadMultiBitmapFromMemory returned NULL");
+    else if (!FreeImage_CloseMultiBitmap(mb, 0))
+        fail(file, "CloseMultiBitmap returned FALSE for a memory stream");
+    FreeImage_CloseMemory(mem);
+    free(buf);
+    printf("    {\"%s\", read_only=1 close -> TRUE, read_only=0 untouched close -> TRUE, edited close -> FALSE, from memory close -> TRUE}\n", file);
 }
 
 static void run(const Expected *e) {
