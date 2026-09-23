@@ -750,56 +750,47 @@ psdThumbnail::Init() {
 }
 
 int psdThumbnail::Read(FreeImageIO *io, fi_handle handle, int iResourceSize, bool isBGR) {
-	BYTE ShortValue[2], IntValue[4];
-	int nBytes=0, n;
+	BYTE ShortValue[2] = { 0 }, IntValue[4] = { 0 };
 
-	// remove the header size (28 bytes) from the total data size
-	int iTotalData = iResourceSize - 28;
+	// the thumbnail data follows a 28-byte header
+	const int iTotalData = iResourceSize - 28;
+	const long block_end = io->tell_proc(handle) + iResourceSize;
 
-	const long block_end = io->tell_proc(handle) + iTotalData;
-
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_Format = psdGetValue(IntValue, sizeof(_Format) );
 
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_Width = psdGetValue(IntValue, sizeof(_Width) );
 
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_Height = psdGetValue(IntValue, sizeof(_Height) );
 
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_WidthBytes = psdGetValue(IntValue, sizeof(_WidthBytes) );
 
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_Size = psdGetValue(IntValue, sizeof(_Size) );
 
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_CompressedSize = psdGetValue(IntValue, sizeof(_CompressedSize) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
 	_BitPerPixel = (short)psdGetValue(ShortValue, sizeof(_BitPerPixel) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
 	_Planes = (short)psdGetValue(ShortValue, sizeof(_Planes) );
 
-	const long JFIF_startpos = io->tell_proc(handle);
+	const long data_start = io->tell_proc(handle);
 
 	if(_dib) {
 		FreeImage_Unload(_dib);
+		_dib = NULL;
 	}
 
-	if (_WidthBytes < _Width * _BitPerPixel / 8) {
-		// Fix for CVE-2020-24293 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2020-24293.patch
-		throw "Invalid PSD image";
-	}
+	// raw rows must fit in the resource and in the file
+	io->seek_proc(handle, 0, SEEK_END);
+	const INT64 avail = MIN((INT64)iTotalData, (INT64)(io->tell_proc(handle) - data_start));
+	io->seek_proc(handle, data_start, SEEK_SET);
 
 	if(_Format == 1) {
 		// kJpegRGB thumbnail image
@@ -807,33 +798,30 @@ int psdThumbnail::Read(FreeImageIO *io, fi_handle handle, int iResourceSize, boo
 		if(isBGR) {
 			SwapRedBlue32(_dib);
 		}
-		// HACK: manually go to end of thumbnail, because (for some reason) LoadFromHandle consumes more bytes then available!
-		io->seek_proc(handle, block_end, SEEK_SET);
 	}
-	else {
+	else if((_Format == 0) && (_BitPerPixel == 24) && (_Width > 0) && (_Height > 0)
+		&& ((INT64)_WidthBytes >= (INT64)_Width * 3) && ((INT64)_WidthBytes * _Height <= avail)) {
 		// kRawRGB thumbnail image
-		_dib = FreeImage_Allocate(_Width, _Height, _BitPerPixel);
-		BYTE* dst_line_start = FreeImage_GetScanLine(_dib, _Height - 1);//<*** flipped
-		BYTE* line_start = new BYTE[_WidthBytes];
-		const unsigned dstLineSize = FreeImage_GetPitch(_dib);
-		for(unsigned h = 0; h < (unsigned)_Height; ++h, dst_line_start -= dstLineSize) {//<*** flipped
-			io->read_proc(line_start, _WidthBytes, 1, handle);
-			iTotalData -= _WidthBytes;
-			memcpy(dst_line_start, line_start, _Width * _BitPerPixel / 8);
-		}
+		_dib = FreeImage_Allocate(_Width, _Height, 24);
+		if(_dib) {
+			BYTE* dst_line_start = FreeImage_GetScanLine(_dib, _Height - 1);//<*** flipped
+			std::vector<BYTE> line_start(_WidthBytes);
+			const unsigned dstLineSize = FreeImage_GetPitch(_dib);
+			for(unsigned h = 0; h < (unsigned)_Height; ++h, dst_line_start -= dstLineSize) {//<*** flipped
+				io->read_proc(&line_start[0], _WidthBytes, 1, handle);
+				memcpy(dst_line_start, &line_start[0], _Width * 3);
+			}
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
-		SwapRedBlue32(_dib);
+			SwapRedBlue32(_dib);
 #endif
-		SAFE_DELETE_ARRAY(line_start);
-
-		// skip any remaining data
-		io->seek_proc(handle, iTotalData, SEEK_CUR);
-		return iResourceSize;
+		}
 	}
+	// any other thumbnail is skipped, the image loads without it
 
-	nBytes += (block_end - JFIF_startpos);
+	// the JPEG decoder reads ahead, so always resume at the end of the resource
+	io->seek_proc(handle, block_end, SEEK_SET);
 
-	return nBytes;
+	return iResourceSize;
 }
 
 bool psdThumbnail::Write(FreeImageIO *io, fi_handle handle, bool isBGR) {
