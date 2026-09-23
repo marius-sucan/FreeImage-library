@@ -312,7 +312,8 @@ the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "p
 
 ## Pre-existing bugs found along the way (same in both builds, not regressions)
 
-All fixed, one commit each (2026-09-22). Several turned out wider than first recorded.
+All fixed, one commit each (2026-09-22; the BMP, PSD and TIFF writers and the PNG loader on 2026-09-23).
+Several turned out wider than first recorded.
 
 - **IPTC in TIFF writes heap garbage** (1d9dc2f). libtiff 4 counts RichTIFFIPTC in bytes; FreeImage still used
   libtiff 3's LONG count.
@@ -332,6 +333,12 @@ All fixed, one commit each (2026-09-22). Several turned out wider than first rec
     converted by the caller.
   - J2K/JP2 (706232c): 1-bit grey and 555/565 read past their rows.
   - ICO (25908ca): 256x256 16-bit icons went through PNG; they are now stored as 24-bit.
+  - BMP (63bbdda): non-bitmap types became 16- to 128-bit BMPs; UINT16/INT16 got all-zero colour masks.
+  - PSD (f0d5bc7): UINT32, INT32, DOUBLE and COMPLEX became single-channel RGB files that FreeImage cannot
+    load; 4- and 16-bit bitmaps were already refused, but silently. The declared FIT_FLOAT had the same layout
+    and did not reload either; it is now 32-bit grayscale (080c325), which psd-tools reads with the same values.
+  - TIFF (23cc6cf): 555/565 bitmaps got their tags but no image data. A thumbnail the writer cannot store is
+    now skipped with the thumbnail warning, and the image is still saved.
 - **Loading from a stream offset.**
   - Fixed as listed: SGI (2b91121), TIFF (74aacfe), EXR (1b4dacf), JXR (0eaf4ed) and MNG/JNG (e65017c). TIFF, EXR
     and JXR also *save* correctly at an offset.
@@ -350,6 +357,11 @@ All fixed, one commit each (2026-09-22). Several turned out wider than first rec
   - 1-pixel-wide or -tall PCX, including Pillow's 1x1 files, was refused (3ea9b2e).
 - **`audit/crashes/png_PluginPNG.cpp-790.png`** (16adb5f): a double free. libpng longjmps out of `png_read_end`
   (bad IEND CRC) after `row_pointers` was freed, and a non-volatile local held the stale pointer.
+- **A PNG damaged after its image data was refused** (83061ac), although every pixel had been decoded: no IEND,
+  a cut or bad-CRC IEND, garbage or a cut chunk after the last IDAT, a missing last IDAT CRC. The image now loads
+  with its transparency and the metadata read so far, and the error is still reported. All 6,224 such copies of
+  778 PNGs load pixel-identical to the intact file; a file cut inside its compressed data still fails.
+  `png_PluginPNG.cpp-790.png` now loads.
 - **Deleting a page from Pillow's mixed-mode multi-page TIFF** (daa370c). The real bug: every 8-bit grey or
   palette TIFF without a SamplesPerPixel tag failed to load ("Image is corrupted"), which includes all of
   Pillow's L and P TIFFs; 44 more corpus files now decode. Found with it: 16-bit colormaps written as v << 8
@@ -364,12 +376,13 @@ Also found while fixing, and fixed:
 - **TGA** (8fc4ac5). TGA has no magic number, so a fuzz file (libheif's `github_46_2.heic`) parsed as a
   28777x28786 TGA. It allocated 3.2 GB, and rows past EOF showed uninitialised heap memory. The data must now
   reach one RLE packet per 128 pixels, and rows past EOF are zero.
+- **BMP RLE saves wrote uninitialised heap bytes** (0bef08b). The pad byte after an odd-length absolute run was
+  skipped instead of written, so the same image saved twice gave different files.
+- **Saving a multi-bitmap opened with `FIF_LOAD_NOPIXELS`** (8bff0ee). The pages reached the writers without
+  pixels: PNG, PSD and TIFF crashed and TGA wrote an empty image, so deleting a page from a TIFF opened
+  header-only crashed in `CloseMultiBitmap`. The pages are now reloaded with pixels.
 
 Found, not fixed (each needs a decision, or is out of scope):
-- The BMP, PSD and TIFF writers still accept types they do not declare (BMP non-bitmap types, PSD
-  DOUBLE/INT32/UINT32, TIFF 555/565) and write visibly wrong images. This is memory-safe; refusing, like TGA/PNG
-  now do, or converting is a policy choice.
-- A PNG cut right after its image data (no IEND) is refused, although every pixel was decoded.
 - `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
   but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
 - JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no
@@ -409,3 +422,9 @@ Found, not fixed (each needs a decision, or is out of scope):
   - Final check: the whole 2,261-file corpus against the post-R5 build. 57 files changed, all as listed above:
     44 more files decode, the PCX bomb, the PNG abort and the TGA fuzz file are now clean refusals, and the ICO,
     PCX and PSD corrections. TestAPI's format suites and `testAPI` pass.
+- **Third round (`refuse/`):**
+  - `probe.cpp`: every type per writer, header-only multi-page saves, TIFF thumbnails, mixed multi-page TIFF.
+  - `wdiff` with `cmp_w.py`: supported cases write the same bytes, unsupported ones are refused.
+  - `gen_png` + `gen_trunc.py` + `pngload` + `cmp_png.py`: 10,747 damaged copies of 778 PNGs; `pngasan` loads
+    them all in one ASan/LSan process (archive from `TestAPI/MNG`'s `asan-lib`).
+  - `psdfloat` + `psdcheck.py`: psd-tools (installed in `refuse/pylib`) as an independent PSD reader.
