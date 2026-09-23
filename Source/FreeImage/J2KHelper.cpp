@@ -40,6 +40,9 @@ static OPJ_SIZE_T
 _ReadProc(void *p_buffer, OPJ_SIZE_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
 	OPJ_SIZE_T l_nb_read = fio->io->read_proc(p_buffer, 1, (unsigned)p_nb_bytes, fio->handle);
+	if (!l_nb_read && p_nb_bytes) {
+		fio->eof = TRUE;
+	}
 	return l_nb_read ? l_nb_read : (OPJ_SIZE_T)-1;
 }
 
@@ -84,6 +87,7 @@ opj_freeimage_stream_create(FreeImageIO *io, fi_handle handle, BOOL bRead) {
 		fio->handle = handle;
 		const long start = io->tell_proc(handle);
 		fio->start = (start > 0) ? start : 0;
+		fio->eof = FALSE;
 
 		opj_stream_t *l_stream = opj_stream_create(OPJ_J2K_STREAM_CHUNK_SIZE, bRead ? OPJ_TRUE : OPJ_FALSE);
 		if (l_stream) {

@@ -165,6 +165,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				throw "Failed to setup the decoder\n";
 			}
 
+			// a cut or damaged codestream decodes as far as it goes
+			opj_decoder_set_strict_mode(d_codec, OPJ_FALSE);
+
 			if(!header_only) {
 				opj_codec_set_threads(d_codec, opj_freeimage_decode_threads(io, handle, OPJ_CODEC_JP2));
 			}
@@ -188,8 +191,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				return dib;
 			}
 
-			// decode the stream and fill the image structure 
-			if( !( opj_decode(d_codec, d_stream, image) && opj_end_decompress(d_codec, d_stream) ) ) {
+			// decode the stream and fill the image structure; a cut file has no end to read
+			fio->eof = FALSE;
+			const BOOL decoded = opj_decode(d_codec, d_stream, image);
+			const BOOL cut = fio->eof;
+			if( !decoded || (!opj_end_decompress(d_codec, d_stream) && !cut) ) {
 				throw "Failed to decode image!\n";
 			}
 
@@ -205,6 +211,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			// free image data structure
 			opj_image_destroy(image);
+
+			if(cut) {
+				DamagedImageWarning(s_format_id);
+			}
 
 			return dib;
 
