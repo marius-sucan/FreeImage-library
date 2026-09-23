@@ -221,6 +221,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	char id_one = 0, id_two = 0;
 	FIBITMAP *dib = NULL;
 	float *lineBuffer = NULL;
+	// a cut file keeps the rows it holds
+	int rows = 0;
+	long pixels_start = 0;
 
 	if (!handle) {
 		return NULL;
@@ -280,6 +283,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// Read the image...
 
+		pixels_start = io->tell_proc(handle);
+
 		if(image_type == FIT_RGBF) {
 			const unsigned lineWidth = 3 * width;
 			lineBuffer = (float*)malloc(lineWidth * sizeof(float));
@@ -291,6 +296,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				FIRGBF *bits = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
 
 				if(io->read_proc(lineBuffer, sizeof(float), lineWidth, handle) != lineWidth) {
+					rows = y;
 					throw "Read error";
 				}
 				float *channel = lineBuffer;
@@ -325,6 +331,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				float *bits = (float*)FreeImage_GetScanLine(dib, height - 1 - y);
 
 				if(io->read_proc(lineBuffer, sizeof(float), lineWidth, handle) != lineWidth) {
+					rows = y;
 					throw "Read error";
 				}
 				float *channel = lineBuffer;
@@ -350,6 +357,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	} catch (const char *text)  {
 		if (lineBuffer) {
 			free(lineBuffer);
+		}
+		// nothing is kept of a huge claim a few bytes long
+		if (dib && (rows > 0) && PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * FreeImage_GetHeight(dib), (UINT64)(io->tell_proc(handle) - pixels_start), 1)) {
+			FreeImage_OutputMessageProc(s_format_id, text);
+			PartialImageWarning(s_format_id, (unsigned)rows, FreeImage_GetHeight(dib));
+			return dib;
 		}
 		if (dib) {
 			FreeImage_Unload(dib);
