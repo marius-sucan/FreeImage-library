@@ -387,6 +387,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
+	// the pixel loops below read 8-bit indices or 3-byte triplets only
+	if ((dib != NULL) && ((FreeImage_GetImageType(dib) != FIT_BITMAP) || !SupportsExportDepth(FreeImage_GetBPP(dib)))) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+		return FALSE;
+	}
 	if ((dib != NULL) && (handle != NULL)) {
 		char header[] = "/* XPM */\nstatic char *freeimage[] = {\n/* width height num_colors chars_per_pixel */\n\"",
 		start_colors[] = "\",\n/* colors */\n\"",
