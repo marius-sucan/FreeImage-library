@@ -634,6 +634,7 @@ const
   FI_COLOR_IS_RGBA_COLOR        = $01; // RGBQUAD color is a RGBA color (contains a valid alpha channel)
   FI_COLOR_FIND_EQUAL_COLOR     = $02; // For palettized images: lookup equal RGB color from palette
   FI_COLOR_ALPHA_IS_INDEX       = $04; // The color's rgbReserved member (alpha) contains the palette index to be used
+  FI_COLOR_SET_ALPHA            = $08; // No blending: a 32-bit image gets the color's rgbReserved member as its alpha
   FI_COLOR_PALETTE_SEARCH_MASK  = FI_COLOR_FIND_EQUAL_COLOR or FI_COLOR_ALPHA_IS_INDEX; // No color lookup is performed
 
 // RescaleEx options ---------------------------------------------------------
@@ -1627,8 +1628,8 @@ function FreeImage_PreMultiplyWithAlpha(dib: PFIBITMAP): LongBool; {$IFDEF MSWIN
 
 // background filling routines
 function FreeImage_FillBackground(dib: PFIBITMAP; color: Pointer;
-  options: Integer = 0; applyAlpha: Integer = 0): LongBool; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
-  external FIDLL {$IFDEF WIN32}name '_FreeImage_FillBackground@16'{$ENDIF}
+  options: Integer = 0): LongBool; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
+  external FIDLL {$IFDEF WIN32}name '_FreeImage_FillBackground@12'{$ENDIF}
   {$IFDEF MACOS}name '_FreeImage_FillBackground'{$ENDIF};
 function FreeImage_EnlargeCanvas(src: PFIBITMAP; left, top, right, bottom: Integer;
   color: Pointer; options: Integer = 0): PFIBITMAP; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}

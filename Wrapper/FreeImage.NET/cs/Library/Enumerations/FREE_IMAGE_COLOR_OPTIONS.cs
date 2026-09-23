@@ -64,5 +64,9 @@ namespace FreeImageAPI
 		/// <see cref="RGBQUAD.rgbReserved"/> contains the palette index to be used.
 		/// </summary>
 		FICO_ALPHA_IS_INDEX = 0x4,
+		/// <summary>
+		/// No blending: a 32-bit image gets <see cref="RGBQUAD.rgbReserved"/> as its alpha.
+		/// </summary>
+		FICO_SET_ALPHA = 0x8,
 	}
 }

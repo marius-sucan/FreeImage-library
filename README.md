@@ -50,7 +50,7 @@ Fixes:
 - and many other fixes
 
 Changes:
-- FillBackgroundBitmap() has a new optional parameter: applyAlpha;
+- FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha. FreeImage_FillBackground() keeps the three parameters of FreeImage 3.18;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - a PNG that is cut short or damaged now loads with what was decoded instead of failing: every row decoded so far, an interlaced image at lower detail, the rest blank; a warning message, mirrored to DebugView, says what was kept;
 - JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;

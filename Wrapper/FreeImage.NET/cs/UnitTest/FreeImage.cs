@@ -3395,6 +3395,10 @@ namespace FreeImageAPI
 		/// <see cref="RGBQUAD.rgbReserved"/> contains the palette index to be used.
 		/// </summary>
 		FICO_ALPHA_IS_INDEX = 0x4,
+		/// <summary>
+		/// No blending: a 32-bit image gets <see cref="RGBQUAD.rgbReserved"/> as its alpha.
+		/// </summary>
+		FICO_SET_ALPHA = 0x8,
 	}
 }
 
@@ -6494,7 +6498,7 @@ namespace FreeImageAPI
 		public static extern uint SwapPaletteIndices(FIBITMAP dib, ref byte index_a, ref byte index_b);
 
 		[DllImport(FreeImageLibrary, EntryPoint = "FreeImage_FillBackground")]
-		internal static extern bool FillBackground(FIBITMAP dib, IntPtr color, FREE_IMAGE_COLOR_OPTIONS options, int applyAlpha);
+		internal static extern bool FillBackground(FIBITMAP dib, IntPtr color, FREE_IMAGE_COLOR_OPTIONS options);
 
 		#endregion
 	}
@@ -29784,7 +29788,7 @@ namespace FreeImageAPI
 			{
 				T[] buffer = new T[] { color };
 				handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-				return FillBackground(dib, handle.AddrOfPinnedObject(), options, 0);
+				return FillBackground(dib, handle.AddrOfPinnedObject(), options);
 			}
 			finally
 			{

@@ -783,6 +783,7 @@ Public Enum FREE_IMAGE_COLOR_OPTIONS
    FI_COLOR_IS_RGBA_COLOR = &H1         ' RGBQUAD color is a RGBA color (contains a valid alpha channel)
    FI_COLOR_FIND_EQUAL_COLOR = &H2      ' For palettized images: lookup equal RGB color from palette
    FI_COLOR_ALPHA_IS_INDEX = &H4        ' The color's rgbReserved member (alpha) contains the palette index to be used
+   FI_COLOR_SET_ALPHA = &H8             ' No blending: a 32-bit image gets the color's rgbReserved member as its alpha
 End Enum
 Public Const FI_COLOR_PALETTE_SEARCH_MASK = _
       (FI_COLOR_FIND_EQUAL_COLOR Or FI_COLOR_ALPHA_IS_INDEX)     ' Flag to test, if any color lookup is performed
@@ -2193,11 +2194,10 @@ Private Declare Function FreeImage_PreMultiplyWithAlphaInt Lib "FreeImage.dll" A
            ByVal Bitmap As Long) As Long
 
 ' background filling functions
-Public Declare Function FreeImage_FillBackground Lib "FreeImage.dll" Alias "_FreeImage_FillBackground@16" ( _
+Public Declare Function FreeImage_FillBackground Lib "FreeImage.dll" Alias "_FreeImage_FillBackground@12" ( _
            ByVal Bitmap As Long, _
            ByRef Color As Any, _
-  Optional ByVal Options As FREE_IMAGE_COLOR_OPTIONS = FI_COLOR_IS_RGB_COLOR, _
-  Optional ByVal ApplyAlpha As Long = 0) As Long
+  Optional ByVal Options As FREE_IMAGE_COLOR_OPTIONS = FI_COLOR_IS_RGB_COLOR) As Long
 
 Public Declare Function FreeImage_EnlargeCanvas Lib "FreeImage.dll" Alias "_FreeImage_EnlargeCanvas@28" ( _
            ByVal Bitmap As Long, _
@@ -12298,6 +12298,7 @@ Const FI_COLOR_IS_RGB_COLOR = 1
 Const FI_COLOR_IS_RGBA_COLOR = 1
 Const FI_COLOR_FIND_EQUAL_COLOR = 1
 Const FI_COLOR_ALPHA_IS_INDEX = 1
+Const FI_COLOR_SET_ALPHA = 1
 
 ' Enum FREE_IMAGE_CONVERSION_FLAGS
 Const FREE_IMAGE_CONVERSION_FLAGS = 1

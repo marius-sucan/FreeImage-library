@@ -209,12 +209,11 @@ GetAlphaBlendedColor(const RGBQUAD *bgcolor, const RGBQUAD *fgcolor, RGBQUAD *bl
  @param dib The image to be filled.
  @param color The color, the specified image should be filled with.
  @param options Options that affect the color search process for palletized images.
- @param applyAlpha For 32-bits RGBA, sets the alpha channel to specified value.
  @return Returns TRUE on success, FALSE otherwise. This function fails if any of
  the dib and color is NULL or the provided image is not a FIT_BITMAP image.
  */
 static BOOL
-FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int applyAlpha) {
+FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options) {
 
 	if ((!dib) || (FreeImage_GetImageType(dib) != FIT_BITMAP)) {
 		return FALSE;;
@@ -242,9 +241,9 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 	
 	// Check for RGBA case if bitmap supports alpha 
 	// blending (8-bit greyscale, 24- or 32-bit images)
-	// not with FI_COLOR_ALPHA_IS_INDEX: rgbReserved is an index then
-	if (supports_alpha && applyAlpha == 0 && (options & FI_COLOR_IS_RGBA_COLOR)
-			&& !(options & FI_COLOR_ALPHA_IS_INDEX)) {
+	// not with FI_COLOR_ALPHA_IS_INDEX (rgbReserved is an index) nor FI_COLOR_SET_ALPHA
+	if (supports_alpha && (options & FI_COLOR_IS_RGBA_COLOR)
+			&& !(options & (FI_COLOR_ALPHA_IS_INDEX | FI_COLOR_SET_ALPHA))) {
 		
 		if (color->rgbReserved == 0) {
 			// the fill color is fully transparent; we are done
@@ -281,10 +280,6 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 		// image. This should never happen...
 		return FALSE;
 	}
-
-   if ((applyAlpha <= 0) || (applyAlpha > 0xFF)) {
-      applyAlpha = 0xFF;
-   }
 	
 	// first, build the first scanline (line 0)
 	switch (bpp) {
@@ -336,7 +331,7 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
 			rgbq.rgbBlue = ((RGBTRIPLE *)color_intl)->rgbtBlue;
 			rgbq.rgbGreen = ((RGBTRIPLE *)color_intl)->rgbtGreen;
 			rgbq.rgbRed = ((RGBTRIPLE *)color_intl)->rgbtRed;
-			rgbq.rgbReserved = applyAlpha;
+			rgbq.rgbReserved = (options & FI_COLOR_SET_ALPHA) ? color->rgbReserved : 0xFF;
 			for (unsigned x = 0; x < width; x++) {
 				((RGBQUAD *)dst_bits)[x] = rgbq;
 			}
@@ -378,11 +373,12 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
  of type FIT_BITMAP. So, for 32- and 24-bit images, the red, green and blue members of
  the RGBQUAD structure are directly used for the image's red, green and blue channel
  respectively. Although alpha transparent RGBQUAD colors are supported, the alpha channel
- of a 32-bit image never gets modified by this function. A fill color with an alpha value
+ of a 32-bit image is set to 255 by this function. A fill color with an alpha value
  smaller than 255 gets blended with the image's actual background color, which is determined
  from the image's bottom-left pixel. So, currently using alpha enabled colors, assumes the
  image to be unicolor before the fill operation. However, the RGBQUAD's rgbReserved member is
  only taken into account, if option FI_COLOR_IS_RGBA_COLOR has been specified.
+ Option FI_COLOR_SET_ALPHA blends nothing and stores rgbReserved as a 32-bit image's alpha.
 
  For 16-bit images, the red-, green- and blue components of the specified color are
  transparently translated into either the 16-bit 555 or 565 representation. This depends
@@ -422,12 +418,11 @@ FillBackgroundBitmap(FIBITMAP *dib, const RGBQUAD *color, int options, int apply
  memory pointed to by this pointer is always assumed to be at least as large as the
  image's color value, but never smaller than the size of an RGBQUAD structure.
  @param options Options that affect the color search process for palletized images.
- @param applyAlpha For 32-bits RGBA, sets the alpha channel to specified value.
  @return Returns TRUE on success, FALSE otherwise. This function fails if any of
  dib and color is NULL.
  */
 BOOL DLL_CALLCONV
-FreeImage_FillBackground(FIBITMAP *dib, const void *color, int options, int applyAlpha) {
+FreeImage_FillBackground(FIBITMAP *dib, const void *color, int options) {
 
 	if (!FreeImage_HasPixels(dib)) {
 		return FALSE;
@@ -437,9 +432,9 @@ FreeImage_FillBackground(FIBITMAP *dib, const void *color, int options, int appl
 		return FALSE;
 	}
 
-   // handle FIT_BITMAP images with FreeImage_FillBackground()
+	// handle FIT_BITMAP images with FreeImage_FillBackground()
 	if (FreeImage_GetImageType(dib) == FIT_BITMAP) {
-		return FillBackgroundBitmap(dib, (RGBQUAD *)color, options, applyAlpha);
+		return FillBackgroundBitmap(dib, (RGBQUAD *)color, options);
 	}
 	
 	// first, construct the first scanline (bottom line)
