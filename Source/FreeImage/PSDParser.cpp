@@ -2132,10 +2132,13 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 		// 128-bit RGBAF
 		samplesperpixel = 4;
 		bitspersample = bitsperpixel / samplesperpixel;
-	} else {
-		// special image type (int, long, double, ...)
+	} else if (image_type == FIT_FLOAT) {
+		// 32-bit float grayscale
 		samplesperpixel = 1;
 		bitspersample = bitsperpixel;
+		colourMode = PSDP_GRAYSCALE;
+	} else {
+		return false;
 	}
 
 	_headerInfo._Version = (((flags & PSD_PSB) == PSD_PSB) || width > 30000 || height > 30000) ? 2 : 1;
