@@ -276,7 +276,8 @@ TIFFErrorHandler _TIFFerrorHandler = msdosErrorHandler;
 
 // ----------------------------------------------------------
 
-#define CVT(x)      (((x) * 255L) / ((1L<<16)-1))
+// the high byte, as libtiff does: exact for maps written as v * 257 and as v << 8
+#define CVT(x)      ((x) >> 8)
 #define	SCALE(x)	(((x)*((1L<<16)-1))/255)
 
 // ==========================================================
