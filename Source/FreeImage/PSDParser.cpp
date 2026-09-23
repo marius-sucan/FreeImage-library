@@ -1050,6 +1050,24 @@ BOOL invertColor(FIBITMAP* dib) {
 	}
 }
 
+/**
+Invert every channel, Black included (FreeImage_Invert leaves the fourth one alone)
+*/
+static
+void invertCMYK(FIBITMAP* dib) {
+	const FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
+	if((type != FIT_BITMAP) && (type != FIT_RGB16) && (type != FIT_RGBA16)) {
+		return;
+	}
+	const unsigned lineSize = FreeImage_GetLine(dib);
+	for(unsigned y = 0; y < FreeImage_GetHeight(dib); y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, y);
+		for(unsigned x = 0; x < lineSize; x++) {
+			line[x] = ~line[x];
+		}
+	}
+}
+
 //---------------------------------------------------------------------------
 
 psdParser::psdParser() {
@@ -1668,7 +1686,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		if(mode == PSDP_MULTICHANNEL) {
 			invertColor(bitmap);
 		} else {
-			FreeImage_Invert(bitmap);
+			invertCMYK(bitmap);
 		}
 
 		if((_fi_flags & PSD_CMYK) == PSD_CMYK) {
@@ -1842,7 +1860,7 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 			return false;
 		}
 		dib = cmyk_dib;
-		FreeImage_Invert(dib);
+		invertCMYK(dib);
 	}
 
 	int nCompression = PSDP_COMPRESSION_RLE;
