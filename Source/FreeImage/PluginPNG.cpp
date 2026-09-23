@@ -838,6 +838,15 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
     fio.s_handle = handle;
 	fio.s_io = io;
 
+	// a 555/565 row is shorter than the 8-bit RGB row libpng reads, and other types have no PNG layout
+	if (dib) {
+		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+		if (!SupportsExportType(image_type) || ((image_type == FIT_BITMAP) && !SupportsExportDepth(FreeImage_GetBPP(dib)))) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+			return FALSE;
+		}
+	}
+
 	if ((dib) && (handle)) {
 		try {
 			// create the chunk manage structure
