@@ -336,8 +336,9 @@ static void test_invalid(void) {
 	build(&b, ihdr, idat, idat_size, small, small_size, 10);
 	expect("two fcTL before IDAT", &b, WANT_STATIC, 0); free(b.data);
 
+	/* a cut file keeps the frames it holds: the fdAT takes the rest of the file as its data */
 	build(&b, ihdr, idat, idat_size, small, small_size, 11);
-	expect("an fdAT claiming more than the file holds", &b, WANT_STATIC, 0); free(b.data);
+	expect("an fdAT claiming more than the file holds", &b, WANT_ANIMATED, 2); free(b.data);
 
 	build(&b, ihdr, idat, idat_size, small, small_size, 12);
 	expect("an fdAT shorter than its sequence number", &b, WANT_STATIC, 0); free(b.data);
@@ -375,7 +376,8 @@ static void test_invalid(void) {
 		chunk(&b, "acTL", a, 8, (size_t)-1);
 		chunk(&b, "IDAT", idat, idat_size, 0x7FFFFFFF);
 		chunk(&b, "IEND", NULL, 0, (size_t)-1);
-		expect("a chunk claiming 2GB it does not hold", &b, WANT_REFUSED, 0); free(b.data);
+		/* the IDAT takes the rest of the file, read in steps, and the default image loads */
+		expect("a chunk claiming 2GB it does not hold", &b, WANT_STATIC, 0); free(b.data);
 	}
 
 	free(idat); free(small); free(ihdr); free(ihdr_small);

@@ -203,9 +203,9 @@ WriteChunk(FreeImageIO *io, fi_handle handle, const char *type, const BYTE *pref
 	return (io->write_proc(trailer, 1, 4, handle) == 4) ? TRUE : FALSE;
 }
 
-// append in bounded steps; buffer untouched on a short read
+// append in bounded steps; a short read leaves the buffer untouched, or keeps what it read
 static BOOL
-ReadBytes(FreeImageIO *io, fi_handle handle, std::vector<BYTE>& out, DWORD length) {
+ReadBytes(FreeImageIO *io, fi_handle handle, std::vector<BYTE>& out, DWORD length, BOOL keep_partial = FALSE) {
 	const DWORD step = 64 * 1024;
 	const size_t start = out.size();
 
@@ -213,8 +213,9 @@ ReadBytes(FreeImageIO *io, fi_handle handle, std::vector<BYTE>& out, DWORD lengt
 	while(done < length) {
 		const DWORD n = MIN(step, length - done);
 		out.resize(start + done + n);
-		if(io->read_proc(&out[start + done], 1, n, handle) != n) {
-			out.resize(start);
+		const unsigned got = io->read_proc(&out[start + done], 1, n, handle);
+		if(got != n) {
+			out.resize(keep_partial ? (start + done + got) : start);
 			return FALSE;
 		}
 		done += n;
@@ -315,6 +316,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 	BOOL seen_idat = FALSE;
 	BOOL idat_is_frame = FALSE;
 	BOOL broken = FALSE;				//! animation chunks inconsistent
+	BOOL cut = FALSE;					//! the file ends inside image data, which the PNG loader salvages
 	DWORD expected_seq = 0;				//! shared fcTL/fdAT sequence, no gaps
 	int current = -1;					//! the frame fdAT payloads belong to
 
@@ -344,11 +346,15 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 			have_ihdr = TRUE;
 
 		} else if(memcmp(type, "IDAT", 4) == 0) {
-			if(!have_ihdr || !ReadBytes(io, handle, default_image, length)) {
+			if(!have_ihdr) {
 				return FALSE;
 			}
-			consumed = length;
 			seen_idat = TRUE;
+			if(!ReadBytes(io, handle, default_image, length, TRUE)) {
+				cut = TRUE;
+				break;
+			}
+			consumed = length;
 
 		} else if(memcmp(type, "acTL", 4) == 0) {
 			BYTE payload[8];
@@ -405,8 +411,8 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 					broken = TRUE;
 				} else {
 					expected_seq++;
-					if(!ReadBytes(io, handle, info->frames[current].data, length - 4)) {
-						broken = TRUE;
+					if(!ReadBytes(io, handle, info->frames[current].data, length - 4, TRUE)) {
+						cut = TRUE;
 						break;
 					}
 					consumed = length;
@@ -453,6 +459,10 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 	}
 
 	info->animated = (have_actl && !broken && (idat_is_frame || !info->frames.empty())) ? TRUE : FALSE;
+
+	if(cut) {
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short; the frames it holds are kept");
+	}
 
 	if(info->animated) {
 		if(idat_is_frame) {
