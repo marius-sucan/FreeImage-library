@@ -28,29 +28,31 @@ asan: clean-bin all
 
 # the library's own compile flags
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
-LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
-LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(OPENMP_CFLAGS)
+# Makefile.gnu's -D flags: the instrumented objects have to be built like the library's
+GNU_CDEFS   := $(shell sed -n 's/^CFLAGS += \(-D.*\)/\1/p' ../../Makefile.gnu)
+GNU_CXXDEFS := $(shell sed -n 's/^CXXFLAGS += \(-D.*\)/\1/p' ../../Makefile.gnu)
+LIBCFLAGS   = -std=gnu99 -O1 -g -fPIC -fexceptions -fvisibility=hidden $(GNU_CDEFS) $(OPENMP_CFLAGS)
+LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(GNU_CXXDEFS) $(OPENMP_CFLAGS)
 ASAN        = -fsanitize=address -fno-omit-frame-pointer
 
 # only the LibJPEG files in Makefile.srcs (not the sample programs)
 JPEG_C   = $(patsubst %,../../%,$(shell grep -o 'Source/LibJPEG/[A-Za-z0-9_]*\.c' ../../Makefile.srcs | sort -u))
 JPEG_CXX = ../../Source/FreeImage/PluginJPEG.cpp ../../Source/FreeImageToolkit/JPEGTransform.cpp
 
-libfreeimage-asan.a: ../../Dist/libfreeimage.a $(JPEG_C) $(JPEG_CXX)
+asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libfreeimage.a $(JPEG_C) $(JPEG_CXX)
 	rm -rf asan-obj && mkdir -p asan-obj
-	cp ../../Dist/libfreeimage.a $@
 	for f in $(JPEG_C); do \
 	  gcc -c $(LIBCFLAGS) $(ASAN) $(LIBINC) $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o || exit 1; done
 	for f in $(JPEG_CXX); do \
 	  g++ -c $(LIBCXXFLAGS) $(ASAN) $(LIBINC) $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o || exit 1; done
-	ar r $@ asan-obj/*.o
+	touch $@
 
-asan-lib: libfreeimage-asan.a
+asan-lib: asan-obj/.built
 
-asan-run: libfreeimage-asan.a
+asan-run: asan-obj/.built
 	@for t in $(TESTS); do \
 	  gcc $(CFLAGS) -fsanitize=address $(INC) $$t.c -o $$t-asan \
-	    libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS) || exit 1; done
+	    asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS) || exit 1; done
 	@for t in $(TESTS); do echo "=== $$t (asan) ==="; \
 	  ASAN_OPTIONS=allocator_may_return_null=1 ./$$t-asan || exit 1; done
 

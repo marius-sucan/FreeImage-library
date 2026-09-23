@@ -16,11 +16,11 @@ samples the repository does not carry. Each prints a report and exits non-zero o
 Build the library first (`make` in the repo root), then:
 
     make run            # decode + narrowio + sequence
-    make asan-run       # the same, against a copy of the library whose plugin, libheif
-                        # and libde265 objects are rebuilt with AddressSanitizer
+    make asan-run       # the same, with the plugin, libheif and libde265 rebuilt with
+                        # AddressSanitizer and linked ahead of the library
     make narrowio-step  # the stepped seek, see below
     make thirdparty-run # fetch the third-party samples (about 12 MB) and run thirdparty
-    make thirdparty-asan-run   # the same against the AddressSanitizer copy
+    make thirdparty-asan-run   # the same with the AddressSanitizer objects
     ./decode --png      # also writes every decoded page as fi_heif_<file>_<page>.png
 
 Scratch files are written to `$HEIF_TEST_TMP`, or the current directory.

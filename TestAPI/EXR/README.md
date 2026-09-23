@@ -21,8 +21,8 @@ Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # all five
     make asan-run       # rebuild OpenEXR, OpenEXRCore, libdeflate and the
-                        # plugin with AddressSanitizer into a private copy of
-                        # the library, and run all five against that
+                        # plugin with AddressSanitizer, and run all five with
+                        # those objects linked ahead of the library
 
 Scratch files are written to `$EXR_TEST_TMP`, or the current directory.
 `make clean` removes them along with the ASan objects.

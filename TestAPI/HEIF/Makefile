@@ -12,7 +12,9 @@ LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
 # Makefile.gnu's C++ flags, relative to here
 LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's\#-I\#-I../../\#g')
-LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden -D__ANSI__ $(OPENMP_CFLAGS)
+# Makefile.gnu's -D flags: the instrumented objects have to be built like the library's
+GNU_CXXDEFS := $(shell sed -n 's/^CXXFLAGS += \(-D.*\)/\1/p' ../../Makefile.gnu)
+LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(GNU_CXXDEFS) $(OPENMP_CFLAGS)
 HEIF_PRE    = $(subst -ISource,-I../../Source,$(LIBHEIF_CXXFLAGS_PRE))
 HEIF_POST   = $(LIBHEIF_CXXFLAGS_POST)
 DE265_PRE   = $(subst -ISource,-I../../Source,$(LIBDE265_CXXFLAGS_PRE))
@@ -43,9 +45,9 @@ thirdparty-run: thirdparty
 	sh fetch_samples.sh
 	./thirdparty
 
-thirdparty-asan-run: libfreeimage-asan.a
+thirdparty-asan-run: asan-obj/.built
 	sh fetch_samples.sh
-	gcc $(CFLAGS) -fsanitize=address $(INC) thirdparty.c -o thirdparty-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+	gcc $(CFLAGS) -fsanitize=address $(INC) thirdparty.c -o thirdparty-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	./thirdparty-asan
 
 # --- AddressSanitizer -------------------------------------------------------
@@ -56,23 +58,27 @@ ifneq (,$(filter x86_64 amd64 i86pc i386 i486 i586 i686,$(HEIF_MACHINE)))
 DE265_CC += $(wildcard ../../Source/LibDe265/libde265/x86/*.cc)
 endif
 
-libfreeimage-asan.a: ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginHEIF.cpp $(HEIF_CC) $(DE265_CC)
+# linked ahead of libfreeimage.a to replace its copies, so only the library's own sources
+LIBSRCS := $(addprefix ../../,$(shell grep -oE 'Source/[A-Za-z0-9_./+-]+\.(c|cc|cpp)' ../../Makefile.srcs))
+HEIF_CC  := $(filter $(LIBSRCS),$(HEIF_CC))
+DE265_CC := $(filter $(LIBSRCS),$(DE265_CC))
+
+asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginHEIF.cpp $(HEIF_CC) $(DE265_CC)
 	rm -rf asan-obj && mkdir -p asan-obj
-	cp ../../Dist/libfreeimage.a $@
 	for f in $(HEIF_CC); do \
-	  g++ -c $(HEIF_PRE) $(LIBCXXFLAGS) $(LIBINC) $(HEIF_POST) -fsanitize=address -fno-omit-frame-pointer $$f -o asan-obj/$$(echo $$f | tr / _).o || exit 1; done
+	  g++ -c $(HEIF_PRE) $(LIBCXXFLAGS) $(LIBINC) $(HEIF_POST) -fsanitize=address -fno-omit-frame-pointer $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o || exit 1; done
 	for f in $(DE265_CC); do \
 	  case $$f in */x86/sse-*) simd="$(LIBDE265_SSE_FLAGS)";; */transform-avx2.cc) simd=-mavx2;; */transform-avx512.cc) simd="-mavx512f -mavx512bw";; *) simd=;; esac; \
-	  g++ -c $(DE265_PRE) $(LIBCXXFLAGS) $(LIBINC) $(DE265_POST) $$simd -fsanitize=address -fno-omit-frame-pointer $$f -o asan-obj/$$(echo $$f | tr / _).o || exit 1; done
+	  g++ -c $(DE265_PRE) $(LIBCXXFLAGS) $(LIBINC) $(DE265_POST) $$simd -fsanitize=address -fno-omit-frame-pointer $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o || exit 1; done
 	g++ -c $(LIBCXXFLAGS) $(LIBINC) -fsanitize=address -fno-omit-frame-pointer ../../Source/FreeImage/PluginHEIF.cpp -o asan-obj/PluginHEIF.o
-	ar r $@ asan-obj/*.o
+	touch $@
 
-asan-lib: libfreeimage-asan.a
+asan-lib: asan-obj/.built
 
-asan-run: libfreeimage-asan.a
-	gcc $(CFLAGS) -fsanitize=address $(INC) decode.c -o decode-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
-	gcc $(CFLAGS) -fsanitize=address $(INC) narrowio.c -o narrowio-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
-	gcc $(CFLAGS) -fsanitize=address $(INC) sequence.c -o sequence-asan libfreeimage-asan.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+asan-run: asan-obj/.built
+	gcc $(CFLAGS) -fsanitize=address $(INC) decode.c -o decode-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+	gcc $(CFLAGS) -fsanitize=address $(INC) narrowio.c -o narrowio-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+	gcc $(CFLAGS) -fsanitize=address $(INC) sequence.c -o sequence-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	./decode-asan && ./narrowio-asan && ./sequence-asan
 
 # --- stepped seek -----------------------------------------------------------

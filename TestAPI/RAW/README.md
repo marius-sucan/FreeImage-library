@@ -18,8 +18,8 @@ Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # all three
     make asan-run       # rebuild the whole of Source/LibRawLite and the plugin
-                        # with AddressSanitizer into a private copy of the
-                        # library, and run all three against that
+                        # with AddressSanitizer, and run all three with those
+                        # objects linked ahead of the library
 
 Nothing is written to disk: `robust` feeds every damaged buffer through a
 memory stream, and no test saves anything.

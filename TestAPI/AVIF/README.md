@@ -14,8 +14,8 @@ on failure.
 Build the library first (`make` in the repo root), then:
 
     make run            # decode + narrowio
-    make asan-run       # the same, against a copy of the library whose plugin, libavif
-                        # and dav1d objects are rebuilt with AddressSanitizer
+    make asan-run       # the same, with the plugin, libavif and dav1d rebuilt with
+                        # AddressSanitizer and linked ahead of the library
     make narrowio-step  # the stepped seek, see below
     ./decode --png      # also writes every decoded page as fi_avif_<file>_<page>.png
 

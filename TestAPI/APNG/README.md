@@ -16,8 +16,8 @@ Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # both
     make asan-run       # rebuild PluginAPNG.cpp, PluginPNG.cpp and the whole of
-                        # Source/LibPNG with AddressSanitizer into a private copy
-                        # of the library, and run both against that
+                        # Source/LibPNG with AddressSanitizer, and run both with
+                        # those objects linked ahead of the library
 
 Scratch files are written to `$APNG_TEST_TMP`, or the current directory.
 `make clean` removes them along with the ASan objects.

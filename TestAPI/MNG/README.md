@@ -124,4 +124,4 @@ hand - chunk headers, lengths, the extent of each embedded datastream, the
 variable-length bodies of FRAM and DEFI - and a sanitized run over deliberately
 damaged input is what catches a mistake in that. It rebuilds `PluginMNG.cpp`,
 `MNGHelper.cpp`, `PluginJNG.cpp`, `PluginPNG.cpp`, `MultiPage.cpp` and the
-bundled libpng with AddressSanitizer into a private copy of the library.
+bundled libpng with AddressSanitizer and links them ahead of the library.

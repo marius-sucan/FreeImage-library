@@ -18,8 +18,8 @@ Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # all three
     make asan-run       # rebuild the whole of Source/LibWebP and the plugin
-                        # with AddressSanitizer into a private copy of the
-                        # library, and run all three against that
+                        # with AddressSanitizer, and run all three with those
+                        # objects linked ahead of the library
 
 Scratch files are written to `$WEBP_TEST_TMP`, or the current directory.
 `make clean` removes them along with the ASan objects.
