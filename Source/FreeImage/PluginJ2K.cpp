@@ -166,7 +166,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			if(!header_only) {
-				opj_codec_set_threads(d_codec, opj_get_num_cpus());
+				opj_codec_set_threads(d_codec, opj_freeimage_decode_threads(io, handle, OPJ_CODEC_J2K));
 			}
 			
 			// read the main header of the codestream and if necessary the JP2 boxes

@@ -26,6 +26,11 @@ Stream destructor
 void opj_freeimage_stream_destroy(J2KFIO_t* fio);
 
 /**
+Decoder thread count for the codestream at the handle's position (0 decodes on the calling thread)
+*/
+int opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FORMAT format);
+
+/**
 Conversion opj_image_t => FIBITMAP
 */
 FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL header_only);

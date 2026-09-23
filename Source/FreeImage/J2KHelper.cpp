@@ -113,6 +113,39 @@ opj_freeimage_stream_destroy(J2KFIO_t* fio) {
 	}
 }
 
+int 
+opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FORMAT format) {
+	// OpenJPEG syncs its pool several times per tile, so a thread only pays off per 2 KiB of tile data
+	const int cpus = opj_get_num_cpus();
+	if(cpus < 2) {
+		return 0;
+	}
+	OPJ_UINT64 threads = 0;
+	const long start = io->tell_proc(handle);
+	J2KFIO_t *fio = opj_freeimage_stream_create(io, handle, TRUE);
+	if(fio) {
+		opj_codec_t *codec = opj_create_decompress(format);
+		opj_dparameters_t parameters;
+		opj_set_default_decoder_parameters(&parameters);
+		opj_image_t *image = NULL;
+		if(codec && opj_setup_decoder(codec, &parameters) && opj_read_header(fio->stream, codec, &image)) {
+			opj_codestream_info_v2_t *info = opj_get_cstr_info(codec);
+			if(info) {
+				const OPJ_UINT64 tiles = (OPJ_UINT64)info->tw * info->th;
+				if(tiles) {
+					threads = _LengthProc(fio) / tiles / 2048;
+				}
+				opj_destroy_cstr_info(&info);
+			}
+		}
+		opj_image_destroy(image);
+		opj_destroy_codec(codec);
+		opj_freeimage_stream_destroy(fio);
+	}
+	io->seek_proc(handle, start, SEEK_SET);
+	return (threads < 2) ? 0 : (int)MIN(threads, (OPJ_UINT64)cpus);
+}
+
 // --------------------------------------------------------------------------
 
 /**
