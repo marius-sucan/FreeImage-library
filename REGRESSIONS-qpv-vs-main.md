@@ -13,10 +13,13 @@ Fixed crashes on malformed files are not regressions. A stricter refusal of a *v
 | R3 | Fattal02 segfaults on a flat image smaller than 32 px (main returned NULL) | **regression** (crash), fixed in 48558a3 | 9b55043 | no |
 | R4 | `CloseMultiBitmap` returns FALSE for an *untouched* read-write session of a writer-less format | **regression** (API result, deliberate), fixed in 3796059 | c1442f5 | no (QPV opens read-only) |
 | R5 | `MakeThumbnail(hdr, N, TRUE)` ignores `convert` when the larger side is exactly N | **regression** (contract), fixed in f3efc44 | 3f0e1dc | no (QPV never calls it) |
-| R6 | Tiled JPEG 2000 with small tiles decodes up to 1.6x (64 px tiles) / 6x (16 px tiles) slower | **performance**, open | 03c89f4 | yes, for such files |
+| R6 | Tiled JPEG 2000 with small tiles decodes up to 1.6x (64 px tiles) / 6x (16 px tiles) slower | **performance**, fixed in 2417853 | 03c89f4 | yes, for such files |
+| R7 | CMYK PSDs load with the K channel reversed (colours black, pure K white) and save it uninverted | **regression**, fixed in fd94d28 | 8464e74 (C5) | yes: every 8/16-bit CMYK PSD |
+| R8 | A PSD with an unusable thumbnail fails to load; a good 1033 + bad 1036 thumbnail pair segfaults | **regression** (crash), fixed in 1f7cf71 | 6e64300 | yes, for such files |
 | C1-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
 
-Nothing else in the differential runs came out worse on qpv for a valid input.
+Nothing else in the differential runs came out worse on qpv for a valid input. R7 and R8 were found while fixing
+the pre-existing bugs below: the corpus had no CMYK PSD, and R8 was listed as "plausible, not reproduced".
 
 ---
 
@@ -147,6 +150,44 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
 - The overall picture is a large speed-up; only small-tile files regress.
 - **Suggested fix:** enable threads only when tiles are large (e.g. tile area ≥ 256x256, readable after
   `opj_read_header`), or cap the thread count.
+- **Fix (2417853):** the loaders read the main header once and give OpenJPEG one thread per 2 KiB of compressed
+  data per tile, capped at the CPU count, and no pool below 4 KiB.
+  - Why that rule: OpenJPEG 2.5.4 syncs its pool once per tile for the code-blocks and twice per resolution
+    level and component for the wavelet. Tile area alone does not predict the cost; heavily compressed lossy
+    tiles lose even at 256 px. A one-thread pool is slower than none.
+  - Measured on 94 generated files (32 px to untiled, lossless and lossy, 1/3 components, 8/16 bits, 32/64-px
+    code-blocks): no file decodes slower than without a pool. The set takes 13.7 s against 21.4 s with every
+    CPU and 28.7 s with none.
+  - The 64-px file now loads in 1.0 s, faster than main's 1.7 s. The tiniest case (a 2000x1500 grey file, 32-px tiles, 50:1
+    lossy) is still 1.28x main (53 vs 41 ms): OpenJPEG 2.5.4's inline decode is slower per tile than the 2014 snapshot,
+    and the header peek costs about 1.3 µs per tile.
+  - Pixels are unchanged in all 1068 J2K/JP2 test files; TestAPI/J2K passes.
+
+### R7. CMYK PSDs load and save with K reversed (fixed in fd94d28)
+- **Where:** `PSDParser.cpp` undoes PSD's inverted CMYK storage with `FreeImage_Invert()`, on load and on save.
+  Since `8464e74` (C5) `FreeImage_Invert` leaves the fourth channel of 32-bit and RGBA16 images alone, and for
+  CMYK that channel is K.
+- **Evidence:** a hand-built 8x2 CMYK PSD with pure and 50% C, M, Y and K. Main decodes Y as 255,255,0 and K as
+  0,0,0; qpv decoded every colour as 0,0,0 and pure K as 255,255,255, at 8 and 16 bits. A known-ink bitmap saved
+  as CMYK PSD had its K plane written uninverted.
+- **Fix:** `invertCMYK()` in PSDParser flips every 8/16-bit sample, as `FreeImage_Invert` did on main; floats
+  are left alone, as before. The public `FreeImage_Invert` keeps C5. Decodes now equal main exactly.
+- No other caller inside the library depends on a C-list change: C1's internal 3-argument FillBackground calls
+  keep main's path, C3 has no internal callers, and C4b's `ConvertToStandardType(…, TRUE)` is used only by the
+  new APNG plugin and MakeThumbnail (R5).
+
+### R8. A bad PSD thumbnail fails the load or crashes (fixed in 1f7cf71)
+- **Where:** `psdThumbnail::Read`, the Fedora CVE-2020-24293 check from `6e64300`. It throws when
+  `WidthBytes < Width * bpp / 8`, which aborts the whole PSD (header-only loads too). It fires even for JPEG
+  thumbnails, which never use WidthBytes, and for a thumbnail resource shorter than its 28-byte header.
+  It also ran after `_dib` was unloaded but not cleared. A good 1033 thumbnail followed by a bad 1036 one left a
+  dangling pointer that the destructor freed again: qpv segfaulted where main loads.
+- **Fix:** an unusable thumbnail is skipped and the image loads.
+  - JPEG thumbnails load as on main.
+  - A raw thumbnail must be 24-bit with WidthBytes ≥ Width × 3, and its rows must fit in the resource and in the
+    file, so the CVE's over-read stays blocked.
+  - The reader now also resumes at the true end of the resource. Main and qpv both stopped 28 bytes early and
+    could parse a fake resource out of the JPEG data.
 
 ---
 
@@ -183,6 +224,7 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
   - **Affects QPV** only in its combine-into-multi-page path (`quick-picto-viewer.ahk:62831`), for
     UINT16/INT16/UINT32/FLOAT pages. Its display path uses `ConvertTo*Bits`, which is unchanged.
 - **C5. `FreeImage_Invert` leaves alpha alone** (`8464e74`, `Colors.cpp:101/123`). Upstream inverts alpha too.
+  PSDParser relied on the old behaviour for K; that internal use is R7, now fixed.
 - **C6. `FreeImage_Save`/`SaveU` delete the file when the plugin fails** (`Plugin.cpp:483/507`).
   - Main left a 0-byte or partial file behind.
   - The writer matrix found no plugin that returns FALSE after writing a readable file, so no valid output is
@@ -257,36 +299,84 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
 - **Performance.**
   - PNG, JPEG and TIFF decode times are identical in controlled runs.
   - `GetFileType` costs 0.1 ms on unknown files in both builds.
-  - JP2 is 3.7-7x faster, except R6.
-- **Plausible, not reproduced:** `PSDParser.cpp:799` (`6e64300` + `4b82cff`). The thumbnail `WidthBytes` check
-  throws and aborts the whole PSD load, even for JPEG thumbnails, which never use WidthBytes. Only spec-violating
-  files can hit it.
+  - JP2 is 3.7-7x faster, except R6 (now fixed).
+- The `PSDParser.cpp:799` thumbnail check once listed here as plausible is R8.
 - **Robustness.**
   - Loading from a stream that does not start at byte 0: qpv newly handles RAW, ICO, HEIF and AVIF; nothing got worse.
   - Repeated Initialise/DeInitialise cycles work.
   - Main's JNG leak (~155 B per load) is gone.
-  - The HEIF path (new, so not a regression) shows possible growth of ~15-25 B per test cycle, i.e. a few bytes per
-    decode (30/150/600 cycles). AVIF growth is a constant warm-up.
+  - HEIF/AVIF do not leak. LeakSanitizer is clean for load, thumbnail, header-only, memory and multi-page cycles.
+    The heap growth seen earlier is a one-time warm-up: about 0.5 KB for a still image and 5.5 KB for a
+    sequence, the same after 30, 150 or 600 cycles.
   - ISOBMFF files that are not images (MP4, MOV, M4A, 3GP, CR3-style) stay FIF_UNKNOWN.
 
 ## Pre-existing bugs found along the way (same in both builds, not regressions)
 
-- **IPTC in TIFF writes heap garbage.** After a TIFF round trip, a 1-byte IPTC `Province-State` comes back as
-  88-100 bytes of heap memory, different on every run. Heap contents end up in saved files.
-- **`ICO_MAKEALPHA` on an 8-bit icon with `biClrUsed=16`** produces random alpha. PIL reads the same icon as
-  fully opaque.
-- **Writers given a bit depth they do not support** read past the image buffer:
-  - TGA RLE aborts;
-  - XPM indexes a 2-entry palette with packed bytes;
-  - PNG given 555/565 input reads past its last row.
-- **Loading from a stream offset:** JXR, EXR, TIFF and MNG/JNG fail, and SGI decodes wrongly.
-- **Fattal02 crashes** on any non-flat image under 32 px (upstream `PhiMatrix`).
-- **A 913-byte PCX** makes both builds allocate 4.3 GB.
-- **`audit/crashes/png_PluginPNG.cpp-790.png`** aborts both builds.
-- **Deleting a page from Pillow's mixed-mode multi-page TIFF** (RGB, L, P and RGBA pages) fails at close with
-  "Image is corrupted" on main and qpv alike. The file is left intact.
-- **`audit/poc/psd_unpackrle.psd` loaded from memory** returns different pixels on every run in both builds
-  (uninitialised data). From a file it is stable.
+All fixed, one commit each (2026-09-22). Several turned out wider than first recorded.
+
+- **IPTC in TIFF writes heap garbage** (1d9dc2f). libtiff 4 counts RichTIFFIPTC in bytes; FreeImage still used
+  libtiff 3's LONG count.
+  - Writing stored only a quarter of the IPTC block: exif.jpg kept 5 of 18 tags.
+  - Reading parsed up to three buffer-lengths of heap past the tag. That was the "Province-State" garbage.
+  - Big-endian TIFFs with IPTC byte-swapped 4x the buffer in place, a heap overflow write, and aborted.
+  - Now: byte counts both ways. Adobe's LONG-typed tag in MM files is detected by the reversed 0x1C marker.
+- **`ICO_MAKEALPHA` with `biClrUsed=16`** (d8287db). The palette read ignored `biClrUsed`, so pixels and mask were
+  read from the wrong place. Colours were wrong too (125 of 128 pixels), not only alpha. Missing mask bytes now
+  count as opaque.
+- **Writers given input they cannot store.** Each writer below now refuses what its `SupportsExportType` /
+  `SupportsExportDepth` do not declare:
+  - TGA (007fd32): RLE aborted, and 1/4-bit wrote empty rows.
+  - XPM (d123545): 1/4-bit packed bytes were read as indices, and 16/32-bit pixels at a 3-byte stride.
+  - PNG (85e8c87): 555/565 read past the last row, and floats and 32-bit integers were half-read.
+    **Behaviour change:** FIT_INT16, which used to round-trip bit-exactly as unsigned 16-bit grey, must now be
+    converted by the caller.
+  - J2K/JP2 (706232c): 1-bit grey and 555/565 read past their rows.
+  - ICO (25908ca): 256x256 16-bit icons went through PNG; they are now stored as 24-bit.
+- **Loading from a stream offset.**
+  - Fixed as listed: SGI (2b91121), TIFF (74aacfe), EXR (1b4dacf), JXR (0eaf4ed) and MNG/JNG (e65017c). TIFF, EXR
+    and JXR also *save* correctly at an offset.
+  - Found with them:
+    - TGA (d0f87e7): 16-bit pixels, the TGA 2.0 footer and thumbnail, and the writer's offsets.
+    - PICT (e1ef615): detection and opcode alignment.
+    - The multi-page layer (6f43e81): `OpenMultiBitmapFromHandle` / `LoadMultiBitmapFromMemory` rewound to byte 0,
+      which broke every multi-page format.
+  - With the image at byte 777 of a memory stream, 2,084 corpus files decode identically to a plain load. The two
+    left are RAS PoCs (see below). All 61 loadable multi-page samples match page for page.
+- **Fattal02 crashes** on any non-flat image under 32 px: fixed by R3's 48558a3.
+- **A 913-byte PCX allocates 4.3 GB** (cb0682c). bytes_per_line must now hold the width, and the data must reach
+  2/63 of the raster. Found with it:
+  - Uncompressed PCX decoded every row after the first wrongly (6845350).
+  - Odd-width 16-colour PCX lost its last column (1d77c3d).
+  - 1-pixel-wide or -tall PCX, including Pillow's 1x1 files, was refused (3ea9b2e).
+- **`audit/crashes/png_PluginPNG.cpp-790.png`** (16adb5f): a double free. libpng longjmps out of `png_read_end`
+  (bad IEND CRC) after `row_pointers` was freed, and a non-volatile local held the stale pointer.
+- **Deleting a page from Pillow's mixed-mode multi-page TIFF** (daa370c). The real bug: every 8-bit grey or
+  palette TIFF without a SamplesPerPixel tag failed to load ("Image is corrupted"), which includes all of
+  Pillow's L and P TIFFs; 44 more corpus files now decode. Found with it: 16-bit colormaps written as v << 8
+  (Pillow, libtiff tools) came out one level low (8f2ae4b).
+- **`audit/poc/psd_unpackrle.psd` from memory** (7b53576). Short RLE lines, truncated count tables and short raw
+  rows left heap memory in the image. They now decode as zeros.
+
+Also found while fixing, and fixed:
+- **PSD writer.**
+  - 16-bit RLE saves overflowed the PackBits buffer on the heap (726d12e).
+  - Every RLE save leaked the line-size table, and failed writes leaked buffers and the CMYK copy (4356041).
+- **TGA** (8fc4ac5). TGA has no magic number, so a fuzz file (libheif's `github_46_2.heic`) parsed as a
+  28777x28786 TGA. It allocated 3.2 GB, and rows past EOF showed uninitialised heap memory. The data must now
+  reach one RLE packet per 128 pixels, and rows past EOF are zero.
+
+Found, not fixed (each needs a decision, or is out of scope):
+- The BMP, PSD and TIFF writers still accept types they do not declare (BMP non-bitmap types, PSD
+  DOUBLE/INT32/UINT32, TIFF 555/565) and write visibly wrong images. This is memory-safe; refusing, like TGA/PNG
+  now do, or converting is a policy choice.
+- A PNG cut right after its image data (no IEND) is refused, although every pixel was decoded.
+- `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
+  but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
+- JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no
+  leak or crash reproduces.
+- The TGA writer's thumbnail block swaps colour order on `dib` instead of `thumbnail` on RGB-order builds (not
+  x86).
+- TestAPI/JXR's `meta` test needs `TestAPI/raw_exif.jpg`, which only `testAPI` creates.
 
 ## Not covered
 
@@ -310,3 +400,12 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
 - **Run outputs:** `runs/`.
 - **Toolkit differential:** `toolkit/`.
 - **Early-commit probes:** `pre2026/`.
+- **Second round (the fixes above):**
+  - `j2kgrid/`: 94-file thread benchmark.
+  - `pcx/`, `psd/`, `pngerr/`, `iptc/`, `tifspp/`, `icoclr/`: hand-built inputs per fix.
+  - `rebuild.sh` and `bedit.py`: byte-safe edits of the Latin-1 sources.
+  - Uninitialised reads were exposed with `GLIBC_TUNABLES=glibc.malloc.perturb`, and in-plugin overflows with a
+    single ASan-compiled TU linked ahead of the archive.
+  - Final check: the whole 2,261-file corpus against the post-R5 build. 57 files changed, all as listed above:
+    44 more files decode, the PCX bomb, the PNG abort and the TGA fuzz file are now clean refusals, and the ICO,
+    PCX and PSD corrections. TestAPI's format suites and `testAPI` pass.
