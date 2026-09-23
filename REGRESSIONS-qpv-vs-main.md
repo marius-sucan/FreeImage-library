@@ -6,14 +6,14 @@ Fixed crashes on malformed files are not regressions. A stricter refusal of a *v
 
 ## Verdict
 
-| # | Finding | Kind | Commit | Affects QPV? |
+| # | Finding | Kind | Introduced by | Affects QPV? |
 |---|---|---|---|---|
-| R1 | Exif thumbnails are never loaded (`FreeImage_GetThumbnail` returns NULL) | **regression** | 6e64300 | no (QPV never calls GetThumbnail), but re-saved files lose their thumbnail |
-| R2 | Fattal02 tone mapping darkens/shifts ordinary images and adds black speckles | **regression** | 9b55043 | no (QPV uses Drago03/Reinhard05 only) |
-| R3 | Fattal02 segfaults on a flat image smaller than 32 px (main returned NULL) | **regression** (crash) | 9b55043 | no |
-| R4 | `CloseMultiBitmap` returns FALSE for an *untouched* read-write session of a writer-less format | **regression** (API result, deliberate) | c1442f5 | no (QPV opens read-only) |
-| R5 | `MakeThumbnail(hdr, N, TRUE)` ignores `convert` when the larger side is exactly N | **regression** (contract) | 3f0e1dc | no (QPV never calls it) |
-| R6 | Tiled JPEG 2000 with small tiles decodes up to 1.6x (64 px tiles) / 6x (16 px tiles) slower | **performance** | 03c89f4 | yes, for such files |
+| R1 | Exif thumbnails are never loaded (`FreeImage_GetThumbnail` returns NULL) | **regression**, fixed in 1d9d70a | 6e64300 | no (QPV never calls GetThumbnail), but re-saved files lose their thumbnail |
+| R2 | Fattal02 tone mapping darkens/shifts ordinary images and adds black speckles | **regression**, fixed in f072350 | 9b55043 | no (QPV uses Drago03/Reinhard05 only) |
+| R3 | Fattal02 segfaults on a flat image smaller than 32 px (main returned NULL) | **regression** (crash), fixed in 48558a3 | 9b55043 | no |
+| R4 | `CloseMultiBitmap` returns FALSE for an *untouched* read-write session of a writer-less format | **regression** (API result, deliberate), fixed in 3796059 | c1442f5 | no (QPV opens read-only) |
+| R5 | `MakeThumbnail(hdr, N, TRUE)` ignores `convert` when the larger side is exactly N | **regression** (contract), fixed in f3efc44 | 3f0e1dc | no (QPV never calls it) |
+| R6 | Tiled JPEG 2000 with small tiles decodes up to 1.6x (64 px tiles) / 6x (16 px tiles) slower | **performance**, open | 03c89f4 | yes, for such files |
 | C1-C10 | Intended behaviour changes that existing callers can notice | needs a decision | various | yes: C4 (tone-mapping look), C4b (16-bit ConvertToType in combine), C8 (`-1` load flag) |
 
 Nothing else in the differential runs came out worse on qpv for a valid input.
@@ -22,7 +22,7 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
 
 ## Confirmed regressions
 
-### R1. Exif thumbnails never load
+### R1. Exif thumbnails never load (fixed in 1d9d70a)
 - **Where:** `Source/Metadata/Exif.cpp:774`, from the Fedora CVE-2021-33367 patch imported in `6e64300`:
   ```cpp
   if(de_addr+4 >= (BYTE*)(dwLength + ifd0th - tiffp)) { return TRUE; } // no thumbnail
@@ -39,8 +39,19 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
     `AUDIT-MULTIPAGE.md` (removed in b73f0d4) called that abort pre-existing, but it only compared qpv against
     earlier qpv builds. On main, `GetThumbnail(exif.jpg)` works.
 - **Suggested fix:** compare pointer to pointer, e.g. `if ((size_t)(de_addr - tiffp) + 4 > dwLength) return TRUE;`.
+- **Fix (1d9d70a):** the IFD0 entry count, the link to the 1st IFD, its entry count and the thumbnail range are
+  checked as 64-bit offsets, and so is the entry count the IFD loop reads first.
+  - Re-enabling this block would otherwise have reopened two upstream overreads: the IFD1 count read and the
+    32-bit wrap of `thOffset + thSize`.
+  - ASan, calling `jpeg_read_exif_profile` on exact-size buffers: main's `Exif.cpp` overreads in all four crafted
+    profiles, and pre-fix qpv's in one (an IFD0 at the profile's end). The fix overreads in none, and a
+    thumbnail ending on the profile's last byte loads.
+  - Decode differential: all 22 thumbnails main produces are reproduced pixel-exactly. Nothing else changed in
+    2,261 files. HEIC/AVIF files without a native thumbnail now carry their Exif one; HEIF still prefers its native
+    thumbnail, which is attached after the Exif block.
+  - `testAPI` now runs to completion (exit 0) for the first time on qpv.
 
-### R2. Fattal02 shifts ordinary images and adds black speckles
+### R2. Fattal02 shifts ordinary images and adds black speckles (fixed in f072350)
 - **Where:** `Source/FreeImage/tmoFattal02.cpp:433`. `LogLuminance()` now takes its minimum from
   `LuminanceRange()`, which returns a 0.1th-percentile minimum. Subtracting that positive minimum before
   `log(v+EPSILON)` pushes the darkest 0.1% of pixels onto the log cliff, where they turn black.
@@ -58,8 +69,17 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
   - That change leaves the four negative-radiance JXR files the percentile was written for untouched: after
     `ClampNegativeRGBF` their minimum is already 0.
 - **Suggested fix:** use the absolute finite minimum, clamped at 0, and keep the robust maximum.
+- **Fix (f072350):** `LuminanceRange()` (Fattal02 is its only caller) returns the darkest finite sample; the
+  maximum stays robust. No clamp is needed, because `ClampNegativeRGBF` runs first.
+  - The fix has a second half. A NaN pixel became a black sample in `ClampNegativeRGBF`, and with an absolute minimum that
+    one pixel set the minimum and shifted the whole render: `testToneMappingSurvivesNonFiniteSamples` caught
+    it. Fattal02 now turns NaN into +INF first, so like an INF it is skipped by the statistics and rendered black.
+  - On each of 14 photos, under 0.05% of channels differ from main by more than 20 levels, and the speckle counts
+    are main's again (5 vs 8,742 pre-fix on raccoon1-light).
+  - Drago03, Reinhard05 and every JXR render are byte-identical to pre-fix qpv.
+  - What still differs from main on HDR files (leadenhall) is the robust *maximum*, which is by design.
 
-### R3. Fattal02 segfaults on a small flat image
+### R3. Fattal02 segfaults on a small flat image (fixed in 48558a3)
 - **Repro:** `FreeImage_TmoFattal02()` on a 13x7 all-black FIT_RGBF image returns NULL on main and segfaults
   (exit 139) on qpv. The same happens at 31x31; at 40x40 qpv returns an image.
 - **Cause:**
@@ -67,8 +87,12 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
   - On main, a flat image threw before reaching that code. On qpv it no longer throws, so it gets there.
   - Non-flat images under 32 px crash in *both* builds; that part is an upstream bug.
 - **Suggested fix:** return NULL when `nlevels == 0`.
+- **Fix (48558a3):** exactly that.
+  - Flat and non-flat images at 13x7, 31x31 and 31x400 return NULL. Main crashed on the non-flat ones and pre-fix
+    qpv on both.
+  - At 32 px and above the output is unchanged.
 
-### R4. `CloseMultiBitmap` fails an untouched read-write session
+### R4. `CloseMultiBitmap` fails an untouched read-write session (fixed in 3796059)
 - **Where:** `Source/FreeImage/MultiPage.cpp:495` (`c1442f5`). Opening a file with `read_only=FALSE` in a format
   that has no `save_proc` marks the session failed **at open time**.
 - **Deliberate, but it reverses an earlier decision.** The message text at `:493` shows the failure is intended.
@@ -82,8 +106,16 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
     So the .NET wrapper's stream loader (`FreeImageBitmap.LoadFromStream`, which throws on a FALSE close) is safe.
   - Not affected: QPV, which always opens read-only.
 - **Suggested fix:** fail at close only when the session actually changed something (`header->changed`).
+- **Fix (3796059):** the open-time flag is gone; the close path already fails a changed session on its own.
+  - DDS, RAW, PCX, SGI, HEIF and AVIF: untouched and lock/unlock-only sessions close TRUE in both cache modes.
+  - An edited session closes FALSE ("does not support writing") and leaves the file byte-identical, with no
+    spool or cache file left behind.
+  - Refused edits still report FALSE.
+  - TIFF/GIF/ICO behaviour is unchanged.
+  - `TestAPI/AVIF/decode` now asserts both halves.
+  - The README changelog line was updated to match.
 
-### R5. `MakeThumbnail(hdr, N, TRUE)` ignores `convert` at exactly N
+### R5. `MakeThumbnail(hdr, N, TRUE)` ignores `convert` at exactly N (fixed in f3efc44)
 - **Where:** `Source/FreeImageToolkit/Rescale.cpp:206`. `3f0e1dc` changed `<` to `<=`, so an image whose larger
   side equals `max_pixel_size` takes the "return a clone" shortcut.
 - **Evidence:** 100x50 source, max 100, `convert=TRUE`:
@@ -93,6 +125,11 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
     upstream inconsistency.
 - For FIT_BITMAP input the change is an improvement: an exact clone instead of an identity resample.
 - **Suggested fix:** apply `convert` in the clone path too.
+- **Fix (f3efc44):** the clone takes the same conversion as a resampled thumbnail.
+  - All six HDR types convert at 99, 100 and 101, including images *smaller* than `max_pixel_size`, as
+    documented; main never converted those.
+  - `convert=FALSE`, the types with no conversion (INT16, DOUBLE, ...) and exact-fit 1/4-bit bitmaps are still
+    plain clones, and metadata is kept.
 
 ### R6. Tiled JPEG 2000 with small tiles got slower
 - **Where:** `PluginJ2K.cpp:169/280` and `PluginJP2.cpp:169/280` (`03c89f4`) force
@@ -246,6 +283,10 @@ Nothing else in the differential runs came out worse on qpv for a valid input.
 - **Fattal02 crashes** on any non-flat image under 32 px (upstream `PhiMatrix`).
 - **A 913-byte PCX** makes both builds allocate 4.3 GB.
 - **`audit/crashes/png_PluginPNG.cpp-790.png`** aborts both builds.
+- **Deleting a page from Pillow's mixed-mode multi-page TIFF** (RGB, L, P and RGBA pages) fails at close with
+  "Image is corrupted" on main and qpv alike. The file is left intact.
+- **`audit/poc/psd_unpackrle.psd` loaded from memory** returns different pixels on every run in both builds
+  (uninitialised data). From a file it is stable.
 
 ## Not covered
 
