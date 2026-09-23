@@ -38,6 +38,7 @@
 #include "../OpenEXR/OpenEXR/ImfRgba.h"
 #include "../OpenEXR/OpenEXR/ImfArray.h"
 #include "../OpenEXR/OpenEXR/ImfPreviewImage.h"
+#include "../OpenEXR/OpenEXR/ImfTileDescription.h"
 #include "../OpenEXR/Imath/half.h"
 #include "../OpenEXR/Imath/ImathInt64.h"
 
@@ -219,6 +220,27 @@ CheckDataWindow(const Imf::Header& header, int width, int height, long stream_by
 			<< " pixels, i.e. " << (INT64)(raw_bytes / 1048576.0) << " MB of pixel data, which a file of "
 			<< stream_bytes << " bytes cannot hold");
 	}
+}
+
+/**
+Reads a cut or damaged file one block of lines at a time, so a bad block loses only its own lines
+@return the lines read
+*/
+static int
+ReadEachBlock(Imf::InputFile &file, const Imath::Box2i &dataWindow) {
+	const Imf::Header &header = file.header();
+	const int step = MAX(1, header.hasTileDescription() ? (int)header.tileDescription().ySize : Imf::getCompressionNumScanlines(header.compression()));
+	int lines = 0;
+	for(INT64 y = dataWindow.min.y; y <= dataWindow.max.y; y += step) {
+		const int last = (int)MIN(y + step - 1, (INT64)dataWindow.max.y);
+		try {
+			file.readPixels((int)y, last);
+			lines += last - (int)y + 1;
+		}
+		catch(Iex::BaseExc &) {
+		}
+	}
+	return lines;
 }
 
 // --------------------------------------------------------------------------
@@ -442,15 +464,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			io->seek_proc(handle, stream_start, SEEK_SET);
 			Imf::RgbaInputFile rgbaFile(istream);
 
-			// read the file in chunks
+			// read the file in chunks; a chunk that cannot be read stays blank
 			Imath::Box2i dw = dataWindow;
 			Imf::Array2D<Imf::Rgba> chunk(chunk_size, width);
+			int lines = 0;
 			while (dw.min.y <= dw.max.y) {
 				// dw.max.y is inclusive; the last chunk is short
 				const int rows = MIN(chunk_size, dw.max.y - dw.min.y + 1);
 				// read a chunk
 				rgbaFile.setFrameBuffer (&chunk[0][0] - dw.min.x - dw.min.y * width, 1, width);
-				rgbaFile.readPixels (dw.min.y, dw.min.y + rows - 1);
+				try {
+					rgbaFile.readPixels (dw.min.y, dw.min.y + rows - 1);
+				}
+				catch(Iex::BaseExc & e) {
+					if(lines == (dw.min.y - dataWindow.min.y)) {
+						FreeImage_OutputMessageProc(s_format_id, e.what());
+					}
+					scanline += (size_t)pitch * rows;
+					dw.min.y += rows;
+					continue;
+				}
+				lines += rows;
 				// fill the dib
 				for(int y = 0; y < rows; y++) {
 					const Imf::Rgba *half_rgba = chunk[y];
@@ -477,6 +511,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 				// next chunk
 				dw.min.y += rows;
+			}
+
+			if(lines < height) {
+				if(lines == 0) {
+					THROW (Iex::InputExc, "No line of the image could be read");
+				}
+				PartialImageWarning(s_format_id, lines, height);
 			}
 
 		} else {
@@ -510,7 +551,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			// read the file
 			file.setFrameBuffer(frameBuffer);
-			file.readPixels(dataWindow.min.y, dataWindow.max.y);
+			try {
+				file.readPixels(dataWindow.min.y, dataWindow.max.y);
+			}
+			catch(Iex::BaseExc & e) {
+				// a cut or damaged file keeps the blocks it holds
+				FreeImage_OutputMessageProc(s_format_id, e.what());
+				const int lines = ReadEachBlock(file, dataWindow);
+				if(lines == 0) {
+					FreeImage_Unload(dib);
+					return NULL;
+				}
+				PartialImageWarning(s_format_id, lines, height);
+			}
 		}
 
 		// lastly, flip dib lines
