@@ -626,6 +626,9 @@ jpeg_read_exif_dir(FIBITMAP *dib, const BYTE *tiffp, DWORD dwOffsetIfd0, DWORD d
 		}
 
 		// determine how many entries there are in the current IFD
+		if (((size_t)(ifdp - tiffp) + 2) > (size_t)dwLength) {
+			continue;
+		}
 		nde = ReadUint16(msb_order, ifdp);
 		if (((size_t)(ifdp - tiffp) + 12 * nde) > (size_t)dwLength) {
 			// suspicious IFD offset, ignore
@@ -769,15 +772,18 @@ jpeg_read_exif_dir(FIBITMAP *dib, const BYTE *tiffp, DWORD dwOffsetIfd0, DWORD d
 	// --- handle thumbnail data ---
 	//
 
-	const WORD entriesCount0th = ReadUint16(msb_order, ifd0th);
-	const BYTE* de_addr = DIR_ENTRY_ADDR(ifd0th, entriesCount0th);
-	if(de_addr+4 >= (BYTE*)(dwLength + ifd0th - tiffp)) {
-		// Fix for CVE-2021-33367 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2021-33367.patch
+	if((UINT64)dwOffsetIfd0 + 2 > dwLength) {
 		return TRUE; //< no thumbnail
 	}
+	const WORD entriesCount0th = ReadUint16(msb_order, ifd0th);
+	// CVE-2021-33367: the link to the 1st IFD lies inside the profile
+	if((UINT64)dwOffsetIfd0 + 2 + 12 * (UINT64)entriesCount0th + 4 > dwLength) {
+		return TRUE; //< no thumbnail
+	}
+	const BYTE* de_addr = DIR_ENTRY_ADDR(ifd0th, entriesCount0th);
 
 	DWORD next_offset = ReadUint32(msb_order, de_addr);
-	if((next_offset == 0) || (next_offset >= dwLength)) {
+	if((next_offset == 0) || ((UINT64)next_offset + 2 > dwLength)) {
 		return TRUE; //< no thumbnail
 	}
 	
@@ -837,7 +843,7 @@ jpeg_read_exif_dir(FIBITMAP *dib, const BYTE *tiffp, DWORD dwOffsetIfd0, DWORD d
 		return TRUE;
 	}
 	
-	if(thOffset + thSize > dwLength) {
+	if((UINT64)thOffset + thSize > dwLength) {
 		return TRUE;
 	}
 	
