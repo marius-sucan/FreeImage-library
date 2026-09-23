@@ -2430,6 +2430,10 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 				// 8-bit transparent picture : convert later to 8-bit + 8-bit alpha
 				samplesperpixel = 2;
 				bitspersample = 8;
+				// without the tag, readers take the second sample for an unspecified channel
+				uint16_t sampleinfo[1];
+				sampleinfo[0] = EXTRASAMPLE_UNASSALPHA;
+				TIFFSetField(out, TIFFTAG_EXTRASAMPLES, 1, sampleinfo);
 			}
 			else if(bitsperpixel == 32) {
 				// 32-bit images : check for CMYK or alpha transparency
@@ -2495,6 +2499,11 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 			samplesperpixel = 4;
 			bitspersample = bitsperpixel / samplesperpixel;
 			photometric	= PHOTOMETRIC_RGB;
+			// transparency mask support
+			uint16_t sampleinfo[1];
+			// unassociated alpha data is transparency information
+			sampleinfo[0] = EXTRASAMPLE_UNASSALPHA;
+			TIFFSetField(out, TIFFTAG_EXTRASAMPLES, 1, sampleinfo);
 		} else {
 			// special image type (int, long, double, ...)
 			
