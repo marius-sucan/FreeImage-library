@@ -1514,6 +1514,10 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	BYTE* line_start = new BYTE[lineSize]; //< fileline cache
    const unsigned dst_buffer_size = dstLineSize * nHeight;
 
+	// a cut file keeps what it holds: the first channel row the data does not reach
+	bool cut = false;
+	unsigned cut_channel = 0, cut_row = 0;
+
 	switch ( nCompression ) {
 		case PSDP_COMPRESSION_NONE: // raw data
 		{
@@ -1534,6 +1538,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= dstLineSize) {//<*** flipped
 					const unsigned got = io->read_proc(line_start, 1, lineSize, handle);
+					if((got < lineSize) && !cut) {
+						cut = true;
+						cut_channel = c;
+						cut_row = h;
+					}
 					memset(line_start + got, 0, lineSize - got);
 					ReadImageLine(dst_line_start, line_start, limitLineSize, dstBpp, bytes,
 					              dst_line_start - channelOffset + dstLineSize);
@@ -1570,6 +1579,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 				// counts past the end of the file are 0
 				const unsigned got = io->read_proc(rleLineSizeList2, 2, nChannels * nHeight, handle);
 				memset(rleLineSizeList2 + got, 0, (nChannels * nHeight - got) * sizeof(WORD));
+				if(got < nChannels * nHeight) {
+					cut = true;
+					cut_channel = got / nHeight;
+					cut_row = got % nHeight;
+				}
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 #ifndef FREEIMAGE_BIGENDIAN
 					SwapShort(&rleLineSizeList2[index]);
@@ -1580,6 +1594,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 			} else {
 				const unsigned got = io->read_proc(rleLineSizeList, 4, nChannels * nHeight, handle);
 				memset(rleLineSizeList + got, 0, (nChannels * nHeight - got) * sizeof(DWORD));
+				if(got < nChannels * nHeight) {
+					cut = true;
+					cut_channel = got / nHeight;
+					cut_row = got % nHeight;
+				}
 #ifndef FREEIMAGE_BIGENDIAN
 				for(unsigned index = 0; index < nChannels * nHeight; ++index) {
 					SwapLong(&rleLineSizeList[index]);
@@ -1624,6 +1643,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 					// only the bytes the file holds are unpacked
 					const unsigned rleLineSize = io->read_proc(rle_line_start, 1, rleLineSizeList[index], handle);
+					if((rleLineSize < rleLineSizeList[index]) && !cut) {
+						cut = true;
+						cut_channel = ch;
+						cut_row = h;
+					}
 
 					// - write line to destination -
 
@@ -1664,6 +1688,28 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		default: // Unknown format
 			break;
 
+	}
+
+	if(cut) {
+		// alpha the file does not hold is opaque, so the colours it holds show
+		if((mode == PSDP_RGB) && (dstChannels == 4) && (cut_channel <= 3)) {
+			const unsigned alphaOffset = GetChannelOffset(bitmap, 3) * bytes;
+			for(unsigned h = (cut_channel == 3) ? cut_row : 0; h < nHeight; h++) {
+				BYTE *p = dst_first_line - (size_t)h * dstLineSize + alphaOffset;
+				for(unsigned x = 0; x < nWidth; x++, p += dstBpp) {
+					switch(bytes) {
+						case 2: *(WORD*)p = 0xFFFF; break;
+						case 4: *(float*)p = 1.0F; break;
+						default: *p = 0xFF; break;
+					}
+				}
+			}
+		}
+		if((dstChannels == 1) && (cut_channel == 0)) {
+			PartialImageWarning(_fi_format_id, cut_row, nHeight);
+		} else {
+			DamagedImageWarning(_fi_format_id);
+		}
 	}
 
 	// --- Further process the bitmap ---
