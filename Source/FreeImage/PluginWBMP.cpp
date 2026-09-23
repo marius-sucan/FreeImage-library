@@ -284,11 +284,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			
 			int line = FreeImage_GetLine(dib);
 
+			// a cut file keeps the rows it holds, the rest is blank
 			for (y = 0; y < height; y++) {
 				bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
-				for (x = 0; x < line; x++) {
-					io->read_proc(&bits[x], 1, 1, handle);
+				if (io->read_proc(bits, 1, line, handle) != (unsigned)line) {
+					PartialImageWarning(s_format_id, y, height);
+					break;
 				}
 			}
 
