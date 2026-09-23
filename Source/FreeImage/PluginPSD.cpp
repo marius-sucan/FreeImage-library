@@ -126,7 +126,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
-	if(!handle) {
+	if(!handle || !dib) {
+		return FALSE;
+	}
+	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+	if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) || ((image_type == FIT_BITMAP) && !SupportsExportDepth(FreeImage_GetBPP(dib)))) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
 	}
 	try {
