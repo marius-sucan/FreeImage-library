@@ -1907,7 +1907,7 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 
 			// later use this array as WORD rleLineSizeList[nChannels][nHeight];
 			// Every 127 bytes needs a length byte.
-			BYTE* rle_line_start = new BYTE[lineSize + ((nWidth + 126) / 127)]; //< RLE buffer
+			BYTE* rle_line_start = new BYTE[lineSize + ((lineSize + 126) / 127)]; //< RLE buffer
 			DWORD *rleLineSizeList = new (std::nothrow) DWORD[nChannels*nHeight];
 
 			if(!rleLineSizeList) {
