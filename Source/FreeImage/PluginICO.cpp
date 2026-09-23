@@ -338,11 +338,15 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 	}
 
 	if( bmih.biBitCount <= 8 ) {
-		// read the palette data
-		io->read_proc(FreeImage_GetPalette(dib), CalculateUsedPaletteEntries(bit_count) * sizeof(RGBQUAD), 1, handle);
+		// read the palette data, which biClrUsed may make shorter than 1 << bit_count
+		unsigned colors = CalculateUsedPaletteEntries(bit_count);
+		if((bmih.biClrUsed > 0) && (bmih.biClrUsed < colors)) {
+			colors = bmih.biClrUsed;
+		}
+		io->read_proc(FreeImage_GetPalette(dib), colors * sizeof(RGBQUAD), 1, handle);
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_RGB
 		RGBQUAD *pal = FreeImage_GetPalette(dib);
-		for(unsigned i = 0; i < CalculateUsedPaletteEntries(bit_count); i++) {
+		for(unsigned i = 0; i < colors; i++) {
 			INPLACESWAP(pal[i].rgbRed, pal[i].rgbBlue);
 		}
 #endif
@@ -401,7 +405,9 @@ LoadStandardIcon(FreeImageIO *io, fi_handle handle, int flags, BOOL header_only)
 		//loop through each line of the AND-mask generating the alpha channel, invert XOR-mask
 		for(int y = 0; y < height; y++) {
 			RGBQUAD *quad = (RGBQUAD *)FreeImage_GetScanLine(dib32, y);
-			io->read_proc(line_and, width_and, 1, handle);
+			// mask bytes missing from the file are opaque
+			const unsigned got = io->read_proc(line_and, 1, width_and, handle);
+			memset(line_and + got, 0, width_and - got);
 			for(int x = 0; x < width; x++) {
 				quad->rgbReserved = (line_and[x>>3] & (0x80 >> (x & 0x07))) != 0 ? 0 : 0xFF;
 				if( quad->rgbReserved == 0 ) {
