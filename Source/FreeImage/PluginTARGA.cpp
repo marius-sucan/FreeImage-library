@@ -482,7 +482,9 @@ loadTrueColor(FIBITMAP* dib, int width, int height, int file_pixel_size, FreeIma
 
 	for (int y = 0; y < height; y++) {
 		BYTE *bits = FreeImage_GetScanLine(dib, y);
-		io->read_proc(file_line, file_pixel_size, width, handle);
+		// bytes past the end of the file are zero, not stale
+		const unsigned got = io->read_proc(file_line, 1, width * file_pixel_size, handle);
+		memset(file_line + got, 0, width * file_pixel_size - got);
 		BYTE *bgra = file_line;
 
 		for (int x = 0; x < width; x++) {
@@ -759,6 +761,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		int fliphoriz = (header.is_image_descriptor & 0x10) ? 1 : 0;
 		int flipvert = (header.is_image_descriptor & 0x20) ? 1 : 0;
 
+		if(!header_only) {
+			// an RLE packet of 1 + pixel bytes holds at most 128 pixels, so a short file cannot claim a huge image
+			const long data_pos = start_offset + (long)sizeof(tagTGAHEADER) + header.id_length
+				+ ((header.color_map_type != 0) ? (long)((header.cm_size + 7) / 8) * header.cm_length : 0);
+			const UINT64 packets = ((UINT64)header.is_width * header.is_height + 127) / 128;
+			const UINT64 data = (eof > data_pos) ? (UINT64)(eof - data_pos) : 0;
+			if(packets * (1 + (header.is_pixel_depth + 7) / 8) > data) {
+				throw FI_MSG_ERROR_CORRUPTED;
+			}
+		}
+
 		// skip comment
 		io->seek_proc(handle, header.id_length, SEEK_CUR);
 
@@ -967,7 +980,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						for (int y = 0; y < h; y++) {
 							
 							BYTE *bits = FreeImage_GetScanLine(dib, y);
-							io->read_proc(in_line, src_pixel_size, header.is_width, handle);
+							const unsigned got = io->read_proc(in_line, 1, header.is_width * src_pixel_size, handle);
+							memset(in_line + got, 0, header.is_width * src_pixel_size - got);
 							
 							BYTE *val = in_line;
 							for (int x = 0; x < line; x += pixel_size) {
