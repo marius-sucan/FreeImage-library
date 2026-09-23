@@ -149,18 +149,22 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// if the load address is correct, skip it. otherwise ignore the load address
 
+		memset(&image, 0, sizeof(image));
+		unsigned got = 0;
+
 		if ((load_address[0] != 0x00) || (load_address[1] != 0x60)) {
 			((BYTE *)&image)[0] = load_address[0];
 			((BYTE *)&image)[1] = load_address[1];
 
-			if (io->read_proc((BYTE *)&image + 2, 1, 10001 - 2, handle) != 10001 - 2) {
-				return NULL;
-			}
+			got = 2 + io->read_proc((BYTE *)&image + 2, 1, 10001 - 2, handle);
 		} else {
-			if (io->read_proc(&image, 1, 10001, handle) != 10001) {
-				return NULL;
-			}
-		}		
+			got = io->read_proc(&image, 1, 10001, handle);
+		}
+
+		// a cut file shows the cells whose colours it holds; with none it would be all black
+		if (got <= sizeof(image.image)) {
+			return NULL;
+		}
 
 		// build DIB in memory
 
@@ -214,6 +218,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 					*(FreeImage_GetScanLine(dib, CBM_HEIGHT - y - 1) + x) = (found_color << 4) | found_color;
 				}
+			}
+
+			if (got < 10001) {
+				DamagedImageWarning(s_format_id);
 			}
 
 			return dib;
