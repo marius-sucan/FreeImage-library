@@ -810,26 +810,44 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, in
 			LastOffset = io->tell_proc(handle);
 			// read length
 			mLength = 0;			
-			io->read_proc(&mLength, 1, sizeof(mLength), handle);
+			const BOOL have_header = (io->read_proc(&mLength, 1, sizeof(mLength), handle) == sizeof(mLength)) &&
+				(io->read_proc(&mChunkName[0], 1, 4, handle) == 4);
 			mng_SwapLong(&mLength);
-			// read name			
-			io->read_proc(&mChunkName[0], 1, 4, handle);
 			mChunkName[4] = '\0';
+
+			if(!have_header && hJpegMemory) {
+				// a JNG cut between chunks decodes the JPEG data it holds
+				FreeImage_OutputMessageProc(format_id, "Error while parsing chunks: unexpected end of file");
+				if(dib) FreeImage_Unload(dib);
+				dib = mng_LoadFromMemoryHandle(hJpegMemory, flags);
+				break;
+			}		
 
 			if(mLength > 0) {
 				mChunk = (BYTE*)realloc(mChunk, mLength);
 				if(!mChunk) {
 					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: out of memory", mChunkName);
 					throw (const char*)NULL;
-				}				
+				}
 				Offset = io->tell_proc(handle);
 				if(Offset + (long)mLength > mLOF) {
 					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: unexpected end of file", mChunkName);
+					if((mng_GetChunckType(mChunkName) == JDAT) && (mLOF > Offset)) {
+						// a JNG cut inside its JPEG data decodes what it holds
+						const unsigned got = io->read_proc(mChunk, 1, (unsigned)(mLOF - Offset), handle);
+						if(hJpegMemory == NULL) {
+							hJpegMemory = FreeImage_OpenMemory();
+						}
+						FreeImage_WriteMemory(mChunk, 1, got, hJpegMemory);
+						if(dib) FreeImage_Unload(dib);
+						dib = mng_LoadFromMemoryHandle(hJpegMemory, flags);
+						break;
+					}
 					throw (const char*)NULL;
 				}
 				// read chunk
 				io->read_proc(mChunk, 1, mLength, handle);
-			}
+			}		
 			// read crc
 			io->read_proc(&crc_file, 1, sizeof(crc_file), handle);
 			mng_SwapLong(&crc_file);
@@ -838,7 +856,11 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, in
 			crc_check = FreeImage_ZLibCRC32(crc_check, mChunk, mLength);
 			if(crc_check != crc_file) {
 				FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: bad CRC", mChunkName);
-				throw (const char*)NULL;
+				// damaged image data is still decoded, and IEND holds nothing; a damaged header is not trusted
+				const int type = mng_GetChunckType(mChunkName);
+				if((type != JDAT) && (type != IDAT) && (type != IEND)) {
+					throw (const char*)NULL;
+				}
 			}		
 
 			switch( mng_GetChunckType(mChunkName) ) {
