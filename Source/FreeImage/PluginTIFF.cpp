@@ -1215,8 +1215,9 @@ FindLoadMethod(TIFF *tif, FREE_IMAGE_TYPE image_type, int flags) {
 	TIFFLoadMethod loadMethod = LoadAsGenericStrip;
 
 	TIFFGetField(tif, TIFFTAG_PHOTOMETRIC, &photometric);
-	TIFFGetField(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesperpixel);
-	TIFFGetField(tif, TIFFTAG_BITSPERSAMPLE, &bitspersample);
+	// both default to 1 when absent, as Load() assumes
+	TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLESPERPIXEL, &samplesperpixel);
+	TIFFGetFieldDefaulted(tif, TIFFTAG_BITSPERSAMPLE, &bitspersample);
 	TIFFGetFieldDefaulted(tif, TIFFTAG_PLANARCONFIG, &planar_config);
 
 	BOOL bIsTiled = (TIFFIsTiled(tif) == 0) ? FALSE:TRUE;
