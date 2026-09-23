@@ -46,11 +46,13 @@ Fixes:
 - fixed PCX, TGA and PSD files that are short or damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
 - fixed a double free in the PNG loader on a damaged end of file, a heap overflow in 16-bit RLE PSD saves, and memory leaks in PSD saves;
 - fixed 8-bit ICO images with a short palette decoding with wrong colours and random ICO_MAKEALPHA alpha;
+- fixed BMP RLE saves writing uninitialised heap memory into the file, 32-bit float PSD saves that could not be read back, and a crash when saving a multi-page document opened with FIF_LOAD_NOPIXELS;
 - and many other fixes
 
 Changes:
 - FillBackgroundBitmap() has a new optional parameter: applyAlpha;
-- the TGA, XPM, PNG, ICO, J2K and JP2 writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
+- the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
+- a PNG damaged after its image data (no IEND, a bad IEND CRC, garbage after the last IDAT) now loads instead of failing; the error is still reported;
 - JPEG 2000 decoding uses one thread per 2 KiB of compressed data per tile, and none for small tiles, where more threads were slower;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
