@@ -67,6 +67,7 @@ static const DWORD CHUNK_MEND = MNG_CHUNK('M', 'E', 'N', 'D');
 static const DWORD CHUNK_IHDR = MNG_CHUNK('I', 'H', 'D', 'R');
 static const DWORD CHUNK_IEND = MNG_CHUNK('I', 'E', 'N', 'D');
 static const DWORD CHUNK_IDAT = MNG_CHUNK('I', 'D', 'A', 'T');
+static const DWORD CHUNK_JDAT = MNG_CHUNK('J', 'D', 'A', 'T');
 static const DWORD CHUNK_JHDR = MNG_CHUNK('J', 'H', 'D', 'R');
 static const DWORD CHUNK_BASI = MNG_CHUNK('B', 'A', 'S', 'I');
 static const DWORD CHUNK_DHDR = MNG_CHUNK('D', 'H', 'D', 'R');
@@ -276,23 +277,27 @@ ReadChunkHeader(FreeImageIO *io, fi_handle handle, DWORD *length, DWORD *type) {
 	return TRUE;
 }
 
+// *cut: the file ends inside the stream after some of its image data; the stream runs to the end of the file
 static BOOL
-ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_length, DWORD *out_length) {
+ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_length, DWORD *out_length, BOOL *cut) {
 	io->seek_proc(handle, start, SEEK_SET);
+	*cut = FALSE;
+	BOOL has_data = FALSE;
 
 	while(TRUE) {
 		const long pos = io->tell_proc(handle);
-		if((pos < 0) || (pos + MNG_CHUNK_OVERHEAD > file_length)) {
-			return FALSE;
-		}
-
 		DWORD length = 0, type = 0;
-		if(!ReadChunkHeader(io, handle, &length, &type)) {
+		const BOOL header = (pos >= 0) && (pos + 8 <= file_length) && ReadChunkHeader(io, handle, &length, &type);
+		const BOOL data = header && ((type == CHUNK_IDAT) || (type == CHUNK_JDAT)) && (pos + 8 < file_length);
+		if(!header || (length > (DWORD)file_length) || (pos + 8 + (long)length + 4 > file_length)) {
+			if(has_data || data) {
+				*out_length = (DWORD)(file_length - start);
+				*cut = TRUE;
+				return TRUE;
+			}
 			return FALSE;
 		}
-		if((length > (DWORD)file_length) || (pos + 8 + (long)length + 4 > file_length)) {
-			return FALSE;
-		}
+		has_data |= data;
 		io->seek_proc(handle, (long)length + 4, SEEK_CUR);
 
 		if(type == CHUNK_IEND) {
@@ -640,10 +645,15 @@ ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 		// skip embedded streams whole, so their PLTE is not taken as global
 		if((type == CHUNK_IHDR) || (type == CHUNK_JHDR) || (type == CHUNK_BASI) || (type == CHUNK_DHDR)) {
 			DWORD stream_length = 0;
-			if(!ScanEmbeddedStream(io, handle, chunk_start, file_length, &stream_length)) {
+			BOOL stream_cut = FALSE;
+			if(!ScanEmbeddedStream(io, handle, chunk_start, file_length, &stream_length, &stream_cut)) {
 				FreeImage_OutputMessageProc(s_format_id,
 					"MNG: an embedded image has no IEND - the file ends inside it");
 				break;
+			}
+			if(stream_cut) {
+				FreeImage_OutputMessageProc(s_format_id,
+					"MNG: the file ends inside an embedded image, which is decoded as far as it goes");
 			}
 
 			if(type == CHUNK_DHDR) {
@@ -1059,21 +1069,30 @@ struct MNGChunkRef {
 	DWORD length;
 	const BYTE *raw;
 	DWORD raw_length;
+	BOOL cut;	//! the stream ends inside it: length and raw_length count what is there
 };
 
 static BOOL
 SplitChunks(const std::vector<BYTE>& stream, std::vector<MNGChunkRef>& out) {
 	size_t pos = 0;
-	while(pos + MNG_CHUNK_OVERHEAD <= stream.size()) {
+	while(pos + 8 <= stream.size()) {
 		MNGChunkRef ref;
 		ref.length = GetDWORD(&stream[pos]);
 		ref.type = GetDWORD(&stream[pos + 4]);
+		ref.raw = &stream[pos];
+		ref.cut = FALSE;
 		if((ref.length > stream.size()) || (pos + 12 + (size_t)ref.length > stream.size())) {
-			return FALSE;
+			// a cut stream keeps its last chunk as far as it goes; the PNG loader decodes that
+			if(out.empty()) {
+				return FALSE;
+			}
+			ref.raw_length = (DWORD)(stream.size() - pos);
+			ref.length = MIN(ref.length, ref.raw_length - 8);
+			ref.cut = TRUE;
+		} else {
+			ref.raw_length = ref.length + MNG_CHUNK_OVERHEAD;
 		}
 		ref.payload = (ref.length > 0) ? &stream[pos + 8] : NULL;
-		ref.raw = &stream[pos];
-		ref.raw_length = ref.length + MNG_CHUNK_OVERHEAD;
 		out.push_back(ref);
 		pos += ref.raw_length;
 	}
@@ -1171,7 +1190,10 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 		out.insert(out.end(), chunk.raw, chunk.raw + chunk.raw_length);
 	}
 
-	AppendChunk(out, CHUNK_IEND, NULL, 0);
+	// a cut stream ends where the file does
+	if(!chunks.back().cut) {
+		AppendChunk(out, CHUNK_IEND, NULL, 0);
+	}
 	return TRUE;
 }
 
