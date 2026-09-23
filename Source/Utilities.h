@@ -565,4 +565,35 @@ static const char *FI_MSG_ERROR_CORRUPTED_IMAGE = "Image is corrupted";
 static const char *FI_MSG_ERROR_UNSUPPORTED_COMPRESSION = "Unsupported compression type";
 static const char *FI_MSG_WARNING_INVALID_THUMBNAIL = "Warning: attached thumbnail cannot be written to output file (invalid format) - Thumbnail saving aborted";
 
+// ==========================================================
+//   Cut or damaged files
+// ==========================================================
+
+/// a loader kept the first rows it decoded before the data ran out or went bad
+inline void
+PartialImageWarning(int format_id, unsigned rows, unsigned height) {
+	if (rows < height) {
+		FreeImage_OutputMessageProc(format_id, "Warning: the image data is cut short or damaged; %u of %u rows decoded, the rest is blank", rows, height);
+	} else {
+		FreeImage_OutputMessageProc(format_id, "Warning: the file is cut short or damaged, but the image is complete");
+	}
+}
+
+/// a loader kept what it decoded where it cannot count whole rows
+inline void
+DamagedImageWarning(int format_id) {
+	FreeImage_OutputMessageProc(format_id, "Warning: the image data is cut short or damaged; what could not be decoded is blank");
+}
+
+/// a raster no larger than 64 MB, or than 64 times what the data can expand to, is worth allocating for a cut file
+inline bool
+PlausibleImageSize(unsigned long long raster_bytes, unsigned long long data_bytes, unsigned long long max_expansion) {
+	const unsigned long long floor_bytes = 64ULL << 20;
+	if (raster_bytes <= floor_bytes) {
+		return true;
+	}
+	// in double: the product can overflow 64 bits
+	return (double)raster_bytes <= (double)data_bytes * (double)max_expansion * 64.0;
+}
+
 #endif // FREEIMAGE_UTILITIES_H
