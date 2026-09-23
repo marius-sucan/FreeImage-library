@@ -536,9 +536,11 @@ static int
 LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
 	const long start = io->tell_proc(handle);
 	const int rows = DecodeRLE8(io, handle, width, height, dib);
-	const long stop = io->tell_proc(handle);
-	if ((rows < abs(height)) && !PlausibleImageSize((UINT64)width * abs(height), (stop > start) ? (UINT64)(stop - start) : 0, 128)) {
-		return 0;
+	if (rows < abs(height)) {
+		const long stop = io->tell_proc(handle);
+		if (!PlausibleImageSize((UINT64)width * abs(height), (stop > start) ? (UINT64)(stop - start) : 0, 128)) {
+			return 0;
+		}
 	}
 	return rows;
 }

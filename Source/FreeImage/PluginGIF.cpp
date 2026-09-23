@@ -1205,7 +1205,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		if( !header_only ) {
 			//LZW Minimum Code Size
-			const long data_start = io->tell_proc(handle);
 			b = 0;
 			io->read_proc(&b, 1, 1, handle);
 			StringTable *stringtable = new(std::nothrow) StringTable;
@@ -1220,12 +1219,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BYTE *scanline = FreeImage_GetScanLine(dib, height - 1);
 			BYTE buf[4096];
 			bool ended = false;
+			UINT64 data_bytes = 0;
 			if( io->read_proc(&b, 1, 1, handle) != 1 ) {
 				b = 0;
 				ended = true;
 			}
 			while( b ) {
 				const unsigned got = io->read_proc(stringtable->FillInputBuffer(b), 1, b, handle);
+				data_bytes += got;
 				if( got < b ) {
 					// decode only the bytes read; a smaller size keeps the buffer
 					stringtable->FillInputBuffer((int)got);
@@ -1272,7 +1273,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			if( rows < height ) {
 				// nothing is kept of a frame cut before its first row, or of a huge claim cut a few bytes in
-				if( ended && ((rows == 0) || !PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * height, (UINT64)(io->tell_proc(handle) - data_start), 4096)) ) {
+				if( ended && ((rows == 0) || !PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * height, data_bytes, 4096)) ) {
 					throw "The frame holds too little data for its size";
 				}
 				if( interlaced ) {
