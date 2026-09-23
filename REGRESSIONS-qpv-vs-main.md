@@ -386,14 +386,15 @@ Also found while fixing, and fixed:
 - **Saving a multi-bitmap opened with `FIF_LOAD_NOPIXELS`** (8bff0ee). The pages reached the writers without
   pixels: PNG, PSD and TIFF crashed and TGA wrote an empty image, so deleting a page from a TIFF opened
   header-only crashed in `CloseMultiBitmap`. The pages are now reloaded with pixels.
+- **TestAPI's ASan runs used the uninstrumented code** (f324a79). `asan-lib` added the ASan objects to a copy of
+  the library under new names, and the linker took the originals: APNG, EXR, JPEG, MNG and RAW ran no
+  instrumented plugin or decoder code, WebP some. AVIF and HEIF named their decoder objects `.._.._Source_...`,
+  which `asan-obj/*.o` skips, so only their plugin was instrumented. The objects are now linked ahead of the
+  unchanged library, restricted to `Makefile.srcs` sources and built with `Makefile.gnu`'s `-D` flags. The AVIF
+  suite had lost `AVIF_ENABLE_EXPERIMENTAL_MINI`, which showed once libavif ran instrumented. All eight
+  `asan-run` pass with no report and the same output as `run`.
 
 Found, not fixed (each needs a decision, or is out of scope):
-- The `asan-lib` targets of TestAPI's APNG, EXR, JPEG, MNG, RAW and WebP suites add their ASan objects under new
-  names next to the originals, and the linker takes whichever member it meets first for each symbol. The MNG
-  suite's ASan binary gets an instrumented MNGHelper but the original PluginMNG, PluginPNG and libpng, so its
-  ASan runs checked allocations, not the plugins' reads and writes; the other five may be the same. AVIF and
-  HEIF replace their plugin object (same name) and duplicate only the bundled decoder objects. Linking
-  `asan-obj/*.o` ahead of the archive gives a fully instrumented test binary.
 - `audit/poc/ras_huge_maplength.ras` and `f08_ras_hugemap.ras` (colour map past EOF) decode as zeros from a file
   but NULL from memory. A seek past EOF succeeds on a file and fails on a memory stream.
 - JPEG's `Load` reads `dib` after a longjmp. It works only because `RotateExif(&dib)` keeps it in memory; no
