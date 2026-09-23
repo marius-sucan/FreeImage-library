@@ -349,8 +349,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			numChannels = 4;
 		}
 		
+		// keep what a cut file holds; RLE rows have offsets, so each one is tried
+		unsigned rows_done = 0;
+		BOOL cut = FALSE;
+		std::vector<BYTE> alpha_done((zsize == 2 || zsize == 4) ? height : 0, 0);
+
 		LONG *pri = pRowIndex;
-		for (i = 0; i < zsize; i++) {
+		for (i = 0; i < zsize && !(cut && !bIsRLE); i++) {
 			BYTE *pRow = pStartRow + offset_table[i];
 			for (int j = 0; j < height; j++, pRow += ns, pri++) {
 				BYTE *p = pRow;
@@ -358,25 +363,62 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					my_rle_status.cnt = 0;
 					io->seek_proc(handle, start_pos + *pri, SEEK_SET);
 				}
-				for (int k = 0; k < width; k++, p += numChannels) {
-					BYTE packed = 0;
+				int k = 0;
+				for (; k < width; k++, p += numChannels) {
 					if (bIsRLE) {
 						const int ch = get_rlechar(io, handle, &my_rle_status);
 						if (ch == EOF) {
-							throw SGI_EOF_IN_IMAGE_DATA;
+							break;
 						}
-						packed = (BYTE)ch;
+						*p = (BYTE)ch;
 					}
 					else {
+						BYTE packed = 0;
 						if (io->read_proc(&packed, sizeof(BYTE), 1, handle) != 1) {
-							throw SGI_EOF_IN_IMAGE_DATA;
+							break;
 						}
+						*p = packed;
 					}
-					*p = packed;
+				}
+				if (!alpha_done.empty() && (i == zsize - 1)) {
+					// alpha the file does not hold is opaque, so the colours it holds show
+					for (int x = k; x < width; x++, p += numChannels) {
+						*p = 0xFF;
+					}
+					alpha_done[j] = 1;
+				}
+				if (k < width) {
+					cut = TRUE;
+					if (!bIsRLE) {
+						break;
+					}
+				} else {
+					rows_done++;
 				}
 			}
 		}
-		
+
+		if (cut) {
+			if (rows_done == 0) {
+				throw SGI_EOF_IN_IMAGE_DATA;
+			}
+			// alpha rows the decoder never reached
+			for (int j = 0; j < (int)alpha_done.size(); j++) {
+				if (!alpha_done[j]) {
+					BYTE *pPixel = pStartRow + (size_t)ns * j;
+					for (int k = 0; k < width; k++, pPixel += 4) {
+						pPixel[3] = 0xFF;
+					}
+				}
+			}
+			FreeImage_OutputMessageProc(s_format_id, SGI_EOF_IN_IMAGE_DATA);
+			if (zsize == 1) {
+				PartialImageWarning(s_format_id, rows_done, height);
+			} else {
+				DamagedImageWarning(s_format_id);
+			}
+		}
+
 		if (zsize == 2)
 		{
 			BYTE *pRow = pStartRow;
