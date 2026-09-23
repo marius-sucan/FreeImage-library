@@ -161,9 +161,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		unsigned size = (unsigned)header.width * (unsigned)header.height;
 		BYTE count = 0, run = 0;
 
+		// a cut or damaged file keeps the rows before the damage
+		const long data_start = io->tell_proc(handle);
+		const char *damage = NULL;
+
 		while (i < size) {
 			if(io->read_proc(&count, 1, sizeof(BYTE), handle) != 1) {
-				throw FI_MSG_ERROR_PARSING;
+				damage = FI_MSG_ERROR_PARSING;
+				break;
 			}
 
 			if (count == 0) {
@@ -188,26 +193,40 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				count &= ~(0x80);
 
 				if(io->read_proc(&run, 1, sizeof(BYTE), handle) != 1) {
-					throw FI_MSG_ERROR_PARSING;
+					damage = FI_MSG_ERROR_PARSING;
+					break;
 				}
 
 				if(k + count <= header.width) {
 					memset(bits + k, run, count);
 				} else {
-					throw FI_MSG_ERROR_PARSING;
+					damage = FI_MSG_ERROR_PARSING;
+					break;
 				}
 			} else {
 				if(k + count <= header.width) {
 					if(io->read_proc(&bits[k], count, sizeof(BYTE), handle) != 1) {
-						throw FI_MSG_ERROR_PARSING;
+						damage = FI_MSG_ERROR_PARSING;
+						break;
 					}
 				} else {
-					throw FI_MSG_ERROR_PARSING;
+					damage = FI_MSG_ERROR_PARSING;
+					break;
 				}
 			}
 
 			k += count;
 			i += count;
+		}
+
+		if (damage) {
+			// rows filled from the top; nothing is kept of a huge claim a few bytes long
+			const unsigned rows = (unsigned)((int)header.height - 1 - y);
+			if ((rows == 0) || !PlausibleImageSize(size, (UINT64)(io->tell_proc(handle) - data_start), 64)) {
+				throw damage;
+			}
+			FreeImage_OutputMessageProc(s_format_id, damage);
+			PartialImageWarning(s_format_id, rows, header.height);
 		}
 
 		return dib;
