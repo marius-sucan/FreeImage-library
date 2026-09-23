@@ -130,6 +130,8 @@ typedef struct {
 	TIFF *tif;
 	//! Count the number of thumbnails already read (used to avoid recursion on loading)
 	unsigned thumbnailCount;
+	//! Handle position of the TIFF header, which libtiff offsets count from
+	long start;
 } fi_TIFFIO;
 
 // ----------------------------------------------------------
@@ -151,8 +153,12 @@ _tiffWriteProc(thandle_t handle, void *buf, tmsize_t size) {
 static toff_t
 _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-	fio->io->seek_proc(fio->handle, (long)off, whence);
-	return fio->io->tell_proc(fio->handle);
+	if(whence == SEEK_SET) {
+		fio->io->seek_proc(fio->handle, fio->start + (long)off, SEEK_SET);
+	} else {
+		fio->io->seek_proc(fio->handle, (long)off, whence);
+	}
+	return (toff_t)(fio->io->tell_proc(fio->handle) - fio->start);
 }
 
 static int
@@ -169,7 +175,7 @@ _tiffSizeProc(thandle_t handle) {
     fio->io->seek_proc(fio->handle, 0, SEEK_END);
     long fileSize = fio->io->tell_proc(fio->handle);
     fio->io->seek_proc(fio->handle, currPos, SEEK_SET);
-    return fileSize;
+    return (fileSize > fio->start) ? (toff_t)(fileSize - fio->start) : 0;
 }
 
 static int
@@ -1086,6 +1092,8 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	fio->io = io;
 	fio->handle = handle;
 	fio->thumbnailCount = 0;
+	const long start = io->tell_proc(handle);
+	fio->start = (start > 0) ? start : 0;
 
 	if (read) {
 		fio->tif = TIFFFdOpen((thandle_t)fio, "", "r");
