@@ -1499,6 +1499,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// ---------------------------------------------------------------------------------
 
+		// a strip or tile that cannot be read (a cut or damaged file) stays blank, and the others load
+		BOOL bParseError = FALSE;
+
 		if(loadMethod == LoadAsRBGA) {
 			// ---------------------------------------------------------------------------------
 			// RGB[A] loading using the TIFFReadRGBAImage() API
@@ -1514,16 +1517,21 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			if(!header_only) {
 
-				raster = (uint32_t*)_TIFFmalloc(width * height * sizeof(uint32_t));
+				// zeroed: a cut or damaged file leaves the rows after the damage untouched
+				raster = (uint32_t*)_TIFFcalloc((tmsize_t)width * height, sizeof(uint32_t));
 				if (raster == NULL) {
 					throw FI_MSG_ERROR_MEMORY;
 				}
 
 				// read the image in one chunk into an RGBA array
 
-				if (!TIFFReadRGBAImage(tif, width, height, raster, 1)) {
+				char emsg[1024];
+				if (!TIFFRGBAImageOK(tif, emsg)) {
 					_TIFFfree(raster);
 					throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
+				}
+				if (!TIFFReadRGBAImage(tif, width, height, raster, 1)) {
+					bParseError = TRUE;
 				}
 			}
 			// TIFFReadRGBAImage always deliveres 3 or 4 samples per pixel images
@@ -1661,8 +1669,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 
 					if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, nrow * src_line) == -1) {
-						free(buf);
-						throw FI_MSG_ERROR_PARSING;
+						// a strip that cannot be read stays blank, and its zeros must not reach the trns table
+						bParseError = TRUE;
+						bits -= (size_t)nrow * dst_pitch;
+						continue;
 					}
 					for (int l = 0; l < nrow; l++) {
 						BYTE *p = bits;
@@ -1695,13 +1705,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (uint32_t y = 0; y < height; y += rowsperstrip) {
 					int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
-					if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), grey, nrow * src_line) == -1) {
-						free(buf);
-						throw FI_MSG_ERROR_PARSING;
-					} 
-					if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 1), alpha, nrow * src_line) == -1) {
-						free(buf);
-						throw FI_MSG_ERROR_PARSING;
+					if ((TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), grey, nrow * src_line) == -1) ||
+						(TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 1), alpha, nrow * src_line) == -1)) {
+						bParseError = TRUE;
+						bits -= (size_t)nrow * dst_pitch;
+						continue;
 					} 
 
 					for (int l = 0; l < nrow; l++) {
@@ -1803,7 +1811,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				// read the tiff lines and save them in the DIB
 
-				BYTE *buf = (BYTE*)malloc(TIFFStripSize(tif) * sizeof(BYTE));
+				BYTE *buf = (BYTE*)calloc(TIFFStripSize(tif), sizeof(BYTE));
 				if(buf == NULL) {
 					FreeImage_Unload(alpha);
 					throw FI_MSG_ERROR_MEMORY;
@@ -1817,11 +1825,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						const int32_t strips = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
 						if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, strips * src_line) == -1) {
-							free(buf);
-							FreeImage_Unload(alpha);
-							throw FI_MSG_ERROR_PARSING;
+							// libtiff zeroes a strip it cannot read
+							bParseError = TRUE;
 						} 
-						
+
 						// - loop for strips -
 						
 						if(src_line != dst_line) {
@@ -1884,9 +1891,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						for(uint16_t sample = 0; sample < samplesperpixel; sample++) {
 							
 							if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, sample), buf, strips * src_line) == -1) {
-								free(buf);
-								FreeImage_Unload(alpha);
-								throw FI_MSG_ERROR_PARSING;
+								// libtiff zeroes a strip it cannot read
+								bParseError = TRUE;
 							} 
 									
 							BYTE *dst_strip = dib_strip;
@@ -2164,10 +2170,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					for (uint32_t x = 0, rowSize = 0; x < width; x += tileWidth, rowSize += tileRowSize) {
 						memset(tileBuffer, 0, tileSize);
 
-						// read one tile
+						// read one tile; libtiff zeroes a tile it cannot read
 						if (TIFFReadTile(tif, tileBuffer, x, y, 0, 0) < 0) {
-							free(tileBuffer);
-							throw "Corrupted tiled TIFF file";
+							bParseError = TRUE;
 						}
 						// convert to strip
 						if(x + tileWidth > width) {
@@ -2230,7 +2235,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				// read the tiff lines and save them in the DIB
 
-				BYTE *buf = (BYTE*)malloc(TIFFStripSize(tif) * sizeof(BYTE));
+				BYTE *buf = (BYTE*)calloc(TIFFStripSize(tif), sizeof(BYTE));
 				if(buf == NULL) {
 					throw FI_MSG_ERROR_MEMORY;
 				}
@@ -2239,8 +2244,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
 					if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, nrow * src_line) == -1) {
-						free(buf);
-						throw FI_MSG_ERROR_PARSING;
+						// libtiff zeroes a strip it cannot read
+						bParseError = TRUE;
 					} 
 					// convert from XYZ to RGB
 					for (int l = 0; l < nrow; l++) {						
@@ -2287,7 +2292,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				if(planar_config == PLANARCONFIG_CONTIG) {
 
-					BYTE *buf = (BYTE*)malloc(TIFFStripSize(tif) * sizeof(BYTE));
+					BYTE *buf = (BYTE*)calloc(TIFFStripSize(tif), sizeof(BYTE));
 					if(buf == NULL) {
 						throw FI_MSG_ERROR_MEMORY;
 					}
@@ -2296,8 +2301,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						uint32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
 						if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, nrow * src_line) == -1) {
-							free(buf);
-							throw FI_MSG_ERROR_PARSING;
+							// libtiff zeroes a strip it cannot read
+							bParseError = TRUE;
 						} 
 
 						// convert from half (16-bit) to float (32-bit)
@@ -2354,8 +2359,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		// copy TIFF thumbnail (must be done after FreeImage_Allocate)
-		
+
 		ReadThumbnail(io, handle, data, tif, dib);
+
+		if(bParseError) {
+			FreeImage_OutputMessageProc(s_format_id, "Warning: parsing error. Image may be incomplete or contain invalid data !");
+		}
 
 		return dib;
 
