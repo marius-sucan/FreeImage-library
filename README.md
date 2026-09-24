@@ -30,6 +30,7 @@ Fixes:
 - fixed FreeImage_Copy() to not crash with very large images [over 5000 mgpx];
 - fixed FreeImage_Rescale() to work with very large images [over 5000 mgpx]; it no longer screws up the colors;
 - fixed FreeImage_RescaleRawBits() reading the wrong rows of FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF and FIT_RGBAF sources whose pitch is not a multiple of the sample size;
+- fixed TIFF files saved to memory carrying a byte of uninitialised heap memory: a write past the end of a memory stream leaves zeros, as in a file; a write near a memory stream's 2 GB limit no longer overflows on Windows;
 - fixed FreeImage_Rotate() to work with very large images [over 5000 mgpx];
 - fixed a data race in the 1-bit 90/180/270 rotation;
 - fixed the bundled ZLib, OpenEXR, LibJXR failing to compile on GCC 14+;
