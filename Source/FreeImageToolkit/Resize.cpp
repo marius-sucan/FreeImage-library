@@ -190,6 +190,31 @@ BandRows(unsigned width, unsigned bpp, unsigned window, unsigned rows) {
 	return (unsigned)MIN(band, (size_t)rows);
 }
 
+// measured costs of a tap, in taps of the row-blocked vertical pass: horizontal, and vertical walking columns
+static const double HORIZONTAL_TAP_COST = 2;
+static const double COLUMN_TAP_COST = 2.5;
+
+// how much cheaper the other order's taps must be to leave the width rule; more for 128-bit pixels, memory-bound vertically
+static const double ORDER_MARGIN = 1.1;
+static const double WIDE_ORDER_MARGIN = 2;
+
+// taps of a pass over one row or column
+static double
+TotalTaps(CWeightsTable &weights, unsigned size) {
+	double taps = 0;
+	for (unsigned i = 0; i < size; i++) {
+		taps += weights.getRightBoundary(i) - weights.getLeftBoundary(i);
+	}
+	return taps;
+}
+
+// cost of a vertical tap from src_bpp to dst_bpp: VerticalFilterSamples takes plain samples, the rest walk columns
+static double
+VerticalTapCost(FREE_IMAGE_TYPE type, unsigned src_bpp, const RGBQUAD *src_pal, unsigned dst_bpp) {
+	const BOOL rows = (type != FIT_BITMAP) || (!src_pal && (src_bpp == dst_bpp) && ((src_bpp == 8) || (src_bpp == 24) || (src_bpp == 32)));
+	return rows ? 1 : COLUMN_TAP_COST;
+}
+
 // horizontal pass for plain sample arrays: SPP samples per pixel, each filtered on its own
 template <class T, int SPP> static void
 HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
@@ -787,25 +812,14 @@ BOOL CResizeEngine::scaleInBands(FIBITMAP *const src, const unsigned src_offset_
 	}
 	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(src);
 
-	/*
-	Decide which filtering order (xy or yx) is faster for this mapping. 
-	--- The theory ---
-	Try to minimize calculations by counting the number of convolution multiplies
-	if(dst_width*src_height <= src_width*dst_height) {
-		// xy filtering
-	} else {
-		// yx filtering
-	}
-	--- The practice ---
-	Try to minimize calculations by counting the number of vertical convolutions (the most time consuming task)
-	if(dst_width*dst_height <= src_width*dst_height) {
-		// xy filtering
-	} else {
-		// yx filtering
-	}
-	*/
+	// horizontal first unless the width grows, or the other order when its taps are clearly cheaper
+	const double taps_x = TotalTaps(weightsX, dst_width), taps_y = TotalTaps(weightsY, dst_height);
+	const double cost_xy = HORIZONTAL_TAP_COST * taps_x * src_height + VerticalTapCost(image_type, tmp_bpp, NULL, FreeImage_GetBPP(dst)) * taps_y * dst_width;
+	const double cost_yx = VerticalTapCost(image_type, FreeImage_GetBPP(src), src_pal, tmp_bpp) * taps_y * src_width + HORIZONTAL_TAP_COST * taps_x * dst_height;
+	const double margin = (FreeImage_GetBPP(src) >= 128) ? WIDE_ORDER_MARGIN : ORDER_MARGIN;
+	const BOOL xy = (dst_width <= src_width) ? (cost_xy <= margin * cost_yx) : (cost_yx > margin * cost_xy);
 
-	if (dst_width <= src_width) {
+	if (xy) {
 		// xy filtering: a destination row reads a window of filtered rows, and neighbouring windows overlap
 		unsigned window = 0;
 		for (unsigned y = 0; y < dst_height; y++) {
