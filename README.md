@@ -63,6 +63,7 @@ Changes:
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
 - added FreeImage_AppendPageEx(), FreeImage_InsertPageEx(), FreeImage_RemovePageEx(), which return TRUE or FALSE;
 - added FreeImage_RescaleRawBits();
+- added FILTER_NEAREST (-1) to FreeImage_Rescale(), FreeImage_RescaleRect() and FreeImage_RescaleRawBits(): nearest-neighbour resampling, the fastest filter; each pixel is copied from the source pixel under its centre and the image keeps its type, bit depth, palette and transparency, so FreeImage_RescaleRawBits() takes every bit depth with it; with FI_RESCALE_TRUE_COLOR an image of 8 bits or less comes out as 24-bit, or 32-bit when transparent;
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
