@@ -257,6 +257,210 @@ VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const IN
 	}
 }
 
+// a nearest-neighbour resize to this many pixels or more shares its rows between threads; waking them costs more below
+static const UINT64 NEAREST_PARALLEL_PIXELS = 1 << 14;
+
+// the rows a nearest-neighbour resize reads and writes
+struct NearestFrame {
+	FIBITMAP *src;
+	unsigned src_offset_y;
+	unsigned src_height;
+	FIBITMAP *dst;
+	unsigned dst_width;
+	unsigned dst_height;
+};
+
+// the source row from the left edge of the source rectangle, as it is
+struct NearestCopy {
+	size_t offset;
+	unsigned width;
+	unsigned bpp;
+	NearestCopy(size_t o, unsigned w, unsigned b) : offset(o), width(w), bpp(b) {}
+	void operator()(BYTE *dst, const BYTE *src) const {
+		CopyRowPixels(dst, src + offset, width, bpp);
+	}
+};
+
+// pixels of B bytes, destination column x copied from source column cols[x]
+template <int B> struct NearestPixels {
+	const unsigned *cols;
+	unsigned width;
+	NearestPixels(const unsigned *c, unsigned w) : cols(c), width(w) {}
+	void operator()(BYTE *dst, const BYTE *src) const {
+		for (unsigned x = 0; x < width; x++) {
+			memcpy(dst, src + (size_t)cols[x] * B, B);
+			dst += B;
+		}
+	}
+};
+
+// 1- or 4-bit pixels, packed from the high bits; the last byte keeps its bits past the row
+template <int BPP> struct NearestPacked {
+	const unsigned *cols;
+	unsigned width;
+	NearestPacked(const unsigned *c, unsigned w) : cols(c), width(w) {}
+	void operator()(BYTE *dst, const BYTE *src) const {
+		const unsigned per_byte = 8 / BPP;
+		for (unsigned x = 0; x < width; x += per_byte) {
+			const unsigned n = MIN(per_byte, width - x);
+			unsigned byte = 0;
+			for (unsigned k = 0; k < n; k++) {
+				const unsigned c = cols[x + k];
+				byte = (byte << BPP) | ((src[c / per_byte] >> ((per_byte - 1 - c % per_byte) * BPP)) & ((1 << BPP) - 1));
+			}
+			const unsigned bits = n * BPP;
+			*dst = (BYTE)((*dst & (0xFF >> bits)) | (byte << (8 - bits)));
+			dst++;
+		}
+	}
+};
+
+// 1-, 4- or 8-bit indices written as the first B bytes of their palette entries
+template <int BPP, int B> struct NearestEntries {
+	const unsigned *cols;
+	unsigned width;
+	const RGBQUAD *pal;
+	NearestEntries(const unsigned *c, unsigned w, const RGBQUAD *p) : cols(c), width(w), pal(p) {}
+	void operator()(BYTE *dst, const BYTE *src) const {
+		const unsigned per_byte = 8 / BPP;
+		for (unsigned x = 0; x < width; x++) {
+			const unsigned c = cols[x];
+			const unsigned index = (src[c / per_byte] >> ((per_byte - 1 - c % per_byte) * BPP)) & ((1 << BPP) - 1);
+			memcpy(dst, &pal[index], B);
+			dst += B;
+		}
+	}
+};
+
+// fills every row of dst; a row with the same source row as the row this thread wrote just before is copied from it
+template <class GATHER> static void
+NearestRows(const NearestFrame &frame, const GATHER &gather) {
+	const unsigned bpp = FreeImage_GetBPP(frame.dst);
+	const INT64 rows = frame.dst_height;
+	const bool threaded = (rows > 1) && ((UINT64)frame.dst_width * frame.dst_height >= NEAREST_PARALLEL_PIXELS);
+
+	#pragma omp parallel default(shared) if(threaded)
+	{
+		INT64 last = -1;
+		unsigned last_src = 0;
+
+		#pragma omp for schedule(static)
+		for (INT64 y = 0; y < rows; y++) {
+			// the source row under this row's centre, counted from the top
+			const UINT64 from_top = ((2 * (UINT64)(rows - 1 - y) + 1) * frame.src_height) / (2 * (UINT64)rows);
+			const unsigned src_row = frame.src_offset_y + frame.src_height - 1 - (unsigned)from_top;
+			BYTE *const dst_bits = FreeImage_GetScanLine(frame.dst, (int)y);
+
+			if ((y > 0) && (last == y - 1) && (last_src == src_row)) {
+				CopyRowPixels(dst_bits, FreeImage_GetScanLine(frame.dst, (int)(y - 1)), frame.dst_width, bpp);
+			} else {
+				gather(dst_bits, FreeImage_GetScanLine(frame.src, src_row));
+			}
+			last = y;
+			last_src = src_row;
+		}
+	}
+}
+
+// copies each pixel from the source pixel under its centre, in the source's format or as its 24/32-bit palette entry
+static BOOL
+ScaleNearest(FIBITMAP *const src, const unsigned src_offset_x, const unsigned src_offset_y, const unsigned src_width, const unsigned src_height, FIBITMAP *const dst, const unsigned dst_width, const unsigned dst_height) {
+	const unsigned src_bpp = FreeImage_GetBPP(src);
+	const unsigned dst_bpp = FreeImage_GetBPP(dst);
+	const NearestFrame frame = { src, src_offset_y, src_height, dst, dst_width, dst_height };
+
+	if (dst_bpp == src_bpp) {
+		if (src_bpp <= 8) {
+			// the indices keep their meaning
+			memcpy(FreeImage_GetPalette(dst), FreeImage_GetPalette(src), FreeImage_GetColorsUsed(src) * sizeof(RGBQUAD));
+			FreeImage_SetTransparencyTable(dst, FreeImage_GetTransparencyTable(src), FreeImage_GetTransparencyCount(src));
+			FreeImage_SetTransparent(dst, FreeImage_IsTransparent(src));
+		}
+		const UINT64 left_bits = (UINT64)src_offset_x * src_bpp;
+		if ((dst_width == src_width) && ((left_bits & 7) == 0)) {
+			NearestRows(frame, NearestCopy((size_t)(left_bits >> 3), dst_width, dst_bpp));
+			return TRUE;
+		}
+	}
+
+	// the source column under each destination column's centre
+	unsigned *const cols = (unsigned *)calloc(dst_width, sizeof(unsigned));
+	if (!cols) {
+		return FALSE;
+	}
+	for (unsigned x = 0; x < dst_width; x++) {
+		cols[x] = src_offset_x + (unsigned)(((2 * (UINT64)x + 1) * src_width) / (2 * (UINT64)dst_width));
+	}
+
+	BOOL bResult = TRUE;
+	if (dst_bpp != src_bpp) {
+		RGBQUAD pal_buffer[256];
+		const RGBQUAD *const pal = (dst_bpp == 32) ? GetRGBAPalette(src, pal_buffer) : FreeImage_GetPalette(src);
+		switch (src_bpp * 100 + dst_bpp) {
+			case 124:
+				NearestRows(frame, NearestEntries<1, 3>(cols, dst_width, pal));
+				break;
+			case 132:
+				NearestRows(frame, NearestEntries<1, 4>(cols, dst_width, pal));
+				break;
+			case 424:
+				NearestRows(frame, NearestEntries<4, 3>(cols, dst_width, pal));
+				break;
+			case 432:
+				NearestRows(frame, NearestEntries<4, 4>(cols, dst_width, pal));
+				break;
+			case 824:
+				NearestRows(frame, NearestEntries<8, 3>(cols, dst_width, pal));
+				break;
+			case 832:
+				NearestRows(frame, NearestEntries<8, 4>(cols, dst_width, pal));
+				break;
+			default:
+				bResult = FALSE;
+				break;
+		}
+	} else {
+		switch (src_bpp) {
+			case 1:
+				NearestRows(frame, NearestPacked<1>(cols, dst_width));
+				break;
+			case 4:
+				NearestRows(frame, NearestPacked<4>(cols, dst_width));
+				break;
+			case 8:
+				NearestRows(frame, NearestPixels<1>(cols, dst_width));
+				break;
+			case 16:
+				NearestRows(frame, NearestPixels<2>(cols, dst_width));
+				break;
+			case 24:
+				NearestRows(frame, NearestPixels<3>(cols, dst_width));
+				break;
+			case 32:
+				NearestRows(frame, NearestPixels<4>(cols, dst_width));
+				break;
+			case 48:
+				NearestRows(frame, NearestPixels<6>(cols, dst_width));
+				break;
+			case 64:
+				NearestRows(frame, NearestPixels<8>(cols, dst_width));
+				break;
+			case 96:
+				NearestRows(frame, NearestPixels<12>(cols, dst_width));
+				break;
+			case 128:
+				NearestRows(frame, NearestPixels<16>(cols, dst_width));
+				break;
+			default:
+				bResult = FALSE;
+				break;
+		}
+	}
+
+	free(cols);
+	return bResult;
+}
+
 // --------------------------------------------------------------------------
 
 CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigned uSrcSize) {
@@ -398,7 +602,13 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	// determine the required bit depth of the destination image
 	unsigned dst_bpp;
 	unsigned dst_bpp_s1 = 0;
-	if (color_type == FIC_PALETTE && !bIsGreyscale) {
+	if (!m_pFilter) {
+		// nearest copies pixels; only FI_RESCALE_TRUE_COLOR changes the format, to what the filters return with it
+		dst_bpp = src_bpp;
+		if ((src_bpp <= 8) && ((flags & FI_RESCALE_TRUE_COLOR) == FI_RESCALE_TRUE_COLOR)) {
+			dst_bpp = FreeImage_IsTransparent(src) ? 32 : 24;
+		}
+	} else if (color_type == FIC_PALETTE && !bIsGreyscale) {
 		// non greyscale FIC_PALETTE images require a high-color destination
 		// image (24- or 32-bits depending on the image's transparent state)
 		dst_bpp = FreeImage_IsTransparent(src) ? 32 : 24;
@@ -516,7 +726,7 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
       // dib = FreeImage_AllocateHeader(header_only, header.is_width, header.is_height, pixel_bits, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
       dst = FreeImage_AllocateHeaderForBits(dst_bits, dst_pitch, image_type, dst_width, dst_height, dst_bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
    } else {
-      dst = FreeImage_AllocateT(image_type, dst_width, dst_height, dst_bpp, 0, 0, 0);
+      dst = FreeImage_AllocateT(image_type, dst_width, dst_height, dst_bpp, FreeImage_GetRedMask(src), FreeImage_GetGreenMask(src), FreeImage_GetBlueMask(src));
    }
    if (!dst) {
       return NULL;
@@ -544,7 +754,9 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	const unsigned src_offset_y = FreeImage_GetHeight(src) - src_height - src_top;
 
 	BOOL bResult;
-	if (src_height == dst_height) {
+	if (!m_pFilter) {
+		bResult = ScaleNearest(src, src_offset_x, src_offset_y, src_width, src_height, dst, dst_width, dst_height);
+	} else if (src_height == dst_height) {
 		CWeightsTable weightsTable(m_pFilter, dst_width, src_width);
 		bResult = weightsTable.isValid();
 		if (bResult) {

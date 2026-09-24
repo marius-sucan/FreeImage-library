@@ -705,6 +705,7 @@ End Enum
 
 ' Up- / Downsampling filter constants
 Public Enum FREE_IMAGE_FILTER
+   FILTER_NEAREST = -1       ' Nearest neighbour: copies the nearest pixel and keeps the pixel format
    FILTER_BOX = 0            ' Box, pulse, Fourier window, 1st order (constant) b-spline
    FILTER_BICUBIC = 1        ' Mitchell & Netravali's two-param cubic filter
    FILTER_BILINEAR = 2       ' Bilinear filter
@@ -12231,6 +12232,7 @@ Const FITMO_FATTAL02 = 1
 
 ' Enum FREE_IMAGE_FILTER
 Const FREE_IMAGE_FILTER = 1
+Const FILTER_NEAREST = 1
 Const FILTER_BOX = 1
 Const FILTER_BICUBIC = 1
 Const FILTER_BILINEAR = 1

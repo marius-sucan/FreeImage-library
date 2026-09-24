@@ -364,6 +364,7 @@ const
   FITMO_FATTAL02   = FREE_IMAGE_TMO(2); // Gradient domain high dynamic range compression (R. Fattal, 2002)
 
   // Upsampling / downsampling filters. Constants used in FreeImage_Rescale.
+  FILTER_NEAREST    = FREE_IMAGE_FILTER(-1); // Nearest neighbour: copies the nearest pixel and keeps the pixel format
   FILTER_BOX        = FREE_IMAGE_FILTER(0); // Box, pulse, Fourier window, 1st order (constant) b-spline
   FILTER_BICUBIC    = FREE_IMAGE_FILTER(1); // Mitchell & Netravali's two-param cubic filter
   FILTER_BILINEAR   = FREE_IMAGE_FILTER(2); // Bilinear filter

@@ -21,6 +21,7 @@
 
 
 #include "TestSuite.h"
+#include <string.h>
 
 // Local test functions
 // ----------------------------------------------------------
@@ -416,6 +417,106 @@ BOOL testLoadSaveConvertComplexType(FIBITMAP *src, FREE_IMAGE_COLOR_CHANNEL chan
 	return TRUE;
 }
 
+// FILTER_NEAREST: each pixel is the source pixel under its centre, in the source's pixel format
+static BOOL testRescaleNearestType(FREE_IMAGE_TYPE image_type, unsigned bpp) {
+	const unsigned sw = 7, sh = 5;
+	const unsigned sizes[][2] = { {3, 2}, {14, 10}, {7, 11}, {20, 5}, {1, 1} };
+
+	FIBITMAP *src = FreeImage_AllocateT(image_type, sw, sh, bpp, FI16_565_RED_MASK, FI16_565_GREEN_MASK, FI16_565_BLUE_MASK);
+	if(!src) return FALSE;
+	for(unsigned y = 0; y < sh; y++) {
+		BYTE *bits = FreeImage_GetScanLine(src, y);
+		for(unsigned i = 0; i < FreeImage_GetLine(src); i++) {
+			bits[i] = (BYTE)(y * 37 + i * 11 + 1);
+		}
+	}
+	bpp = FreeImage_GetBPP(src);
+	if(bpp <= 8) {
+		RGBQUAD *pal = FreeImage_GetPalette(src);
+		for(unsigned i = 0; i < FreeImage_GetColorsUsed(src); i++) {
+			pal[i].rgbRed = (BYTE)(i * 3);
+			pal[i].rgbGreen = (BYTE)(255 - i);
+			pal[i].rgbBlue = (BYTE)(i * 7);
+		}
+		BYTE table[2] = { 0, 128 };
+		FreeImage_SetTransparencyTable(src, table, 2);
+	}
+
+	BOOL bResult = TRUE;
+	for(unsigned s = 0; (s < sizeof(sizes) / sizeof(sizes[0])) && bResult; s++) {
+		const unsigned dw = sizes[s][0], dh = sizes[s][1];
+		FIBITMAP *dst = FreeImage_Rescale(src, dw, dh, FILTER_NEAREST);
+		bResult = dst && (FreeImage_GetImageType(dst) == image_type) && (FreeImage_GetBPP(dst) == bpp)
+			&& (FreeImage_GetWidth(dst) == dw) && (FreeImage_GetHeight(dst) == dh);
+		if(bResult && (bpp <= 8)) {
+			bResult = (memcmp(FreeImage_GetPalette(dst), FreeImage_GetPalette(src), FreeImage_GetColorsUsed(src) * sizeof(RGBQUAD)) == 0)
+				&& (FreeImage_GetTransparencyCount(dst) == 2) && FreeImage_IsTransparent(dst);
+		}
+		if(bResult && (bpp == 16) && (image_type == FIT_BITMAP)) {
+			bResult = (FreeImage_GetRedMask(dst) == FI16_565_RED_MASK) && (FreeImage_GetGreenMask(dst) == FI16_565_GREEN_MASK);
+		}
+		// rows are counted from the top, as the image is seen
+		for(unsigned y = 0; (y < dh) && bResult; y++) {
+			const unsigned sy = sh - 1 - (2 * y + 1) * sh / (2 * dh);
+			for(unsigned x = 0; (x < dw) && bResult; x++) {
+				const unsigned sx = (2 * x + 1) * sw / (2 * dw);
+				if(bpp < 8) {
+					BYTE a = 0, b = 0;
+					FreeImage_GetPixelIndex(src, sx, sy, &a);
+					FreeImage_GetPixelIndex(dst, x, dh - 1 - y, &b);
+					bResult = (a == b);
+				} else {
+					const unsigned n = bpp / 8;
+					bResult = memcmp(FreeImage_GetScanLine(src, sy) + sx * n, FreeImage_GetScanLine(dst, dh - 1 - y) + x * n, n) == 0;
+				}
+			}
+		}
+		if(dst) FreeImage_Unload(dst);
+	}
+
+	FreeImage_Unload(src);
+	return bResult;
+}
+
+// FILTER_NEAREST with FI_RESCALE_TRUE_COLOR: a transparent 8-bit image becomes 32-bit RGBA
+static BOOL testRescaleNearestTrueColor() {
+	FIBITMAP *src = FreeImage_AllocateT(FIT_BITMAP, 4, 4, 8);
+	if(!src) return FALSE;
+	RGBQUAD *pal = FreeImage_GetPalette(src);
+	for(unsigned i = 0; i < 256; i++) {
+		pal[i].rgbRed = (BYTE)i;
+		pal[i].rgbGreen = (BYTE)(i ^ 0x55);
+		pal[i].rgbBlue = (BYTE)(255 - i);
+	}
+	BYTE table[16];
+	for(unsigned i = 0; i < 16; i++) {
+		table[i] = (BYTE)(i * 16);
+	}
+	FreeImage_SetTransparencyTable(src, table, 16);
+	for(unsigned y = 0; y < 4; y++) {
+		for(unsigned x = 0; x < 4; x++) {
+			BYTE index = (BYTE)(y * 4 + x);
+			FreeImage_SetPixelIndex(src, x, y, &index);
+		}
+	}
+
+	FIBITMAP *dst = FreeImage_RescaleRect(src, 8, 8, 0, 0, 4, 4, FILTER_NEAREST, FI_RESCALE_TRUE_COLOR);
+	BOOL bResult = dst && (FreeImage_GetBPP(dst) == 32);
+	for(unsigned y = 0; (y < 8) && bResult; y++) {
+		for(unsigned x = 0; (x < 8) && bResult; x++) {
+			RGBQUAD color;
+			FreeImage_GetPixelColor(dst, x, y, &color);
+			const BYTE index = (BYTE)((y / 2) * 4 + x / 2);
+			bResult = (color.rgbRed == pal[index].rgbRed) && (color.rgbGreen == pal[index].rgbGreen)
+				&& (color.rgbBlue == pal[index].rgbBlue) && (color.rgbReserved == table[index]);
+		}
+	}
+	if(dst) FreeImage_Unload(dst);
+
+	FreeImage_Unload(src);
+	return bResult;
+}
+
 // Main test functions
 // ----------------------------------------------------------
 
@@ -447,6 +548,25 @@ void testImageType(unsigned width, unsigned height) {
 	bResult = testAllocateCloneUnloadType(FIT_RGBF, width, height);
 	assert(bResult);
 	bResult = testAllocateCloneUnloadType(FIT_RGBAF, width, height);
+	assert(bResult);
+}
+
+void testRescaleNearest() {
+	BOOL bResult = FALSE;
+
+	printf("testRescaleNearest ...\n");
+
+	const unsigned bitmap_bpp[] = { 1, 4, 8, 16, 24, 32 };
+	for(unsigned i = 0; i < sizeof(bitmap_bpp) / sizeof(bitmap_bpp[0]); i++) {
+		bResult = testRescaleNearestType(FIT_BITMAP, bitmap_bpp[i]);
+		assert(bResult);
+	}
+	const FREE_IMAGE_TYPE types[] = { FIT_UINT16, FIT_INT16, FIT_UINT32, FIT_INT32, FIT_FLOAT, FIT_DOUBLE, FIT_COMPLEX, FIT_RGB16, FIT_RGBA16, FIT_RGBF, FIT_RGBAF };
+	for(unsigned i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
+		bResult = testRescaleNearestType(types[i], 0);
+		assert(bResult);
+	}
+	bResult = testRescaleNearestTrueColor();
 	assert(bResult);
 }
 

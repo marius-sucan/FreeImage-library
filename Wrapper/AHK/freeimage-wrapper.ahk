@@ -1590,6 +1590,7 @@ FreeImage_FlipVertical(hImage) {
 
 FreeImage_Rescale(hImage, w, h, filter:=3) {
 ; Filter parameter options
+; -1 = FILTER_NEAREST;   Nearest neighbour, the fastest: copies the nearest pixel and keeps the pixel format
 ; 0 = FILTER_BOX;        Box, pulse, Fourier window, 1st order (constant) B-Spline
 ; 1 = FILTER_BICUBIC;    Mitchell and Netravali's two-param cubic filter
 ; 2 = FILTER_BILINEAR;   Bilinear filter

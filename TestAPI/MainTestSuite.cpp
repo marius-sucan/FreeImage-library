@@ -74,6 +74,9 @@ int main(int argc, char *argv[]) {
 	// test loading / saving / converting image types using the TIFF plugin
 	testImageTypeTIFF(width, height);
 
+	// test the nearest-neighbour filter on every image type
+	testRescaleNearest();
+
 	// test memory IO
 	testMemIO("sample.png");
 	testMemIO("exif.jxr");

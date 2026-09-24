@@ -503,6 +503,7 @@ FI_ENUM(FREE_IMAGE_TMO) {
 Constants used in FreeImage_Rescale.
 */
 FI_ENUM(FREE_IMAGE_FILTER) {
+	FILTER_NEAREST	  = -1,	//! Nearest neighbour: copies the nearest pixel and keeps the pixel format
 	FILTER_BOX		  = 0,	//! Box, pulse, Fourier window, 1st order (constant) b-spline
 	FILTER_BICUBIC	  = 1,	//! Mitchell & Netravali's two-param cubic filter
 	FILTER_BILINEAR   = 2,	//! Bilinear filter

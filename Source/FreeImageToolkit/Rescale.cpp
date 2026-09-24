@@ -52,6 +52,9 @@ FreeImage_RescaleRect(FIBITMAP *src, int dst_width, int dst_height, int src_left
 	// select the filter
 	CGenericFilter *pFilter = NULL;
 	switch (filter) {
+		case FILTER_NEAREST:
+			// none: the engine copies the nearest pixel
+			break;
 		case FILTER_BOX:
 			pFilter = new(std::nothrow) CBoxFilter();
 			break;
@@ -72,7 +75,7 @@ FreeImage_RescaleRect(FIBITMAP *src, int dst_width, int dst_height, int src_left
 			break;
 	}
 
-	if (!pFilter) {
+	if (!pFilter && (filter != FILTER_NEAREST)) {
 		return NULL;
 	}
 
@@ -137,6 +140,9 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
    // select the filter
    CGenericFilter *pFilter = NULL;
    switch (filter) {
+      case FILTER_NEAREST:
+         // none: the engine copies the nearest pixel
+         break;
       case FILTER_BOX:
          pFilter = new(std::nothrow) CBoxFilter();
          break;
@@ -157,7 +163,7 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
          break;
    }
 
-   if (!pFilter) {
+   if (!pFilter && (filter != FILTER_NEAREST)) {
       FreeImage_Unload(src);
       return FALSE;
    }
@@ -180,7 +186,7 @@ FreeImage_RescaleRawBits(BYTE *src_bits, BYTE *dst_bits, FREE_IMAGE_TYPE type, i
       const unsigned line = FreeImage_GetLine(dst);
       if((unsigned)dst_pitch >= line) {
          for(unsigned y = 0; y < FreeImage_GetHeight(dst); y++) {
-            memcpy(dst_bits + (size_t)y * dst_pitch, FreeImage_GetScanLine(dst, y), line);
+            CopyRowPixels(dst_bits + (size_t)y * dst_pitch, FreeImage_GetScanLine(dst, y), FreeImage_GetWidth(dst), FreeImage_GetBPP(dst));
          }
       } else {
          bResult = FALSE;

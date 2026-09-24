@@ -128,7 +128,7 @@ public:
 
 	/**
 	Constructor
-	@param filter FIR /IIR filter to be used
+	@param filter FIR /IIR filter to be used, NULL to copy the nearest pixel
 	*/
 	CResizeEngine(CGenericFilter* filter):m_pFilter(filter) {}
 

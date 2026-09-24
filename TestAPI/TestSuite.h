@@ -51,6 +51,7 @@ void testAllocateCloneUnload(const char *lpszPathName);
 BOOL testAllocateCloneUnloadType(FREE_IMAGE_TYPE image_type, unsigned width, unsigned height);
 void testImageType(unsigned width, unsigned height);
 void testImageTypeTIFF(unsigned width, unsigned height);
+void testRescaleNearest();
 
 // Header loading test suite
 // ==========================================================

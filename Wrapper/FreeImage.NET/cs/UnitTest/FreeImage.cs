@@ -3566,6 +3566,10 @@ namespace FreeImageAPI
 	public enum FREE_IMAGE_FILTER
 	{
 		/// <summary>
+		/// Nearest neighbour: copies the nearest pixel and keeps the pixel format
+		/// </summary>
+		FILTER_NEAREST = -1,
+		/// <summary>
 		/// Box, pulse, Fourier window, 1st order (constant) b-spline
 		/// </summary>
 		FILTER_BOX = 0,
