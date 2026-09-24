@@ -148,6 +148,7 @@ RoundSample(double value, double lo, double hi) {
 	return (T)((value >= hi) ? hi : lo);
 }
 
+static inline void StoreSample(BYTE *dst, double value) { *dst = RoundSample<BYTE>(value, 0.0, 255.0); }
 static inline void StoreSample(WORD *dst, double value) { *dst = RoundSample<WORD>(value, 0.0, 65535.0); }
 static inline void StoreSample(short *dst, double value) { *dst = RoundSample<short>(value, -32768.0, 32767.0); }
 static inline void StoreSample(DWORD *dst, double value) { *dst = RoundSample<DWORD>(value, 0.0, 4294967295.0); }
@@ -155,11 +156,16 @@ static inline void StoreSample(LONG *dst, double value) { *dst = RoundSample<LON
 static inline void StoreSample(float *dst, double value) { *dst = (float)value; }
 static inline void StoreSample(double *dst, double value) { *dst = value; }
 
-// a block of the vertical pass; WORD sums stay far inside int, and saturating them there vectorises
+// a block of the vertical pass; BYTE and WORD sums stay far inside int, and saturating them there vectorises
 template <class T> static inline void
 StoreSamples(T *dst, const double *value, INT64 count) {
 	for (INT64 k = 0; k < count; k++) {
 		StoreSample(dst + k, value[k]);
+	}
+}
+static inline void StoreSamples(BYTE *dst, const double *value, INT64 count) {
+	for (INT64 k = 0; k < count; k++) {
+		dst[k] = (BYTE)CLAMP<int>((int)(value[k] + 0.5), 0, 0xFF);
 	}
 }
 static inline void StoreSamples(WORD *dst, const double *value, INT64 count) {
@@ -1051,30 +1057,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                         }
                      } else {
                         // we do not have a palette
-                        #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
-                           // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, y);
-
-                           for (INT64 x = 0; x < dst_width; x++) {
-                              // loop through row
-                              const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-                              const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-                              const BYTE * const pixel = src_bits + iLeft;
-                              double value = 0;
-
-                              // for(i = iLeft to iRight)
-                              for (INT64 i = 0; i < iLimit; i++) {
-                                 // scan between boundaries
-                                 // accumulate weighted effect of each neighboring pixel
-                                 value += (weightsTable.getWeight(x, i) * (double)pixel[i]);
-                              }
-
-                              // clamp and place result in destination pixel
-                              dst_bits[x] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
-                           }
-                        }
+                        HorizontalFilterSamples<BYTE, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
                      }
                   }
                   break;
@@ -1266,80 +1249,12 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
             break;
 
             case 24:
-            {
-               // scale the 24-bit non-transparent image into a 24 bpp destination image
-               #pragma omp parallel for schedule(dynamic) default(shared)
-               for (INT64 y = 0; y < height; y++) {
-                  // scale each row
-                  const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * 3;
-                  BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
-
-                  for (INT64 x = 0; x < dst_width; x++) {
-                     // loop through row
-                     const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-                     const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-                     const BYTE * pixel = src_bits + iLeft * 3;
-                     double r = 0, g = 0, b = 0;
-
-                     // for(i = iLeft to iRight)
-                     for (INT64 i = 0; i < iLimit; i++) {
-                        // scan between boundaries
-                        // accumulate weighted effect of each neighboring pixel
-                        const double weight = weightsTable.getWeight(x, i);
-                        r += (weight * (double)pixel[FI_RGBA_RED]);
-                        g += (weight * (double)pixel[FI_RGBA_GREEN]);
-                        b += (weight * (double)pixel[FI_RGBA_BLUE]);
-                        pixel += 3;
-                     }
-
-                     // clamp and place result in destination pixel
-                     dst_bits[FI_RGBA_RED]   = (BYTE)CLAMP<int>((int)(r + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_GREEN]   = (BYTE)CLAMP<int>((int)(g + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_BLUE]   = (BYTE)CLAMP<int>((int)(b + 0.5), 0, 0xFF);
-                     dst_bits += 3;
-                  }
-               }
-            }
-            break;
+               HorizontalFilterSamples<BYTE, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+               break;
 
             case 32:
-            {
-               // scale the 32-bit transparent image into a 32 bpp destination image
-               #pragma omp parallel for schedule(dynamic) default(shared)
-               for (INT64 y = 0; y < height; y++) {
-                  // scale each row
-                  const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * 4;
-                  BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
-
-                  for (INT64 x = 0; x < dst_width; x++) {
-                     // loop through row
-                     const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-                     const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-                     const BYTE *pixel = src_bits + iLeft * 4;
-                     double r = 0, g = 0, b = 0, a = 0;
-
-                     // for(i = iLeft to iRight)
-                     for (INT64 i = 0; i < iLimit; i++) {
-                        // scan between boundaries
-                        // accumulate weighted effect of each neighboring pixel
-                        const double weight = weightsTable.getWeight(x, i);
-                        r += (weight * (double)pixel[FI_RGBA_RED]);
-                        g += (weight * (double)pixel[FI_RGBA_GREEN]);
-                        b += (weight * (double)pixel[FI_RGBA_BLUE]);
-                        a += (weight * (double)pixel[FI_RGBA_ALPHA]);
-                        pixel += 4;
-                     }
-
-                     // clamp and place result in destination pixel
-                     dst_bits[FI_RGBA_RED]   = (BYTE)CLAMP<int>((int)(r + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_GREEN]   = (BYTE)CLAMP<int>((int)(g + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_BLUE]   = (BYTE)CLAMP<int>((int)(b + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_ALPHA]   = (BYTE)CLAMP<int>((int)(a + 0.5), 0, 0xFF);
-                     dst_bits += 4;
-                  }
-               }
-            }
-            break;
+               HorizontalFilterSamples<BYTE, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+               break;
          }
       }
       break;
@@ -1773,31 +1688,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         }
                      } else {
                         // we do not have a palette
-                        #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 x = 0; x < width; x++) {
-                           // work on column x in dst
-                           BYTE *dst_bits = dst_base + x;
-
-                           // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
-                              // loop through column
-                              const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-                              const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + x;
-                              double value = 0;
-
-                              for (INT64 i = 0; i < iLimit; i++) {
-                                 // scan between boundaries
-                                 // accumulate weighted effect of each neighboring pixel
-                                 value += (weightsTable.getWeight(y, i) * (double)*src_bits);
-                                 src_bits += src_pitch;
-                              }
-
-                              // clamp and place result in destination pixel
-                              *dst_bits = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
-                              dst_bits += dst_pitch;
-                           }
-                        }
+                        VerticalFilterSamples<BYTE, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
                      }
                   }
                   break;
@@ -1990,84 +1881,12 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             break;
 
             case 24:
-            {
-               // scale the 24-bit transparent image into a 24 bpp destination image
-               const INT64 src_pitch = FreeImage_GetPitch(src);
-               const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x * 3;
-               #pragma omp parallel for schedule(dynamic) default(shared)
-               for (INT64 x = 0; x < width; x++) {
-                  // work on column x in dst
-                  const INT64 index = x * 3;
-                  BYTE *dst_bits = dst_base + index;
-
-                  // scale each column
-                  for (INT64 y = 0; y < dst_height; y++) {
-                     // loop through column
-                     const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-                     const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                     const BYTE *src_bits = src_base + iLeft * src_pitch + index;
-                     double r = 0, g = 0, b = 0;
-
-                     for (INT64 i = 0; i < iLimit; i++) {
-                        // scan between boundaries
-                        // accumulate weighted effect of each neighboring pixel
-                        const double weight = weightsTable.getWeight(y, i);
-                        r += (weight * (double)src_bits[FI_RGBA_RED]);
-                        g += (weight * (double)src_bits[FI_RGBA_GREEN]);
-                        b += (weight * (double)src_bits[FI_RGBA_BLUE]);
-                        src_bits += src_pitch;
-                     }
-
-                     // clamp and place result in destination pixel
-                     dst_bits[FI_RGBA_RED]   = (BYTE)CLAMP<int>((int) (r + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_GREEN]   = (BYTE)CLAMP<int>((int) (g + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_BLUE]   = (BYTE)CLAMP<int>((int) (b + 0.5), 0, 0xFF);
-                     dst_bits += dst_pitch;
-                  }
-               }
-            }
-            break;
+               VerticalFilterSamples<BYTE, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+               break;
 
             case 32:
-            {
-               // scale the 32-bit transparent image into a 32 bpp destination image
-               const INT64 src_pitch = FreeImage_GetPitch(src);
-               const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x * 4;
-               #pragma omp parallel for schedule(dynamic) default(shared)
-               for (INT64 x = 0; x < width; x++) {
-                  // work on column x in dst
-                  const INT64 index = x * 4;
-                  BYTE *dst_bits = dst_base + index;
-
-                  // scale each column
-                  for (INT64 y = 0; y < dst_height; y++) {
-                     // loop through column
-                     const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-                     const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                     const BYTE *src_bits = src_base + iLeft * src_pitch + index;
-                     double r = 0, g = 0, b = 0, a = 0;
-
-                     for (INT64 i = 0; i < iLimit; i++) {
-                        // scan between boundaries
-                        // accumulate weighted effect of each neighboring pixel
-                        const double weight = weightsTable.getWeight(y, i);
-                        r += (weight * (double)src_bits[FI_RGBA_RED]);
-                        g += (weight * (double)src_bits[FI_RGBA_GREEN]);
-                        b += (weight * (double)src_bits[FI_RGBA_BLUE]);
-                        a += (weight * (double)src_bits[FI_RGBA_ALPHA]);
-                        src_bits += src_pitch;
-                     }
-
-                     // clamp and place result in destination pixel
-                     dst_bits[FI_RGBA_RED]   = (BYTE)CLAMP<int>((int) (r + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_GREEN]   = (BYTE)CLAMP<int>((int) (g + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_BLUE]   = (BYTE)CLAMP<int>((int) (b + 0.5), 0, 0xFF);
-                     dst_bits[FI_RGBA_ALPHA]   = (BYTE)CLAMP<int>((int) (a + 0.5), 0, 0xFF);
-                     dst_bits += dst_pitch;
-                  }
-               }
-            }
-            break;
+               VerticalFilterSamples<BYTE, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+               break;
          }
       }
       break;
