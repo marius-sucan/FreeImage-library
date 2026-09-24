@@ -29,6 +29,7 @@ Fixes:
 - fixed integer wrap around and segmentation fault in Exif.cpp;
 - fixed FreeImage_Copy() to not crash with very large images [over 5000 mgpx];
 - fixed FreeImage_Rescale() to work with very large images [over 5000 mgpx]; it no longer screws up the colors;
+- fixed FreeImage_RescaleRawBits() reading the wrong rows of FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF and FIT_RGBAF sources whose pitch is not a multiple of the sample size;
 - fixed FreeImage_Rotate() to work with very large images [over 5000 mgpx];
 - fixed a data race in the 1-bit 90/180/270 rotation;
 - fixed the bundled ZLib, OpenEXR, LibJXR failing to compile on GCC 14+;
@@ -53,6 +54,7 @@ Changes:
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - FreeImage_Rescale(), FreeImage_RescaleRect(), FreeImage_RescaleRawBits() and FreeImage_MakeThumbnail() resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter, instead of a blank image, TRUE with nothing written or no thumbnail; integer samples round half away from zero and saturate at their type's limits, complex images are filtered per real and imaginary part, and a thumbnail made with convert set is an 8-bit image, as for FIT_FLOAT;
 - a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
+- FreeImage_Rescale(), FreeImage_RescaleRect(), FreeImage_RescaleRawBits() and FreeImage_MakeThumbnail() are faster, with the same output: the vertical pass reads rows instead of columns for 8-bit greyscale, 24-bit and 32-bit images and every other image type, and a resize in both directions keeps a band of about 4 MB between its two passes instead of a temporary image of the full size, which lowers the peak memory by that image's size;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
