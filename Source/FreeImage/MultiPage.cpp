@@ -1380,10 +1380,17 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 BOOL DLL_CALLCONV
 FreeImage_SaveMultiBitmapToMemory(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, FIMEMORY *stream, int flags) {
 	if (stream && stream->data) {
-		FreeImageIO io;
-		SetMemoryIO(&io);
+		FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(stream->data);
 
-		return FreeImage_SaveMultiBitmapToHandle(fif, bitmap, &io, (fi_handle)stream, flags);
+		if (mem_header->delete_me == TRUE) {
+			FreeImageIO io;
+			SetMemoryIO(&io);
+
+			return FreeImage_SaveMultiBitmapToHandle(fif, bitmap, &io, (fi_handle)stream, flags);
+		} else {
+			// do not save in a user buffer
+			FreeImage_OutputMessageProc(fif, "Memory buffer is read only");
+		}
 	}
 
 	return FALSE;
