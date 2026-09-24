@@ -177,13 +177,26 @@ static inline void StoreSamples(WORD *dst, const double *value, INT64 count) {
 // samples per block of the vertical pass: its accumulators stay in L1
 static const int VERTICAL_BLOCK = 256;
 
+// the image between the two passes is held a band at a time, of about this many bytes: it stays in cache
+static const size_t BAND_BYTES = 4 << 20;
+// and of at least this many rows, to keep every thread busy
+static const unsigned BAND_MIN_ROWS = 64;
+
+// rows of a band: BAND_BYTES of them, never fewer than a window or BAND_MIN_ROWS, never more than rows
+static unsigned
+BandRows(unsigned width, unsigned bpp, unsigned window, unsigned rows) {
+	const size_t line = MAX((size_t)1, ((size_t)width * bpp + 7) / 8);
+	const size_t band = MAX(BAND_BYTES / line, (size_t)MAX(window, BAND_MIN_ROWS));
+	return (unsigned)MIN(band, (size_t)rows);
+}
+
 // horizontal pass for plain sample arrays: SPP samples per pixel, each filtered on its own
 template <class T, int SPP> static void
-HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned height, const unsigned src_offset_x, const unsigned src_offset_y, FIBITMAP *const dst, const unsigned dst_width) {
+HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
 	#pragma omp parallel for schedule(dynamic) default(shared)
-	for (INT64 y = 0; y < height; y++) {
-		const T *const src_bits = (T *)FreeImage_GetScanLine(src, y + src_offset_y) + (INT64)src_offset_x * SPP;
-		T *dst_bits = (T *)FreeImage_GetScanLine(dst, y);
+	for (INT64 y = 0; y < rows; y++) {
+		const T *const src_bits = (T *)FreeImage_GetScanLine(src, src_row + y) + (INT64)src_offset_x * SPP;
+		T *dst_bits = (T *)FreeImage_GetScanLine(dst, dst_row + y);
 
 		for (INT64 x = 0; x < dst_width; x++) {
 			const INT64 iLeft = weightsTable.getLeftBoundary(x);
@@ -212,17 +225,17 @@ HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const 
 
 // vertical pass for plain sample arrays, row by row: every source row is read sequentially
 template <class T, int SPP> static void
-VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned width, const unsigned src_offset_x, const unsigned src_offset_y, FIBITMAP *const dst, const unsigned dst_height) {
+VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
 	const INT64 src_pitch = FreeImage_GetPitch(src);
-	const BYTE *const src_base = FreeImage_GetScanLine(src, src_offset_y) + (INT64)src_offset_x * SPP * sizeof(T);
+	const BYTE *const src_base = FreeImage_GetBits(src) + (INT64)src_offset_x * SPP * sizeof(T);
 	const INT64 samples = (INT64)width * SPP;
 
 	#pragma omp parallel for schedule(dynamic) default(shared)
-	for (INT64 y = 0; y < dst_height; y++) {
+	for (INT64 y = y_begin; y < y_end; y++) {
 		const INT64 iLeft = weightsTable.getLeftBoundary(y);
 		const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;
-		const BYTE *const src_rows = src_base + iLeft * src_pitch;
-		T *const dst_bits = (T *)FreeImage_GetScanLine(dst, y);
+		const BYTE *const src_rows = src_base + (src_row_bias + iLeft) * src_pitch;
+		T *const dst_bits = (T *)FreeImage_GetScanLine(dst, dst_row_bias + y);
 		double value[VERTICAL_BLOCK];
 
 		for (INT64 x0 = 0; x0 < samples; x0 += VERTICAL_BLOCK) {
@@ -527,8 +540,40 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 
 	// calculate x and y offsets; since FreeImage uses bottom-up bitmaps, the
 	// value of src_offset_y is measured from the bottom of the image
-	unsigned src_offset_x = src_left;
-	unsigned src_offset_y = FreeImage_GetHeight(src) - src_height - src_top;
+	const unsigned src_offset_x = src_left;
+	const unsigned src_offset_y = FreeImage_GetHeight(src) - src_height - src_top;
+
+	BOOL bResult;
+	if (src_height == dst_height) {
+		CWeightsTable weightsTable(m_pFilter, dst_width, src_width);
+		bResult = weightsTable.isValid();
+		if (bResult) {
+			horizontalFilter(weightsTable, src, src_offset_y, src_offset_x, src_pal, dst, 0, src_height, dst_width);
+		}
+	} else if (src_width == dst_width) {
+		CWeightsTable weightsTable(m_pFilter, dst_height, src_height);
+		bResult = weightsTable.isValid();
+		if (bResult) {
+			verticalFilter(weightsTable, src, src_offset_y, src_offset_x, src_pal, dst, 0, 0, dst_height, dst_width);
+		}
+	} else {
+		bResult = scaleInBands(src, src_offset_x, src_offset_y, src_width, src_height, src_pal, dst, dst_width, dst_height, dst_bpp_s1);
+	}
+
+	if (!bResult) {
+		FreeImage_Unload(dst);
+		return NULL;
+	}
+	return dst;
+}
+
+BOOL CResizeEngine::scaleInBands(FIBITMAP *const src, const unsigned src_offset_x, const unsigned src_offset_y, const unsigned src_width, const unsigned src_height, const RGBQUAD *const src_pal, FIBITMAP *const dst, const unsigned dst_width, const unsigned dst_height, const unsigned tmp_bpp) {
+	CWeightsTable weightsX(m_pFilter, dst_width, src_width);
+	CWeightsTable weightsY(m_pFilter, dst_height, src_height);
+	if (!weightsX.isValid() || !weightsY.isValid()) {
+		return FALSE;
+	}
+	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(src);
 
 	/*
 	Decide which filtering order (xy or yx) is faster for this mapping. 
@@ -549,163 +594,70 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	*/
 
 	if (dst_width <= src_width) {
-		// xy filtering
-		// -------------
-
-		FIBITMAP *tmp = NULL;
-
-		if (src_width != dst_width) {
-			// source and destination widths are different so, we must
-			// filter horizontally
-			if (src_height != dst_height) {
-				// source and destination heights are also different so, we need
-				// a temporary image
-				tmp = FreeImage_AllocateT(image_type, dst_width, src_height, dst_bpp_s1, 0, 0, 0);
-				if (!tmp) {
-					FreeImage_Unload(dst);
-					return NULL;
-				}
-			} else {
-				// source and destination heights are equal so, we can directly
-				// scale into destination image (second filter method will not
-				// be invoked)
-				tmp = dst;
-			}
-
-			// scale source image horizontally into temporary (or destination) image
-			if (!horizontalFilter(src, src_height, src_width, src_offset_x, src_offset_y, src_pal, tmp, dst_width)) {
-				if (tmp != dst) {
-					FreeImage_Unload(tmp);
-				}
-				FreeImage_Unload(dst);
-				return NULL;
-			}
-
-			// set x and y offsets to zero for the second filter method
-			// invocation (the temporary image only contains the portion of
-			// the image to be rescaled with no offsets)
-			src_offset_x = 0;
-			src_offset_y = 0;
-
-			// also ensure, that the second filter method gets no source
-			// palette (the temporary image is palletized only, if it is
-			// greyscale; in that case, it is an 8-bit image with a linear
-			// palette so, the source palette is not needed or will even be
-			// mismatching, if the source palette is unordered)
-			src_pal = NULL;
-		} else {
-			// source and destination widths are equal so, just copy the
-			// image pointer
-			tmp = src;
+		// xy filtering: a destination row reads a window of filtered rows, and neighbouring windows overlap
+		unsigned window = 0;
+		for (unsigned y = 0; y < dst_height; y++) {
+			window = MAX(window, weightsY.getRightBoundary(y) - weightsY.getLeftBoundary(y));
 		}
+		FIBITMAP *tmp = FreeImage_AllocateT(image_type, dst_width, BandRows(dst_width, tmp_bpp, window, src_height), tmp_bpp, 0, 0, 0);
+		if (!tmp) {
+			return FALSE;
+		}
+		const unsigned capacity = FreeImage_GetHeight(tmp);
+		const size_t pitch = FreeImage_GetPitch(tmp);
 
-		if (src_height != dst_height) {
-			// source and destination heights are different so, scale
-			// temporary (or source) image vertically into destination image
-			if (!verticalFilter(tmp, dst_width, src_height, src_offset_x, src_offset_y, src_pal, dst, dst_height)) {
-				if (tmp != src && tmp != dst) {
-					FreeImage_Unload(tmp);
+		// filtered rows [held_first, held_last) of the source rectangle, from the start of tmp
+		unsigned held_first = 0, held_last = 0;
+		for (unsigned y0 = 0; y0 < dst_height; ) {
+			// as many destination rows as their filtered rows fit in tmp; the right boundaries are not monotonic
+			unsigned first = weightsY.getLeftBoundary(y0), last = weightsY.getRightBoundary(y0), y1 = y0 + 1;
+			for (; y1 < dst_height; y1++) {
+				const unsigned f = MIN(first, weightsY.getLeftBoundary(y1));
+				const unsigned l = MAX(last, weightsY.getRightBoundary(y1));
+				if (l - f > capacity) {
+					break;
 				}
-				FreeImage_Unload(dst);
-				return NULL;
+				first = f;
+				last = l;
 			}
-		}
+			// rows the previous band filtered move to the start instead of being filtered again
+			unsigned kept = 0;
+			if ((first >= held_first) && (first < held_last)) {
+				kept = held_last - first;
+				if (first > held_first) {
+					memmove(FreeImage_GetBits(tmp), FreeImage_GetScanLine(tmp, first - held_first), kept * pitch);
+				}
+			}
+			if (first + kept < last) {
+				horizontalFilter(weightsX, src, src_offset_y + first + kept, src_offset_x, src_pal, tmp, kept, last - first - kept, dst_width);
+				kept = last - first;
+			}
+			held_first = first;
+			held_last = first + kept;
 
-		// free temporary image, if not pointing to either src or dst
-		if (tmp != src && tmp != dst) {
-			FreeImage_Unload(tmp);
+			verticalFilter(weightsY, tmp, -(INT64)first, 0, NULL, dst, 0, y0, y1, dst_width);
+			y0 = y1;
 		}
-
+		FreeImage_Unload(tmp);
 	} else {
-		// yx filtering
-		// -------------
-
-		// Remark:
-		// The yx filtering branch could be more optimized by taking into,
-		// account that (src_width != dst_width) is always true, which
-		// follows from the above condition, which selects filtering order.
-		// Since (dst_width <= src_width) == TRUE selects xy filtering,
-		// both widths must be different when performing yx filtering.
-		// However, to make the code more robust, not depending on that
-		// condition and more symmetric to the xy filtering case, these
-		// (src_width != dst_width) conditions are still in place.
-
-		FIBITMAP *tmp = NULL;
-
-		if (src_height != dst_height) {
-			// source and destination heights are different so, we must
-			// filter vertically
-			if (src_width != dst_width) {
-				// source and destination widths are also different so, we need
-				// a temporary image
-				tmp = FreeImage_AllocateT(image_type, src_width, dst_height, dst_bpp_s1, 0, 0, 0);
-				if (!tmp) {
-					FreeImage_Unload(dst);
-					return NULL;
-				}
-			} else {
-				// source and destination widths are equal so, we can directly
-				// scale into destination image (second filter method will not
-				// be invoked)
-				tmp = dst;
-			}
-
-			// scale source image vertically into temporary (or destination) image
-			if (!verticalFilter(src, src_width, src_height, src_offset_x, src_offset_y, src_pal, tmp, dst_height)) {
-				if (tmp != dst) {
-					FreeImage_Unload(tmp);
-				}
-				FreeImage_Unload(dst);
-				return NULL;
-			}
-
-			// set x and y offsets to zero for the second filter method
-			// invocation (the temporary image only contains the portion of
-			// the image to be rescaled with no offsets)
-			src_offset_x = 0;
-			src_offset_y = 0;
-
-			// also ensure, that the second filter method gets no source
-			// palette (the temporary image is palletized only, if it is
-			// greyscale; in that case, it is an 8-bit image with a linear
-			// palette so, the source palette is not needed or will even be
-			// mismatching, if the source palette is unordered)
-			src_pal = NULL;
-
-		} else {
-			// source and destination heights are equal so, just copy the
-			// image pointer
-			tmp = src;
+		// yx filtering: each filtered row feeds one destination row
+		FIBITMAP *tmp = FreeImage_AllocateT(image_type, src_width, BandRows(src_width, tmp_bpp, 1, dst_height), tmp_bpp, 0, 0, 0);
+		if (!tmp) {
+			return FALSE;
 		}
-
-		if (src_width != dst_width) {
-			// source and destination heights are different so, scale
-			// temporary (or source) image horizontally into destination image
-			if (!horizontalFilter(tmp, dst_height, src_width, src_offset_x, src_offset_y, src_pal, dst, dst_width)) {
-				if (tmp != src && tmp != dst) {
-					FreeImage_Unload(tmp);
-				}
-				FreeImage_Unload(dst);
-				return NULL;
-			}
+		const unsigned capacity = FreeImage_GetHeight(tmp);
+		for (unsigned y0 = 0; y0 < dst_height; y0 += capacity) {
+			const unsigned y1 = MIN(dst_height, y0 + capacity);
+			verticalFilter(weightsY, src, src_offset_y, src_offset_x, src_pal, tmp, -(INT64)y0, y0, y1, src_width);
+			horizontalFilter(weightsX, tmp, 0, 0, NULL, dst, y0, y1 - y0, dst_width);
 		}
-
-		// free temporary image, if not pointing to either src or dst
-		if (tmp != src && tmp != dst) {
-			FreeImage_Unload(tmp);
-		}
+		FreeImage_Unload(tmp);
 	}
 
-	return dst;
-} 
+	return TRUE;
+}
 
-BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsigned src_width, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_width) {
-
-   // allocate and calculate the contributions
-   CWeightsTable weightsTable(m_pFilter, dst_width, src_width);
-   if(!weightsTable.isValid()) {
-      return FALSE;
-   }
+void CResizeEngine::horizontalFilter(CWeightsTable &weightsTable, FIBITMAP *const src, unsigned src_row, unsigned src_offset_x, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_row, unsigned rows, unsigned dst_width) {
 
    // step through rows
    switch(FreeImage_GetImageType(src)) {
@@ -724,10 +676,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      if (src_pal) {
                         // we have got a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -750,10 +702,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      } else {
                         // we do not have a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -787,10 +739,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      if (src_pal) {
                         // we have got a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -820,10 +772,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      } else {
                         // we do not have a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -860,10 +812,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      const INT64 src_bit_offset = src_offset_x & 0x07;
                      src_offset_x >>= 3;
                      #pragma omp parallel for schedule(dynamic) default(shared)
-                     for (INT64 y = 0; y < height; y++) {
+                     for (INT64 y = 0; y < rows; y++) {
                         // scale each row
-                        const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                        BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                        const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                        BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                         for (INT64 x = 0; x < dst_width; x++) {
                            // loop through row
@@ -909,10 +861,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
-                     for (INT64 y = 0; y < height; y++) {
+                     for (INT64 y = 0; y < rows; y++) {
                         // scale each row
-                        const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                        BYTE * const dst_bits = FreeImage_GetScanLine(dst, y);
+                        const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                        BYTE * const dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                         for (INT64 x = 0; x < dst_width; x++) {
                            // loop through row
@@ -943,10 +895,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
-                     for (INT64 y = 0; y < height; y++) {
+                     for (INT64 y = 0; y < rows; y++) {
                         // scale each row
-                        const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                        BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                        const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                        BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                         for (INT64 x = 0; x < dst_width; x++) {
                            // loop through row
@@ -984,10 +936,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      const INT64 src_nibble_offset = src_offset_x & 0x01;
                      src_offset_x >>= 1;
                      #pragma omp parallel for schedule(dynamic) default(shared)
-                     for (INT64 y = 0; y < height; y++) {
+                     for (INT64 y = 0; y < rows; y++) {
                         // scale each row
-                        const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                        BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                        const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                        BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                         for (INT64 x = 0; x < dst_width; x++) {
                            // loop through row
@@ -1032,10 +984,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      if (src_pal) {
                         // we have got a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE * const dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -1057,7 +1009,7 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                         }
                      } else {
                         // we do not have a palette
-                        HorizontalFilterSamples<BYTE, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+                        HorizontalFilterSamples<BYTE, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                      }
                   }
                   break;
@@ -1068,10 +1020,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      if (src_pal) {
                         // we have got a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
                               const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
@@ -1100,10 +1052,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      } else {
                         // we do not have a palette
                         #pragma omp parallel for schedule(dynamic) default(shared)
-                        for (INT64 y = 0; y < height; y++) {
+                        for (INT64 y = 0; y < rows; y++) {
                            // scale each row
-                           const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                           BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                           const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                           BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                            for (INT64 x = 0; x < dst_width; x++) {
                               // loop through row
@@ -1137,10 +1089,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                      // transparently convert the transparent 8-bit image to 32 bpp; 
                      // we always have got a palette here
                      #pragma omp parallel for schedule(dynamic) default(shared)
-                     for (INT64 y = 0; y < height; y++) {
+                     for (INT64 y = 0; y < rows; y++) {
                         // scale each row
-                        const BYTE * const src_bits = FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                        BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                        const BYTE * const src_bits = FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                        BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                         for (INT64 x = 0; x < dst_width; x++) {
                            // loop through row
@@ -1181,10 +1133,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                if (IS_FORMAT_RGB565(src)) {
                   // image has 565 format
                   #pragma omp parallel for schedule(dynamic) default(shared)
-                  for (INT64 y = 0; y < height; y++) {
+                  for (INT64 y = 0; y < rows; y++) {
                      // scale each row
-                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                     BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                     BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                      for (INT64 x = 0; x < dst_width; x++) {
                         // loop through row
@@ -1214,10 +1166,10 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
                } else {
                   // image has 555 format
                   #pragma omp parallel for schedule(dynamic) default(shared)
-                  for (INT64 y = 0; y < height; y++) {
+                  for (INT64 y = 0; y < rows; y++) {
                      // scale each row
-                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x;
-                     BYTE *dst_bits = FreeImage_GetScanLine(dst, y);
+                     const WORD * const src_bits = (WORD *)FreeImage_GetScanLine(src, src_row + y) + src_offset_x;
+                     BYTE *dst_bits = FreeImage_GetScanLine(dst, dst_row + y);
 
                      for (INT64 x = 0; x < dst_width; x++) {
                         // loop through row
@@ -1249,86 +1201,78 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
             break;
 
             case 24:
-               HorizontalFilterSamples<BYTE, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+               HorizontalFilterSamples<BYTE, 3>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                break;
 
             case 32:
-               HorizontalFilterSamples<BYTE, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+               HorizontalFilterSamples<BYTE, 4>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                break;
          }
       }
       break;
 
       case FIT_UINT16:
-         HorizontalFilterSamples<WORD, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<WORD, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_RGB16:
-         HorizontalFilterSamples<WORD, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<WORD, 3>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_RGBA16:
-         HorizontalFilterSamples<WORD, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<WORD, 4>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_FLOAT:
-         HorizontalFilterSamples<float, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<float, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_RGBF:
-         HorizontalFilterSamples<float, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<float, 3>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_RGBAF:
-         HorizontalFilterSamples<float, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<float, 4>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_INT16:
-         HorizontalFilterSamples<short, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<short, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_UINT32:
-         HorizontalFilterSamples<DWORD, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<DWORD, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_INT32:
-         HorizontalFilterSamples<LONG, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<LONG, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_DOUBLE:
-         HorizontalFilterSamples<double, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<double, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
 
       case FIT_COMPLEX:
          // real and imaginary parts: the weights are real
-         HorizontalFilterSamples<double, 2>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         HorizontalFilterSamples<double, 2>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
          break;
    }
-
-   return TRUE;
 }
 
 /// Performs vertical image filtering
-BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned src_height, unsigned src_offset_x, unsigned src_offset_y, const RGBQUAD *const src_pal, FIBITMAP *const dst, unsigned dst_height) {
-
-   // allocate and calculate the contributions
-   CWeightsTable weightsTable(m_pFilter, dst_height, src_height);
-   if(!weightsTable.isValid()) {
-      return FALSE;
-   }
+void CResizeEngine::verticalFilter(CWeightsTable &weightsTable, FIBITMAP *const src, INT64 src_row_bias, unsigned src_offset_x, const RGBQUAD *const src_pal, FIBITMAP *const dst, INT64 dst_row_bias, unsigned y_begin, unsigned y_end, unsigned width) {
 
    // step through columns
    switch(FreeImage_GetImageType(src)) {
       case FIT_BITMAP:
       {
          const INT64 dst_pitch = FreeImage_GetPitch(dst);
-         BYTE * const dst_base = FreeImage_GetBits(dst);
+         BYTE * const dst_base = FreeImage_GetBits(dst) + (dst_row_bias + y_begin) * dst_pitch;
 
          switch(FreeImage_GetBPP(src)) {
             case 1:
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
-               const BYTE * const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 3);
+               const BYTE * const src_base = FreeImage_GetBits(src) + (src_offset_x >> 3);
                // src_base is byte-aligned: carry the dropped bits
                const INT64 src_bit_offset = src_offset_x & 0x07;
 
@@ -1346,11 +1290,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                               double value = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1377,11 +1321,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                               double value = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1414,11 +1358,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                               double r = 0, g = 0, b = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1450,11 +1394,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                               double value = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1489,11 +1433,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         const INT64 mask = 0x80 >> ((x + src_bit_offset) & 0x07);
 
                         // scale each column
-                        for (INT64 y = 0; y < dst_height; y++) {
+                        for (INT64 y = y_begin; y < y_end; y++) {
                            // loop through column
                            const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                            const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                           const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                           const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                            double r = 0, g = 0, b = 0, a = 0;
 
                            for (INT64 i = 0; i < iLimit; i++) {
@@ -1526,7 +1470,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             case 4:
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
-               const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + (src_offset_x >> 1);
+               const BYTE *const src_base = FreeImage_GetBits(src) + (src_offset_x >> 1);
                // and the dropped nibble
                const INT64 src_nibble_offset = src_offset_x & 0x01;
 
@@ -1542,11 +1486,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
-                        for (INT64 y = 0; y < dst_height; y++) {
+                        for (INT64 y = y_begin; y < y_end; y++) {
                            // loop through column
                            const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                            const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                           const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                           const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                            double value = 0;
 
                            for (INT64 i = 0; i < iLimit; i++) {
@@ -1576,11 +1520,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
-                        for (INT64 y = 0; y < dst_height; y++) {
+                        for (INT64 y = y_begin; y < y_end; y++) {
                            // loop through column
                            const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                            const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                           const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                           const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                            double r = 0, g = 0, b = 0;
 
                            for (INT64 i = 0; i < iLimit; i++) {
@@ -1616,11 +1560,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         const INT64 index = (x + src_nibble_offset) >> 1;
 
                         // scale each column
-                        for (INT64 y = 0; y < dst_height; y++) {
+                        for (INT64 y = y_begin; y < y_end; y++) {
                            // loop through column
                            const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                            const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                           const BYTE *src_bits = src_base + iLeft * src_pitch + index;
+                           const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + index;
                            double r = 0, g = 0, b = 0, a = 0;
 
                            for (INT64 i = 0; i < iLimit; i++) {
@@ -1653,7 +1597,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             case 8:
             {
                const INT64 src_pitch = FreeImage_GetPitch(src);
-               const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x;
+               const BYTE *const src_base = FreeImage_GetBits(src) + src_offset_x;
 
                switch(FreeImage_GetBPP(dst)) {
                   case 8:
@@ -1667,11 +1611,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            BYTE *dst_bits = dst_base + x;
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + x;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                               double value = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1688,7 +1632,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         }
                      } else {
                         // we do not have a palette
-                        VerticalFilterSamples<BYTE, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+                        VerticalFilterSamples<BYTE, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                      }
                   }
                   break;
@@ -1704,11 +1648,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            BYTE *dst_bits = dst_base + x * 3;
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + x;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                               double r = 0, g = 0, b = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1737,11 +1681,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                            BYTE *dst_bits = dst_base + x * 3;
 
                            // scale each column
-                           for (INT64 y = 0; y < dst_height; y++) {
+                           for (INT64 y = y_begin; y < y_end; y++) {
                               // loop through column
                               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                              const BYTE *src_bits = src_base + iLeft * src_pitch + x;
+                              const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                               double value = 0;
 
                               for (INT64 i = 0; i < iLimit; i++) {
@@ -1773,11 +1717,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                         BYTE *dst_bits = dst_base + x * 4;
 
                         // scale each column
-                        for (INT64 y = 0; y < dst_height; y++) {
+                        for (INT64 y = y_begin; y < y_end; y++) {
                            // loop through column
                            const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                            const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                           const BYTE *src_bits = src_base + iLeft * src_pitch + x;
+                           const BYTE *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                            double r = 0, g = 0, b = 0, a = 0;
 
                            for (INT64 i = 0; i < iLimit; i++) {
@@ -1810,7 +1754,7 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             {
                // transparently convert the 16-bit non-transparent image to 24 bpp
                const INT64 src_pitch = FreeImage_GetPitch(src) / sizeof(WORD);
-               const WORD *const src_base = (WORD *)FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x;
+               const WORD *const src_base = (WORD *)FreeImage_GetBits(src) + src_offset_x;
 
                if (IS_FORMAT_RGB565(src)) {
                   // image has 565 format
@@ -1820,11 +1764,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      BYTE *dst_bits = dst_base + x * 3;
 
                      // scale each column
-                     for (INT64 y = 0; y < dst_height; y++) {
+                     for (INT64 y = y_begin; y < y_end; y++) {
                         // loop through column
                         const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                         const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                        const WORD *src_bits = src_base + iLeft * src_pitch + x;
+                        const WORD *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                         double r = 0, g = 0, b = 0;
 
                         for (INT64 i = 0; i < iLimit; i++) {
@@ -1852,11 +1796,11 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
                      BYTE *dst_bits = dst_base + x * 3;
 
                      // scale each column
-                     for (INT64 y = 0; y < dst_height; y++) {
+                     for (INT64 y = y_begin; y < y_end; y++) {
                         // loop through column
                         const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
                         const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-                        const WORD *src_bits = src_base + iLeft * src_pitch + x;
+                        const WORD *src_bits = src_base + (src_row_bias + iLeft) * src_pitch + x;
                         double r = 0, g = 0, b = 0;
 
                         for (INT64 i = 0; i < iLimit; i++) {
@@ -1881,60 +1825,58 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
             break;
 
             case 24:
-               VerticalFilterSamples<BYTE, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+               VerticalFilterSamples<BYTE, 3>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                break;
 
             case 32:
-               VerticalFilterSamples<BYTE, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+               VerticalFilterSamples<BYTE, 4>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                break;
          }
       }
       break;
 
       case FIT_UINT16:
-         VerticalFilterSamples<WORD, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<WORD, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_RGB16:
-         VerticalFilterSamples<WORD, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<WORD, 3>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_RGBA16:
-         VerticalFilterSamples<WORD, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<WORD, 4>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_FLOAT:
-         VerticalFilterSamples<float, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<float, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_RGBF:
-         VerticalFilterSamples<float, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<float, 3>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_RGBAF:
-         VerticalFilterSamples<float, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<float, 4>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_INT16:
-         VerticalFilterSamples<short, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<short, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_UINT32:
-         VerticalFilterSamples<DWORD, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<DWORD, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_INT32:
-         VerticalFilterSamples<LONG, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<LONG, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_DOUBLE:
-         VerticalFilterSamples<double, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<double, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
 
       case FIT_COMPLEX:
-         VerticalFilterSamples<double, 2>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         VerticalFilterSamples<double, 2>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
          break;
    }
-
-   return TRUE;
 }

@@ -137,23 +137,10 @@ public:
 
 	/** Scale an image to the desired dimensions.
 
-	Method CResizeEngine::scale, as well as the two filtering methods
-	CResizeEngine::horizontalFilter and CResizeEngine::verticalFilter take
-	four additional parameters, that define a rectangle in the source
-	image to be rescaled.
-
-	These are src_left, src_top, src_width and src_height and should work
-	like these of function FreeImage_Copy. However, src_left and src_top are
-	actually named src_offset_x and src_offset_y in the filtering methods.
-
-	Additionally, since src_height and dst_height are always the same for
-	method horizontalFilter as src_width and dst_width are always the same
-	for verticalFilter, these have been stripped down to a single parameter
-	height and width for horizontalFilter and verticalFilter respectively.
-
-	Currently, method scale is called with the actual size of the source
-	image. However, in a future version, we could provide a new function
-	called FreeImage_RescaleRect that rescales only part of an image. 
+	src_left, src_top, src_width and src_height define the rectangle of the
+	source image to be rescaled, like those of FreeImage_Copy. A resize in one
+	direction is a single filtering pass; one in both directions runs the two
+	passes over a band of rows at a time, see scaleInBands.
 
 	@param src Pointer to the source image
 	@param dst_width Destination image width
@@ -169,37 +156,60 @@ public:
 private:
 
 	/**
-	Performs horizontal image filtering
+	Resizes in both directions, keeping only a band of the image between the
+	two passes: the passes alternate band by band, and the result is the
+	same as with the whole image in between
 
 	@param src Source image
-	@param height Source / Destination image height
-	@param src_width Source image width
-	@param src_offset_x
-	@param src_offset_y
-	@param src_pal
+	@param src_offset_x Left boundary of the source rectangle
+	@param src_offset_y Bottom boundary of the source rectangle, in scanlines
+	@param src_width Width of the source rectangle
+	@param src_height Height of the source rectangle
+	@param src_pal Palette for the first pass, NULL when the pixels are the values
 	@param dst Destination image
 	@param dst_width Destination image width
-	@return Returns TRUE on success, FALSE if the weights table could not be built
+	@param dst_height Destination image height
+	@param tmp_bpp Bit depth of the image between the passes
+	@return Returns TRUE on success, FALSE if a weights table or the band could not be allocated
 	*/
-	BOOL horizontalFilter(FIBITMAP * const src, const unsigned height, const unsigned src_width,
-			const unsigned src_offset_x, const unsigned src_offset_y, const RGBQUAD * const src_pal,
-			FIBITMAP * const dst, const unsigned dst_width);
+	BOOL scaleInBands(FIBITMAP * const src, const unsigned src_offset_x, const unsigned src_offset_y,
+			const unsigned src_width, const unsigned src_height, const RGBQUAD * const src_pal,
+			FIBITMAP * const dst, const unsigned dst_width, const unsigned dst_height, const unsigned tmp_bpp);
 
 	/**
-	Performs vertical image filtering
+	Performs horizontal image filtering over a range of rows
+
+	@param weightsTable Weights of the destination columns
 	@param src Source image
-	@param width Source / Destination image width
-	@param src_height Source image height
-	@param src_offset_x
-	@param src_offset_y
-	@param src_pal
+	@param src_row First source scanline
+	@param src_offset_x Left boundary of the source columns
+	@param src_pal Source palette, NULL when the pixels are the values
 	@param dst Destination image
-	@param dst_height Destination image height
-	@return Returns TRUE on success, FALSE if the weights table could not be built
+	@param dst_row First destination scanline
+	@param rows Number of rows
+	@param dst_width Destination image width
 	*/
-	BOOL verticalFilter(FIBITMAP * const src, const unsigned width, const unsigned src_height,
-			const unsigned src_offset_x, const unsigned src_offset_y, const RGBQUAD * const src_pal,
-			FIBITMAP * const dst, const unsigned dst_height);
+	void horizontalFilter(CWeightsTable &weightsTable, FIBITMAP * const src, const unsigned src_row,
+			const unsigned src_offset_x, const RGBQUAD * const src_pal,
+			FIBITMAP * const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width);
+
+	/**
+	Performs vertical image filtering over a range of destination rows
+
+	@param weightsTable Weights of the destination rows
+	@param src Source image
+	@param src_row_bias Source scanline of the weights' row 0
+	@param src_offset_x Left boundary of the source columns
+	@param src_pal Source palette, NULL when the pixels are the values
+	@param dst Destination image
+	@param dst_row_bias Destination scanline of the weights' row 0
+	@param y_begin First destination row, as a row of the weights
+	@param y_end End of the destination rows, as a row of the weights
+	@param width Number of columns
+	*/
+	void verticalFilter(CWeightsTable &weightsTable, FIBITMAP * const src, const INT64 src_row_bias,
+			const unsigned src_offset_x, const RGBQUAD * const src_pal,
+			FIBITMAP * const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width);
 };
 
 #endif //   _RESIZE_H_
