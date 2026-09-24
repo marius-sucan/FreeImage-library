@@ -107,8 +107,9 @@ public:
  CResizeEngine<br>
  This class performs filtered zoom. It scales an image to the desired dimensions with 
  any of the CGenericFilter derived filter class.<br>
- It works with FIT_BITMAP buffers, WORD buffers (FIT_UINT16, FIT_RGB16, FIT_RGBA16) 
- and float buffers (FIT_FLOAT, FIT_RGBF, FIT_RGBAF).<br><br>
+ It works with FIT_BITMAP buffers, WORD buffers (FIT_UINT16, FIT_RGB16, FIT_RGBA16),
+ float buffers (FIT_FLOAT, FIT_RGBF, FIT_RGBAF) and FIT_INT16, FIT_UINT32, FIT_INT32,
+ FIT_DOUBLE and FIT_COMPLEX buffers.<br><br>
 
  <b>References</b> : <br>
  [1] Paul Heckbert, C code to zoom raster images up or down, with nice filtering. 

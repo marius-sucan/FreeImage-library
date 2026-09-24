@@ -142,6 +142,95 @@ SamplesPerPixel(FIBITMAP *dib, size_t sample_size) {
 	return (INT64)((FreeImage_GetLine(dib) / FreeImage_GetWidth(dib)) / sample_size);
 }
 
+// rounds half away from zero and saturates; NaN gives lo
+template <class T> static inline T
+RoundSample(double value, double lo, double hi) {
+	if ((value > lo) && (value < hi)) {
+		// negated without a branch: noisy signs would mispredict one
+		const INT64 magnitude = (INT64)(fabs(value) + 0.5);
+		const INT64 negative = (value < 0);
+		return (T)((magnitude ^ -negative) + negative);
+	}
+	return (T)((value >= hi) ? hi : lo);
+}
+
+static inline void StoreSample(short *dst, double value) { *dst = RoundSample<short>(value, -32768.0, 32767.0); }
+static inline void StoreSample(DWORD *dst, double value) { *dst = RoundSample<DWORD>(value, 0.0, 4294967295.0); }
+static inline void StoreSample(LONG *dst, double value) { *dst = RoundSample<LONG>(value, -2147483648.0, 2147483647.0); }
+static inline void StoreSample(double *dst, double value) { *dst = value; }
+
+// samples per block of the vertical pass: its accumulators stay in L1
+static const int VERTICAL_BLOCK = 256;
+
+// horizontal pass for plain sample arrays: SPP samples per pixel, each filtered on its own
+template <class T, int SPP> static void
+HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned height, const unsigned src_offset_x, const unsigned src_offset_y, FIBITMAP *const dst, const unsigned dst_width) {
+	#pragma omp parallel for schedule(dynamic) default(shared)
+	for (INT64 y = 0; y < height; y++) {
+		const T *const src_bits = (T *)FreeImage_GetScanLine(src, y + src_offset_y) + (INT64)src_offset_x * SPP;
+		T *dst_bits = (T *)FreeImage_GetScanLine(dst, y);
+
+		for (INT64 x = 0; x < dst_width; x++) {
+			const INT64 iLeft = weightsTable.getLeftBoundary(x);
+			const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;
+			const T *pixel = src_bits + iLeft * SPP;
+			double value[SPP];
+			for (int j = 0; j < SPP; j++) {
+				value[j] = 0;
+			}
+
+			for (INT64 i = 0; i < iLimit; i++) {
+				const double weight = weightsTable.getWeight(x, i);
+				for (int j = 0; j < SPP; j++) {
+					value[j] += weight * (double)pixel[j];
+				}
+				pixel += SPP;
+			}
+
+			for (int j = 0; j < SPP; j++) {
+				StoreSample(dst_bits + j, value[j]);
+			}
+			dst_bits += SPP;
+		}
+	}
+}
+
+// vertical pass for plain sample arrays, row by row: every source row is read sequentially
+template <class T, int SPP> static void
+VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned width, const unsigned src_offset_x, const unsigned src_offset_y, FIBITMAP *const dst, const unsigned dst_height) {
+	const INT64 src_pitch = FreeImage_GetPitch(src);
+	const BYTE *const src_base = FreeImage_GetScanLine(src, src_offset_y) + (INT64)src_offset_x * SPP * sizeof(T);
+	const INT64 samples = (INT64)width * SPP;
+
+	#pragma omp parallel for schedule(dynamic) default(shared)
+	for (INT64 y = 0; y < dst_height; y++) {
+		const INT64 iLeft = weightsTable.getLeftBoundary(y);
+		const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;
+		const BYTE *const src_rows = src_base + iLeft * src_pitch;
+		T *const dst_bits = (T *)FreeImage_GetScanLine(dst, y);
+		double value[VERTICAL_BLOCK];
+
+		for (INT64 x0 = 0; x0 < samples; x0 += VERTICAL_BLOCK) {
+			const INT64 count = MIN((INT64)VERTICAL_BLOCK, samples - x0);
+			for (INT64 k = 0; k < count; k++) {
+				value[k] = 0;
+			}
+
+			for (INT64 i = 0; i < iLimit; i++) {
+				const double weight = weightsTable.getWeight(y, i);
+				const T *const pixel = (const T *)(src_rows + i * src_pitch) + x0;
+				for (INT64 k = 0; k < count; k++) {
+					value[k] += weight * (double)pixel[k];
+				}
+			}
+
+			for (INT64 k = 0; k < count; k++) {
+				StoreSample(dst_bits + x0 + k, value[k]);
+			}
+		}
+	}
+}
+
 // --------------------------------------------------------------------------
 
 CWeightsTable::CWeightsTable(CGenericFilter *pFilter, unsigned uDstSize, unsigned uSrcSize) {
@@ -363,9 +452,14 @@ FIBITMAP* CResizeEngine::scale(FIBITMAP *src, unsigned dst_width, unsigned dst_h
 	switch (image_type) {
 		case FIT_BITMAP:
 		case FIT_UINT16:
+		case FIT_INT16:
+		case FIT_UINT32:
+		case FIT_INT32:
+		case FIT_FLOAT:
+		case FIT_DOUBLE:
+		case FIT_COMPLEX:
 		case FIT_RGB16:
 		case FIT_RGBA16:
-		case FIT_FLOAT:
 		case FIT_RGBF:
 		case FIT_RGBAF:
 			break;
@@ -1394,6 +1488,27 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
          }
       }
       break;
+
+      case FIT_INT16:
+         HorizontalFilterSamples<short, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
+      case FIT_UINT32:
+         HorizontalFilterSamples<DWORD, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
+      case FIT_INT32:
+         HorizontalFilterSamples<LONG, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
+      case FIT_DOUBLE:
+         HorizontalFilterSamples<double, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
+      case FIT_COMPLEX:
+         // real and imaginary parts: the weights are real
+         HorizontalFilterSamples<double, 2>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
    }
 
    return TRUE;
@@ -2258,6 +2373,26 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
          }
       }
       break;
+
+      case FIT_INT16:
+         VerticalFilterSamples<short, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
+      case FIT_UINT32:
+         VerticalFilterSamples<DWORD, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
+      case FIT_INT32:
+         VerticalFilterSamples<LONG, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
+      case FIT_DOUBLE:
+         VerticalFilterSamples<double, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
+      case FIT_COMPLEX:
+         VerticalFilterSamples<double, 2>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
    }
 
    return TRUE;
