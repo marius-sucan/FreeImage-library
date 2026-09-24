@@ -136,12 +136,6 @@ GetRGBAPalette(FIBITMAP *dib, RGBQUAD * const buffer) {
 	return buffer;
 }
 
-// samples per pixel, from the image width (not the rectangle's)
-static inline INT64
-SamplesPerPixel(FIBITMAP *dib, size_t sample_size) {
-	return (INT64)((FreeImage_GetLine(dib) / FreeImage_GetWidth(dib)) / sample_size);
-}
-
 // rounds half away from zero and saturates; NaN gives lo
 template <class T> static inline T
 RoundSample(double value, double lo, double hi) {
@@ -154,10 +148,25 @@ RoundSample(double value, double lo, double hi) {
 	return (T)((value >= hi) ? hi : lo);
 }
 
+static inline void StoreSample(WORD *dst, double value) { *dst = RoundSample<WORD>(value, 0.0, 65535.0); }
 static inline void StoreSample(short *dst, double value) { *dst = RoundSample<short>(value, -32768.0, 32767.0); }
 static inline void StoreSample(DWORD *dst, double value) { *dst = RoundSample<DWORD>(value, 0.0, 4294967295.0); }
 static inline void StoreSample(LONG *dst, double value) { *dst = RoundSample<LONG>(value, -2147483648.0, 2147483647.0); }
+static inline void StoreSample(float *dst, double value) { *dst = (float)value; }
 static inline void StoreSample(double *dst, double value) { *dst = value; }
+
+// a block of the vertical pass; WORD sums stay far inside int, and saturating them there vectorises
+template <class T> static inline void
+StoreSamples(T *dst, const double *value, INT64 count) {
+	for (INT64 k = 0; k < count; k++) {
+		StoreSample(dst + k, value[k]);
+	}
+}
+static inline void StoreSamples(WORD *dst, const double *value, INT64 count) {
+	for (INT64 k = 0; k < count; k++) {
+		dst[k] = (WORD)CLAMP<int>((int)(value[k] + 0.5), 0, 0xFFFF);
+	}
+}
 
 // samples per block of the vertical pass: its accumulators stay in L1
 static const int VERTICAL_BLOCK = 256;
@@ -224,9 +233,7 @@ VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const un
 				}
 			}
 
-			for (INT64 k = 0; k < count; k++) {
-				StoreSample(dst_bits + x0 + k, value[k]);
-			}
+			StoreSamples(dst_bits + x0, value, count);
 		}
 	}
 }
@@ -1338,156 +1345,28 @@ BOOL CResizeEngine::horizontalFilter(FIBITMAP *const src, unsigned height, unsig
       break;
 
       case FIT_UINT16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 y = 0; y < height; y++) {
-            // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
-            WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
-
-            for (INT64 x = 0; x < dst_width; x++) {
-               // loop through row
-               const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-               const WORD *pixel = src_bits + iLeft * wordspp;
-               double value = 0;
-
-               // for(i = iLeft to iRight)
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(x, i);                  
-                  value += (weight * (double)pixel[0]);
-                  pixel++;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(value + 0.5), 0, 0xFFFF);
-               dst_bits += wordspp;
-            }
-         }
-      }
-      break;
+         HorizontalFilterSamples<WORD, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
 
       case FIT_RGB16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 y = 0; y < height; y++) {
-            // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
-            WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
-
-            for (INT64 x = 0; x < dst_width; x++) {
-               // loop through row
-               const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-               const WORD *pixel = src_bits + iLeft * wordspp;
-               double r = 0, g = 0, b = 0;
-
-               // for(i = iLeft to iRight)
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(x, i);                  
-                  r += (weight * (double)pixel[0]);
-                  g += (weight * (double)pixel[1]);
-                  b += (weight * (double)pixel[2]);
-                  pixel += wordspp;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(r + 0.5), 0, 0xFFFF);
-               dst_bits[1] = (WORD)CLAMP<int>((int)(g + 0.5), 0, 0xFFFF);
-               dst_bits[2] = (WORD)CLAMP<int>((int)(b + 0.5), 0, 0xFFFF);
-               dst_bits += wordspp;
-            }
-         }
-      }
-      break;
+         HorizontalFilterSamples<WORD, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
 
       case FIT_RGBA16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 y = 0; y < height; y++) {
-            // scale each row
-            const WORD *src_bits = (WORD*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * wordspp;
-            WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dst, y);
-
-            for (INT64 x = 0; x < dst_width; x++) {
-               // loop through row
-               const INT64 iLeft = weightsTable.getLeftBoundary(x);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(x) - iLeft;   // retrieve right boundary
-               const WORD *pixel = src_bits + iLeft * wordspp;
-               double r = 0, g = 0, b = 0, a = 0;
-
-               // for(i = iLeft to iRight)
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(x, i);                  
-                  r += (weight * (double)pixel[0]);
-                  g += (weight * (double)pixel[1]);
-                  b += (weight * (double)pixel[2]);
-                  a += (weight * (double)pixel[3]);
-                  pixel += wordspp;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(r + 0.5), 0, 0xFFFF);
-               dst_bits[1] = (WORD)CLAMP<int>((int)(g + 0.5), 0, 0xFFFF);
-               dst_bits[2] = (WORD)CLAMP<int>((int)(b + 0.5), 0, 0xFFFF);
-               dst_bits[3] = (WORD)CLAMP<int>((int)(a + 0.5), 0, 0xFFFF);
-               dst_bits += wordspp;
-            }
-         }
-      }
-      break;
+         HorizontalFilterSamples<WORD, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
 
       case FIT_FLOAT:
+         HorizontalFilterSamples<float, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
       case FIT_RGBF:
+         HorizontalFilterSamples<float, 3>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
+
       case FIT_RGBAF:
-      {
-         // Calculate the number of floats per pixel (1 for 32-bit, 3 for 96-bit or 4 for 128-bit)
-         const INT64 floatspp = SamplesPerPixel(src, sizeof(float));
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for(INT64 y = 0; y < height; y++) {
-            // scale each row
-            const float *src_bits = (float*)FreeImage_GetScanLine(src, y + src_offset_y) + src_offset_x * floatspp;
-            float *dst_bits = (float*)FreeImage_GetScanLine(dst, y);
-
-            for(INT64 x = 0; x < dst_width; x++) {
-               // loop through row
-               const INT64 iLeft = weightsTable.getLeftBoundary(x);    // retrieve left boundary
-               const INT64 iRight = weightsTable.getRightBoundary(x);  // retrieve right boundary
-               double value[4] = {0, 0, 0, 0};                            // 4 = 128 bpp max
-
-               for(INT64 i = iLeft; i < iRight; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(x, i-iLeft);
-
-                  INT64 index = i * floatspp;   // pixel index
-                  for (INT64 j = 0; j < floatspp; j++) {
-                     value[j] += (weight * (double)src_bits[index++]);
-                  }
-               }
-
-               // place result in destination pixel
-               for (INT64 j = 0; j < floatspp; j++) {
-                  dst_bits[j] = (float)value[j];
-               }
-
-               dst_bits += floatspp;
-            }
-         }
-      }
-      break;
+         HorizontalFilterSamples<float, 4>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
+         break;
 
       case FIT_INT16:
          HorizontalFilterSamples<short, 1>(weightsTable, src, height, src_offset_x, src_offset_y, dst, dst_width);
@@ -2194,185 +2073,28 @@ BOOL CResizeEngine::verticalFilter(FIBITMAP *const src, unsigned width, unsigned
       break;
 
       case FIT_UINT16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-
-         const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
-         WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
-
-         const INT64 src_pitch = FreeImage_GetPitch(src) / sizeof(WORD);
-         const WORD *const src_base = (WORD *)FreeImage_GetBits(src)   + src_offset_y * src_pitch + src_offset_x * wordspp;
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 x = 0; x < width; x++) {
-            // work on column x in dst
-            const INT64 index = x * wordspp;   // pixel index
-            WORD *dst_bits = dst_base + index;
-
-            // scale each column
-            for (INT64 y = 0; y < dst_height; y++) {
-               // loop through column
-               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-               const WORD *src_bits = src_base + iLeft * src_pitch + index;
-               double value = 0;
-
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(y, i);
-                  value += (weight * (double)src_bits[0]);
-                  src_bits += src_pitch;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(value + 0.5), 0, 0xFFFF);
-
-               dst_bits += dst_pitch;
-            }
-         }
-      }
-      break;
+         VerticalFilterSamples<WORD, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
 
       case FIT_RGB16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-
-         const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
-         WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
-
-         const INT64 src_pitch = FreeImage_GetPitch(src) / sizeof(WORD);
-         const WORD *const src_base = (WORD *)FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x * wordspp;
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 x = 0; x < width; x++) {
-            // work on column x in dst
-            const INT64 index = x * wordspp;   // pixel index
-            WORD *dst_bits = dst_base + index;
-
-            // scale each column
-            for (INT64 y = 0; y < dst_height; y++) {
-               // loop through column
-               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-               const WORD *src_bits = src_base + iLeft * src_pitch + index;
-               double r = 0, g = 0, b = 0;
-
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(y, i);               
-                  r += (weight * (double)src_bits[0]);
-                  g += (weight * (double)src_bits[1]);
-                  b += (weight * (double)src_bits[2]);
-
-                  src_bits += src_pitch;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(r + 0.5), 0, 0xFFFF);
-               dst_bits[1] = (WORD)CLAMP<int>((int)(g + 0.5), 0, 0xFFFF);
-               dst_bits[2] = (WORD)CLAMP<int>((int)(b + 0.5), 0, 0xFFFF);
-
-               dst_bits += dst_pitch;
-            }
-         }
-      }
-      break;
+         VerticalFilterSamples<WORD, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
 
       case FIT_RGBA16:
-      {
-         // Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
-         const INT64 wordspp = SamplesPerPixel(src, sizeof(WORD));
-
-         const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(WORD);
-         WORD *const dst_base = (WORD *)FreeImage_GetBits(dst);
-
-         const INT64 src_pitch = FreeImage_GetPitch(src) / sizeof(WORD);
-         const WORD *const src_base = (WORD *)FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x * wordspp;
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 x = 0; x < width; x++) {
-            // work on column x in dst
-            const INT64 index = x * wordspp;   // pixel index
-            WORD *dst_bits = dst_base + index;
-
-            // scale each column
-            for (INT64 y = 0; y < dst_height; y++) {
-               // loop through column
-               const INT64 iLeft = weightsTable.getLeftBoundary(y);            // retrieve left boundary
-               const INT64 iLimit = weightsTable.getRightBoundary(y) - iLeft;   // retrieve right boundary
-               const WORD *src_bits = src_base + iLeft * src_pitch + index;
-               double r = 0, g = 0, b = 0, a = 0;
-
-               for (INT64 i = 0; i < iLimit; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(y, i);               
-                  r += (weight * (double)src_bits[0]);
-                  g += (weight * (double)src_bits[1]);
-                  b += (weight * (double)src_bits[2]);
-                  a += (weight * (double)src_bits[3]);
-
-                  src_bits += src_pitch;
-               }
-
-               // clamp and place result in destination pixel
-               dst_bits[0] = (WORD)CLAMP<int>((int)(r + 0.5), 0, 0xFFFF);
-               dst_bits[1] = (WORD)CLAMP<int>((int)(g + 0.5), 0, 0xFFFF);
-               dst_bits[2] = (WORD)CLAMP<int>((int)(b + 0.5), 0, 0xFFFF);
-               dst_bits[3] = (WORD)CLAMP<int>((int)(a + 0.5), 0, 0xFFFF);
-
-               dst_bits += dst_pitch;
-            }
-         }
-      }
-      break;
+         VerticalFilterSamples<WORD, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
 
       case FIT_FLOAT:
+         VerticalFilterSamples<float, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
       case FIT_RGBF:
+         VerticalFilterSamples<float, 3>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
+
       case FIT_RGBAF:
-      {
-         // Calculate the number of floats per pixel (1 for 32-bit, 3 for 96-bit or 4 for 128-bit)
-         const INT64 floatspp = SamplesPerPixel(src, sizeof(float));
-
-         const INT64 dst_pitch = FreeImage_GetPitch(dst) / sizeof(float);
-         float *const dst_base = (float *)FreeImage_GetBits(dst);
-
-         const INT64 src_pitch = FreeImage_GetPitch(src) / sizeof(float);
-         const float *const src_base = (float *)FreeImage_GetBits(src) + src_offset_y * src_pitch + src_offset_x * floatspp;
-         #pragma omp parallel for schedule(dynamic) default(shared)
-         for (INT64 x = 0; x < width; x++) {
-            // work on column x in dst
-            const INT64 index = x * floatspp;   // pixel index
-            float *dst_bits = (float *)dst_base + index;
-
-            // scale each column
-            for (INT64 y = 0; y < dst_height; y++) {
-               // loop through column
-               const INT64 iLeft = weightsTable.getLeftBoundary(y);    // retrieve left boundary
-               const INT64 iRight = weightsTable.getRightBoundary(y);  // retrieve right boundary
-               const float *src_bits = src_base + iLeft * src_pitch + index;
-               double value[4] = {0, 0, 0, 0};                            // 4 = 128 bpp max
-
-               for (INT64 i = iLeft; i < iRight; i++) {
-                  // scan between boundaries
-                  // accumulate weighted effect of each neighboring pixel
-                  const double weight = weightsTable.getWeight(y, i - iLeft);
-                  for (INT64 j = 0; j < floatspp; j++) {
-                     value[j] += (weight * (double)src_bits[j]);
-                  }
-                  src_bits += src_pitch;
-               }
-
-               // place result in destination pixel
-               for (INT64 j = 0; j < floatspp; j++) {
-                  dst_bits[j] = (float)value[j];
-               }
-               dst_bits += dst_pitch;
-            }
-         }
-      }
-      break;
+         VerticalFilterSamples<float, 4>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
+         break;
 
       case FIT_INT16:
          VerticalFilterSamples<short, 1>(weightsTable, src, width, src_offset_x, src_offset_y, dst, dst_height);
