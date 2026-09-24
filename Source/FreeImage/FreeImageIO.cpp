@@ -122,8 +122,14 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 
 	const long required_bytes = (long)wanted;
 
+	// in 64 bits, since long may be 32; the block holds at most 0x7FFFFFFE bytes
+	const INT64 required_end = (INT64)mem_header->current_position + required_bytes;
+	if( required_end >= 0x7FFFFFFF ) {
+		return 0;
+	}
+
 	// double the data block size if we need to
-	while( (mem_header->current_position + required_bytes) >= mem_header->data_length ) {
+	while( required_end >= mem_header->data_length ) {
 		long newdatalen = 0;
 
 		// if we are at or above 1G, we cant double without going negative
@@ -146,6 +152,11 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 		}
 		mem_header->data = newdata;
 		mem_header->data_length = newdatalen;
+	}
+
+	// a write past the end leaves a gap, which reads as zeros, as in a file
+	if( mem_header->current_position > mem_header->file_length ) {
+		memset((char *)mem_header->data + mem_header->file_length, 0, mem_header->current_position - mem_header->file_length);
 	}
 
 	memcpy((char *)mem_header->data + mem_header->current_position, buffer, required_bytes);
