@@ -221,6 +221,37 @@ int main(void) {
                 ok("32-bit CMYK accepted and round trips as FIC_CMYK");
             if (back) FreeImage_Unload(back);
         }
+        /* a CMYK file's profile: kept with JPEG_CMYK, dropped when the file loads as RGB */
+        if (cmyk && FreeImage_GetColorType(cmyk) == FIC_CMYK) {
+            FIBITMAP *tagged = FreeImage_Clone(cmyk);
+            BYTE icc[132];
+            memset(icc, 0, sizeof icc);
+            icc[3] = sizeof icc;
+            memcpy(icc + 16, "CMYK", 4);
+            memcpy(icc + 36, "acsp", 4);
+            FreeImage_CreateICCProfile(tagged, icc, sizeof icc);
+            tmppath(path, sizeof path, "fi_jpeg_rt_cmyk_icc.jpg");
+            if (!FreeImage_Save(FIF_JPEG, tagged, path, 0)) {
+                fail("CMYK profile", "a CMYK bitmap with a profile was refused: %s", msgbuf);
+            } else {
+                FIBITMAP *asCMYK = FreeImage_Load(FIF_JPEG, path, JPEG_CMYK);
+                FIBITMAP *asRGB = FreeImage_Load(FIF_JPEG, path, JPEG_DEFAULT);
+                FIBITMAP *header = FreeImage_Load(FIF_JPEG, path, FIF_LOAD_NOPIXELS);
+                FIICCPROFILE *p = asCMYK ? FreeImage_GetICCProfile(asCMYK) : NULL;
+                if (!p || p->size != sizeof icc || !(p->flags & FIICC_COLOR_IS_CMYK))
+                    fail("CMYK profile", "JPEG_CMYK did not keep the profile, flagged CMYK");
+                else if (!asRGB || FreeImage_GetBPP(asRGB) != 24 || FreeImage_GetICCProfile(asRGB)->size)
+                    fail("CMYK profile", "the file loaded as RGB still carries the CMYK profile");
+                else if (!header || FreeImage_GetICCProfile(header)->size)
+                    fail("CMYK profile", "a header-only load still carries the CMYK profile");
+                else
+                    ok("CMYK profile kept with JPEG_CMYK, dropped when the file loads as RGB");
+                if (asCMYK) FreeImage_Unload(asCMYK);
+                if (asRGB) FreeImage_Unload(asRGB);
+                if (header) FreeImage_Unload(header);
+            }
+            FreeImage_Unload(tagged);
+        }
         if (bits1) FreeImage_Unload(bits1);
         if (rgb16) FreeImage_Unload(rgb16);
         if (f32) FreeImage_Unload(f32);

@@ -1284,6 +1284,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			
 			read_markers(&cinfo, dib);
 
+			if((cinfo.out_color_space == JCS_CMYK) && ((flags & JPEG_CMYK) != JPEG_CMYK)) {
+				// the pixels are converted to RGB below: the profile of the CMYK data no longer applies
+				FreeImage_DestroyICCProfile(dib);
+			}
+
 			// --- header only mode => clean-up and return
 
 			if (header_only) {
