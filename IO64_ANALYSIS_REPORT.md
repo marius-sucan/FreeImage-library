@@ -1,373 +1,72 @@
-# Complete Analysis Report: FreeImage 64-Bit I/O (`worktree-io64`)
+# 64-bit I/O review (`worktree-io64`)
 
-**Date**: 2026-09-25  
-**Branch**: `worktree-io64`  
-**Base Commit**: `c0ed58c` (`origin/qpv`)  
-**Head Commit**: `05357f7` ("I/O: GIF and TARGA positions are 64-bit on Win32 too")  
-**Target Platforms**: Linux (32-bit, 64-bit), Windows (32-bit, 64-bit)
+**Date**: 2026-09-25
+**Reviewed**: 7de5c34 "I/O: FreeImageIO seeks and tells with 64-bit positions" and 05357f7 "I/O: GIF and TARGA positions are 64-bit on Win32 too", on qpv c0ed58c
+**Fixes**: fb327b7 (HEIF), 608cb13 (ICO, GIF, TGA), and the commit that carries this report (32-bit builds, overflow guards, examples, wrappers)
+**Targets**: Linux x86_64, Linux x86 (compile and symbol check), Windows x86 (a `__stdcall` FreeImage.dll), Windows x64
 
----
+This replaces the first version of the report, which listed twelve findings without verifying or fixing them. Its claims are settled in the second table.
 
-## Executive Summary
+## Verdict
 
-The `worktree-io64` branch updates FreeImage's I/O layer so that stream positions are represented as 64-bit signed integers (`INT64`) instead of `long`. On Windows platforms (32-bit and 64-bit LLP64), `long` is 32 bits, historically preventing FreeImage from reading or writing beyond 2 GB.
+The change holds. `FI_SeekProc`/`FI_TellProc` carry `INT64` in every configuration of `FreeImage.h` (`int64_t`, `__int64` or `basetsd.h`'s, one type on each platform), the default I/O uses `_fseeki64`/`fseeko`, memory streams are 64-bit, bulk reads and writes go through the callbacks in 1 GB pieces, and every `tell_proc` result in the library now lands in an `INT64`. No `FreeImageIO` implementation in the repository kept the old types. The exports are unchanged: `libfreeimage.so` exports the same 551 symbols, and neither `FreeImage_fseek64` nor `FreeImage_ReadBytes` is among them.
 
-The core conversion is well-designed:
-1. `FreeImageIO` callbacks (`FI_SeekProc`, `FI_TellProc`) take and return `INT64`.
-2. Standard I/O uses `_fseeki64` / `_ftelli64` on Windows and `fseeko` / `ftello` on POSIX.
-3. Memory streams dynamically grow up to `FI_MEMORY_MAX` (`size_t_max >> 1`), and wrapped buffers can address large ranges.
-4. Chunked helpers `FreeImage_ReadBytes()` and `FreeImage_WriteBytes()` eliminate 4 GB truncation in plugin wrappers.
-5. Large sparse BigTIFF tests (2.5 GB, 4.5 GB) and memory tests run and pass.
+The review found one regression the change brought to every platform (HEIF over a stream of unknown length), two it made reachable on 32-bit Windows (WebP, TGA's RLE cache), one gap on 32-bit POSIX (files over 2 GB were not opened for large-file access), smaller omissions, and older position bugs in the same code. All are fixed and tested.
 
-However, a meticulous code audit across all modified and related files revealed **critical bugs, regressions, omissions, and platform-specific hazards** (particularly on 32-bit Linux and for offset/container streams) that require correction.
+## Findings
 
----
-
-## Summary of Findings
-
-| Severity | ID | Category | Location | Description |
+| # | Where | What | Since | Fixed in |
 |---|---|---|---|---|
-| **Critical** | BUG-01 | Regression / Truncation | `Source/FreeImage/MultiPage.cpp:1335` | `FreeImage_OpenMultiBitmapFromMemory` calls `FreeImage_TellMemory`, resetting stream position to 0 past 2 GB |
-| **Critical** | BUG-02 | Offset Stream Corruption | `Source/FreeImage/PluginICO.cpp:819, 843` | `Save` writes absolute file offset instead of relative offset, corrupting reloaded ICOs in offset streams and truncating past 4 GB |
-| **High** | BUG-03 | 32-bit Linux Truncation | `Source/FreeImageToolkit/JPEGTransform.cpp:406` | Missing `_FILE_OFFSET_BITS 64` causes `(off_t)end` to truncate 64-bit offset to 32 bits in `ftruncate` |
-| **High** | BUG-04 | 32-bit Linux Truncation | `TestAPI/testMPageStream.cpp`, `Wrapper/FreeImagePlus/test/fipTestMPageStream.cpp` | Missing `_FILE_OFFSET_BITS 64` narrows `(off_t)offset` in `mySeekProc` to 32 bits |
-| **Medium** | BUG-05 | Error Handling Bug | `Source/FreeImage/PluginTIFF.cpp:161` | `_tiffSeekProc` returns `(toff_t)(-1 - start)` instead of `(toff_t)-1` when `tell_proc` fails in offset streams |
-| **Medium** | BUG-06 | Missing Clamping | `Source/FreeImage/PluginRAW.cpp:52, 97` | `_start` not clamped to 0 on `tell_proc` failure; subsequent `tell()` calls are off by 1 |
-| **Medium** | OMISSION-01 | API Limitation | `Source/FreeImage.h:877-878`, `MemoryIO.cpp` | Public exports `FreeImage_SeekMemory` and `FreeImage_TellMemory` remain 32-bit `long` on Windows and 32-bit Linux |
-| **Medium** | OMISSION-02 | API Limitation | `Source/FreeImage.h:873, 879`, `MemoryIO.cpp` | `FreeImage_OpenMemory` and `FreeImage_AcquireMemory` remain bound to 32-bit `DWORD` |
-| **Low** | OMISSION-03 | Example Header Defect | `Examples/Generic/FIIO_Mem.h:21` | `fiio_mem_handle` struct retains 32-bit `long curpos, filelen, datalen` while `fiio_mem_SeekProc` was changed to `INT64` |
-| **Low** | OMISSION-04 | Wrapper Omission | `Wrapper/VB6/src/MFreeImage.bas:1002` | VB6 wrapper was omitted from the wrapper updates; stdcall stack layout changes need documentation |
-| **Low** | PRE-01 | Pre-existing Bug | `Source/FreeImage/PluginGIF.cpp:920, 1293` | Hardcoded `io->seek_proc(handle, 6, SEEK_SET)` breaks reading GIFs embedded in offset streams |
-| **Low** | PRE-02 | Overflow Vulnerability | `Source/FreeImage/PluginJXR.cpp:74` | `_jxr_io_SetPos` lacks upper bounds check against `INT64_MAX - fio->start` |
+| 1 | `PluginHEIF.cpp` | libheif needs the exact stream length. 7de5c34 removed `HEIF_MeasureStream()` with the capped tells it served, so a `FreeImageIO` whose `SEEK_END` fails loaded no HEIF: 43 of 43 test files failed, qpv loads them all. The probe is back: doubling, then bisection, single 64-bit seeks. | 7de5c34, all platforms | fb327b7 |
+| 2 | `PluginWebP.cpp` | The whole stream is read into `malloc(length + 1)` with `length = (size_t)(end - start)`. On Win32 a stream of 4 GB - 1 bytes made that `malloc(0)` followed by a 4 GB read into it. A length a `size_t` cannot hold with its spare byte is refused. | Win32 since 7de5c34 (Windows had it for any stream past 2 GB before) | this commit |
+| 3 | `PluginTARGA.cpp` `loadRLE` | The RLE cache is sized remaining bytes / rows, raised to at least a pixel, then cast to `size_t`. On Win32 a remainder past 4 GB could leave it under a pixel, and `getBytes()` handed out bytes past the allocation: garbage pixels under Wine. On 64-bit, `refill()` read `(unsigned)` of the size and zeroed the rest: black pixels, reproduced on Linux with qpv. The cache is capped at 16 MB. | Win32 since 7de5c34; 64-bit before it | this commit |
+| 4 | `Plugin.cpp`, `GetType.cpp`, `CacheFile.cpp`, `JPEGTransform.cpp` | On 32-bit POSIX, `fopen()` without large-file support fails on files over 2 GB (`EOVERFLOW`) and `ftruncate()` took a 32-bit `off_t`: `FreeImage_Load()`, `FreeImage_Save()`, the multi-page functions and the JPEG transforms stopped at 2 GB although `FreeImageIO.cpp` seeks in 64 bits. These files define `_FILE_OFFSET_BITS 64` as `FreeImageIO.cpp` does. Not in the makefiles: under it, zlib's `zconf.h` can rename `gzopen`, `gzseek` and others to their `*64` variants in every file that includes `zlib.h`, and the flag would reach every vendored library. | omission of 7de5c34 | this commit |
+| 5 | `MultiPage.cpp` | `FreeImage_LoadMultiBitmapFromMemory()` took the stream's start through `FreeImage_TellMemory()`, a `long`: on Windows, a stream positioned past 2 GB started at byte 0. | omission of 7de5c34 | this commit |
+| 6 | `FreeImageIO.cpp` | On 32-bit builds the 2 GB - 1 cap on memory streams also capped seeks in a wrapped buffer over 2 GB: `SEEK_END` failed. A wrapped buffer is now addressable whole; writes stay capped. Checked by inspection: the 32-bit Wine process here cannot reserve over 2 GB to run it. | omission of 7de5c34 | this commit |
+| 7 | `PluginG3.cpp`, `MNGHelper.cpp` | Explicit casts cut a G3 stream or an embedded PNG past 4 GB to 32 bits, so part of it was read; MNG's chunk skip added the CRC in 32 bits. Both are refused or computed in 64 bits. | 7de5c34 (explicit casts, invisible to `-Wshorten-64-to-32`) | this commit |
+| 8 | `PluginTIFF.cpp`, `PluginEXR.cpp`, `PluginRAW.cpp`, `PluginJXR.cpp` | Each adds a 64-bit offset from the file (BigTIFF IFD offsets, EXR chunk offsets, LibRaw's) to the stream's start: past `INT64_MAX` that is signed overflow. They refuse it; EXR throws `Iex::InputExc`, which OpenEXR's stream adapter catches, as its own streams do. | before 7de5c34 on LP64 | this commit |
+| 9 | `PluginICO.cpp` | The writer stored the stream's positions as the directory's offsets, while `Load` counts them from where the ICO starts: an icon saved to a stream not at byte 0 read back wrong, and a two-page save failed, since `Save` reads page 0 back. Past 4 GB the `DWORD` offsets wrapped. | before 7de5c34 (the loader became relative on qpv) | 608cb13 |
+| 10 | `PluginGIF.cpp` | `Load` read the logical screen at byte 6 of the stream: a GIF behind other data got a screen made of those bytes (a 12586 x 16184 canvas in the test with `GIF_PLAYBACK`). | upstream | 608cb13 |
+| 11 | `PluginTARGA.cpp` thumbnail | A thumbnail claiming more pixels than the bytes before the footer was copied out of a buffer of that size: AddressSanitizer reports a heap-buffer-overflow in `TargaThumbnail::toFIBITMAP()`. The data is checked against the claim, and no more than 255 x 255 x 4 bytes are read. | upstream | 608cb13 |
+| 12 | `PluginTARGA.cpp` `Save` | With the pixels ending past 4 GB, the extension area's offset was cut to 32 bits, the writer seeked back to it and wrote the thumbnail and the footer over the pixels, and `Save` returned `TRUE`. The extension area is left out, with a message. | before 7de5c34 on LP64; Windows since | 608cb13 |
+| 13 | `Examples/Generic/FIIO_Mem` | The seek stored the `INT64` offset in a `long` unchecked (on Windows a 3 GB offset became negative, and the next read came from before the buffer). It refuses what the `long` cannot hold. Its callbacks lacked `DLL_CALLCONV`: against a 32-bit FreeImage.dll it did not compile (5 errors). | narrowing since 7de5c34; calling convention upstream | this commit |
+| 14 | `TestAPI/IO`, `Examples/Generic/LoadFromHandle.cpp`, `Wrapper/VB6` | The tests failed on 32-bit Windows (`memstream` could not reserve 2.5 GB) and lacked large-file support on 32-bit POSIX; the example that shows `fseeko` did too. The VB6 module now says how VB6 passes the 64-bit offset (as `Currency`). | 7de5c34 | this commit |
 
----
+## The first report's claims
 
-## Detailed Analysis & Remediation
+| Claim | Verdict |
+|---|---|
+| BUG-01, `MultiPage.cpp` start through `FreeImage_TellMemory()` | Real: finding 5. The function is `FreeImage_LoadMultiBitmapFromMemory()`. |
+| BUG-02, ICO offsets | Real, older than the change: finding 9. |
+| BUG-03, `JPEGTransform.cpp` on 32-bit Linux | Real: finding 4, fixed per file rather than in `Makefile.gnu`, `Makefile.fip` and `Makefile.cygwin` as proposed (Cygwin's `off_t` is 64-bit anyway). |
+| BUG-04, tests without `_FILE_OFFSET_BITS` | The IO tests, which make files over 2 GB, and the `LoadFromHandle` example have it now. `testMPageStream`, `fipTestMPageStream` and the J2K and narrowio tests use small files: nothing to fix. |
+| BUG-05, `_tiffSeekProc` returning `-1 - start` | Not a defect: libtiff's `SeekOK()` compares the returned position with the one it asked for, so a failed tell cannot pass for a seek. The offset overflow next to it was real: finding 8. |
+| BUG-06, LibRaw `_start` not clamped | Not a defect: a stream whose tell fails when it is opened also fails the `SEEK_END` size probe, and LibRaw refuses a 0-byte stream. |
+| OMISSION-01/02, 64-bit memory exports | Not a bug: the exports keep their types by design, as the README says. See below. |
+| OMISSION-03, `FIIO_Mem.h` fields | Real: finding 13, fixed by bounding the position rather than widening the example's structure. |
+| OMISSION-04, VB6 | The module implements no callbacks; it now documents them: finding 14. |
+| PRE-01, GIF byte 6 | Real: finding 10. |
+| PRE-02, JXR `SetPos` overflow | Not reachable (jxrlib's positions come from 32-bit container fields); guarded anyway: finding 8. |
+| Platform matrix | The first report did not build 32-bit Linux or 32-bit Windows; see below. |
 
-### 1. BUG-01: Regression in `FreeImage_OpenMultiBitmapFromMemory` (`MultiPage.cpp`)
+## Verification
 
-#### Problem
-In `Source/FreeImage/MultiPage.cpp`:
-In `FreeImage_OpenMultiBitmapFromHandle` (line 602), the starting stream offset was updated to 64-bit:
-```cpp
-header->start = MAX(io->tell_proc(handle), (INT64)0);
-```
-However, in `FreeImage_OpenMultiBitmapFromMemory` (line 1335), the code still invokes `FreeImage_TellMemory`:
-```cpp
-SetMemoryIO(&header->io);
-header->handle = (fi_handle)stream;						
-header->start = MAX(FreeImage_TellMemory(stream), 0L);
-```
-Because `FreeImage_TellMemory` returns `long`, on Windows and 32-bit Linux any stream position exceeding `LONG_MAX` (2 GB) returns `-1L`. `MAX(-1L, 0L)` evaluates to `0L`, resetting `header->start` to 0. When pages are later locked or unlocked, seeks are performed relative to 0 rather than the multi-page document's actual position in the memory stream.
+| Target | Build | Result |
+|---|---|---|
+| Linux x86_64, gcc | `make -f Makefile.gnu` | testAPI and the IO, JXR, HEIF, AVIF, J2K, EXR, MNG, APNG, ICC, WebP, RAW and JPEG suites pass; IO and HEIF under AddressSanitizer; `bigsave` (2.2 GB) and `memstream --grow`. `g++ -Wall -Wextra` shows no new warning in the 41 changed sources. |
+| Linux x86, 32-bit | zig for x86-linux-gnu, the five files that open files | They reference `fopen64`, `fseeko64`, `ftello64` and `ftruncate64`; qpv's reference `fopen`, `fseek`, `ftell` and `ftruncate`. Not run: no 32-bit glibc here. |
+| Windows x86 | the whole library as FreeImage.dll with `__stdcall` exports (zig, MinGW-w64 headers); tests linked against its import library, run under Wine | `bigfile` (pages at 2.5 GB and 4.5 GB through `FreeImage_Load`, `FreeImage_LoadFromHandle`, `FreeImage_OpenMultiBitmap` and `FreeImage_OpenMultiBitmapFromHandle`, the TGA and WebP cases), `streams`, an in-place `FreeImage_JPEGCrop()` (the file cut with `_chsize_s`) and a disk-cached multi-page TIFF pass. `memstream` skips. Against the unfixed branch: `bigfile` 2 failures, `streams` 12. |
+| Windows x64 | static library, same programs | All pass, and `bigsave`: 2,209,282,234 bytes, IFD past 2 GB. |
+| Narrowing | `-Wshorten-64-to-32`, 41 changed sources, qpv vs the branch, x86_64- and x86-windows-gnu | No new narrowing. |
 
-#### Remediation
-Use `header->io.tell_proc` directly:
-```cpp
-SetMemoryIO(&header->io);
-header->handle = (fi_handle)stream;						
-header->start = MAX(header->io.tell_proc(header->handle), (INT64)0);
-```
+A differential test read 186 files (every tracked sample, and a generated file per writable format, multi-page and thumbnail variants included) through `FreeImage_Load`, a `FreeImageIO` at byte 0, behind 777 bytes of junk, with `SEEK_END` refused, header-only at byte 0 and behind junk, from memory, and page by page through both multi-page openers. qpv and the fixed branch give identical results on Linux, and their saved files are byte-identical. Windows x86 and x64 give Linux's results, except for three J2K files read with `SEEK_END` refused (the OpenJPEG assert below; Windows builds define `NDEBUG`) and, on x86 only, the two lossy DWAA/DWAB EXR files, whose floating-point decode differs under x87 on the unfixed branch too.
 
----
+## Seen, not fixed
 
-### 2. BUG-02: ICO Saved at Stream Offset or Past 4 GB Is Corrupted (`PluginICO.cpp`)
-
-#### Problem
-In `Source/FreeImage/PluginICO.cpp`:
-In `Load` (line 493), `icon_list[page].dwImageOffset` is treated as an offset relative to `state->start_pos`:
-```cpp
-io->seek_proc(handle, state->start_pos + (INT64)icon_list[page].dwImageOffset, SEEK_SET);
-```
-However, in `Save` (line 819):
-```cpp
-DWORD dwImageOffset = (DWORD)io->tell_proc(handle);
-...
-DWORD dwBytesInRes = (DWORD)io->tell_proc(handle) - dwImageOffset;
-icon_list[k].dwImageOffset = dwImageOffset;
-icon_list[k].dwBytesInRes  = dwBytesInRes;
-dwImageOffset += dwBytesInRes;
-```
-1. `io->tell_proc(handle)` is the **absolute** stream position, not the relative offset within the ICO data (`io->tell_proc(handle) - state->start_pos`). If an ICO is saved into a stream where `state->start_pos > 0`, `icon_list[k].dwImageOffset` stores `start_pos + local_offset`. When loaded back, `Load` seeks to `start_pos + (start_pos + local_offset)`, double-counting `start_pos`.
-2. If `io->tell_proc(handle)` exceeds 4 GB, the cast `(DWORD)io->tell_proc(handle)` truncates the upper 32 bits, producing invalid offsets.
-
-#### Remediation
-Calculate `dwImageOffset` and `dwBytesInRes` relative to `state->start_pos`:
-```cpp
-const INT64 start_pos = state->start_pos;
-INT64 current_pos = io->tell_proc(handle);
-if ((current_pos - start_pos) > (INT64)0xFFFFFFFFu) {
-    free(icon_list);
-    throw "ICO image offset exceeds 4 GB limit";
-}
-DWORD dwImageOffset = (DWORD)(current_pos - start_pos);
-
-for(k = 0; k < icon_header->idCount; k++) {
-    ...
-    INT64 after_image_pos = io->tell_proc(handle);
-    DWORD dwBytesInRes = (DWORD)(after_image_pos - start_pos) - dwImageOffset;
-    icon_list[k].dwImageOffset = dwImageOffset;
-    icon_list[k].dwBytesInRes  = dwBytesInRes;
-    dwImageOffset += dwBytesInRes;
-}
-```
-
----
-
-### 3. BUG-03: `JPEGTransform.cpp` Truncates 64-bit Offset on 32-bit Linux
-
-#### Problem
-In `Source/FreeImageToolkit/JPEGTransform.cpp`:
-```cpp
-const INT64 end = FreeImage_ftell64(f);
-if(end < 0) {
-    return;
-}
-#ifdef _WIN32
-if(_chsize_s(_fileno(f), end) != 0) {
-#else
-if(ftruncate(fileno(f), (off_t)end) != 0) {
-#endif
-```
-`JPEGTransform.cpp` does not define `_FILE_OFFSET_BITS 64`, nor is it passed in `Makefile.gnu` or `Makefile.fip`. On 32-bit Linux (glibc), `off_t` is a signed 32-bit integer (`long`). The cast `(off_t)end` truncates the 64-bit position to 32 bits, causing `ftruncate` to truncate the file to the wrong size when operating on files larger than 2 GB.
-
-#### Remediation
-Define `_FILE_OFFSET_BITS 64` before any includes in `JPEGTransform.cpp` (identical to `FreeImageIO.cpp`):
-```cpp
-#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
-#define _FILE_OFFSET_BITS 64
-#endif
-```
-Additionally, add `-D_FILE_OFFSET_BITS=64` to `COMPILERFLAGS` in `Makefile.gnu`, `Makefile.fip`, and `Makefile.cygwin`.
-
----
-
-### 4. BUG-04: Test Scripts and FreeImagePlus Narrow `(off_t)offset` on 32-bit Linux
-
-#### Problem
-In:
-- `Wrapper/FreeImagePlus/test/fipTestMPageStream.cpp` (lines 40-54)
-- `TestAPI/testMPageStream.cpp` (lines 47-61)
-- `TestAPI/J2K/corpus.c` (lines 75-76)
-- `TestAPI/JXR/narrowio.c` (lines 19-22)
-
-The callback implementations use:
-```cpp
-static int DLL_CALLCONV
-mySeekProc(fi_handle handle, INT64 offset, int origin) {
-#ifdef _WIN32
-    return _fseeki64((FILE *)handle, offset, origin);
-#else
-    return fseeko((FILE *)handle, (off_t)offset, origin);
-#endif
-}
-```
-None of these files define `_FILE_OFFSET_BITS 64`, nor do their respective test Makefiles specify `-D_FILE_OFFSET_BITS=64`. On 32-bit Linux, `(off_t)offset` truncates the 64-bit parameter back to 32 bits, re-introducing the 2 GB barrier.
-
-#### Remediation
-Add `#define _FILE_OFFSET_BITS 64` before includes or add `-D_FILE_OFFSET_BITS=64` to test Makefiles.
-
----
-
-### 5. BUG-05: `_tiffSeekProc` Returns Corrupted Error Offset in Offset Streams (`PluginTIFF.cpp`)
-
-#### Problem
-In `Source/FreeImage/PluginTIFF.cpp`:
-```cpp
-static toff_t
-_tiffSeekProc(thandle_t handle, toff_t off, int whence) {
-    fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-    if(whence == SEEK_SET) {
-        fio->io->seek_proc(fio->handle, fio->start + (INT64)off, SEEK_SET);
-    } else {
-        fio->io->seek_proc(fio->handle, (INT64)off, whence);
-    }
-    return (toff_t)(fio->io->tell_proc(fio->handle) - fio->start);
-}
-```
-1. LibTIFF's `toff_t` is `uint64_t`, and its error return sentinel is `(toff_t)-1` (`~0ULL`).
-2. If `tell_proc` returns `-1` (failure), `_tiffSeekProc` evaluates `(toff_t)(-1 - fio->start)`.
-   - If `fio->start == 0`, `(toff_t)(-1)` is returned, which matches `(toff_t)-1`.
-   - If `fio->start > 0` (e.g. `fio->start = 512`), `(toff_t)(-513)` is returned. LibTIFF does not recognize this as an error and assumes the seek succeeded at file position `0xFFFFFFFFFFFFFE00`.
-3. In addition, the return code of `seek_proc` is not inspected.
-
-#### Remediation
-```cpp
-static toff_t
-_tiffSeekProc(thandle_t handle, toff_t off, int whence) {
-    fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-    const INT64 target = (whence == SEEK_SET) ? (fio->start + (INT64)off) : (INT64)off;
-    if(fio->io->seek_proc(fio->handle, target, whence) != 0) {
-        return (toff_t)-1;
-    }
-    const INT64 pos = fio->io->tell_proc(fio->handle);
-    if(pos < fio->start) {
-        return (toff_t)-1;
-    }
-    return (toff_t)(pos - fio->start);
-}
-```
-
----
-
-### 6. BUG-06: `PluginRAW.cpp` Missing `_start` Clamping
-
-#### Problem
-In `Source/FreeImage/PluginRAW.cpp`:
-```cpp
-_start = io->tell_proc(handle);
-...
-INT64 tell() {
-    return _io->tell_proc(_handle) - _start;
-}
-```
-In `PluginTIFF.cpp`, `PluginEXR.cpp`, `PluginAVIF.cpp`, and `PluginHEIF.cpp`, `start` is clamped:
-```cpp
-const INT64 start = io->tell_proc(handle);
-fio->start = (start > 0) ? start : 0;
-```
-If `tell_proc` returns `-1` (e.g., non-seekable stream), `PluginRAW.cpp` stores `_start = -1`. Subsequent `tell()` calls return `pos - (-1)` = `pos + 1`, shifting all stream positions by 1 byte.
-
-#### Remediation
-Clamp `_start` in the constructor:
-```cpp
-const INT64 start = io->tell_proc(handle);
-_start = (start > 0) ? start : 0;
-```
-
----
-
-### 7. OMISSION-01: Public Memory API Exports Retain 32-Bit `long` Signatures
-
-#### Problem
-In `Source/FreeImage.h` and `Source/FreeImage/MemoryIO.cpp`:
-```c
-DLL_API long DLL_CALLCONV FreeImage_TellMemory(FIMEMORY *stream);
-DLL_API BOOL DLL_CALLCONV FreeImage_SeekMemory(FIMEMORY *stream, long offset, int origin);
-```
-While `FreeImageIO` callbacks (`FI_SeekProc`, `FI_TellProc`) were expanded to `INT64`, `FreeImage_SeekMemory` and `FreeImage_TellMemory` were kept as `long`.
-- On Windows (both 32-bit and 64-bit) and 32-bit Linux, `long` is 32-bit signed (`LONG_MAX = 2147483647`).
-- External callers cannot seek to an offset > 2 GB via `FreeImage_SeekMemory(stream, 2500000000LL, SEEK_SET)`.
-- If a memory stream has grown past 2 GB, `FreeImage_TellMemory` returns `-1L`.
-- `FreeImagePlus` (`fipMemoryIO::tell()`, `fipMemoryIO::seek()`) and `FreeImage.NET` (`FreeImage.TellMemory()`, `FreeImage.SeekMemory()`) inherit this 2 GB restriction.
-
-#### Recommendation
-To preserve existing binary compatibility while allowing 64-bit memory stream operations, provide 64-bit export variants:
-```c
-DLL_API INT64 DLL_CALLCONV FreeImage_TellMemory64(FIMEMORY *stream);
-DLL_API BOOL  DLL_CALLCONV FreeImage_SeekMemory64(FIMEMORY *stream, INT64 offset, int origin);
-```
-
----
-
-### 8. OMISSION-02: User-Buffer Memory Streams Limited to 32-Bit `DWORD`
-
-#### Problem
-In `Source/FreeImage.h`:
-```c
-DLL_API FIMEMORY *DLL_CALLCONV FreeImage_OpenMemory(BYTE *data FI_DEFAULT(0), DWORD size_in_bytes FI_DEFAULT(0));
-DLL_API BOOL DLL_CALLCONV FreeImage_AcquireMemory(FIMEMORY *stream, BYTE **data, DWORD *size_in_bytes);
-```
-- `FreeImage_OpenMemory` takes `DWORD size_in_bytes` (32 bits). Callers cannot wrap a memory buffer larger than 4 GB on 64-bit platforms.
-- `FreeImage_AcquireMemory` returns `FALSE` if the memory stream exceeds 4 GB.
-
-#### Recommendation
-Provide 64-bit export variants taking `size_t` or `UINT64`:
-```c
-DLL_API FIMEMORY *DLL_CALLCONV FreeImage_OpenMemory64(BYTE *data, UINT64 size_in_bytes);
-DLL_API BOOL DLL_CALLCONV FreeImage_AcquireMemory64(FIMEMORY *stream, BYTE **data, UINT64 *size_in_bytes);
-```
-
----
-
-### 9. OMISSION-03: `Examples/Generic/FIIO_Mem.h` Retains 32-bit Struct Fields
-
-#### Problem
-In `Examples/Generic/FIIO_Mem.h`:
-```c
-typedef struct fiio_mem_handle_s {
-    long filelen, datalen, curpos;
-    void *data;
-} fiio_mem_handle;
-```
-In `Examples/Generic/FIIO_Mem.cpp`:
-```cpp
-int fiio_mem_SeekProc(fi_handle handle, INT64 offset, int origin) {
-    ...
-    case SEEK_SET:
-        if( offset >= 0 ) {
-            FIIOMEM(curpos) = offset; // <--- assigns INT64 to long
-            return 0;
-        }
-```
-`fiio_mem_SeekProc` was updated to `INT64 offset`, but `fiio_mem_handle` kept `long curpos`. On Windows and 32-bit Linux, assigning `INT64 offset` to `long curpos` narrows and overflows.
-
-#### Remediation
-Update `fiio_mem_handle`:
-```c
-typedef struct fiio_mem_handle_s {
-    INT64 filelen, datalen, curpos;
-    void *data;
-} fiio_mem_handle;
-```
-
----
-
-### 10. OMISSION-04: Visual Basic 6 Wrapper (`Wrapper/VB6/src/MFreeImage.bas`)
-
-#### Problem
-`Wrapper/VB6/src/MFreeImage.bas` was untouched:
-```vb
-Public Type FreeImageIO
-   read_proc As Long
-   write_proc As Long
-   seek_proc As Long
-   tell_proc As Long
-End Type
-```
-In 32-bit x86 stdcall:
-- `FI_SeekProc` changed from 3 arguments totaling 12 bytes (`handle`, `long offset`, `origin`) to 16 bytes (`handle`, `INT64 offset` [8 bytes], `origin`).
-- `FI_TellProc` changed from returning 32-bit in `EAX` to 64-bit in `EDX:EAX`.
-If any VB6 application implements custom callbacks using standard VB6 types (`ByVal Offset As Long`), stdcall stack corruption will occur upon invocation.
-
-#### Remediation
-Update comments in `MFreeImage.bas` and `WhatsNew_VB.txt` to clearly explain that `FreeImageIO` callbacks now require 64-bit integer handling (`Currency` or low/high dwords on VB6).
-
----
-
-### 11. PRE-01 & PRE-02: Plugin Edge Cases (`PluginGIF.cpp` & `PluginJXR.cpp`)
-
-1. **`PluginGIF.cpp` Lines 920 & 1293**:
-   `io->seek_proc(handle, 6, SEEK_SET);`
-   Seeks to byte 6 of the stream unconditionally instead of `stream_start + 6`. When a GIF is opened from an offset stream (e.g. at an offset inside another container), playback and canvas dimensions fail to load.
-   *Remediation*: Save `stream_start = io->tell_proc(handle);` in `Open()` and seek to `stream_start + 6`.
-
-2. **`PluginJXR.cpp` Line 74**:
-   `fio->io->seek_proc(fio->handle, fio->start + (INT64)offPos, SEEK_SET);`
-   `offPos` is `size_t` (unsigned 64-bit on 64-bit platforms). If `offPos > INT64_MAX - fio->start`, `fio->start + (INT64)offPos` overflows into negative numbers.
-   *Remediation*: Check `if (offPos > (size_t)(std::numeric_limits<INT64>::max() - fio->start)) return WMP_errFileIO;`.
-
----
-
-## Platform Verification Matrix
-
-| Target | Build Toolchain | Core Compiles | `-Wshorten-64-to-32` Clean | Test Suites Status |
-|---|---|:---:|:---:|---|
-| **Linux x86_64** | gcc / g++ 15.0 | Yes | Yes | All tests pass (`testAPI`, `IO`, `AVIF`, `HEIF`, `JXR`) |
-| **Linux x86 (32-bit)** | gcc / g++ `-m32` | Yes (syntax) | Yes | **Requires `-D_FILE_OFFSET_BITS=64`** in Makefiles and headers |
-| **Windows x86_64** | zig clang++ `x86_64-windows-gnu` | Yes | Yes | Zero narrowing warnings on changed files |
-| **Windows x86 (32-bit)** | zig clang++ `x86-windows-gnu` | Yes | Yes | Zero narrowing warnings on changed files |
-
----
-
-## Conclusion & Action Checklist
-
-The `worktree-io64` branch achieves its primary goal of enabling 64-bit file stream positioning in FreeImage. To make it completely robust and production-ready across Linux and Windows (32-bit and 64-bit), the following corrections should be applied:
-
-- [ ] **Fix `MultiPage.cpp:1335`**: Replace `FreeImage_TellMemory(stream)` with `header->io.tell_proc(header->handle)`.
-- [ ] **Fix `PluginICO.cpp:819, 843`**: Make `dwImageOffset` relative to `state->start_pos` in `Save()`.
-- [ ] **Fix `JPEGTransform.cpp`**: Add `#define _FILE_OFFSET_BITS 64` before includes.
-- [ ] **Fix Makefiles**: Add `-D_FILE_OFFSET_BITS=64` to `Makefile.gnu`, `Makefile.fip`, `Makefile.cygwin`, and `TestAPI/Makefile`.
-- [ ] **Fix `PluginTIFF.cpp:161`**: Return `(toff_t)-1` on seek failure instead of `(toff_t)(-1 - fio->start)`.
-- [ ] **Fix `PluginRAW.cpp:52`**: Clamp `_start = (start > 0) ? start : 0;`.
-- [ ] **Fix `FIIO_Mem.h`**: Change `curpos`, `filelen`, `datalen` to `INT64`.
-- [ ] **Add 64-bit Memory Exports**: Provide `FreeImage_SeekMemory64`, `FreeImage_TellMemory64`, `FreeImage_OpenMemory64`, and `FreeImage_AcquireMemory64`.
+- OpenJPEG asserts `m_user_data_length >= m_byte_offset` when a J2K or JP2 stream's length is unknown (its `SEEK_END` fails), although 0 means unknown there. `Makefile.gnu` builds without `NDEBUG`, so the Linux library aborts (qpv too); builds with `NDEBUG` fail the load cleanly.
+- `Makefile.mingw` lacks `-DAVIF_ENABLE_EXPERIMENTAL_MINI=1`, which every other build defines: a MinGW build does not read mini AVIF files, which fall to the HEIF plugin and fail.
+- The memory stream exports keep 32-bit types: `FreeImage_OpenMemory()` and `FreeImage_AcquireMemory()` take a `DWORD`, `FreeImage_SeekMemory()` and `FreeImage_TellMemory()` a `long`. A stream past 4 GB cannot be wrapped or acquired, and on Windows a position past 2 GB cannot be told or seeked to through them. Widening them means new exports and wrapper updates: a decision for the maintainer.
+- On macOS `int64_t` is `long long`, so, as on Windows, a C++ `FreeImageIO` written with `long` callbacks no longer compiles (the binaries stay compatible).
+- The Managed C++ wrapper's `SeekProc` (`FreeImageIO.Net.cpp`) returns `Stream::Seek()`'s new position where FreeImage expects 0; the file uses Managed Extensions syntax (`__nogc`), which current compilers no longer build.
+- `mng_CopyRemoveChunks()` allocates the stream's size plus the chunk's for a removal and writes it all back, leaving uninitialised bytes after IEND in the in-memory PNG; the decoder stops at IEND.
+- `libfreeimage.so` exports one weak `std::vector` instantiation for `long` instead of `unsigned long`, from GIF's offset vectors: harmless.

@@ -24,6 +24,11 @@
 #pragma warning (disable : 4786) // identifier was truncated to 'number' characters
 #endif 
 
+// files over 2 GB on 32-bit POSIX; must precede every include
+#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include "FreeImage.h"
 #include "Utilities.h"
 #include "FreeImageIO.h"

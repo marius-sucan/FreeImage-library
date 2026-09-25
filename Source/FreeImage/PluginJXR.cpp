@@ -71,6 +71,9 @@ _jxr_io_Write(WMPStream* pWS, const void* pv, size_t cb) {
 static ERR
 _jxr_io_SetPos(WMPStream* pWS, size_t offPos) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
+	if((UINT64)offPos > (UINT64)((std::numeric_limits<INT64>::max)() - fio->start)) {
+		return WMP_errFileIO;
+	}
 	if(fio->io->seek_proc(fio->handle, fio->start + (INT64)offPos, SEEK_SET) != 0) {
 		return WMP_errFileIO;
 	}

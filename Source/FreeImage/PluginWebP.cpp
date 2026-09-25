@@ -118,6 +118,10 @@ ReadFileToWebPData(FreeImageIO *io, fi_handle handle, WebPData * const bitstream
 	  if(end_pos < start_pos) {
 		  throw "Error while reading input stream";
 	  }
+	  // a 32-bit size_t may not hold the stream and its spare byte
+	  if((UINT64)(end_pos - start_pos) >= (UINT64)(std::numeric_limits<size_t>::max)()) {
+		  throw FI_MSG_ERROR_MEMORY;
+	  }
 	  const size_t file_length = (size_t)(end_pos - start_pos);
 	  // one byte spare: a cut image chunk may need a pad byte
 	  raw_data = (uint8_t*)malloc(file_length + 1);

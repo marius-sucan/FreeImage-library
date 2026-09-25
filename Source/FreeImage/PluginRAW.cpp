@@ -72,20 +72,25 @@ public:
 
 	// LibRaw offsets are relative to where the stream started
     int seek(INT64 offset, int origin) {
-		INT64 target;
+		INT64 base;
 
 		switch(origin) {
 			case SEEK_SET:
-				target = _start + offset;
+				base = _start;
 				break;
 			case SEEK_END:
-				target = _eof + offset;
+				base = _eof;
 				break;
 			case SEEK_CUR:
 			default:
-				target = _io->tell_proc(_handle) + offset;
+				base = _io->tell_proc(_handle);
 				break;
 		}
+		// an offset from the file may not fit past the base
+		if((base < 0) || (offset > (std::numeric_limits<INT64>::max)() - base)) {
+			return -1;
+		}
+		const INT64 target = base + offset;
 		if(target < _start) {
 			return -1;
 		}

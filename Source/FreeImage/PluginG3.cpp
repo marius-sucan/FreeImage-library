@@ -87,7 +87,11 @@ G3GetFileSize(FreeImageIO *io, fi_handle handle) {
     io->seek_proc(handle, 0, SEEK_END);
     INT64 fileSize = io->tell_proc(handle);
     io->seek_proc(handle, currentPos, SEEK_SET);
-    return (fileSize > currentPos) ? (tmsize_t)(fileSize - currentPos) : 0;
+    // 0 when there is nothing to read or a 32-bit tmsize_t cannot hold it
+    if((fileSize <= currentPos) || ((UINT64)(fileSize - currentPos) > (UINT64)(std::numeric_limits<tmsize_t>::max)())) {
+        return 0;
+    }
+    return (tmsize_t)(fileSize - currentPos);
 }
 
 static BOOL 

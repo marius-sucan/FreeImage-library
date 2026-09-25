@@ -80,6 +80,10 @@ public:
 	}
 
 	virtual void seekg(uint64_t pos) {
+		// a chunk offset from the file may not fit past the start
+		if(pos > (uint64_t)((std::numeric_limits<INT64>::max)() - _start)) {
+			throw Iex::InputExc("Invalid seek position");
+		}
 		_io->seek_proc(_handle, _start + (INT64)pos, SEEK_SET);
 	}
 
@@ -117,6 +121,9 @@ public:
 	}
 
 	virtual void seekp(uint64_t pos) {
+		if(pos > (uint64_t)((std::numeric_limits<INT64>::max)() - _start)) {
+			throw Iex::IoExc("Invalid seek position");
+		}
 		_io->seek_proc(_handle, _start + (INT64)pos, SEEK_SET);
 	}
 };

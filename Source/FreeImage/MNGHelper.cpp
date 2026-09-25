@@ -317,7 +317,7 @@ mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, INT64 inPos, unsigned *m_T
 			if(mPos + (INT64)mLength + 4 > mLOF) {
 				throw(1);
 			}
-			io->seek_proc(handle, mLength + 4, SEEK_CUR);
+			io->seek_proc(handle, (INT64)mLength + 4, SEEK_CUR);
 
 			switch( mng_GetChunckType(mChunkName) ) {
 				case IHDR:
@@ -327,10 +327,16 @@ mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, INT64 inPos, unsigned *m_T
 					break;
 				
 				case IEND:
+				{
 					mEnd = TRUE;		
 					// the length below includes 4 bytes CRC, but no bytes for Length
-					*m_TotalBytesOfChunks = (unsigned)(io->tell_proc(handle) - inPos);
-					break;		
+					const INT64 total = io->tell_proc(handle) - inPos;
+					if((total <= 0) || (total > (INT64)0xFFFFFFFFu)) {
+						throw(1);
+					}
+					*m_TotalBytesOfChunks = (unsigned)total;
+					break;
+				}
 				
 				case UNKNOWN_CHUNCK:
 				default:

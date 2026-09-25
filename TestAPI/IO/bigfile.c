@@ -157,12 +157,97 @@ static void test_file(const char *name, INT64 strip) {
     remove(path);
 }
 
+/* --- sizes taken from a file 4 GB long ----------------------------------------- */
+
+/* extend an open file to 'size' bytes: a hole, then one byte */
+static int extend_sparse(FILE *f, INT64 size) {
+    return fi_fseek64(f, size - 1, SEEK_SET) == 0 && fputc(0, f) != EOF;
+}
+
+/* a 4 x 1 RLE TGA with 4 GB + 1 byte after its header: the read cache is sized from what follows */
+static void test_tga_rle(void) {
+    const char *path = tmppath("fi_io_big.tga");
+    BYTE header[18], packet[4] = { 0x83, 0x11, 0x5A, 0xA5 };	/* a run of 4 pixels, B G R */
+    FIBITMAP *dib;
+    FILE *f;
+    int ok = 0, x;
+
+    printf("fi_io_big.tga: a 4 x 1 RLE TGA, 4 GB of other data after its pixels\n");
+    memset(header, 0, sizeof(header));
+    header[2] = 10;		/* RLE true colour */
+    header[12] = 4;		/* width */
+    header[14] = 1;		/* height */
+    header[16] = 24;
+    header[17] = 0x20;	/* top-left origin */
+    f = fopen(path, "wb");
+    ok = f && fwrite(header, 1, sizeof(header), f) == sizeof(header) && fwrite(packet, 1, sizeof(packet), f) == sizeof(packet)
+        && extend_sparse(f, (INT64)sizeof(header) + ((INT64)1 << 32) + 1);
+    if (f && fclose(f) != 0) ok = 0;
+    if (!ok) { report("write the sparse TGA", 0); remove(path); return; }
+
+    dib = FreeImage_Load(FIF_TARGA, path, 0);
+    ok = dib && FreeImage_GetWidth(dib) == 4 && FreeImage_GetHeight(dib) == 1 && FreeImage_GetBPP(dib) == 24;
+    for (x = 0; ok && x < 4; x++) {
+        const BYTE *p = FreeImage_GetScanLine(dib, 0) + x * 3;
+        ok = p[0] == 0x11 && p[1] == 0x5A && p[2] == 0xA5;
+    }
+    report("FreeImage_Load, every pixel", ok);
+    if (dib) FreeImage_Unload(dib);
+    remove(path);
+}
+
+/* stdio reads that note the largest request and refuse, writing nothing, one over 1 MB */
+static size_t largest_read = 0;
+static unsigned DLL_CALLCONV rd_bounded(void *b, unsigned s, unsigned c, fi_handle h) {
+    const size_t n = (size_t)s * c;
+    if (n > largest_read) largest_read = n;
+    return (n > ((size_t)1 << 20)) ? 0 : (unsigned)fread(b, s, c, (FILE *)h);
+}
+
+/* a WebP and 4 GB - 1 bytes in all: a 32-bit size_t cannot hold the stream and its spare byte */
+static void test_webp_4g(void) {
+    const char *path = tmppath("fi_io_big.webp");
+    FIBITMAP *dib = FreeImage_Allocate(16, 16, 24, 0, 0, 0);
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BYTE *bytes = NULL;
+    DWORD size = 0;
+    FILE *f;
+    int ok;
+
+    printf("fi_io_big.webp: a WebP, then other data up to 4 GB - 1 bytes\n");
+    if (sizeof(size_t) > 4) {
+        printf("  (32-bit builds only)\n");
+    } else {
+        ok = FreeImage_SaveToMemory(FIF_WEBP, dib, mem, WEBP_LOSSLESS) && FreeImage_AcquireMemory(mem, &bytes, &size);
+        f = ok ? fopen(path, "wb") : NULL;
+        ok = f && fwrite(bytes, 1, size, f) == size && extend_sparse(f, (INT64)0xFFFFFFFFu);
+        if (f && fclose(f) != 0) ok = 0;
+        if (!ok) {
+            report("write the sparse WebP", 0);
+        } else {
+            /* the old code allocated 0 bytes and read the 4 GB into them */
+            FreeImageIO io = { rd_bounded, wr, sk, tl };
+            FIBITMAP *d = NULL;
+            f = fopen(path, "rb");
+            largest_read = 0;
+            if (f) { d = FreeImage_LoadFromHandle(FIF_WEBP, &io, (fi_handle)f, 0); fclose(f); }
+            report("FreeImage_LoadFromHandle refuses it before reading it", f && d == NULL && largest_read <= ((size_t)1 << 20));
+            if (d) FreeImage_Unload(d);
+        }
+        remove(path);
+    }
+    FreeImage_CloseMemory(mem);
+    FreeImage_Unload(dib);
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     FreeImage_Initialise(FALSE);
     printf("FreeImage %s, %s positions\n", FreeImage_GetVersion(), sizeof(FI_TEST_OFF_T) == 8 ? "64-bit" : "32-bit");
     test_file("fi_io_big2g.tif", (INT64)0xA0000000);      /* 2.5 GB */
     test_file("fi_io_big4g.tif", (INT64)0x120000000);     /* 4.5 GB */
+    test_tga_rle();
+    test_webp_4g();
     FreeImage_DeInitialise();
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;

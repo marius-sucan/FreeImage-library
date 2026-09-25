@@ -1332,7 +1332,7 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 						header->fif = fif;
 						SetMemoryIO(&header->io);
 						header->handle = (fi_handle)stream;						
-						header->start = MAX(FreeImage_TellMemory(stream), 0L);
+						header->start = MAX(header->io.tell_proc(header->handle), (INT64)0);
 						header->read_only = read_only;
 						header->cache_fif = fif;
 						header->load_flags = flags;

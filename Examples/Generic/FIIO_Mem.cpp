@@ -55,7 +55,7 @@ SetMemIO(FreeImageIO *io) {
 
 #define FIIOMEM(member) (((fiio_mem_handle *)handle)->member)
 
-unsigned
+unsigned DLL_CALLCONV
 fiio_mem_ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	unsigned x;
 	for( x=0; x<count; x++ ) {
@@ -72,7 +72,7 @@ fiio_mem_ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle)
 	return x;
 }
 
-unsigned
+unsigned DLL_CALLCONV
 fiio_mem_WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	void *newdata;
 	long newdatalen;
@@ -107,36 +107,34 @@ fiio_mem_WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle
 	return count;
 }
 
-int
+int DLL_CALLCONV
 fiio_mem_SeekProc(fi_handle handle, INT64 offset, int origin) {
+	INT64 base;
+
 	switch(origin) { //0 to filelen-1 are 'inside' the file
 	default:
-	case SEEK_SET: //can fseek() to 0-7FFFFFFF always
-		if( offset >= 0 ) {
-			FIIOMEM(curpos) = offset;
-			return 0;
-		}
+	case SEEK_SET:
+		base = 0;
 		break;
 
 	case SEEK_CUR:
-		if( FIIOMEM(curpos)+offset >= 0 ) {
-			FIIOMEM(curpos) += offset;
-			return 0;
-		}
+		base = FIIOMEM(curpos);
 		break;
 
 	case SEEK_END:
-		if( FIIOMEM(filelen)+offset >= 0 ) {
-			FIIOMEM(curpos) = FIIOMEM(filelen)+offset;
-			return 0;
-		}
+		base = FIIOMEM(filelen);
 		break;
 	}
 
-	return -1;
+	//the handle holds a long: 0-7FFFFFFF only
+	if( (offset < -base) || (offset > 0x7FFFFFFF - base) ) {
+		return -1;
+	}
+	FIIOMEM(curpos) = (long)(base + offset);
+	return 0;
 }
 
-INT64
+INT64 DLL_CALLCONV
 fiio_mem_TellProc(fi_handle handle) {
 	return FIIOMEM(curpos);
 }

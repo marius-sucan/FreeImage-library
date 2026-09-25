@@ -1002,6 +1002,7 @@ End Type
 Public Type FreeImageIO
    read_proc As Long
    write_proc As Long
+   ' seek_proc's offset and tell_proc's result are 64-bit: VB6 passes them as Currency (bytes / 10000)
    seek_proc As Long
    tell_proc As Long
 End Type

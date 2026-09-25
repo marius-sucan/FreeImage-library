@@ -224,8 +224,9 @@ _MemorySeekProc(fi_handle handle, INT64 offset, int origin) {
 			break;
 	}
 
-	// the pointer can also be positioned beyond the end of the file
-	if ((offset < -base) || (offset > FI_MEMORY_MAX - base)) {
+	// the pointer can also be positioned beyond the end of the file; a wrapped buffer is addressable whole
+	const INT64 limit = MAX(FI_MEMORY_MAX, mem_header->data_length);
+	if ((offset < -base) || (offset > limit - base)) {
 		return -1;
 	}
 

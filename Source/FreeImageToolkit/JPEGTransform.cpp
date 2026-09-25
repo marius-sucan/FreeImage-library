@@ -21,6 +21,11 @@
 // Use at your own risk!
 // ==========================================================
 
+// files over 2 GB and ftruncate() on 32-bit POSIX; must precede every include
+#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
+
 extern "C" {
 #define XMD_H
 #undef FAR

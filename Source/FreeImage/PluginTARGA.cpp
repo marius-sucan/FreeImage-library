@@ -647,6 +647,11 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 		sz = file_pixel_size;
 	}
 
+	// ...and at most 16 MB, far above any line, so a 32-bit size_t holds it
+	if (sz > ((INT64)1 << 24)) {
+		sz = (INT64)1 << 24;
+	}
+
 	// ...and allocate cache of this size (yields good results)
 	IOCache cache(io, handle, (size_t)sz);
 	if(cache.isNull()) {

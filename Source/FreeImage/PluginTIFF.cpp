@@ -154,6 +154,10 @@ static toff_t
 _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
 	if(whence == SEEK_SET) {
+		// a BigTIFF offset from the file may not fit past the start
+		if(off > (toff_t)((std::numeric_limits<INT64>::max)() - fio->start)) {
+			return (toff_t)-1;
+		}
 		fio->io->seek_proc(fio->handle, fio->start + (INT64)off, SEEK_SET);
 	} else {
 		fio->io->seek_proc(fio->handle, (INT64)off, whence);

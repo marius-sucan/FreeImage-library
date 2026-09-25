@@ -19,8 +19,9 @@ ASAN_SRCS   = PluginTARGA PluginICO PluginGIF FreeImageIO MultiPage MemoryIO
 default: all
 all: $(TESTS)
 
+# 64-bit off_t for the test's own stdio on 32-bit POSIX
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
-	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
+	gcc $(CFLAGS) -D_FILE_OFFSET_BITS=64 $(INC) $< -o $@ $(LIB)
 
 run: all
 	@for t in bigfile memstream streams; do echo "=== $$t ==="; ./$$t || exit 1; done
@@ -29,7 +30,7 @@ run: all
 asan-run: streams.c ../../Dist/libfreeimage.a
 	rm -rf asan-obj && mkdir -p asan-obj
 	for f in $(ASAN_SRCS); do g++ -c $(LIBCXXFLAGS) $(LIBINC) -fsanitize=address -fno-omit-frame-pointer ../../Source/FreeImage/$$f.cpp -o asan-obj/$$f.o || exit 1; done
-	gcc $(CFLAGS) -fsanitize=address $(INC) streams.c -o streams-asan asan-obj/*.o $(LIB)
+	gcc $(CFLAGS) -fsanitize=address -D_FILE_OFFSET_BITS=64 $(INC) streams.c -o streams-asan asan-obj/*.o $(LIB)
 	ASAN_OPTIONS=detect_leaks=0 ./streams-asan
 
 # 2.2 GB of RAM and of disk; --full reloads the file too (2.2 GB more RAM)
