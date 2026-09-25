@@ -8,6 +8,11 @@
 ; Change log:
 ; =============================
 ;
+; 24 September 2026 - v2.02
+; - added the color management functions (ICC profiles, Little CMS): FreeImage_ConvertToICCProfile(), FreeImage_ApplyICCProfile(),
+;   FreeImage_ConvertToCMYK(), FreeImage_ConvertCMYKToRGB(), FreeImage_SoftProof(), FreeImage_GetBuiltInICCProfile(),
+;   FreeImage_GetICCProfileDescription(), FreeImage_GetICCProfileColorSpace() and FreeImage_GetICCProfileData()
+;
 ; 23 September 2026 - v2.01
 ; - FreeImage_FillBackground() takes three parameters again, as in FreeImage 3.18; options 8 (FI_COLOR_SET_ALPHA) replaces applyAlpha
 ;
@@ -1031,6 +1036,70 @@ FreeImage_DestroyICCProfile(hImage) {
    Return DllCall(getFIMfunc("DestroyICCProfile"), "UPtr", hImage)
 }
 
+FreeImage_GetICCProfileData(hImage, ByRef size) {
+; returns a pointer to the image's own ICC profile, 0 if it has none; size receives its byte count
+   pICC := FreeImage_GetICCProfile(hImage)
+   size := pICC ? NumGet(pICC + 0, 4, "UInt") : 0
+   Return (pICC && size) ? NumGet(pICC + 0, 8, "UPtr") : 0
+}
+
+; === Color management (ICC profiles, Little CMS) ===
+; A profile is a block of ICC bytes: pProfile and profileSize; pProfile 0 means FreeImage's default space
+; (sRGB, linear sRGB for float images, grey sRGB for greyscale ones) and leaves the result untagged.
+; flags - the rendering intent: 0 perceptual, 1 relative colorimetric, 2 saturation, 3 absolute colorimetric
+;         + 0x100 black point compensation; FreeImage_SoftProof() also takes 0x200 gamut check, 0x400 paper white
+; The source is the image's embedded profile when it describes the pixels, else the default of its type.
+
+FreeImage_ConvertToICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
+; returns a new image in the color model of the profile (RGB, grey or CMYK), tagged with it
+   Return DllCall(getFIMfunc("ConvertToICCProfile"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags, "UPtr")
+}
+
+FreeImage_ApplyICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
+; FreeImage_ConvertToICCProfile() in place, for showing an image: a palette changes its colors,
+; a CMYK image becomes RGBA with opaque alpha
+; Return value: 1 -- succes; 0 -- fail, or the pixel format would change
+   Return DllCall(getFIMfunc("ApplyICCProfile"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags)
+}
+
+FreeImage_ConvertToCMYK(hImage, pProfile:=0, profileSize:=0, flags:=0) {
+; pProfile - a CMYK profile; 0 - the device CMYK of FreeImage's loaders; returns 32-bit or 64-bit CMYK
+; with pProfile 0, an image that is already CMYK comes back as a copy, its profile kept
+   Return DllCall(getFIMfunc("ConvertToCMYK"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags, "UPtr")
+}
+
+FreeImage_ConvertCMYKToRGB(hImage, pProfile:=0, profileSize:=0, flags:=0) {
+; for a CMYK image (loaded with JPEG_CMYK, TIFF_CMYK or PSD_CMYK); pProfile - an RGB profile, 0 - sRGB
+   Return DllCall(getFIMfunc("ConvertCMYKToRGB"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags, "UPtr")
+}
+
+FreeImage_SoftProof(hImage, pProofProfile, proofSize, pDisplayProfile:=0, displaySize:=0, flags:=0) {
+; shows how the proofing device (a printer profile) would reproduce the image on the display
+   Return DllCall(getFIMfunc("SoftProof"), "UPtr", hImage, "UPtr", pProofProfile, "UInt", proofSize, "UPtr", pDisplayProfile, "UInt", displaySize, "Int", flags, "UPtr")
+}
+
+FreeImage_GetBuiltInICCProfile(profileID, ByRef size) {
+; profileID: 0 sRGB, 1 linear sRGB, 2 grey, 3 linear grey, 4 Adobe RGB (1998) compatible, 5 Display P3, 6 ProPhoto RGB
+; returns a pointer owned by FreeImage, valid until it unloads; size receives its byte count
+   Return DllCall(getFIMfunc("GetBuiltInICCProfile"), "Int", profileID, "UInt*", size, "UPtr")
+}
+
+FreeImage_GetICCProfileDescription(pProfile, profileSize) {
+; returns the profile's description, e.g. "Adobe RGB (1998)"; empty for an invalid profile
+   n := DllCall(getFIMfunc("GetICCProfileDescription"), "UPtr", pProfile, "UInt", profileSize, "UPtr", 0, "UInt", 0, "UInt")
+   If !n
+      Return ""
+
+   VarSetCapacity(buf, n, 0)
+   DllCall(getFIMfunc("GetICCProfileDescription"), "UPtr", pProfile, "UInt", profileSize, "UPtr", &buf, "UInt", n, "UInt")
+   Return StrGet(&buf, "UTF-8")
+}
+
+FreeImage_GetICCProfileColorSpace(pProfile, profileSize) {
+; returns 0x52474220 RGB, 0x434D594B CMYK, 0x47524159 grey, 0x4C616220 Lab, other ICC color spaces; 0 -- not a valid profile
+   Return DllCall(getFIMfunc("GetICCProfileColorSpace"), "UPtr", pProfile, "UInt", profileSize, "UInt")
+}
+
 ; === Plugin functions ===
 
 FreeImage_GetFIFCount() {
@@ -1843,11 +1912,11 @@ getFIMfunc(funct) {
 
    Static fList0 := "|CreateTag|DeInitialise|GetCopyrightMessage|GetFIFCount|GetVersion|IsLittleEndian|"
         , fList4 := "|Clone|CloneTag|CloseMemory|ConvertTo16Bits555|ConvertTo16Bits565|ConvertTo24Bits|ConvertTo32Bits|ConvertTo4Bits|ConvertTo8Bits|ConvertToFloat|ConvertToGreyscale|ConvertToRGB16|ConvertToRGBA16|ConvertToRGBAF|ConvertToRGBF|ConvertToUINT16|DeleteTag|DestroyICCProfile|FIFSupportsICCProfiles|FIFSupportsNoPixels|FIFSupportsReading|FIFSupportsWriting|FindCloseMetadata|FlipHorizontal|FlipVertical|GetBits|GetBlueMask|GetBPP|GetColorsUsed|GetColorType|GetDIBSize|GetDotsPerMeterX|GetDotsPerMeterY|GetFIFDescription|GetFIFExtensionList|GetFIFFromFilename|GetFIFFromFilenameU|GetFIFFromFormat|GetFIFFromMime|GetFIFMimeType|GetFIFRegExpr|GetFormatFromFIF|GetGreenMask|GetHeight|GetICCProfile|GetImageType|GetInfo|GetInfoHeader|GetLine|GetMemorySize|GetPageCount|GetPalette|GetPitch|GetRedMask|GetTagCount|GetTagDescription|GetTagID|GetTagKey|GetTagLength|GetTagType|GetTagValue|GetThumbnail|GetTransparencyCount|GetTransparencyTable|GetTransparentIndex|GetWidth|HasBackgroundColor|HasPixels|HasRGBMasks|Initialise|Invert|IsPluginEnabled|IsTransparent|PreMultiplyWithAlpha|SetOutputMessage|SetOutputMessageStdCall|TellMemory|Unload|"
-        , fList8 := "|AppendPage|AppendPageEx|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|DeletePageEx|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
+        , fList8 := "|AppendPage|AppendPageEx|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|DeletePageEx|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
         , fList12 := "|AcquireMemory|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|InsertPageEx|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
-        , fList16 := "|Composite|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
+        , fList16 := "|ApplyICCProfile|Composite|ConvertCMYKToRGB|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|ConvertToCMYK|ConvertToICCProfile|GetICCProfileDescription|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
         , fList20 := "|ApplyPaletteIndexMapping|ColorQuantizeEx|Copy|CreateView|Paste|RegisterExternalPlugin|RegisterLocalPlugin|SaveMultiBitmapToHandle|SaveToHandle|TmoDrago03|TmoFattal02|TmoReinhard05|"
-        , fList24 := "|Allocate|ApplyColorMapping|ConvertLine1To32MapTransparency|ConvertLine4To32MapTransparency|ConvertLine8To32MapTransparency|JPEGCrop|JPEGCropU|OpenMultiBitmap|OpenMultiBitmapU|ToneMapping|"
+        , fList24 := "|Allocate|ApplyColorMapping|ConvertLine1To32MapTransparency|ConvertLine4To32MapTransparency|ConvertLine8To32MapTransparency|JPEGCrop|JPEGCropU|OpenMultiBitmap|OpenMultiBitmapU|SoftProof|ToneMapping|"
         , fList28 := "|AllocateHeader|AllocateT|EnlargeCanvas|"
         , fList32 := "|AdjustColors|AllocateHeaderT|ConvertToRawBits|GetAdjustColorsLookupTable|JPEGTransformCombined|JPEGTransformCombinedFromMemory|JPEGTransformCombinedU|"
         , fList36 := "|AllocateEx|AllocateHeaderForBits|ConvertFromRawBits|RescaleRect|TmoReinhard05Ex|"
