@@ -49,6 +49,7 @@ Fixes:
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed CMYK JPEGs loaded as RGB keeping their CMYK ICC profile: saving them as PNG, APNG or MNG failed, and TIFF, JPEG, WebP and JPEG XR files carried a profile for the wrong colour space;
+- fixed tiled CMYK TIFF files: loaded with TIFF_CMYK their cyan and yellow came back swapped, and loaded without it their CMYK samples came back as a 32-bit RGBA image carrying the CMYK profile; they now load as striped files do;
 - fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
 - and many other fixes
 
@@ -91,5 +92,6 @@ Color management:
 
 Bugs or limitations identified:
 - AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB;
+- a header-only load (FIF_LOAD_NOPIXELS) of a CMYK TIFF without TIFF_CMYK reports 32 bits and the CMYK profile; the full load is 24-bit RGB without it;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

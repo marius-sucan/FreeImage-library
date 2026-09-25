@@ -2192,10 +2192,25 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					bits -= nrows * dst_pitch;
 				}
 
-#if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
-				SwapRedBlue32(dib);
-#endif
 				free(tileBuffer);
+
+				if (photometric == PHOTOMETRIC_SEPARATED) {
+					// CMYK samples keep their order; as the strip loader, RGB unless TIFF_CMYK
+					if (!asCMYK) {
+						ConvertCMYKtoRGBA(dib);
+						iccSize = 0;
+						iccBuf = NULL;
+						FIBITMAP *rgb = RemoveAlphaChannel(dib);
+						if (rgb) {
+							FreeImage_Unload(dib);
+							dib = rgb;
+						}
+					}
+				} else {
+#if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
+					SwapRedBlue32(dib);
+#endif
+				}
 			}
 			else if(planar_config == PLANARCONFIG_SEPARATE) {
 				throw "Separated tiled TIFF images are not supported"; 
