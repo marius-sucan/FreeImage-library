@@ -793,6 +793,36 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define FI_RESCALE_TRUE_COLOR		0x01	//! for non-transparent greyscale images, convert to 24-bit if src bitdepth <= 8 (default is a 8-bit greyscale image). 
 #define FI_RESCALE_OMIT_METADATA	0x02	//! do not copy metadata to the rescaled image
 
+// Color management options ---------------------------------------------------
+// Constants used in the ICC profile conversion routines: a rendering intent, optionally combined with options
+
+#define FICMS_INTENT_PERCEPTUAL				0x00	//! perceptual rendering intent (default)
+#define FICMS_INTENT_RELATIVE_COLORIMETRIC	0x01	//! media-relative colorimetric rendering intent
+#define FICMS_INTENT_SATURATION				0x02	//! saturation rendering intent
+#define FICMS_INTENT_ABSOLUTE_COLORIMETRIC	0x03	//! ICC-absolute colorimetric rendering intent
+#define FICMS_BLACKPOINT_COMPENSATION		0x0100	//! map the black point of the source to the black point of the destination
+#define FICMS_GAMUT_CHECK					0x0200	//! FreeImage_SoftProof: paint grey the colors the proofing device cannot reproduce
+#define FICMS_SIMULATE_PAPER				0x0400	//! FreeImage_SoftProof: show the paper white of the proofing device
+
+// Built-in ICC profiles
+// Constants used in FreeImage_GetBuiltInICCProfile
+
+#define FICMS_PROFILE_SRGB			0	//! sRGB, assumed for 8- and 16-bit color images without a profile
+#define FICMS_PROFILE_LINEAR_SRGB	1	//! sRGB primaries with a linear tone curve, assumed for float color images
+#define FICMS_PROFILE_GRAY			2	//! grey with the sRGB tone curve, assumed for 8- and 16-bit greyscale images
+#define FICMS_PROFILE_LINEAR_GRAY	3	//! grey with a linear tone curve, assumed for float greyscale images
+#define FICMS_PROFILE_ADOBE_RGB		4	//! compatible with Adobe RGB (1998)
+#define FICMS_PROFILE_DISPLAY_P3	5	//! Display P3
+#define FICMS_PROFILE_PROPHOTO_RGB	6	//! ProPhoto RGB (ROMM RGB)
+
+// ICC color spaces
+// Values returned by FreeImage_GetICCProfileColorSpace
+
+#define FICMS_COLORSPACE_GRAY		0x47524159	//! 'GRAY'
+#define FICMS_COLORSPACE_RGB		0x52474220	//! 'RGB '
+#define FICMS_COLORSPACE_CMYK		0x434D594B	//! 'CMYK'
+#define FICMS_COLORSPACE_LAB		0x4C616220	//! 'Lab '
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -1167,6 +1197,16 @@ DLL_API BOOL DLL_CALLCONV FreeImage_FillBackground(FIBITMAP *dib, const void *co
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_EnlargeCanvas(FIBITMAP *src, int left, int top, int right, int bottom, const void *color, int options FI_DEFAULT(0));
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_AllocateEx(int width, int height, int bpp, const RGBQUAD *color, int options FI_DEFAULT(0), const RGBQUAD *palette FI_DEFAULT(NULL), unsigned red_mask FI_DEFAULT(0), unsigned green_mask FI_DEFAULT(0), unsigned blue_mask FI_DEFAULT(0));
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_AllocateExT(FREE_IMAGE_TYPE type, int width, int height, int bpp, const void *color, int options FI_DEFAULT(0), const RGBQUAD *palette FI_DEFAULT(NULL), unsigned red_mask FI_DEFAULT(0), unsigned green_mask FI_DEFAULT(0), unsigned blue_mask FI_DEFAULT(0));
+
+// color management routines (ICC profiles, Little CMS)
+DLL_API FIBITMAP *DLL_CALLCONV FreeImage_ConvertToICCProfile(FIBITMAP *dib, const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(0));
+DLL_API BOOL DLL_CALLCONV FreeImage_ApplyICCProfile(FIBITMAP *dib, const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(0));
+DLL_API FIBITMAP *DLL_CALLCONV FreeImage_ConvertToCMYK(FIBITMAP *dib, const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(0));
+DLL_API FIBITMAP *DLL_CALLCONV FreeImage_ConvertCMYKToRGB(FIBITMAP *dib, const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(0));
+DLL_API FIBITMAP *DLL_CALLCONV FreeImage_SoftProof(FIBITMAP *dib, const void *proof_profile, DWORD proof_size, const void *display_profile FI_DEFAULT(NULL), DWORD display_size FI_DEFAULT(0), int flags FI_DEFAULT(0));
+DLL_API const void *DLL_CALLCONV FreeImage_GetBuiltInICCProfile(int profile, DWORD *size);
+DLL_API unsigned DLL_CALLCONV FreeImage_GetICCProfileDescription(const void *profile, DWORD size, char *buffer, unsigned buffer_size);
+DLL_API DWORD DLL_CALLCONV FreeImage_GetICCProfileColorSpace(const void *profile, DWORD size);
 
 // miscellaneous algorithms
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle FI_DEFAULT(3));

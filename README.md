@@ -71,6 +71,7 @@ Changes:
 - added animated HEIC/HEIF reading (HEIF image sequences);
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
+- added color management with the bundled Little CMS 2.19.1: FreeImage_ConvertToICCProfile() converts an image from its embedded ICC profile, or from sRGB when it has none, to any RGB, grey or CMYK profile; FreeImage_ApplyICCProfile() does it in place, for showing images; FreeImage_ConvertToCMYK() and FreeImage_ConvertCMYKToRGB() convert between RGB and CMYK with a profile, or without one as FreeImage's loaders do; FreeImage_SoftProof() shows how a printer would reproduce an image; FreeImage_GetBuiltInICCProfile() gives sRGB, linear sRGB, grey, linear grey, Adobe RGB (1998) compatible, Display P3 and ProPhoto RGB profiles; FreeImage_GetICCProfileDescription() and FreeImage_GetICCProfileColorSpace() read a profile; see Color management below;
 - updated LibRaw library to version 0.22.2, from 0.21.1;
 - updated LibJPEG library to version 10, from the 9d of January 2020;
 - updated LibTIFF library to version 4.7.2, from 4.6.0 release of September 2023;
@@ -79,6 +80,15 @@ Changes:
 - updated OpenJPEG library to version 2.5.4, from a March 2014 trunk snapshot labelled 2.0.0;
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
+Color management:
+- a profile is a block of ICC bytes and its size. NULL stands for FreeImage's default space: sRGB for 8- and 16-bit colour images, sRGB primaries with a linear tone curve for float ones, grey with the sRGB tone curve for greyscale ones. A result in the default space has no profile attached, any other result has its profile, and CMYK results the FIICC_COLOR_IS_CMYK flag;
+- the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type; a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders. FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
+- flags: FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION; FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
+- results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey. FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
+- to show an image: load CMYK JPEG, TIFF and PSD files with JPEG_CMYK, TIFF_CMYK or PSD_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. Do it before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
+- 8-bit conversions use Little CMS's precalculated tables; 16-bit ones are computed exactly, as those tables are coarser than the 8-bit path, and take about 5 to 7 times longer per thread. Rows are converted on several threads. A soft proof with FICMS_GAMUT_CHECK first builds a gamut table, 0.1 to 0.3 seconds;
+
 Bugs or limitations identified:
+- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

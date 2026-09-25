@@ -272,6 +272,9 @@
     <ClCompile Include="..\FreeImageToolkit\ClassicRotate.cpp">
       <Filter>Toolkit Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\FreeImageToolkit\ColorManagement.cpp">
+      <Filter>Toolkit Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\FreeImageToolkit\Colors.cpp">
       <Filter>Toolkit Files</Filter>
     </ClCompile>

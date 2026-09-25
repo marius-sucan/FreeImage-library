@@ -324,6 +324,7 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <ClCompile Include="..\FreeImageToolkit\BSplineRotate.cpp" />
     <ClCompile Include="..\FreeImageToolkit\Channels.cpp" />
     <ClCompile Include="..\FreeImageToolkit\ClassicRotate.cpp" />
+    <ClCompile Include="..\FreeImageToolkit\ColorManagement.cpp" />
     <ClCompile Include="..\FreeImageToolkit\Colors.cpp" />
     <ClCompile Include="..\FreeImageToolkit\CopyPaste.cpp" />
     <ClCompile Include="..\FreeImageToolkit\Display.cpp" />
@@ -373,6 +374,10 @@ copy ..\FreeImage.h ..\..\Dist\x64
     </ProjectReference>
     <ProjectReference Include="..\LibJXR\LibJXR.2017.vcxproj">
       <Project>{244455e0-5f25-4451-9540-f317883e52a8}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="..\LibLCMS2\LibLCMS2.2017.vcxproj">
+      <Project>{4beedb53-607a-4858-9442-7c42e9431f81}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
     <ProjectReference Include="..\LibOpenJPEG\LibOpenJPEG.2017.vcxproj">
