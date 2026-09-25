@@ -770,10 +770,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 #endif
 
 				DWORD postage_stamp_offset = extensionarea.postage_stamp_offset;
-				BOOL hasThumbnail = (postage_stamp_offset > 0) && (postage_stamp_offset < (DWORD)footer_offset);
+				BOOL hasThumbnail = (postage_stamp_offset > 0) && ((INT64)postage_stamp_offset < footer_offset);
 				if(hasThumbnail) {
 					io->seek_proc(handle, start_offset + (INT64)postage_stamp_offset, SEEK_SET);
-					thumbnail.read(io, handle, footer_offset - postage_stamp_offset);
+					thumbnail.read(io, handle, (size_t)(footer_offset - postage_stamp_offset));
 				}
 			}
 		}
