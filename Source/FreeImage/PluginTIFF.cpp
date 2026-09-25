@@ -1787,6 +1787,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			ReadResolution(tif, dib);
 
+			const unsigned dibBpp = FreeImage_GetBPP(dib) / 8;
+			const unsigned Bpc = dibBpp / chCount;
+
+			// CMYK is only BYTE or SHORT: refuse anything wider
+			if (Bpc > 2) {
+				FreeImage_Unload(alpha);
+				throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
+			}
+
 			if(!header_only) {
 
 				// calculate the line + pitch (separate for scr & dest)
@@ -1794,15 +1803,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				const tmsize_t src_line = TIFFScanlineSize(tif);
 				const tmsize_t dst_line = FreeImage_GetLine(dib);
 				const unsigned dib_pitch = FreeImage_GetPitch(dib);
-				const unsigned dibBpp = FreeImage_GetBPP(dib) / 8;
-				const unsigned Bpc = dibBpp / chCount;
 				const unsigned srcBpp = bitspersample * samplesperpixel / 8;
-
-				// CMYK is only BYTE or SHORT: refuse anything wider
-				if (Bpc > 2) {
-					FreeImage_Unload(alpha);
-					throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
-				}
 
 				// In the tiff file the lines are save from up to down 
 				// In a DIB the lines must be saved from down to up
@@ -1944,35 +1945,36 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 
 				free(buf);
-			
-				if(!asCMYK) {
-					ConvertCMYKtoRGBA(dib);
-					
-					// The ICC Profile is invalid, clear it
-					iccSize = 0;
-					iccBuf = NULL;
-					
-					if(isCMYKA) {
-						// HACK until we have Extra channels. (ConvertCMYKtoRGBA will then do the work)
-						
-						FreeImage_SetChannel(dib, alpha, FICC_ALPHA);
-						FreeImage_Unload(alpha);
-						alpha = NULL;
+
+			} // !header_only
+
+			// a header gets the layout of the converted image too
+			if(!asCMYK) {
+				ConvertCMYKtoRGBA(dib);
+
+				// The ICC Profile is invalid, clear it
+				iccSize = 0;
+				iccBuf = NULL;
+
+				if(isCMYKA) {
+					// HACK until we have Extra channels. (ConvertCMYKtoRGBA will then do the work)
+
+					FreeImage_SetChannel(dib, alpha, FICC_ALPHA);
+					FreeImage_Unload(alpha);
+					alpha = NULL;
+				}
+				else {
+					FIBITMAP *t = RemoveAlphaChannel(dib);
+					if(t) {
+						FreeImage_Unload(dib);
+						dib = t;
 					}
-					else {
-						FIBITMAP *t = RemoveAlphaChannel(dib);
-						if(t) {
-							FreeImage_Unload(dib);
-							dib = t;
-						}
-						else {
-							FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
-						}
+					else if(!header_only) {
+						FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
 					}
 				}
-				
-			} // !header_only
-			
+			}
+
 		} else if(loadMethod == LoadAsGenericStrip) {
 			// ---------------------------------------------------------------------------------
 			// Generic loading
@@ -2194,26 +2196,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				free(tileBuffer);
 
-				if (photometric == PHOTOMETRIC_SEPARATED) {
-					// CMYK samples keep their order; as the strip loader, RGB unless TIFF_CMYK
-					if (!asCMYK) {
-						ConvertCMYKtoRGBA(dib);
-						iccSize = 0;
-						iccBuf = NULL;
-						FIBITMAP *rgb = RemoveAlphaChannel(dib);
-						if (rgb) {
-							FreeImage_Unload(dib);
-							dib = rgb;
-						}
-					}
-				} else {
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
+				// CMYK samples keep their order
+				if (photometric != PHOTOMETRIC_SEPARATED) {
 					SwapRedBlue32(dib);
-#endif
 				}
+#endif
 			}
 			else if(planar_config == PLANARCONFIG_SEPARATE) {
-				throw "Separated tiled TIFF images are not supported"; 
+				throw "Separated tiled TIFF images are not supported";
+			}
+
+			// as the strip loader, RGB unless TIFF_CMYK; a header gets that layout too
+			if ((photometric == PHOTOMETRIC_SEPARATED) && !asCMYK) {
+				ConvertCMYKtoRGBA(dib);
+				iccSize = 0;
+				iccBuf = NULL;
+				FIBITMAP *rgb = RemoveAlphaChannel(dib);
+				if (rgb) {
+					FreeImage_Unload(dib);
+					dib = rgb;
+				}
 			}
 
 

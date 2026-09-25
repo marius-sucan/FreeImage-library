@@ -410,7 +410,7 @@ Inplace convert CIELab to RGBA (8- and 16-bit).
 BOOL ConvertLABtoRGB(FIBITMAP* dib);
 
 /**
-RGBA to RGB conversion
+RGBA to RGB conversion; a header-only image gets the header of the result
 @see See definition in Conversion.cpp
 */
 FIBITMAP* RemoveAlphaChannel(FIBITMAP* dib);

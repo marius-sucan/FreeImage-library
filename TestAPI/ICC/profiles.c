@@ -385,6 +385,98 @@ static void tiled_cmyk_tiff(const Bytes *press) {
     }
 }
 
+/* ------------------------------------------------------------------ header-only loads describe the full load */
+
+/* what: a name; full and head: the same file loaded with and without FIF_LOAD_NOPIXELS */
+static void same_as_full(const char *what, FIBITMAP *full, FIBITMAP *head) {
+    const FIICCPROFILE *a, *b;
+    FIBITMAP *ta, *tb;
+    if (!full || !head) {
+        CHECK(!full && !head, "%s: the full load %s, the header-only one %s", what, full ? "succeeds" : "fails", head ? "succeeds" : "fails");
+        if (full) FreeImage_Unload(full);
+        if (head) FreeImage_Unload(head);
+        return;
+    }
+    CHECK(!FreeImage_HasPixels(head), "%s: the header-only load has pixels", what);
+    CHECK(FreeImage_GetWidth(head) == FreeImage_GetWidth(full) && FreeImage_GetHeight(head) == FreeImage_GetHeight(full) &&
+        FreeImage_GetBPP(head) == FreeImage_GetBPP(full) && FreeImage_GetImageType(head) == FreeImage_GetImageType(full) &&
+        FreeImage_GetLine(head) == FreeImage_GetLine(full) && FreeImage_GetRedMask(head) == FreeImage_GetRedMask(full) &&
+        FreeImage_GetBlueMask(head) == FreeImage_GetBlueMask(full),
+        "%s: header-only %u-bit type %d, full %u-bit type %d", what, FreeImage_GetBPP(head), (int)FreeImage_GetImageType(head),
+        FreeImage_GetBPP(full), (int)FreeImage_GetImageType(full));
+    a = FreeImage_GetICCProfile(full);
+    b = FreeImage_GetICCProfile(head);
+    CHECK(a->size == b->size && a->flags == b->flags && (!a->size || !memcmp(a->data, b->data, a->size)),
+        "%s: header-only profile %u bytes, flags %x; full %u bytes, flags %x", what, (unsigned)b->size, b->flags, (unsigned)a->size, a->flags);
+    CHECK(FreeImage_GetDotsPerMeterX(head) == FreeImage_GetDotsPerMeterX(full) && FreeImage_GetDotsPerMeterY(head) == FreeImage_GetDotsPerMeterY(full),
+        "%s: header-only resolution %u, full %u", what, FreeImage_GetDotsPerMeterX(head), FreeImage_GetDotsPerMeterX(full));
+    if (FreeImage_GetPalette(full))
+        CHECK(FreeImage_GetPalette(head) && FreeImage_GetColorsUsed(head) == FreeImage_GetColorsUsed(full) &&
+            !memcmp(FreeImage_GetPalette(head), FreeImage_GetPalette(full), FreeImage_GetColorsUsed(full) * sizeof(RGBQUAD)), "%s: palette", what);
+    ta = FreeImage_GetThumbnail(full);
+    tb = FreeImage_GetThumbnail(head);
+    CHECK(!ta == !tb && (!ta || (FreeImage_GetWidth(ta) == FreeImage_GetWidth(tb) && FreeImage_GetBPP(ta) == FreeImage_GetBPP(tb))),
+        "%s: header-only thumbnail %s, full %s", what, tb ? "present" : "missing", ta ? "present" : "missing");
+    FreeImage_Unload(full);
+    FreeImage_Unload(head);
+}
+
+/* samples of bits each (32: float), 300 dpi, strips (layout 0), planes (1) or 16x16 tiles (2); extra samples after the fourth */
+static int write_separated_tiff(const char *path, int bits, int spp, int layout, const Bytes *icc) {
+    static BYTE px[48 * 32 * 8 * 4];
+    const int bytes = bits / 8, row = 48 * (layout == 1 ? 1 : spp) * bytes;
+    TIFF *t;
+    int i, s;
+    FILE *f = fopen(path, "w+b");
+    if (!f) return 0;
+    t = TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap);
+    if (!t) { fclose(f); return 0; }
+    for (i = 0; i < (int)sizeof(px); i++) px[i] = (BYTE)(i * 11 + 5);
+    if (bits == 32) for (i = 0; i < (int)(sizeof(px) / 4); i++) ((float *)px)[i] = (i % 97) / 96.0f;
+    TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 48); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 32);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED);
+    TIFFSetField(t, TIFFTAG_PLANARCONFIG, layout == 1 ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG);
+    TIFFSetField(t, TIFFTAG_XRESOLUTION, 300.0); TIFFSetField(t, TIFFTAG_YRESOLUTION, 300.0); TIFFSetField(t, TIFFTAG_RESOLUTIONUNIT, RESUNIT_INCH);
+    if (spp > 4) {
+        uint16_t extra[4] = { EXTRASAMPLE_UNASSALPHA, EXTRASAMPLE_UNSPECIFIED, EXTRASAMPLE_UNSPECIFIED, EXTRASAMPLE_UNSPECIFIED };
+        TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - 4, extra);
+    }
+    if (bits == 32) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+    TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
+    if (layout == 2) {
+        TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
+        for (i = 0; i < 6; i++) TIFFWriteTile(t, px + i * 64, (i % 3) * 16, (i / 3) * 16, 0, 0);
+    } else {
+        TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 8);
+        for (s = 0; s < (layout == 1 ? spp : 1); s++)
+            for (i = 0; i < 32; i++) TIFFWriteScanline(t, px + ((i + s) % 32) * row, i, (uint16_t)s);
+    }
+    TIFFClose(t);
+    return 1;
+}
+
+static void header_only_cmyk_tiff(const Bytes *press) {
+    static const struct { int bits, spp, layout; const char *name; } FILES[] = {
+        { 8, 4, 0, "8-bit CMYK strips" }, { 8, 4, 1, "8-bit CMYK planes" }, { 8, 4, 2, "8-bit CMYK tiles" },
+        { 16, 4, 0, "16-bit CMYK strips" }, { 16, 4, 2, "16-bit CMYK tiles" }, { 8, 6, 0, "8-bit CMYK + 2 extra samples" },
+        { 8, 3, 0, "8-bit 3-ink separation" }, { 32, 4, 0, "float CMYK strips" }, { 32, 4, 2, "float CMYK tiles" }
+    };
+    const char *path = scratch("icc_separated.tif");
+    unsigned i;
+    int k;
+    char what[128];
+    for (i = 0; i < sizeof(FILES) / sizeof(FILES[0]); i++) {
+        if (!write_separated_tiff(path, FILES[i].bits, FILES[i].spp, FILES[i].layout, press)) { fail("cannot write %s", path); return; }
+        for (k = 0; k < 2; k++) {
+            const int flags = k ? TIFF_CMYK : TIFF_DEFAULT;
+            snprintf(what, sizeof(what), "TIFF, %s, flags %d", FILES[i].name, flags);
+            same_as_full(what, FreeImage_Load(FIF_TIFF, path, flags), FreeImage_Load(FIF_TIFF, path, flags | FIF_LOAD_NOPIXELS));
+        }
+        remove(path);
+    }
+}
+
 int main(int argc, char **argv) {
     Bytes press;
     int record = (argc > 1 && !strcmp(argv[1], "--record"));
@@ -398,6 +490,7 @@ int main(int argc, char **argv) {
     files(&press);
     png_with_profile_and_gamma();
     tiled_cmyk_tiff(&press);
+    header_only_cmyk_tiff(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -337,15 +337,41 @@ ConvertLABtoRGB(FIBITMAP* dib) {
 
 // ----------------------------------------------------------
 
-FIBITMAP* 
-RemoveAlphaChannel(FIBITMAP* src) { 
+FIBITMAP*
+RemoveAlphaChannel(FIBITMAP* src) {
 
-	if(!FreeImage_HasPixels(src)) {
+	if(!src) {
 		return NULL;
 	}
 
 	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(src);
-		
+
+	if(!FreeImage_HasPixels(src)) {
+		// a header gets the header of the converted image
+		const int width = (int)FreeImage_GetWidth(src);
+		const int height = (int)FreeImage_GetHeight(src);
+		FIBITMAP *dst = NULL;
+		switch(image_type) {
+			case FIT_BITMAP:
+				if(FreeImage_GetBPP(src) == 32) {
+					dst = FreeImage_AllocateHeader(TRUE, width, height, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+				}
+				break;
+			case FIT_RGBA16:
+				dst = FreeImage_AllocateHeaderT(TRUE, FIT_RGB16, width, height);
+				break;
+			case FIT_RGBAF:
+				dst = FreeImage_AllocateHeaderT(TRUE, FIT_RGBF, width, height);
+				break;
+			default:
+				break;
+		}
+		if(dst) {
+			FreeImage_CloneMetadata(dst, src);
+		}
+		return dst;
+	}
+
 	switch(image_type) {
 		case FIT_BITMAP:
 			if(FreeImage_GetBPP(src) == 32) {
