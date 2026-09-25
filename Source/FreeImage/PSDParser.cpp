@@ -1470,7 +1470,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		case PSDP_CMYK	:
 		case PSDP_MULTICHANNEL	:
 			// force PSDP_MULTICHANNEL CMY as CMYK
-			dstCh = (mode == PSDP_MULTICHANNEL && !header_only) ? 4 : MIN<unsigned>(nChannels, 4);
+			dstCh = (mode == PSDP_MULTICHANNEL) ? 4 : MIN<unsigned>(nChannels, 4);
 			if(dstCh < 3) {
 				throw "Invalid number of channels";
 			}
@@ -1495,13 +1495,10 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		throw FI_MSG_ERROR_DIB_MEMORY;
 	}
 
-	// write thumbnail
-	FreeImage_SetThumbnail(bitmap, _thumbnail.getDib());
-
 	// @todo Add some metadata model
 
 	if(header_only) {
-		return bitmap;
+		return FinishImage(bitmap, mode, nChannels, needPalette);
 	}
 
 	// Load pixels data
@@ -1712,15 +1709,22 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		}
 	}
 
-	// --- Further process the bitmap ---
+	return FinishImage(bitmap, mode, nChannels, needPalette);
+}
 
+/**
+Further process the bitmap: a header-only one gets the same layout, profile, palette and thumbnail
+*/
+FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannels, bool needPalette) {
 	if((mode == PSDP_CMYK || mode == PSDP_MULTICHANNEL)) {
 		// CMYK values are "inverted", invert them back
 
-		if(mode == PSDP_MULTICHANNEL) {
-			invertColor(bitmap);
-		} else {
-			invertCMYK(bitmap);
+		if(FreeImage_HasPixels(bitmap)) {
+			if(mode == PSDP_MULTICHANNEL) {
+				invertColor(bitmap);
+			} else {
+				invertCMYK(bitmap);
+			}
 		}
 
 		if((_fi_flags & PSD_CMYK) == PSD_CMYK) {
@@ -1770,6 +1774,9 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 			// GRAYSCALE, DUOTONE - use default grayscale palette
 		}
 	}
+
+	// write thumbnail, after the conversion replaced the bitmap
+	FreeImage_SetThumbnail(bitmap, _thumbnail.getDib());
 
 	return bitmap;
 }

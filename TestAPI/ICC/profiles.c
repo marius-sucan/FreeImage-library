@@ -477,6 +477,102 @@ static void header_only_cmyk_tiff(const Bytes *press) {
     }
 }
 
+static void put16(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 8); p[1] = (BYTE)v; }
+
+/* a raw 8-bit 32x24 PSD of the colour mode and channels, 300 dpi, with the profile when there is one */
+static Bytes make_psd(int mode, int channels, const Bytes *icc) {
+    Bytes b;
+    const DWORD resources = 28 + (icc ? 12 + ((icc->size + 1) & ~1u) : 0);
+    BYTE *p;
+    int i;
+    b.size = 26 + 4 + 4 + resources + 4 + 2 + channels * 32 * 24;
+    b.data = p = (BYTE *)calloc(1, b.size);
+    memcpy(p, "8BPS", 4); put16(p + 4, 1); put16(p + 12, channels); put32(p + 14, 24); put32(p + 18, 32); put16(p + 22, 8); put16(p + 24, mode);
+    p += 30;                                    /* no colour mode data */
+    put32(p, resources);
+    memcpy(p + 4, "8BIM", 4); put16(p + 8, 1005); put32(p + 12, 16);
+    put16(p + 16, 300); put16(p + 20, 1); put16(p + 22, 1); put16(p + 24, 300); put16(p + 28, 1); put16(p + 30, 1);
+    p += 32;
+    if (icc) {
+        memcpy(p, "8BIM", 4); put16(p + 4, 1039); put32(p + 8, icc->size); memcpy(p + 12, icc->data, icc->size);
+        p += 12 + ((icc->size + 1) & ~1u);
+    }
+    p += 4 + 2;                                 /* no layers, raw image data */
+    for (i = 0; i < channels * 32 * 24; i++) p[i] = (BYTE)(i * 13 + 1);
+    return b;
+}
+
+static FIBITMAP *load_memory(FREE_IMAGE_FORMAT fif, const Bytes *b, int flags) {
+    FIMEMORY *m = FreeImage_OpenMemory(b->data, b->size);
+    FIBITMAP *dib = FreeImage_LoadFromMemory(fif, m, flags);
+    FreeImage_CloseMemory(m);
+    return dib;
+}
+
+static Bytes save_memory(FREE_IMAGE_FORMAT fif, FIBITMAP *dib) {
+    Bytes b = { NULL, 0 };
+    FIMEMORY *m = FreeImage_OpenMemory(NULL, 0);
+    BYTE *data;
+    DWORD size;
+    if (FreeImage_SaveToMemory(fif, dib, m, 0) && FreeImage_AcquireMemory(m, &data, &size) && (b.data = (BYTE *)malloc(size))) {
+        memcpy(b.data, data, size);
+        b.size = size;
+    }
+    FreeImage_CloseMemory(m);
+    return b;
+}
+
+static void header_only_psd(const Bytes *press) {
+    Bytes files[8];
+    const char *names[8] = { "8-bit CMYK", "16-bit CMYK", "indexed", "bitmap", "3-channel multichannel", "4-channel multichannel",
+        "CMYK + alpha", "RGB" };
+    FIBITMAP *dib, *thumb = FreeImage_Allocate(10, 6, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    char what[128];
+    unsigned i, x, y;
+    int k;
+    for (y = 0; y < 6; y++) memset(FreeImage_GetScanLine(thumb, y), 90 + y * 20, 30);
+    /* FreeImage's writer: CMYK with a profile and a thumbnail, a palette, 1-bit */
+    for (i = 0; i < 2; i++) {
+        dib = i ? FreeImage_AllocateT(FIT_RGBA16, 32, 24, 64, 0, 0, 0) : FreeImage_Allocate(32, 24, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+        for (y = 0; y < 24; y++) for (x = 0; x < FreeImage_GetLine(dib); x++) FreeImage_GetScanLine(dib, y)[x] = (BYTE)(x * 3 + y * 7);
+        FreeImage_CreateICCProfile(dib, press->data, (long)press->size)->flags |= FIICC_COLOR_IS_CMYK;
+        FreeImage_SetThumbnail(dib, thumb);
+        FreeImage_SetDotsPerMeterX(dib, 11811); FreeImage_SetDotsPerMeterY(dib, 11811);
+        files[i] = save_memory(FIF_PSD, dib);
+        FreeImage_Unload(dib);
+    }
+    dib = FreeImage_Allocate(32, 24, 8, 0, 0, 0);
+    for (x = 0; x < 256; x++) { RGBQUAD *q = FreeImage_GetPalette(dib) + x; q->rgbRed = (BYTE)(x * 5); q->rgbGreen = (BYTE)(255 - x); q->rgbBlue = (BYTE)(x * 3); }
+    files[2] = save_memory(FIF_PSD, dib);
+    FreeImage_Unload(dib);
+    dib = FreeImage_Allocate(32, 24, 1, 0, 0, 0);
+    files[3] = save_memory(FIF_PSD, dib);
+    FreeImage_Unload(dib);
+    /* colour modes FreeImage does not write */
+    files[4] = make_psd(7, 3, NULL);
+    files[5] = make_psd(7, 4, NULL);
+    files[6] = make_psd(4, 5, press);
+    files[7] = make_psd(3, 3, NULL);
+    FreeImage_Unload(thumb);
+
+    for (i = 0; i < 8; i++) {
+        if (!files[i].data) { fail("PSD, %s: not written", names[i]); continue; }
+        for (k = 0; k < 2; k++) {
+            const int flags = k ? PSD_CMYK : PSD_DEFAULT;
+            snprintf(what, sizeof(what), "PSD, %s, flags %d", names[i], flags);
+            same_as_full(what, load_memory(FIF_PSD, &files[i], flags), load_memory(FIF_PSD, &files[i], flags | FIF_LOAD_NOPIXELS));
+        }
+    }
+    /* loaded as RGB, CMYK keeps its thumbnail */
+    for (i = 0; i < 2; i++) {
+        if (!files[i].data) continue;
+        dib = load_memory(FIF_PSD, &files[i], PSD_DEFAULT);
+        CHECK(dib && FreeImage_GetThumbnail(dib) && FreeImage_GetWidth(FreeImage_GetThumbnail(dib)) == 10, "PSD, %s loaded as RGB: the thumbnail is lost", names[i]);
+        if (dib) FreeImage_Unload(dib);
+    }
+    for (i = 0; i < 8; i++) free(files[i].data);
+}
+
 int main(int argc, char **argv) {
     Bytes press;
     int record = (argc > 1 && !strcmp(argv[1], "--record"));
@@ -491,6 +587,7 @@ int main(int argc, char **argv) {
     png_with_profile_and_gamma();
     tiled_cmyk_tiff(&press);
     header_only_cmyk_tiff(&press);
+    header_only_psd(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -52,6 +52,7 @@ Fixes:
 - fixed tiled CMYK TIFF files: loaded with TIFF_CMYK their cyan and yellow came back swapped, and loaded without it their CMYK samples came back as a 32-bit RGBA image carrying the CMYK profile; they now load as striped files do;
 - fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
 - fixed header-only loads (FIF_LOAD_NOPIXELS) of CMYK TIFF files without TIFF_CMYK describing the CMYK data: they reported 32 or 64 bits and the CMYK profile of the file, while a load returns 24- or 48-bit RGB without it, and a float CMYK file loaded header-only although it cannot be loaded;
+- fixed header-only loads of PSD files: CMYK and multichannel files described the CMYK data instead of the RGB image a load without PSD_CMYK returns, a multichannel file loaded with PSD_CMYK missed its fourth channel and CMYK flag, and indexed and bitmap files got a grey palette; CMYK and multichannel files loaded as RGB also lost their thumbnail;
 - and many other fixes
 
 Changes:

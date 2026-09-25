@@ -318,6 +318,7 @@ private:
 	void ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes, const BYTE* dst_line_end);
 	void UnpackRLE(BYTE* dst, const BYTE* src, BYTE* dst_end, unsigned srcSize);
 	FIBITMAP* ReadImageData(FreeImageIO *io, fi_handle handle);
+	FIBITMAP* FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannels, bool needPalette);
 	bool WriteLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle);
 	void WriteImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned srcBpp, unsigned bytes);
 	unsigned PackRLE(BYTE* line_start, const BYTE* src_line, unsigned srcSize);
