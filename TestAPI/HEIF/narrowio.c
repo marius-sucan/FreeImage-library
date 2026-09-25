@@ -1,4 +1,4 @@
-/* HEIF stream I/O test: a FreeImageIO of our own, and a HEIF not at offset 0 */
+/* HEIF stream I/O test: a FreeImageIO of our own, a HEIF not at offset 0, and a stream of unknown length */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,7 +12,8 @@ static void message(FREE_IMAGE_FORMAT fif, const char *msg) {
     printf("    [%s] %s\n", fif == FIF_UNKNOWN ? "?" : FreeImage_GetFormatFromFIF(fif), msg);
 }
 
-/* 64-bit positions, as the callbacks carry them */
+/* 64-bit positions, as the callbacks carry them; g_no_end refuses SEEK_END, so the length is unknown */
+static int g_no_end = 0;
 static unsigned DLL_CALLCONV rd(void *buf, unsigned size, unsigned count, fi_handle h) {
     return (unsigned)fread(buf, size, count, (FILE *)h);
 }
@@ -20,6 +21,7 @@ static unsigned DLL_CALLCONV wr(void *buf, unsigned size, unsigned count, fi_han
     return (unsigned)fwrite(buf, size, count, (FILE *)h);
 }
 static int DLL_CALLCONV sk(fi_handle h, INT64 offset, int origin) {
+    if (g_no_end && origin == SEEK_END) return -1;
     return fseeko((FILE *)h, (off_t)offset, origin);
 }
 static INT64 DLL_CALLCONV tl(fi_handle h) {
@@ -123,6 +125,16 @@ int main(void) {
         if (d) FreeImage_Unload(d);
         remove(path);
     }
+
+    /* 4. a stream that cannot seek to its end: libheif needs the exact length, so the plugin probes for it */
+    g_no_end = 1;
+    f = fopen(SAMPLE, "rb");
+    d = FreeImage_LoadFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);
+    fclose(f);
+    g_no_end = 0;
+    printf("stream of unknown length: load -> %s\n", !d ? "FAILED" : (sum_pixels(d) == want ? "exact" : "DIFFERENT"));
+    if (!d || sum_pixels(d) != want) failures++;
+    if (d) FreeImage_Unload(d);
 
     FreeImage_Unload(ref);
     FreeImage_DeInitialise();

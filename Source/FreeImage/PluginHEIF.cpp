@@ -103,6 +103,43 @@ HEIF_SeekTo(HEIFStream *s, uint64_t offset) {
 	return (s->io->seek_proc(s->handle, s->base + (INT64)offset, SEEK_SET) == 0) ? TRUE : FALSE;
 }
 
+/** is there a byte at 'offset'? Leaves the position undefined */
+static BOOL
+HEIF_Probe(HEIFStream *s, uint64_t offset) {
+	BYTE b;
+	return (HEIF_SeekTo(s, offset) && (s->io->read_proc(&b, 1, 1, s->handle) == 1)) ? TRUE : FALSE;
+}
+
+/** the length of a stream that SEEK_END cannot tell: doubling probes, then bisection */
+static void
+HEIF_MeasureStream(HEIFStream *s) {
+	uint64_t lo = 0;	// a byte exists at 'lo'
+	uint64_t hi = 1;	// no byte exists at 'hi', once the doubling stops
+
+	if(!HEIF_Probe(s, 0)) {
+		s->size = 0;
+		s->size_known = TRUE;
+		return;
+	}
+	while(HEIF_Probe(s, hi)) {
+		if(hi > ((uint64_t)INT64_MAX >> 1)) {
+			return;
+		}
+		lo = hi;
+		hi <<= 1;
+	}
+	while(hi - lo > 1) {
+		const uint64_t mid = lo + (hi - lo) / 2;
+		if(HEIF_Probe(s, mid)) {
+			lo = mid;
+		} else {
+			hi = mid;
+		}
+	}
+	s->size = hi;
+	s->size_known = TRUE;
+}
+
 /** libheif callback: tracked position */
 static int64_t
 HEIF_GetPosition(void *userdata) {
@@ -1403,6 +1440,10 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			s->size = (uint64_t)(end - s->base);
 			s->size_known = TRUE;
 		}
+	}
+	// libheif needs the exact length: probe for it
+	if(!s->size_known) {
+		HEIF_MeasureStream(s);
 	}
 	io->seek_proc(handle, s->base, SEEK_SET);
 	s->position = 0;
