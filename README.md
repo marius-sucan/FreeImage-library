@@ -49,6 +49,7 @@ Fixes:
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed CMYK JPEGs loaded as RGB keeping their CMYK ICC profile: saving them as PNG, APNG or MNG failed, and TIFF, JPEG, WebP and JPEG XR files carried a profile for the wrong colour space;
+- fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
 - and many other fixes
 
 Changes:

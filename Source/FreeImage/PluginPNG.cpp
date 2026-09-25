@@ -521,7 +521,8 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 	// this file may have come from--so if it doesn't have a file gamma, don't
 	// do any correction ("do no harm")
 
-	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA)) {
+	// an ICC profile overrides gAMA: the pixels stay as the profile describes them
+	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP)) {
 		double gamma = 0;
 		double screen_gamma = 2.2;
 
