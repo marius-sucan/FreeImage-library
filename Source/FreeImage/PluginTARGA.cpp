@@ -107,7 +107,7 @@ static const char *FI_MSG_ERROR_CORRUPTED = "Image data corrupted";
 class TargaThumbnail
 {
 public:
-	TargaThumbnail() : _w(0), _h(0), _depth(0), _data(NULL) { 
+	TargaThumbnail() : _w(0), _h(0), _depth(0), _data(NULL), _size(0) { 
 	}
 	~TargaThumbnail() { 
 		if(_data) {
@@ -120,13 +120,21 @@ public:
 	}
 	
 	BOOL read(FreeImageIO *io, fi_handle handle, size_t size) {
+		if(size <= 2) {
+			return FALSE;
+		}
 		io->read_proc(&_w, 1, 1, handle);
 		io->read_proc(&_h, 1, 1, handle);
 		
 		const size_t sizeofData = size - 2;
 		_data = (BYTE*)malloc(sizeofData);
 		if(_data) {
-			return (io->read_proc(_data, 1, (unsigned)sizeofData, handle) == sizeofData);
+			if(io->read_proc(_data, 1, (unsigned)sizeofData, handle) == sizeofData) {
+				_size = sizeofData;
+				return TRUE;
+			}
+			free(_data);
+			_data = NULL;
 		}
 		return FALSE;
 	}
@@ -142,6 +150,7 @@ private:
 	BYTE _h;
 	BYTE _depth;
 	BYTE* _data;
+	size_t _size;	// bytes of _data
 };
 
 #ifdef FREEIMAGE_BIGENDIAN
@@ -175,6 +184,10 @@ FIBITMAP* TargaThumbnail::toFIBITMAP() {
 	}
 		
 	const unsigned line_size = _depth * _w / 8;
+	// the pixels the header claims must be in the data read
+	if((size_t)line_size * _h > _size) {
+		return NULL;
+	}
 	FIBITMAP* dib = FreeImage_Allocate(_w, _h, _depth);
 	if(!dib) {
 		return NULL;
@@ -773,7 +786,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				BOOL hasThumbnail = (postage_stamp_offset > 0) && ((INT64)postage_stamp_offset < footer_offset);
 				if(hasThumbnail) {
 					io->seek_proc(handle, start_offset + (INT64)postage_stamp_offset, SEEK_SET);
-					thumbnail.read(io, handle, (size_t)(footer_offset - postage_stamp_offset));
+					// no more than the largest thumbnail: 2 size bytes, 255 x 255 pixels of 4 bytes
+					thumbnail.read(io, handle, (size_t)MIN(footer_offset - (INT64)postage_stamp_offset, (INT64)(2 + 255 * 255 * 4)));
 				}
 			}
 		}
@@ -1608,10 +1622,14 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	
 	INT64 extension_offset = 0 ;
-	if(hasValidThumbnail(dib)) {
+	// the footer holds 32-bit offsets: past 4 GB the extension area and its thumbnail are left out
+	const INT64 extension_start = hasValidThumbnail(dib) ? io->tell_proc(handle) - start_offset : 0;
+	if((extension_start > 0) && (extension_start + (INT64)sizeof(TGAEXTENSIONAREA) > (INT64)0xFFFFFFFFu)) {
+		FreeImage_OutputMessageProc(s_format_id, "The thumbnail is not saved: the image data ends past 4 GB");
+	} else if(extension_start > 0) {
 		// write extension area
 		
-		extension_offset = io->tell_proc(handle) - start_offset;
+		extension_offset = extension_start;
 		
 		TGAEXTENSIONAREA ex;
 		memset(&ex, 0, sizeof(ex));

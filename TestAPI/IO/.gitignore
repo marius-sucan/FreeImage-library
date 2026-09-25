@@ -1,4 +1,7 @@
 bigfile
 memstream
 bigsave
+streams
+streams-asan
+asan-obj/
 fi_io_*

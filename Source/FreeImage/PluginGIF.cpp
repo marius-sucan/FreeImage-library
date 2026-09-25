@@ -72,8 +72,8 @@ struct GIFinfo {
 	WORD canvas_width;
 	WORD canvas_height;
 	LONG loop_count;
-	//only really used when writing
 	INT64 lsd_offset;			// header offset; the LSD follows it
+	//only really used when writing
 	BOOL lsd_written;			// page 0 has written the LSD
 	unsigned logical_width;		// as written by page 0 (host order)
 	unsigned logical_height;
@@ -624,6 +624,9 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 
 	if( read ) {
 		try {
+			// the GIF need not start at byte 0 of the stream
+			info->lsd_offset = MAX(io->tell_proc(handle), (INT64)0);
+
 			// read Header (6 bytes)
 			if( !Validate(io, handle) ) {
 				throw FI_MSG_ERROR_MAGIC_NUMBER;
@@ -917,7 +920,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		//playback pages to generate what the user would see for this frame
 		if( (flags & GIF_PLAYBACK) == GIF_PLAYBACK ) {
 			//Logical Screen Descriptor
-			io->seek_proc(handle, 6, SEEK_SET);
+			io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET);
 			WORD logicalwidth, logicalheight;
 			io->read_proc(&logicalwidth, 2, 1, handle);
 			io->read_proc(&logicalheight, 2, 1, handle);
@@ -1290,7 +1293,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// canvas and loop count go on every frame, so deleting page 0 keeps them
 		if( !info->canvas_cached ) {
 			//Logical Screen Descriptor
-			io->seek_proc(handle, 6, SEEK_SET);
+			io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET);
 			WORD logicalwidth, logicalheight;
 			io->read_proc(&logicalwidth, 2, 1, handle);
 			io->read_proc(&logicalheight, 2, 1, handle);

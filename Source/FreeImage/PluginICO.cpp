@@ -814,9 +814,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		const INT64 directory_start = io->tell_proc(handle);
 		io->write_proc(icon_list, sizeof(ICONDIRENTRY) * icon_header->idCount, 1, handle);
 
-		// write the image bits for each image
+		// write the image bits for each image; offsets count from the start of the ICO, as Load reads them
 		
-		DWORD dwImageOffset = (DWORD)io->tell_proc(handle);
+		INT64 image_offset = io->tell_proc(handle) - state->start_pos;
 
 		for(k = 0; k < icon_header->idCount; k++) {
 			icon_dib = (FIBITMAP*)vPages[k];
@@ -839,11 +839,15 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				SaveStandardIcon(io, icon_dib, handle);
 			}
 
-			// update ICONDIRENTRY members			
-			DWORD dwBytesInRes = (DWORD)io->tell_proc(handle) - dwImageOffset;
-			icon_list[k].dwImageOffset = dwImageOffset;
-			icon_list[k].dwBytesInRes  = dwBytesInRes;
-			dwImageOffset += dwBytesInRes;
+			// update ICONDIRENTRY members, whose offsets are 32-bit
+			const INT64 image_end = io->tell_proc(handle) - state->start_pos;
+			if((image_offset < 0) || (image_end < image_offset) || (image_end > (INT64)0xFFFFFFFFu)) {
+				free(icon_list);
+				throw "The icon file cannot be larger than 4 GB";
+			}
+			icon_list[k].dwImageOffset = (DWORD)image_offset;
+			icon_list[k].dwBytesInRes  = (DWORD)(image_end - image_offset);
+			image_offset = image_end;
 		}
 
 		// update the icon descriptions
