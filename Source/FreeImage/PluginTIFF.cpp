@@ -2040,9 +2040,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 						else {
+							// pixels of different sizes: each gets what both hold
+							const unsigned n = MIN(Bpp, srcBpp);
 							for (int l = 0; l < strips; l++) {
-								for(BYTE *pixel = bits, *src_pixel =  buf + l * src_line; pixel < bits + dst_pitch; pixel += Bpp, src_pixel += srcBpp) {
-									AssignPixel(pixel, src_pixel, Bpp);
+								for(BYTE *pixel = bits, *src_pixel =  buf + l * src_line; pixel < bits + dst_line; pixel += Bpp, src_pixel += srcBpp) {
+									AssignPixel(pixel, src_pixel, n);
 								}
 								bits -= dst_pitch;
 							}
@@ -2067,7 +2069,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 								bThrowMessage = TRUE;	
 							} 
 									
-							if(sample >= chCount) {
+							// a sample past the fourth or past the image pixel is dropped
+							if((sample >= chCount) || ((sample + 1) * Bpc > Bpp)) {
 								// TODO Write to Extra Channel
 								break; 
 							}
@@ -2123,6 +2126,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			dib = CreateImageType( header_only, image_type, width, height, bitspersample, samplesperpixel);
 			if (dib == NULL) {
 				throw FI_MSG_ERROR_MEMORY;
+			}
+
+			// tiles are copied as they are: the image rows must be the file's
+			if((planar_config == PLANARCONFIG_CONTIG) && ((tmsize_t)FreeImage_GetLine(dib) != TIFFScanlineSize(tif))) {
+				throw "Tiled TIFF images of this sample layout are not supported";
 			}
 
 			// fill in the resolution (english or universal)

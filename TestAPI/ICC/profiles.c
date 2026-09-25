@@ -421,10 +421,11 @@ static void same_as_full(const char *what, FIBITMAP *full, FIBITMAP *head) {
     FreeImage_Unload(head);
 }
 
-/* samples of bits each (32: float), 300 dpi, strips (layout 0), planes (1) or 16x16 tiles (2); extra samples after the fourth */
-static int write_separated_tiff(const char *path, int bits, int spp, int layout, const Bytes *icc) {
+/* samples of bits each (32: float), 300 dpi, strips (layout 0), planes (1) or 16x16 tiles (2); samples past the colours are extra */
+static int write_test_tiff(const char *path, int photometric, int bits, int spp, int layout, const Bytes *icc) {
     static BYTE px[48 * 32 * 8 * 4];
     const int bytes = bits / 8, row = 48 * (layout == 1 ? 1 : spp) * bytes;
+    const int colours = (photometric == PHOTOMETRIC_SEPARATED) ? 4 : (photometric == PHOTOMETRIC_RGB) ? 3 : 1;
     TIFF *t;
     int i, s;
     FILE *f = fopen(path, "w+b");
@@ -435,15 +436,15 @@ static int write_separated_tiff(const char *path, int bits, int spp, int layout,
     if (bits == 32) for (i = 0; i < (int)(sizeof(px) / 4); i++) ((float *)px)[i] = (i % 97) / 96.0f;
     TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 48); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 32);
     TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
-    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, photometric);
     TIFFSetField(t, TIFFTAG_PLANARCONFIG, layout == 1 ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG);
     TIFFSetField(t, TIFFTAG_XRESOLUTION, 300.0); TIFFSetField(t, TIFFTAG_YRESOLUTION, 300.0); TIFFSetField(t, TIFFTAG_RESOLUTIONUNIT, RESUNIT_INCH);
-    if (spp > 4) {
+    if (spp > colours) {
         uint16_t extra[4] = { EXTRASAMPLE_UNASSALPHA, EXTRASAMPLE_UNSPECIFIED, EXTRASAMPLE_UNSPECIFIED, EXTRASAMPLE_UNSPECIFIED };
-        TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - 4, extra);
+        TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - colours, extra);
     }
     if (bits == 32) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
-    TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
+    if (icc) TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
     if (layout == 2) {
         TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
         for (i = 0; i < 6; i++) TIFFWriteTile(t, px + i * 64, (i % 3) * 16, (i / 3) * 16, 0, 0);
@@ -454,6 +455,10 @@ static int write_separated_tiff(const char *path, int bits, int spp, int layout,
     }
     TIFFClose(t);
     return 1;
+}
+
+static int write_separated_tiff(const char *path, int bits, int spp, int layout, const Bytes *icc) {
+    return write_test_tiff(path, PHOTOMETRIC_SEPARATED, bits, spp, layout, icc);
 }
 
 static void header_only_cmyk_tiff(const Bytes *press) {
@@ -474,6 +479,59 @@ static void header_only_cmyk_tiff(const Bytes *press) {
             same_as_full(what, FreeImage_Load(FIF_TIFF, path, flags), FreeImage_Load(FIF_TIFF, path, flags | FIF_LOAD_NOPIXELS));
         }
         remove(path);
+    }
+}
+
+/* tiles are copied as they are: a layout FreeImage stores in pixels of another size is refused, not written past the image */
+static void tiled_layouts_refused(const Bytes *press) {
+    static const struct { int photometric, bits, spp; const char *name; } FILES[] = {
+        { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }, { PHOTOMETRIC_SEPARATED, 16, 6, "16-bit CMYK + 2 extra samples" },
+        { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
+    };
+    static const int FLAGS[4] = { TIFF_DEFAULT, FIF_LOAD_NOPIXELS, TIFF_CMYK, TIFF_CMYK | FIF_LOAD_NOPIXELS };
+    const char *path = scratch("icc_tiled_layout.tif");
+    unsigned i;
+    int k;
+    for (i = 0; i < sizeof(FILES) / sizeof(FILES[0]); i++) {
+        const Bytes *icc = (FILES[i].photometric == PHOTOMETRIC_SEPARATED) ? press : NULL;
+        if (!write_test_tiff(path, FILES[i].photometric, FILES[i].bits, FILES[i].spp, 2, icc)) { fail("cannot write %s", path); return; }
+        for (k = 0; k < 4; k++) {
+            FIBITMAP *dib = FreeImage_Load(FIF_TIFF, path, FLAGS[k]);
+            CHECK(!dib, "tiled %s, flags %x: loaded, its tiles would be copied past the image", FILES[i].name, FLAGS[k]);
+            if (dib) FreeImage_Unload(dib);
+        }
+        remove(path);
+    }
+}
+
+/* striped grey + float alpha loads its grey, contiguous or planar */
+static void grey_alpha_float_strips(void) {
+    const char *path = scratch("icc_grey_alpha.tif");
+    int layout, r, x;
+    for (layout = 0; layout < 2; layout++) {
+        FIBITMAP *dib, *head;
+        unsigned wrong = 0;
+        if (!write_test_tiff(path, PHOTOMETRIC_MINISBLACK, 32, 2, layout, NULL)) { fail("cannot write %s", path); return; }
+        dib = FreeImage_Load(FIF_TIFF, path, TIFF_DEFAULT);
+        head = FreeImage_Load(FIF_TIFF, path, FIF_LOAD_NOPIXELS);
+        remove(path);
+        CHECK(head && FreeImage_GetImageType(head) == FIT_FLOAT, "%s grey + float alpha: header-only load", layout ? "planar" : "contiguous");
+        if (head) FreeImage_Unload(head);
+        if (!dib || FreeImage_GetImageType(dib) != FIT_FLOAT) {
+            fail("%s grey + float alpha: not loaded as FIT_FLOAT", layout ? "planar" : "contiguous");
+            if (dib) FreeImage_Unload(dib);
+            continue;
+        }
+        /* the writer's float i is (i % 97) / 96: file row r, pixel x is float r * 96 + 2x, or r * 48 + x in the grey plane */
+        for (r = 0; r < 32; r++) {
+            const float *line = (const float *)FreeImage_GetScanLine(dib, 31 - r);
+            for (x = 0; x < 48; x++) {
+                const int i = layout ? r * 48 + x : r * 96 + 2 * x;
+                wrong += line[x] != (i % 97) / 96.0f;
+            }
+        }
+        CHECK(wrong == 0, "%s grey + float alpha: %u pixels are not the file's grey", layout ? "planar" : "contiguous", wrong);
+        FreeImage_Unload(dib);
     }
 }
 
@@ -587,6 +645,8 @@ int main(int argc, char **argv) {
     png_with_profile_and_gamma();
     tiled_cmyk_tiff(&press);
     header_only_cmyk_tiff(&press);
+    tiled_layouts_refused(&press);
+    grey_alpha_float_strips();
     header_only_psd(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
