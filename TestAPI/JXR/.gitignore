@@ -3,7 +3,5 @@ edge
 narrowio
 meta
 bigfile
-narrowio-step
 *.o
-libfreeimage-narrowstep.a
 fi_jxr_*.jxr

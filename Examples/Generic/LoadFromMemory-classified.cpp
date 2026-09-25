@@ -42,8 +42,8 @@ public :
 
     static unsigned DLL_CALLCONV _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle);
     static unsigned DLL_CALLCONV _WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle);
-    static int DLL_CALLCONV _SeekProc(fi_handle handle, long offset, int origin);
-	static long DLL_CALLCONV _TellProc(fi_handle handle);
+    static int DLL_CALLCONV _SeekProc(fi_handle handle, INT64 offset, int origin);
+	static INT64 DLL_CALLCONV _TellProc(fi_handle handle);
 
 private:
     BYTE * const _start;
@@ -81,7 +81,7 @@ MemIO::_WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle)
 }
 
 int DLL_CALLCONV
-MemIO::_SeekProc(fi_handle handle, long offset, int origin) {
+MemIO::_SeekProc(fi_handle handle, INT64 offset, int origin) {
     MemIO *memIO = (MemIO*)handle;
 
     if (origin == SEEK_SET) {
@@ -95,11 +95,11 @@ MemIO::_SeekProc(fi_handle handle, long offset, int origin) {
     return 0;
 }
 
-long DLL_CALLCONV
+INT64 DLL_CALLCONV
 MemIO::_TellProc(fi_handle handle) {
     MemIO *memIO = (MemIO*)handle;
 
-    return (long)(memIO->_cp - memIO->_start);
+    return (INT64)(memIO->_cp - memIO->_start);
 }
 
 // ----------------------------------------------------------

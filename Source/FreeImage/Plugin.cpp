@@ -818,7 +818,7 @@ FreeImage_ValidateFIF(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_handle handle) 
 		PluginNode *node = s_plugins->FindNodeFromFIF(fif);
 
 		if (node) {
-			long tell = io->tell_proc(handle);
+			const INT64 tell = io->tell_proc(handle);
 
 			validated = (node != NULL) ? (node->m_enabled) ? (node->m_plugin->validate_proc != NULL) ? node->m_plugin->validate_proc(io, handle) : FALSE : FALSE : FALSE;
 

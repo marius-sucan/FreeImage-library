@@ -36,16 +36,16 @@ FI_STRUCT (FIMEMORYHEADER) {
 	*/
 	bool delete_me;
 	/**
-	file_length is equal to the input buffer size when the buffer is a wrapped buffer, i.e. file_length == data_length. 
+	file_length is equal to the input buffer size when the buffer is a wrapped buffer, i.e. file_length == data_length.
 	file_length is the amount of the written bytes when the buffer is a read/write buffer.
 	*/
-	int file_length;
+	INT64 file_length;
 	/**
 	When using read-only input buffers, data_length is equal to the input buffer size, i.e. the file_length.
-	When using read/write buffers, data_length is the size of the allocated buffer, 
+	When using read/write buffers, data_length is the size of the allocated buffer,
 	whose size is greater than or equal to file_length.
 	*/
-	int data_length;
+	INT64 data_length;
 	/**
 	start buffer address
 	*/
@@ -53,7 +53,7 @@ FI_STRUCT (FIMEMORYHEADER) {
 	/**
 	Current position into the memory stream
 	*/
-	int current_position;
+	INT64 current_position;
 };
 
 void SetDefaultIO(FreeImageIO *io);

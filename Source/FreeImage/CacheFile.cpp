@@ -176,7 +176,7 @@ CacheFile::cleanupMemCache() {
 			// flush the least used block to file
 
 			Block *old_block = m_page_cache_mem.back();
-			fseek(m_file, (long)old_block->nr * BLOCK_SIZE, SEEK_SET);
+			FreeImage_fseek64(m_file, (INT64)old_block->nr * BLOCK_SIZE, SEEK_SET);
 			fwrite(old_block->data, BLOCK_SIZE, 1, m_file);
 
 			// remove the data
@@ -228,8 +228,8 @@ CacheFile::lockBlock(int nr) {
 			if (m_current_block->data == NULL) {
 				m_current_block->data = new BYTE[BLOCK_SIZE];
 
-				// (long) first: a 32-bit product wraps past 4 GB
-				fseek(m_file, (long)m_current_block->nr * BLOCK_SIZE, SEEK_SET);
+				// (INT64) first: a 32-bit product wraps past 4 GB
+				FreeImage_fseek64(m_file, (INT64)m_current_block->nr * BLOCK_SIZE, SEEK_SET);
 				if (fread(m_current_block->data, BLOCK_SIZE, 1, m_file) == 1) {
 					m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_disk, it->second);
 					m_page_map[nr] = m_page_cache_mem.begin();

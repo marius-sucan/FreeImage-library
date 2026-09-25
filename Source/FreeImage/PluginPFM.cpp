@@ -223,7 +223,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	float *lineBuffer = NULL;
 	// a cut file keeps the rows it holds
 	int rows = 0;
-	long pixels_start = 0;
+	INT64 pixels_start = 0;
 
 	if (!handle) {
 		return NULL;

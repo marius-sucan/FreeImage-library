@@ -372,7 +372,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 
 	try {
-		const long start_pos = io->tell_proc(handle);
+		const INT64 start_pos = io->tell_proc(handle);
 
 		// check PCX identifier
 		// (note: should have been already validated using FreeImage_GetFileType but check again)
@@ -417,9 +417,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		if(!header_only) {
 			// a 2-byte run yields at most 63 bytes, so a short file cannot claim a huge raster
-			const long data_pos = start_pos + (long)sizeof(PCXHEADER);
+			const INT64 data_pos = start_pos + (INT64)sizeof(PCXHEADER);
 			io->seek_proc(handle, 0, SEEK_END);
-			const long data_end = io->tell_proc(handle);
+			const INT64 data_end = io->tell_proc(handle);
 			io->seek_proc(handle, data_pos, SEEK_SET);
 			const UINT64 raster = (UINT64)header.bytes_per_line * header.planes * height;
 			const UINT64 data = (data_end > data_pos) ? (UINT64)(data_end - data_pos) : 0;
@@ -521,7 +521,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 
-				io->seek_proc(handle, start_pos + (long)sizeof(PCXHEADER), SEEK_SET);
+				io->seek_proc(handle, start_pos + (INT64)sizeof(PCXHEADER), SEEK_SET);
 			}
 			break;
 		}

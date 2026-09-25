@@ -64,6 +64,46 @@
 void* FreeImage_Aligned_Malloc(size_t amount, size_t alignment);
 void FreeImage_Aligned_Free(void* mem);
 
+// ==========================================================
+//   File I/O helpers
+// ==========================================================
+
+// 64-bit stdio positions on every CRT
+// defined in FreeImageIO.cpp
+
+int FreeImage_fseek64(FILE *file, INT64 offset, int origin);
+INT64 FreeImage_ftell64(FILE *file);
+
+// read_proc / write_proc take an unsigned count: any size, in chunks
+
+inline size_t
+FreeImage_ReadBytes(FreeImageIO *io, fi_handle handle, void *buffer, size_t size) {
+	size_t done = 0;
+	while (done < size) {
+		const unsigned chunk = (size - done > 0x40000000) ? 0x40000000u : (unsigned)(size - done);
+		const unsigned got = io->read_proc((BYTE*)buffer + done, 1, chunk, handle);
+		done += got;
+		if (got != chunk) {
+			break;
+		}
+	}
+	return done;
+}
+
+inline size_t
+FreeImage_WriteBytes(FreeImageIO *io, fi_handle handle, const void *buffer, size_t size) {
+	size_t done = 0;
+	while (done < size) {
+		const unsigned chunk = (size - done > 0x40000000) ? 0x40000000u : (unsigned)(size - done);
+		const unsigned put = io->write_proc((void*)((const BYTE*)buffer + done), 1, chunk, handle);
+		done += put;
+		if (put != chunk) {
+			break;
+		}
+	}
+	return done;
+}
+
 #if defined(__cplusplus)
 extern "C" {
 #endif

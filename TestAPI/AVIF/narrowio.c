@@ -1,35 +1,28 @@
-/* AVIF stream I/O test: capped 'long' seeks/tells, non-zero start offset */
+/* AVIF stream I/O test: a FreeImageIO of our own, and an AVIF not at offset 0 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 #include "FreeImage.h"
 
 #define SAMPLE "data/paris_icc_exif_xmp.avif"
 #define JUNK 777
 
-static long g_cap = LONG_MAX;
-static int g_refused_seeks = 0, g_refused_tells = 0, g_steps = 0;
-
 static void message(FREE_IMAGE_FORMAT fif, const char *msg) {
     printf("    [%s] %s\n", fif == FIF_UNKNOWN ? "?" : FreeImage_GetFormatFromFIF(fif), msg);
 }
 
+/* 64-bit positions, as the callbacks carry them */
 static unsigned DLL_CALLCONV rd(void *buf, unsigned size, unsigned count, fi_handle h) {
     return (unsigned)fread(buf, size, count, (FILE *)h);
 }
 static unsigned DLL_CALLCONV wr(void *buf, unsigned size, unsigned count, fi_handle h) {
     return (unsigned)fwrite(buf, size, count, (FILE *)h);
 }
-static int DLL_CALLCONV sk(fi_handle h, long offset, int origin) {
-    if (origin == SEEK_SET && offset > g_cap) { g_refused_seeks++; return -1; }
-    if (origin == SEEK_CUR && offset > 0) g_steps++;
-    return fseek((FILE *)h, offset, origin);
+static int DLL_CALLCONV sk(fi_handle h, INT64 offset, int origin) {
+    return fseeko((FILE *)h, (off_t)offset, origin);
 }
-static long DLL_CALLCONV tl(fi_handle h) {
-    long pos = ftell((FILE *)h);
-    if (pos > g_cap) { g_refused_tells++; return -1; }
-    return pos;
+static INT64 DLL_CALLCONV tl(fi_handle h) {
+    return (INT64)ftello((FILE *)h);
 }
 
 static unsigned long long sum_pixels(FIBITMAP *d) {
@@ -49,11 +42,10 @@ static const char *tmppath(const char *name) {
     return buf;
 }
 
-int main(int argc, char **argv) {
+int main(void) {
     FreeImageIO io = { rd, wr, sk, tl };
     FIBITMAP *ref, *d; FILE *f; unsigned long long want; int failures = 0;
 
-    if (argc > 1) g_cap = atol(argv[1]);
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(message);
 
@@ -62,15 +54,13 @@ int main(int argc, char **argv) {
     want = sum_pixels(ref);
     printf("reference: %ux%u %u bpp, sum %016llx\n", FreeImage_GetWidth(ref), FreeImage_GetHeight(ref), FreeImage_GetBPP(ref), want);
 
-    /* 1. capped absolute seeks and tells */
+    /* 1. through our FreeImageIO */
     f = fopen(SAMPLE, "rb");
     d = FreeImage_LoadFromHandle(FIF_AVIF, &io, (fi_handle)f, 0);
     fclose(f);
-    printf("capped I/O (cap %ld): load -> %s, refused %d absolute seeks and %d tells, %d forward steps with SEEK_CUR\n",
-           g_cap, d ? "ok" : "FAILED", g_refused_seeks, g_refused_tells, g_steps);
+    printf("handle stream: load -> %s\n", d ? "ok" : "FAILED");
     if (!d) failures++;
     else { if (sum_pixels(d) != want) { printf("    pixels differ\n"); failures++; } else printf("    pixels -> exact\n"); FreeImage_Unload(d); }
-    if (g_cap < LONG_MAX && (g_refused_tells == 0 || g_steps == 0)) { printf("    the cap was never hit: nothing was exercised\n"); failures++; }
 
     /* 2. the AVIF preceded by junk, loaded from the current position */
     {
@@ -79,7 +69,6 @@ int main(int argc, char **argv) {
         for (n = 0; n < JUNK; n++) fputc((int)(n * 7), out);
         while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
         fclose(in); fclose(out);
-        g_cap = LONG_MAX;
         f = fopen(path, "rb");
         fseek(f, JUNK, SEEK_SET);
         if (FreeImage_GetFileTypeFromHandle(&io, (fi_handle)f, 0) != FIF_AVIF) { printf("offset stream: not detected as AVIF\n"); failures++; }

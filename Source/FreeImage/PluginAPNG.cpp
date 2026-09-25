@@ -254,7 +254,7 @@ APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle) {
 		if((memcmp(header + 4, "IDAT", 4) == 0) || (memcmp(header + 4, "IEND", 4) == 0)) {
 			return FALSE;
 		}
-		if(io->seek_proc(handle, (long)(length + 4), SEEK_CUR) != 0) {
+		if(io->seek_proc(handle, (INT64)(length + 4), SEEK_CUR) != 0) {
 			return FALSE;
 		}
 	}
@@ -439,7 +439,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 		}
 
 		// skip the rest of the payload and the CRC
-		if(io->seek_proc(handle, (long)(length - consumed) + 4, SEEK_CUR) != 0) {
+		if(io->seek_proc(handle, (INT64)(length - consumed) + 4, SEEK_CUR) != 0) {
 			break;
 		}
 	}
@@ -1115,7 +1115,7 @@ WriteAnimation(FreeImageIO *io, fi_handle handle, APNGinfo *info, int flags) {
 
 	if(!info->out_ancillary.empty()) {
 		const size_t size = info->out_ancillary.size();
-		if(io->write_proc(&info->out_ancillary[0], 1, (unsigned)size, handle) != size) {
+		if(FreeImage_WriteBytes(io, handle, &info->out_ancillary[0], size) != size) {
 			return FALSE;
 		}
 	}

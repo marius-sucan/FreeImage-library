@@ -129,7 +129,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 	// to make absolute seeks possible we store the current position in the file
 	
-	long offset_in_file = io->tell_proc(handle);
+	INT64 offset_in_file = io->tell_proc(handle);
 	long seek = 0;
 
 	// decide which bitmap in the cabinet to load

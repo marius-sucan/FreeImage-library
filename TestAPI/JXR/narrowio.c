@@ -1,5 +1,4 @@
-/* FreeImage 3 - JPEG XR test: tell_proc capped like a 32-bit long */
-/* for the stepped seek: make narrowio-step */
+/* FreeImage 3 - JPEG XR test: a round trip through the caller's own FreeImageIO */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,27 +11,17 @@ static const char *tmppath(const char *name) {
     return buf;
 }
 
-/* emulated 32-bit limits: tell always, seek only via argv[1] */
-static long  TELL_CAP = 4096;
-static long  SEEK_CAP = 0;          /* 0 = no cap */
-static int   g_tellFailures = 0;
-static int   g_seekRefusals = 0;
-
+/* 64-bit positions, as the callbacks carry them */
 static unsigned DLL_CALLCONV nRead(void*b,unsigned s,unsigned c,fi_handle h){
     return (unsigned)fread(b,s,c,(FILE*)h); }
 static unsigned DLL_CALLCONV nWrite(void*b,unsigned s,unsigned c,fi_handle h){
     return (unsigned)fwrite(b,s,c,(FILE*)h); }
-static int DLL_CALLCONV nSeek(fi_handle h,long off,int origin){
-    if(origin==SEEK_SET && SEEK_CAP && off>SEEK_CAP){
-        g_seekRefusals++; return -1;        /* a 32-bit seek could not express this */
-    }
-    return fseek((FILE*)h,off,origin); }
-static long DLL_CALLCONV nTell(fi_handle h){
-    long p=ftell((FILE*)h);
-    if(p>TELL_CAP){ g_tellFailures++; return -1L; } /* what ftell does past LONG_MAX */
-    return p; }
+static int DLL_CALLCONV nSeek(fi_handle h,INT64 off,int origin){
+    return fseeko((FILE*)h,(off_t)off,origin); }
+static INT64 DLL_CALLCONV nTell(fi_handle h){
+    return (INT64)ftello((FILE*)h); }
 
-int main(int argc, char **argv){
+int main(void){
     FreeImageIO io; FIBITMAP *d,*b; FILE *f; int ok; long sz;
     const char *p = tmppath("fi_jxr_narrow.jxr");
     unsigned y,x,s=99991u;
@@ -43,28 +32,17 @@ int main(int argc, char **argv){
     for(y=0;y<256;y++){ BYTE*q=FreeImage_GetScanLine(d,y);
         for(x=0;x<256*4;x++){ s^=s<<13; s^=s>>17; s^=s<<5; q[x]=(BYTE)(s>>7); } }
 
-    if(argc > 1) SEEK_CAP = atol(argv[1]);
-    printf("A 256x256 32bpp JXR is ~280 KB.\n");
-    printf("  tell_proc capped at %ld bytes  (the Win64 wall, scaled down ~500000x)\n", TELL_CAP);
-    if(SEEK_CAP)
-        printf("  absolute seek capped at %ld bytes - needs PluginJXR.o built with\n"
-               "  -DFI_JXR_SEEK_STEP_MAX=%ld, otherwise the reload below cannot pass\n", SEEK_CAP, SEEK_CAP);
-    else
-        printf("  absolute seek uncapped (pass a cap as argv[1] to exercise the stepped seek)\n");
-    printf("\n");
+    printf("A 256x256 32bpp JXR is ~280 KB, saved and reloaded through a FreeImageIO of our own.\n\n");
 
     f=fopen(p,"w+b");
     ok=FreeImage_SaveToHandle(FIF_JXR,d,&io,(fi_handle)f,JXR_LOSSLESS);
     fseek(f,0,SEEK_END); sz=ftell(f); fclose(f);
-    printf("save   -> %-8s  %ld bytes written, tell_proc refused %d queries\n",
-           ok?"ok":"FAILED", sz, g_tellFailures);
+    printf("save   -> %-8s  %ld bytes written\n", ok?"ok":"FAILED", sz);
 
-    g_tellFailures=0; g_seekRefusals=0;
     f=fopen(p,"rb");
     b=FreeImage_LoadFromHandle(FIF_JXR,&io,(fi_handle)f,0);
     fclose(f);
-    printf("reload -> %-8s  tell_proc refused %d queries, seek_proc refused %d\n",
-           b?"ok":"FAILED", g_tellFailures, g_seekRefusals);
+    printf("reload -> %-8s\n", b?"ok":"FAILED");
     if(b){
         int bad=0; s=99991u;
         for(y=0;y<256 && !bad;y++){ BYTE*q=FreeImage_GetScanLine(b,y);
@@ -72,6 +50,7 @@ int main(int argc, char **argv){
                 if(q[x]!=e){bad=1;break;} } }
         printf("pixels -> %s\n", bad?"MISMATCH":"exact");
         FreeImage_Unload(b);
+        if(bad) ok=0;
     }
     FreeImage_Unload(d);
     FreeImage_DeInitialise();

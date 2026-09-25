@@ -4071,14 +4071,14 @@ namespace FreeImageAPI.IO
 	/// <param name="offset">Number of bytes from origin.</param>
 	/// <param name="origin">Initial position.</param>
 	/// <returns>If successful 0 is returned; otherwise a nonzero value. </returns>
-	public delegate int SeekProc(fi_handle handle, int offset, SeekOrigin origin);
+	public delegate int SeekProc(fi_handle handle, long offset, SeekOrigin origin);
 
 	/// <summary>
 	/// Delegate to the C++ function <b>ftell</b>.
 	/// </summary>
 	/// <param name="handle">Handle/stream to retrieve its currents position from.</param>
 	/// <returns>The current position.</returns>
-	public delegate int TellProc(fi_handle handle);
+	public delegate long TellProc(fi_handle handle);
 
 	// Delegates used by 'Plugin' structure
 }
@@ -14023,28 +14023,28 @@ namespace FreeImageAPI.IO
 		/// <summary>
 		/// Moves the streams position.
 		/// </summary>
-		static int streamSeek(fi_handle handle, int offset, SeekOrigin origin)
+		static int streamSeek(fi_handle handle, long offset, SeekOrigin origin)
 		{
 			Stream stream = handle.GetObject() as Stream;
 			if (stream == null)
 			{
 				return 1;
 			}
-			stream.Seek((long)offset, origin);
+			stream.Seek(offset, origin);
 			return 0;
 		}
 
 		/// <summary>
 		/// Returns the streams current position
 		/// </summary>
-		static int streamTell(fi_handle handle)
+		static long streamTell(fi_handle handle)
 		{
 			Stream stream = handle.GetObject() as Stream;
 			if (stream == null)
 			{
 				return -1;
 			}
-			return (int)stream.Position;
+			return stream.Position;
 		}
 	}
 }
@@ -14834,7 +14834,7 @@ namespace FreeImageAPI.Plugins
 		/// <summary>
 		/// Seeks in an unmanaged stream.
 		/// </summary>
-		protected int Seek(FreeImageIO io, fi_handle handle, int offset, SeekOrigin origin)
+		protected int Seek(FreeImageIO io, fi_handle handle, long offset, SeekOrigin origin)
 		{
 			return io.seekProc(handle, offset, origin);
 		}
@@ -14842,7 +14842,7 @@ namespace FreeImageAPI.Plugins
 		/// <summary>
 		/// Retrieves the position of an unmanaged stream.
 		/// </summary>
-		protected int Tell(FreeImageIO io, fi_handle handle)
+		protected long Tell(FreeImageIO io, fi_handle handle)
 		{
 			return io.tellProc(handle);
 		}

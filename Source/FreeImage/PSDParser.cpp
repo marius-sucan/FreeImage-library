@@ -754,7 +754,7 @@ int psdThumbnail::Read(FreeImageIO *io, fi_handle handle, int iResourceSize, boo
 
 	// the thumbnail data follows a 28-byte header
 	const int iTotalData = iResourceSize - 28;
-	const long block_end = io->tell_proc(handle) + iResourceSize;
+	const INT64 block_end = io->tell_proc(handle) + iResourceSize;
 
 	io->read_proc(IntValue, sizeof(IntValue), 1, handle);
 	_Format = psdGetValue(IntValue, sizeof(_Format) );
@@ -780,7 +780,7 @@ int psdThumbnail::Read(FreeImageIO *io, fi_handle handle, int iResourceSize, boo
 	io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
 	_Planes = (short)psdGetValue(ShortValue, sizeof(_Planes) );
 
-	const long data_start = io->tell_proc(handle);
+	const INT64 data_start = io->tell_proc(handle);
 
 	if(_dib) {
 		FreeImage_Unload(_dib);
@@ -827,7 +827,7 @@ int psdThumbnail::Read(FreeImageIO *io, fi_handle handle, int iResourceSize, boo
 bool psdThumbnail::Write(FreeImageIO *io, fi_handle handle, bool isBGR) {
 	BYTE ShortValue[2], IntValue[4];
 
-	const long res_start_pos = io->tell_proc(handle);
+	const INT64 res_start_pos = io->tell_proc(handle);
 	const int ID = isBGR ? PSDP_RES_THUMBNAIL_PS4 : PSDP_RES_THUMBNAIL;
 	if(!psdImageResource().Write(io, handle, ID, 0))
 		return false;
@@ -852,7 +852,7 @@ bool psdThumbnail::Write(FreeImageIO *io, fi_handle handle, bool isBGR) {
 	if(io->write_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
 		return false;
 	}
-	const long compressed_pos = io->tell_proc(handle);
+	const INT64 compressed_pos = io->tell_proc(handle);
 	psdSetValue(IntValue, sizeof(IntValue), _CompressedSize);
 	if(io->write_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
 		return false;
@@ -870,9 +870,9 @@ bool psdThumbnail::Write(FreeImageIO *io, fi_handle handle, bool isBGR) {
 		if(isBGR) {
 			SwapRedBlue32(_dib);
 		}
-		const long start_pos = io->tell_proc(handle);
+		const INT64 start_pos = io->tell_proc(handle);
 		FreeImage_SaveToHandle(FIF_JPEG, _dib, io, handle, JPEG_DEFAULT);
-		const long current_pos = io->tell_proc(handle);
+		const INT64 current_pos = io->tell_proc(handle);
 		_CompressedSize = (int)(current_pos - start_pos);
 		io->seek_proc(handle, compressed_pos, SEEK_SET);
 		psdSetValue(IntValue, sizeof(IntValue), _CompressedSize);
@@ -1090,22 +1090,12 @@ unsigned psdParser::GetChannelOffset(FIBITMAP* bitmap, unsigned c) const {
 bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 	bool bSuccess = true;
 
-	UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
+	const UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
 
-	// Hack to handle large PSB files without using fseeko().
-	if (sizeof(long) < sizeof(UINT64)) {
-		const long offset = 0x10000000;
-		while (nTotalBytes > offset) {
-			if (io->seek_proc(handle, offset, SEEK_CUR) != 0) {
-				bSuccess = false;
-				break;
-			}
-			nTotalBytes -= offset;
-		}
-	}
-	if (bSuccess && nTotalBytes > 0) {
-		if (io->seek_proc(handle, (long)nTotalBytes, SEEK_CUR) != 0)
+	if (nTotalBytes > 0) {
+		if ((nTotalBytes > (UINT64)std::numeric_limits<INT64>::max()) || (io->seek_proc(handle, (INT64)nTotalBytes, SEEK_CUR) != 0)) {
 			bSuccess = false;
+		}
 	}
 
 	return bSuccess;
@@ -1974,7 +1964,7 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 			std::vector<BYTE> rle_line(lineSize + ((lineSize + 126) / 127)); //< RLE buffer
 			BYTE* rle_line_start = &rle_line[0];
 			std::vector<DWORD> rleLineSizeList(nChannels*nHeight, 0);
-			const long offsets_pos = io->tell_proc(handle);
+			const INT64 offsets_pos = io->tell_proc(handle);
 			if(_headerInfo._Version == 1) {
 				if(io->write_proc(&rleLineSizeList[0], nChannels*nHeight*2, 1, handle) != 1) {
 					return false;
@@ -2229,7 +2219,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 	}
 
 	BYTE IntValue[4];
-	const long res_start_pos = io->tell_proc(handle);
+	const INT64 res_start_pos = io->tell_proc(handle);
 	psdSetValue(IntValue, sizeof(IntValue), 0);
 	if(io->write_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
 		return false;
@@ -2314,7 +2304,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 	}
 
 	// Fix length of resources
-	const long current_pos = io->tell_proc(handle);
+	const INT64 current_pos = io->tell_proc(handle);
 	psdSetValue(IntValue, sizeof(IntValue), (int)(current_pos - res_start_pos - 4));
 	io->seek_proc(handle, res_start_pos, SEEK_SET);
 	if(io->write_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {

@@ -54,16 +54,16 @@ extern "C" static unsigned __stdcall WriteProc (void *buffer, unsigned size, uns
 	return count;
 }
 
-extern "C" static int __stdcall SeekProc (fi_handle handle, long offset, int origin)
+extern "C" static int __stdcall SeekProc (fi_handle handle, INT64 offset, int origin)
 {
 	struct UNMANAGED_HANDLER* puh = (struct UNMANAGED_HANDLER*)handle;
 	return (int)puh->_stream->Seek(offset,(SeekOrigin) origin);
 	
 }
 
-extern "C" static long __stdcall TellProc(fi_handle handle)
+extern "C" static INT64 __stdcall TellProc(fi_handle handle)
 {
 	struct UNMANAGED_HANDLER* puh = (struct UNMANAGED_HANDLER*)handle;
-	return (long)puh->_stream->Position;
+	return (INT64)puh->_stream->Position;
 }
 

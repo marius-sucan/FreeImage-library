@@ -152,7 +152,7 @@ struct MULTIBITMAPHEADER {
 	// plugin decoder state, from the first LockPage until close
 	void *read_data;
 	// handle position where the image starts; a stream need not hold it at 0
-	long start;
+	INT64 start;
 };
 
 // =====================================================================
@@ -599,7 +599,7 @@ FreeImage_OpenMultiBitmapFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_h
 					header->node = node;
 					header->fif = fif;
 					header->handle = handle;						
-					header->start = MAX(io->tell_proc(handle), 0L);
+					header->start = MAX(io->tell_proc(handle), (INT64)0);
 					header->read_only = read_only;	
 					header->cache_fif = fif;
 					header->load_flags = flags;

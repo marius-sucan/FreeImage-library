@@ -12,7 +12,7 @@ typedef struct tagJ2KFIO_t {
 	FreeImageIO *io;		//! FreeImage IO
     fi_handle handle;		//! FreeImage handle
 	opj_stream_t *stream;	//! OpenJPEG stream
-	long start;			//! handle position when the stream was created
+	INT64 start;			//! handle position when the stream was created
 	BOOL eof;				//! OpenJPEG asked for bytes past the end of the file
 } J2KFIO_t;
 

@@ -96,19 +96,9 @@ typedef struct {
 	BYTE remaining;
 } RASRLEState;
 
-// seek in steps that fit a long
 static BOOL
 SkipBytes(FreeImageIO *io, fi_handle handle, DWORD n) {
-	while (n > 0) {
-		const long step = (n > 0x10000000) ? 0x10000000 : (long)n;
-
-		if (io->seek_proc(handle, step, SEEK_CUR) != 0) {
-			return FALSE;
-		}
-		n -= (DWORD)step;
-	}
-
-	return TRUE;
+	return (io->seek_proc(handle, (INT64)n, SEEK_CUR) == 0) ? TRUE : FALSE;
 }
 
 // FALSE when the file ends first; what it does not hold is zero

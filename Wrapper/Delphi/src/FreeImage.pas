@@ -443,9 +443,9 @@ type
     handle: fi_handle): Cardinal; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
   FI_WriteProc = function(buffer: Pointer; size, count: Cardinal;
     handle: fi_handle): Cardinal; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
-  FI_SeekProc = function(handle: fi_handle; offset: LongInt;
+  FI_SeekProc = function(handle: fi_handle; offset: Int64;
     origin: Integer): Integer; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
-  FI_TellProc = function(handle: fi_handle): LongInt; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
+  FI_TellProc = function(handle: fi_handle): Int64; {$IFDEF MSWINDOWS}stdcall;{$ELSE}cdecl;{$ENDIF}
 
   FreeImageIO = packed record
     read_proc : FI_ReadProc;     // pointer to the function used to read data

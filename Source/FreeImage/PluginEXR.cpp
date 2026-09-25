@@ -62,12 +62,12 @@ class C_IStream : public Imf::IStream {
 private:
     FreeImageIO *_io;
 	fi_handle _handle;
-	long _start;	// OpenEXR positions count from here
+	INT64 _start;	// OpenEXR positions count from here
 
 public:
-	C_IStream (FreeImageIO *io, fi_handle handle) : 
+	C_IStream (FreeImageIO *io, fi_handle handle) :
 	  Imf::IStream(""), _io (io), _handle(handle), _start(0) {
-		const long start = io->tell_proc(handle);
+		const INT64 start = io->tell_proc(handle);
 		_start = (start > 0) ? start : 0;
 	}
 
@@ -80,7 +80,7 @@ public:
 	}
 
 	virtual void seekg(uint64_t pos) {
-		_io->seek_proc(_handle, _start + (long)pos, SEEK_SET);
+		_io->seek_proc(_handle, _start + (INT64)pos, SEEK_SET);
 	}
 
 	virtual void clear() {
@@ -97,12 +97,12 @@ class C_OStream : public Imf::OStream {
 private:
     FreeImageIO *_io;
 	fi_handle _handle;
-	long _start;	// OpenEXR positions count from here
+	INT64 _start;	// OpenEXR positions count from here
 
 public:
-	C_OStream (FreeImageIO *io, fi_handle handle) : 
+	C_OStream (FreeImageIO *io, fi_handle handle) :
 	  Imf::OStream(""), _io (io), _handle(handle), _start(0) {
-		const long start = io->tell_proc(handle);
+		const INT64 start = io->tell_proc(handle);
 		_start = (start > 0) ? start : 0;
 	}
 
@@ -117,7 +117,7 @@ public:
 	}
 
 	virtual void seekp(uint64_t pos) {
-		_io->seek_proc(_handle, _start + (long)pos, SEEK_SET);
+		_io->seek_proc(_handle, _start + (INT64)pos, SEEK_SET);
 	}
 };
 
@@ -185,7 +185,7 @@ SupportsNoPixels() {
 
 // refuse a data window the file is too small to hold
 static void
-CheckDataWindow(const Imf::Header& header, int width, int height, long stream_bytes) {
+CheckDataWindow(const Imf::Header& header, int width, int height, INT64 stream_bytes) {
 	if(stream_bytes <= 0) {
 		return;
 	}
@@ -258,12 +258,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 
 		// save the stream starting point
-		const long stream_start = io->tell_proc(handle);
+		const INT64 stream_start = io->tell_proc(handle);
 
 		// stream length for CheckDataWindow; 0 = unknown, no check
-		long stream_bytes = 0;
+		INT64 stream_bytes = 0;
 		if(io->seek_proc(handle, 0, SEEK_END) == 0) {
-			const long stream_end = io->tell_proc(handle);
+			const INT64 stream_end = io->tell_proc(handle);
 			if(stream_end > stream_start) {
 				stream_bytes = stream_end - stream_start;
 			}

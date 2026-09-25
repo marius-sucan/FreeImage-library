@@ -119,7 +119,7 @@ IsPNG(FreeImageIO *io, fi_handle handle) {
 	BYTE png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 	BYTE signature[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-	long tell = io->tell_proc(handle);
+	INT64 tell = io->tell_proc(handle);
 	io->read_proc(&signature, 1, 8, handle);
 	BOOL bIsPNG = (memcmp(png_signature, signature, 8) == 0);
 	io->seek_proc(handle, tell, SEEK_SET);
@@ -237,7 +237,7 @@ SupportsNoPixels() {
 // start_pos: where the ICO begins; its offsets count from there
 typedef struct tagICOSTATE {
 	ICONHEADER	header;
-	long		start_pos;
+	INT64		start_pos;
 } ICOSTATE;
 
 static void * DLL_CALLCONV
@@ -476,7 +476,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if(icon_list == NULL) {
 				return NULL;
 			}
-			io->seek_proc(handle, state->start_pos + (long)sizeof(ICONHEADER), SEEK_SET);
+			io->seek_proc(handle, state->start_pos + (INT64)sizeof(ICONHEADER), SEEK_SET);
 
 			if (io->read_proc(icon_list, icon_header->idCount * sizeof(ICONDIRENTRY), 1, handle) != 1) {
 				free(icon_list);
@@ -490,7 +490,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// load the requested icon
 			if (page < icon_header->idCount) {
 				// seek to the start of the bitmap data for the icon
-				io->seek_proc(handle, state->start_pos + (long)icon_list[page].dwImageOffset, SEEK_SET);
+				io->seek_proc(handle, state->start_pos + (INT64)icon_list[page].dwImageOffset, SEEK_SET);
 
 				if( IsPNG(io, handle) ) {
 					// Vista icon support
@@ -811,7 +811,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 
 		// make a room for icon dir entries, until later update
-		const long directory_start = io->tell_proc(handle);
+		const INT64 directory_start = io->tell_proc(handle);
 		io->write_proc(icon_list, sizeof(ICONDIRENTRY) * icon_header->idCount, 1, handle);
 
 		// write the image bits for each image
@@ -847,7 +847,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 
 		// update the icon descriptions
-		const long current_pos = io->tell_proc(handle);
+		const INT64 current_pos = io->tell_proc(handle);
 		io->seek_proc(handle, directory_start, SEEK_SET);
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapIconDirEntries(icon_list, icon_header->idCount);

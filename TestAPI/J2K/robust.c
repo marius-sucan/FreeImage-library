@@ -62,11 +62,11 @@ static unsigned DLL_CALLCONV mb_write(void *b, unsigned s, unsigned c, fi_handle
     if (m->pos + n > m->cap) { m->cap = (m->pos + n) * 2; m->p = (BYTE*)realloc(m->p, (size_t)m->cap); }
     memcpy(m->p + m->pos, b, (size_t)n); m->pos += n; if (m->pos > m->size) m->size = m->pos; return c;
 }
-static int DLL_CALLCONV mb_seek(fi_handle h, long o, int w) {
-    membuf *m = (membuf*)h; long np = (w == SEEK_SET) ? o : (w == SEEK_CUR) ? m->pos + o : m->size + o;
-    if (np < 0) return -1; m->pos = np; return 0;
+static int DLL_CALLCONV mb_seek(fi_handle h, INT64 o, int w) {
+    membuf *m = (membuf*)h; INT64 np = (w == SEEK_SET) ? o : (w == SEEK_CUR) ? m->pos + o : m->size + o;
+    if (np < 0) return -1; m->pos = (long)np; return 0;
 }
-static long DLL_CALLCONV mb_tell(fi_handle h) { return ((membuf*)h)->pos; }
+static INT64 DLL_CALLCONV mb_tell(fi_handle h) { return ((membuf*)h)->pos; }
 
 static void check(int ok, const char *what) {
     printf("%-58s %s\n", what, ok ? "ok" : "FAIL");

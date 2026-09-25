@@ -158,7 +158,7 @@ getCropString(char* crop, int* left, int* top, int* right, int* bottom, int widt
 static BOOL
 JPEGTransformFromHandle(FreeImageIO* src_io, fi_handle src_handle, FreeImageIO* dst_io, fi_handle dst_handle, FREE_IMAGE_JPEG_OPERATION operation, int* left, int* top, int* right, int* bottom, BOOL perfect) {
 	const BOOL onlyReturnCropRect = (dst_io == NULL) || (dst_handle == NULL);
-	const long stream_start = onlyReturnCropRect ? 0 : dst_io->tell_proc(dst_handle);
+	const INT64 stream_start = onlyReturnCropRect ? 0 : dst_io->tell_proc(dst_handle);
 	BOOL swappedDim = FALSE;
 	BOOL trimH = FALSE;
 	BOOL trimV = FALSE;
@@ -397,12 +397,12 @@ truncateInPlaceStdIO(fi_handle src_handle, fi_handle dst_handle) {
 	if(fflush(f) != 0) {
 		return;
 	}
-	const long end = ftell(f);
+	const INT64 end = FreeImage_ftell64(f);
 	if(end < 0) {
 		return;
 	}
 #ifdef _WIN32
-	if(_chsize(_fileno(f), end) != 0) {
+	if(_chsize_s(_fileno(f), end) != 0) {
 #else
 	if(ftruncate(fileno(f), (off_t)end) != 0) {
 #endif

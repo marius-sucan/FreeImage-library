@@ -6,11 +6,8 @@ decode-asan
 narrowio-asan
 sequence-asan
 thirdparty-asan
-narrowio-step
 asan-obj/
-step-obj/
 libfreeimage-asan.a
-libfreeimage-narrowstep.a
 fi_heif_*
 *.log
 # fetched by fetch_samples.sh, not redistributed

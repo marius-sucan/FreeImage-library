@@ -73,7 +73,7 @@ struct GIFinfo {
 	WORD canvas_height;
 	LONG loop_count;
 	//only really used when writing
-	long lsd_offset;			// header offset; the LSD follows it
+	INT64 lsd_offset;			// header offset; the LSD follows it
 	BOOL lsd_written;			// page 0 has written the LSD
 	unsigned logical_width;		// as written by page 0 (host order)
 	unsigned logical_height;
@@ -761,7 +761,7 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		if( info->lsd_written && (info->max_right > info->logical_width || info->max_bottom > info->logical_height) ) {
 			bool patched = false;
 			if( info->lsd_offset >= 0 ) {
-				const long end_offset = io->tell_proc(handle);
+				const INT64 end_offset = io->tell_proc(handle);
 				if( end_offset >= 0 && io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET) == 0 ) {
 					WORD logicalwidth = (WORD)MIN(MAX(info->logical_width, info->max_right), 0xFFFFu);
 					WORD logicalheight = (WORD)MIN(MAX(info->logical_height, info->max_bottom), 0xFFFFu);
@@ -870,13 +870,13 @@ GifPlaybackReadPageInfo(FreeImageIO *io, fi_handle handle, GIFinfo *info, int pa
 	int disposal_method = GIF_DISPOSAL_LEAVE;
 	if( info->graphic_control_extension_offsets[page] != 0 ) {
 		BYTE packed = 0;
-		io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
+		io->seek_proc(handle, (INT64)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
 		io->read_proc(&packed, 1, 1, handle);
 		disposal_method = (packed & GIF_PACKED_GCE_DISPOSAL) >> 2;
 	}
 
 	WORD left = 0, top = 0, width = 0, height = 0;
-	io->seek_proc(handle, (long)(info->image_descriptor_offsets[page]), SEEK_SET);
+	io->seek_proc(handle, (INT64)(info->image_descriptor_offsets[page]), SEEK_SET);
 	io->read_proc(&left, 2, 1, handle);
 	io->read_proc(&top, 2, 1, handle);
 	io->read_proc(&width, 2, 1, handle);
@@ -933,7 +933,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					throw FI_MSG_ERROR_DIB_MEMORY;
 				}
 				if( info->graphic_control_extension_offsets[page] != 0 ) {
-					io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
+					io->seek_proc(handle, (INT64)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
 					io->read_proc(&packed, 1, 1, handle);
 					io->read_proc(&w, 2, 1, handle);
 #ifdef FREEIMAGE_BIGENDIAN
@@ -948,7 +948,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			//set the background color with 0 alpha
 			RGBQUAD background;
 			if( info->global_color_table_offset != 0 && info->background_color < info->global_color_table_size ) {
-				io->seek_proc(handle, (long)(info->global_color_table_offset + (info->background_color * 3)), SEEK_SET);
+				io->seek_proc(handle, (INT64)(info->global_color_table_offset + (info->background_color * 3)), SEEK_SET);
 				io->read_proc(&background.rgbRed, 1, 1, handle);
 				io->read_proc(&background.rgbGreen, 1, 1, handle);
 				io->read_proc(&background.rgbBlue, 1, 1, handle);
@@ -1037,7 +1037,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			while( start >= 0 ) {
 				//Graphic Control Extension
 				if( info->graphic_control_extension_offsets[start] != 0 ) {
-					io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[start] + 1), SEEK_SET);
+					io->seek_proc(handle, (INT64)(info->graphic_control_extension_offsets[start] + 1), SEEK_SET);
 					io->read_proc(&packed, 1, 1, handle);
 					have_transparent = (packed & GIF_PACKED_GCE_HAVETRANS) ? true : false;
 					disposal_method = (packed & GIF_PACKED_GCE_DISPOSAL) >> 2;
@@ -1046,7 +1046,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					disposal_method = GIF_DISPOSAL_LEAVE;
 				}
 				//Image Descriptor
-				io->seek_proc(handle, (long)(info->image_descriptor_offsets[start]), SEEK_SET);
+				io->seek_proc(handle, (INT64)(info->image_descriptor_offsets[start]), SEEK_SET);
 				io->read_proc(&left, 2, 1, handle);
 				io->read_proc(&top, 2, 1, handle);
 				io->read_proc(&width, 2, 1, handle);
@@ -1131,7 +1131,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		//get the actual frame image data for a single frame
 
 		//Image Descriptor
-		io->seek_proc(handle, (long)info->image_descriptor_offsets[page], SEEK_SET);
+		io->seek_proc(handle, (INT64)info->image_descriptor_offsets[page], SEEK_SET);
 		io->read_proc(&left, 2, 1, handle);
 		io->read_proc(&top, 2, 1, handle);
 		io->read_proc(&width, 2, 1, handle);
@@ -1182,8 +1182,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				i++;
 			}
 		} else if( info->global_color_table_offset != 0 ) {
-			long pos = io->tell_proc(handle);
-			io->seek_proc(handle, (long)info->global_color_table_offset, SEEK_SET);
+			INT64 pos = io->tell_proc(handle);
+			io->seek_proc(handle, (INT64)info->global_color_table_offset, SEEK_SET);
 
 			int i = 0;
 			while( i < info->global_color_table_size ) {
@@ -1302,7 +1302,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			//Application Extension
 			LONG loop = 1; //If no AE with a loop count is found, the default must be 1
 			for( size_t idx = 0; idx < info->application_extension_offsets.size(); idx++ ) {
-				io->seek_proc(handle, (long)info->application_extension_offsets[idx], SEEK_SET);
+				io->seek_proc(handle, (INT64)info->application_extension_offsets[idx], SEEK_SET);
 				io->read_proc(&b, 1, 1, handle);
 				if( b == 11 ) { //All AEs start with an 11 byte sub-block to determine what type of AE it is
 					char buf[11];
@@ -1344,7 +1344,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			//Global Color Table
 			if( info->global_color_table_offset != 0 ) {
 				RGBQUAD globalpalette[256];
-				io->seek_proc(handle, (long)info->global_color_table_offset, SEEK_SET);
+				io->seek_proc(handle, (INT64)info->global_color_table_offset, SEEK_SET);
 				int i = 0;
 				while( i < info->global_color_table_size ) {
 					io->read_proc(&globalpalette[i].rgbRed, 1, 1, handle);
@@ -1362,7 +1362,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			//Comment Extension
 			for( idx = 0; idx < info->comment_extension_offsets.size(); idx++ ) {
-				io->seek_proc(handle, (long)info->comment_extension_offsets[idx], SEEK_SET);
+				io->seek_proc(handle, (INT64)info->comment_extension_offsets[idx], SEEK_SET);
 				std::string comment;
 				char buf[255];
 				io->read_proc(&b, 1, 1, handle);
@@ -1380,7 +1380,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		//Graphic Control Extension
 		if( info->graphic_control_extension_offsets[page] != 0 ) {
-			io->seek_proc(handle, (long)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
+			io->seek_proc(handle, (INT64)(info->graphic_control_extension_offsets[page] + 1), SEEK_SET);
 			io->read_proc(&packed, 1, 1, handle);
 			io->read_proc(&w, 2, 1, handle);
 #ifdef FREEIMAGE_BIGENDIAN

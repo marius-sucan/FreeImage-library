@@ -32,8 +32,8 @@ BOOL FreeImage_SaveToMem(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, fiio_mem_handle *
 void SetMemIO(FreeImageIO *io);
 unsigned fiio_mem_ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle);
 unsigned fiio_mem_WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle);
-int fiio_mem_SeekProc(fi_handle handle, long offset, int origin);
-long fiio_mem_TellProc(fi_handle handle);
+int fiio_mem_SeekProc(fi_handle handle, INT64 offset, int origin);
+INT64 fiio_mem_TellProc(fi_handle handle);
 
 /*** Example Usage ***
 

@@ -258,11 +258,11 @@ mng_SwapLong(DWORD *lp) {
 /**
 Returns the size, in bytes, of a FreeImageIO stream, from the current position. 
 */
-static long
+static INT64
 mng_LOF(FreeImageIO *io, fi_handle handle) {
-	long start_pos = io->tell_proc(handle);
+	const INT64 start_pos = io->tell_proc(handle);
 	io->seek_proc(handle, 0, SEEK_END);
-	long file_length = io->tell_proc(handle);
+	const INT64 file_length = io->tell_proc(handle);
 	io->seek_proc(handle, start_pos, SEEK_SET);
 	return file_length;
 }
@@ -278,9 +278,9 @@ should be the end of the PNG stream at the return of the function.
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 static BOOL 
-mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, long inPos, unsigned *m_TotalBytesOfChunks) {
-	long mLOF;
-	long mPos;
+mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, INT64 inPos, unsigned *m_TotalBytesOfChunks) {
+	INT64 mLOF;
+	INT64 mPos;
 	BOOL mEnd = FALSE;
 	DWORD mLength = 0;
 	BYTE mChunkName[5];
@@ -314,7 +314,7 @@ mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, long inPos, unsigned *m_To
 			// go to next chunk
 			mPos = io->tell_proc(handle);
 			// 4 = size of the CRC
-			if(mPos + (long)mLength + 4 > mLOF) {
+			if(mPos + (INT64)mLength + 4 > mLOF) {
 				throw(1);
 			}
 			io->seek_proc(handle, mLength + 4, SEEK_CUR);
@@ -329,7 +329,7 @@ mng_CountPNGChunks(FreeImageIO *io, fi_handle handle, long inPos, unsigned *m_To
 				case IEND:
 					mEnd = TRUE;		
 					// the length below includes 4 bytes CRC, but no bytes for Length
-					*m_TotalBytesOfChunks = io->tell_proc(handle) - inPos;
+					*m_TotalBytesOfChunks = (unsigned)(io->tell_proc(handle) - inPos);
 					break;		
 				
 				case UNKNOWN_CHUNCK:
@@ -744,13 +744,13 @@ Load a FIBITMAP from a MNG or a JNG stream
 @return Returns a dib if successful, returns NULL otherwise
 */
 FIBITMAP* 
-mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, int flags = 0) {
+mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, int flags = 0) {
 	DWORD mLength = 0;
 	BYTE mChunkName[5];
 	BYTE *mChunk = NULL;
 	DWORD crc_file;
-	long LastOffset;
-	long mOrigPos;
+	INT64 LastOffset;
+	INT64 mOrigPos;
 	BYTE *PLTE_file_chunk = NULL;	// whole PLTE chunk (lentgh, name, array, crc)
 	DWORD PLTE_file_size = 0;		// size of PLTE chunk
 
@@ -798,7 +798,7 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, in
 	BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 	
 	// get the file size
-	const long mLOF = mng_LOF(io, handle);
+	const INT64 mLOF = mng_LOF(io, handle);
 	// go to the first chunk
 	io->seek_proc(handle, Offset, SEEK_SET);
 
@@ -825,7 +825,7 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, long Offset, in
 
 			if(mLength > 0) {
 				Offset = io->tell_proc(handle);
-				// a length the file cannot hold allocates nothing; no sum, so a 32-bit long cannot wrap
+				// a length the file cannot hold allocates nothing
 				if((Offset < 0) || (Offset > mLOF) || ((INT64)mLength > (INT64)(mLOF - Offset))) {
 					FreeImage_OutputMessageProc(format_id, "Error while parsing %s chunk: unexpected end of file", mChunkName);
 					BYTE *part = ((mng_GetChunckType(mChunkName) == JDAT) && (Offset >= 0) && (mLOF > Offset)) ? (BYTE*)realloc(mChunk, (size_t)(mLOF - Offset)) : NULL;

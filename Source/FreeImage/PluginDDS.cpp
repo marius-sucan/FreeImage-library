@@ -611,9 +611,9 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 
 	// uncompressed: a short file cannot claim a huge image
 	{
-		const long pos = io->tell_proc(handle);
+		const INT64 pos = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
-		const long end = io->tell_proc(handle);
+		const INT64 end = io->tell_proc(handle);
 		io->seek_proc(handle, pos, SEEK_SET);
 
 		const UINT64 raster = (((UINT64)desc->dwWidth * ddspf->dwRGBBitCount + 7) / 8) * desc->dwHeight;

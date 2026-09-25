@@ -162,7 +162,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		BYTE count = 0, run = 0;
 
 		// a cut or damaged file keeps the rows before the damage
-		const long data_start = io->tell_proc(handle);
+		const INT64 data_start = io->tell_proc(handle);
 		const char *damage = NULL;
 
 		while (i < size) {

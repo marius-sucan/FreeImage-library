@@ -991,7 +991,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	char outputMessage[ outputMessageSize ] = "";
 	FIBITMAP* dib = NULL;
 	// version 2 opcodes are word-aligned from the start of the picture
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 	try {		
 		// Skip empty 512 byte header.
 		if ( !io->seek_proc(handle, 512, SEEK_CUR) == 0 )
@@ -1006,7 +1006,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// Read8() also returns 0 at EOF: the stream position ends the scan
 		BYTE b = 0;
 		for (;;) {
-			const long scanPos = io->tell_proc(handle);
+			const INT64 scanPos = io->tell_proc(handle);
 
 			b = Read8(io, handle);
 
@@ -1036,7 +1036,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		WORD rowBytes = 0;
 		BOOL isRegion = FALSE;
 		BOOL done = FALSE;
-		long currentPos = 0;
+		INT64 currentPos = 0;
 
 		while ( !done ) {
 			WORD opcode = 0;

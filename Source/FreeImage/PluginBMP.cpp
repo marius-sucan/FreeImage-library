@@ -284,7 +284,7 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 		// a cut file keeps the rows it holds; a full row still waiting for its end-of-line counts
 		int rows = height;
 		int scanline = 0;
-		const long start = io->tell_proc(handle);
+		const INT64 start = io->tell_proc(handle);
 
 		pixels = (BYTE*)malloc((unsigned long long)width * height * sizeof(BYTE));
 		if (!pixels) {
@@ -383,7 +383,7 @@ LoadPixelDataRLE4(FreeImageIO *io, fi_handle handle, int width, int height, FIBI
 cut:
 			rows = scanline + ((bits >= width) ? 1 : 0);
 			// nothing is kept of a huge claim a few bytes long
-			const long stop = io->tell_proc(handle);
+			const INT64 stop = io->tell_proc(handle);
 			if (!PlausibleImageSize(((UINT64)width * height + 1) / 2, (stop > start) ? (UINT64)(stop - start) : 0, 64)) {
 				rows = 0;
 			}
@@ -524,10 +524,10 @@ DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *d
 // as DecodeRLE8(), but nothing is kept of a huge claim a few bytes long
 static int
 LoadPixelDataRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *dib) {
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 	const int rows = DecodeRLE8(io, handle, width, height, dib);
 	if (rows < abs(height)) {
-		const long stop = io->tell_proc(handle);
+		const INT64 stop = io->tell_proc(handle);
 		if (!PlausibleImageSize((UINT64)width * abs(height), (stop > start) ? (UINT64)(stop - start) : 0, 128)) {
 			return 0;
 		}
@@ -560,17 +560,17 @@ WarnRows(int rows, int height) {
 
 // nothing is allocated for a raster over 64 MB that the pixel data the file holds could not fill
 static BOOL
-PixelDataCanFill(FreeImageIO *io, fi_handle handle, unsigned bitmap_bits_offset, UINT64 width, UINT64 height, unsigned bit_count, unsigned compression) {
+PixelDataCanFill(FreeImageIO *io, fi_handle handle, INT64 bitmap_bits_offset, UINT64 width, UINT64 height, unsigned bit_count, unsigned compression) {
 	const UINT64 pitch = (((width * bit_count) + 7) / 8 + 3) & ~(UINT64)3;
 	const UINT64 raster = (height && (pitch > ~(UINT64)0 / height)) ? ~(UINT64)0 : pitch * height;
 	// under the 64 MB floor the file size is not needed
 	if (PlausibleImageSize(raster, 0, 1)) {
 		return TRUE;
 	}
-	const long here = io->tell_proc(handle);
+	const INT64 here = io->tell_proc(handle);
 	io->seek_proc(handle, 0, SEEK_END);
-	const long end = io->tell_proc(handle);
-	const UINT64 data = ((end > 0) && ((UINT64)end > bitmap_bits_offset)) ? (UINT64)end - bitmap_bits_offset : 0;
+	const INT64 end = io->tell_proc(handle);
+	const UINT64 data = ((end > 0) && ((UINT64)end > (UINT64)bitmap_bits_offset)) ? (UINT64)end - (UINT64)bitmap_bits_offset : 0;
 	// RLE8 expands up to 128 times, RLE4 64 times, except where it skips pixels
 	BOOL plausible = PlausibleImageSize(raster, data, (compression == BI_RLE8) ? 128 : (compression == BI_RLE4) ? 64 : 1) ? TRUE : FALSE;
 	if (!plausible && ((compression == BI_RLE8) || (compression == BI_RLE4)) && (data >= 4)) {
@@ -589,7 +589,7 @@ PixelDataCanFill(FreeImageIO *io, fi_handle handle, unsigned bitmap_bits_offset,
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
-LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_offset, int type) {
+LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_offset, int type) {
 	FIBITMAP *dib = NULL;
 
 	try {
@@ -652,7 +652,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 					case 56:	// sizeof(BITMAPV3INFOHEADER) (undocumented)
 					case 108:	// sizeof(BITMAPV4HEADER) - all Windows versions since Windows 95/NT4 (not supported)
 					case 124:	// sizeof(BITMAPV5HEADER) - Windows 98/2000 and newer (not supported)
-						io->seek_proc(handle, (long)(type - sizeof(BITMAPINFOHEADER)), SEEK_CUR);
+						io->seek_proc(handle, (INT64)(type - sizeof(BITMAPINFOHEADER)), SEEK_CUR);
 						break;
 				}
 				
@@ -821,13 +821,13 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bit
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
-LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_offset) {
+LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_offset) {
 	FIBITMAP *dib = NULL;
 
 	try {
 		BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
 		// the palette follows the header, wherever the file starts in the stream
-		const long header_start = io->tell_proc(handle);
+		const INT64 header_start = io->tell_proc(handle);
 
 		// load the info header
 		BITMAPINFOHEADER bih;
@@ -882,7 +882,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				const INT64 pal_bytes = (INT64)bitmap_bits_offset - header_start - (INT64)bih.biSize;
 				unsigned pal_size = (pal_bytes > 0) ? (unsigned)(pal_bytes / used_colors) : 0;
 
-				io->seek_proc(handle, header_start + (long)bih.biSize, SEEK_SET);
+				io->seek_proc(handle, header_start + (INT64)bih.biSize, SEEK_SET);
 
 				RGBQUAD *pal = FreeImage_GetPalette(dib);
 
@@ -923,7 +923,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				// seek to the actual pixel data.
 				// this is needed because sometimes the palette is larger than the entries it contains predicts
 
-				if (bitmap_bits_offset > (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
+				if (bitmap_bits_offset > (INT64)(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
 					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 				}
 
@@ -985,7 +985,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 					return dib;
 				}
 
-				if (bitmap_bits_offset > (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
+				if (bitmap_bits_offset > (INT64)(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
 					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 				}
 
@@ -1020,7 +1020,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 				// Skip over the optional palette 
 				// A 24 or 32 bit DIB may contain a palette for faster color reduction
 
-				if (bitmap_bits_offset > (sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
+				if (bitmap_bits_offset > (INT64)(sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (used_colors * 3))) {
 					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 				}
 
@@ -1048,7 +1048,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
-LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, unsigned bitmap_bits_offset) {
+LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_offset) {
 	FIBITMAP *dib = NULL;
 
 	try {
@@ -1275,7 +1275,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		DWORD type = 0;
 
 		// we use this offset value to make seemingly absolute seeks relative in the file		
-		long long offset_in_file = io->tell_proc(handle);
+		INT64 offset_in_file = io->tell_proc(handle);
 
 		// read the fileheader
 		memset(&bitmapfileheader, 0, sizeof(BITMAPFILEHEADER));

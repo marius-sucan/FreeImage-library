@@ -1,5 +1,5 @@
 # HEIF tests; needs Dist/libfreeimage.a. Scratch files: $HEIF_TEST_TMP or cwd
-# targets: run asan-run narrowio-step thirdparty-run thirdparty-asan-run
+# targets: run asan-run thirdparty-run thirdparty-asan-run
 
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
@@ -30,12 +30,12 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) decode-asan narrowio-asan sequence-asan narrowio-step thirdparty thirdparty-asan
+	rm -f $(TESTS) decode-asan narrowio-asan sequence-asan thirdparty thirdparty-asan
 
 clean: clean-bin
-	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_heif_*.png fi_heif_*.bin fi_heif_*.webp
+	rm -rf asan-obj libfreeimage-asan.a fi_heif_*.png fi_heif_*.bin fi_heif_*.webp
 
-.PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step thirdparty-run thirdparty-asan-run
+.PHONY: default all run clean clean-bin asan-lib asan-run thirdparty-run thirdparty-asan-run
 
 # --- third-party samples -----------------------------------------------------
 thirdparty: thirdparty.c ../../Dist/libfreeimage.a
@@ -80,13 +80,3 @@ asan-run: asan-obj/.built
 	gcc $(CFLAGS) -fsanitize=address $(INC) narrowio.c -o narrowio-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	gcc $(CFLAGS) -fsanitize=address $(INC) sequence.c -o sequence-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	./decode-asan && ./narrowio-asan && ./sequence-asan
-
-# --- stepped seek -----------------------------------------------------------
-# runs narrowio against a 4 KB seek step (the Win64-only path)
-narrowio-step: narrowio.c ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginHEIF.cpp
-	rm -rf step-obj && mkdir -p step-obj
-	cp ../../Dist/libfreeimage.a libfreeimage-narrowstep.a
-	g++ -c $(LIBCXXFLAGS) -DFI_HEIF_SEEK_STEP_MAX=4096 $(LIBINC) ../../Source/FreeImage/PluginHEIF.cpp -o step-obj/PluginHEIF.o
-	ar r libfreeimage-narrowstep.a step-obj/PluginHEIF.o
-	gcc $(CFLAGS) $(INC) narrowio.c -o narrowio-step libfreeimage-narrowstep.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
-	./narrowio-step 4096

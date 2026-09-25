@@ -48,8 +48,8 @@ FreeImage_OpenMemory(BYTE *data, DWORD size_in_bytes) {
 				// wrap a user buffer
 				mem_header->delete_me = FALSE;
 				mem_header->data = (BYTE*)data;
-				mem_header->file_length = size_in_bytes;
-				mem_header->data_length = size_in_bytes;
+				mem_header->file_length = (INT64)size_in_bytes;
+				mem_header->data_length = (INT64)size_in_bytes;
 			} else {
 				mem_header->delete_me = TRUE;
 			}
@@ -120,8 +120,13 @@ FreeImage_AcquireMemory(FIMEMORY *stream, BYTE **data, DWORD *size_in_bytes) {
 	if (stream) {
 		FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(stream->data);
 
+		if (mem_header->file_length > (INT64)0xFFFFFFFFu) {
+			FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_AcquireMemory: the memory stream holds more than 4 GB");
+			return FALSE;
+		}
+
 		*data = (BYTE*)mem_header->data;
-		*size_in_bytes = mem_header->file_length;
+		*size_in_bytes = (DWORD)mem_header->file_length;
 		return TRUE;
 	}
 
@@ -163,7 +168,8 @@ FreeImage_TellMemory(FIMEMORY *stream) {
 	SetMemoryIO(&io);
 
 	if (stream != NULL) {
-		return io.tell_proc((fi_handle)stream);
+		const INT64 position = io.tell_proc((fi_handle)stream);
+		return (position <= (INT64)LONG_MAX) ? (long)position : -1L;
 	}
 
 	return -1L;

@@ -74,44 +74,24 @@ GetProcessorCount() {
 //   avifIO over FreeImageIO
 // ----------------------------------------------------------
 
-// seek_proc takes a long (32-bit on Win64); overridable for tests
-#ifndef FI_AVIF_SEEK_STEP_MAX
-#define FI_AVIF_SEEK_STEP_MAX LONG_MAX
-#endif
-
-// read_proc takes an unsigned size
-#define FI_AVIF_READ_CHUNK 0x40000000u
-
 typedef struct tagAVIFStream {
 	avifIO io;
 	FreeImageIO *fio;
 	fi_handle handle;
-	long base;				//! stream position of the first AVIF byte
+	INT64 base;				//! stream position of the first AVIF byte
 	BOOL size_known;
 	uint64_t size;			//! bytes from base to the end
 	BYTE *buffer;
 	size_t capacity;
 } AVIFStream;
 
-// seek to base + offset, in long-sized steps if needed
+// seek to base + offset
 static BOOL
 AVIF_SeekTo(AVIFStream *s, uint64_t offset) {
-	const long span = (s->base <= FI_AVIF_SEEK_STEP_MAX) ? (FI_AVIF_SEEK_STEP_MAX - s->base) : 0;
-	if(offset <= (uint64_t)span) {
-		return (s->fio->seek_proc(s->handle, s->base + (long)offset, SEEK_SET) == 0) ? TRUE : FALSE;
-	}
-	if(s->fio->seek_proc(s->handle, s->base, SEEK_SET) != 0) {
+	if(offset > (uint64_t)(INT64_MAX - s->base)) {
 		return FALSE;
 	}
-	uint64_t remaining = offset;
-	while(remaining > 0) {
-		const long step = (remaining > (uint64_t)FI_AVIF_SEEK_STEP_MAX) ? (long)FI_AVIF_SEEK_STEP_MAX : (long)remaining;
-		if(s->fio->seek_proc(s->handle, step, SEEK_CUR) != 0) {
-			return FALSE;
-		}
-		remaining -= (uint64_t)step;
-	}
-	return TRUE;
+	return (s->fio->seek_proc(s->handle, s->base + (INT64)offset, SEEK_SET) == 0) ? TRUE : FALSE;
 }
 
 // avifIOReadFunc: past the end = error, at the end = empty, across = clipped
@@ -148,16 +128,7 @@ AVIF_ReadProc(avifIO *io, uint32_t readFlags, uint64_t offset, size_t size, avif
 		return AVIF_RESULT_IO_ERROR;
 	}
 
-	size_t total = 0;
-	while(total < size) {
-		const size_t left = size - total;
-		const unsigned chunk = (left > (size_t)FI_AVIF_READ_CHUNK) ? FI_AVIF_READ_CHUNK : (unsigned)left;
-		const unsigned got = s->fio->read_proc(s->buffer + total, 1, chunk, s->handle);
-		if(got == 0) {
-			break;
-		}
-		total += got;
-	}
+	const size_t total = FreeImage_ReadBytes(s->fio, s->handle, s->buffer, size);
 	if((total < size) && s->size_known) {
 		return AVIF_RESULT_IO_ERROR;
 	}
@@ -569,9 +540,8 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	if(s->base < 0) {
 		s->base = 0;
 	}
-	// stream length, when tell_proc can express it (32-bit long on Win64)
 	if(io->seek_proc(handle, 0, SEEK_END) == 0) {
-		const long end = io->tell_proc(handle);
+		const INT64 end = io->tell_proc(handle);
 		if(end >= s->base) {
 			s->size = (uint64_t)(end - s->base);
 			s->size_known = TRUE;

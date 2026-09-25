@@ -41,19 +41,14 @@ JXR wrapper for FreeImage I/O handle
 typedef struct tagFreeImageJXRIO {
     FreeImageIO *io;
 	fi_handle handle;
-	size_t pos;			//! own 64-bit position (long is 32-bit on Win64), from start
-	long start;			//! handle position of the JXR data, which jxrlib requires to be its position 0
+	size_t pos;			//! own position, from start
+	INT64 start;		//! handle position of the JXR data, which jxrlib requires to be its position 0
 } FreeImageJXRIO;
-
-// largest single seek; override to test the stepped path
-#ifndef FI_JXR_SEEK_STEP_MAX
-#define FI_JXR_SEEK_STEP_MAX LONG_MAX
-#endif
 
 static ERR
 _jxr_io_Read(WMPStream* pWS, void* pv, size_t cb) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
-	if(fio->io->read_proc(pv, (unsigned)cb, 1, fio->handle) != 1) {
+	if(FreeImage_ReadBytes(fio->io, fio->handle, pv, cb) != cb) {
 		return WMP_errFileIO;
 	}
 	fio->pos += cb;
@@ -64,7 +59,7 @@ static ERR
 _jxr_io_Write(WMPStream* pWS, const void* pv, size_t cb) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
 	if(0 != cb) {
-		if(fio->io->write_proc((void*)pv, (unsigned)cb, 1, fio->handle) != 1) {
+		if(FreeImage_WriteBytes(fio->io, fio->handle, pv, cb) != cb) {
 			return WMP_errFileIO;
 		}
 		fio->pos += cb;
@@ -76,25 +71,8 @@ _jxr_io_Write(WMPStream* pWS, const void* pv, size_t cb) {
 static ERR
 _jxr_io_SetPos(WMPStream* pWS, size_t offPos) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
-
-	const size_t step_max = (size_t)FI_JXR_SEEK_STEP_MAX;
-	if(((size_t)fio->start <= step_max) && (offPos <= step_max - (size_t)fio->start)) {
-		if(fio->io->seek_proc(fio->handle, fio->start + (long)offPos, SEEK_SET) != 0) {
-			return WMP_errFileIO;
-		}
-	} else {
-		// too far for one seek: go back to the start, then step
-		size_t remaining = offPos;
-		if(fio->io->seek_proc(fio->handle, fio->start, SEEK_SET) != 0) {
-			return WMP_errFileIO;
-		}
-		while(remaining > 0) {
-			const long step = (remaining > (size_t)FI_JXR_SEEK_STEP_MAX) ? (long)FI_JXR_SEEK_STEP_MAX : (long)remaining;
-			if(fio->io->seek_proc(fio->handle, step, SEEK_CUR) != 0) {
-				return WMP_errFileIO;
-			}
-			remaining -= (size_t)step;
-		}
+	if(fio->io->seek_proc(fio->handle, fio->start + (INT64)offPos, SEEK_SET) != 0) {
+		return WMP_errFileIO;
 	}
 	fio->pos = offPos;
 	return WMP_errSuccess;
@@ -112,7 +90,7 @@ _jxr_io_EOS(WMPStream* pWS) {
 	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
 	const size_t currentPos = fio->pos;
 	BYTE byte = 0;
-	// probe a byte: tell_proc cannot report past 2 GB
+	// probe a byte
 	const Bool bDataRemaining = (fio->io->read_proc(&byte, 1, 1, fio->handle) == 1) ? TRUE : FALSE;
 	_jxr_io_SetPos(pWS, currentPos);
 	return bDataRemaining;
@@ -1005,7 +983,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			jxr_io->io = io;
 			jxr_io->handle = handle;
 			{
-				const long lOff = io->tell_proc(handle);
+				const INT64 lOff = io->tell_proc(handle);
 				jxr_io->start = (lOff > 0) ? lOff : 0;
 				jxr_io->pos = 0;
 			}

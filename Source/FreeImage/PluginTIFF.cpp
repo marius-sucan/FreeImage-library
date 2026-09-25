@@ -131,32 +131,32 @@ typedef struct {
 	//! Count the number of thumbnails already read (used to avoid recursion on loading)
 	unsigned thumbnailCount;
 	//! Handle position of the TIFF header, which libtiff offsets count from
-	long start;
+	INT64 start;
 } fi_TIFFIO;
 
 // ----------------------------------------------------------
 //   libtiff interface 
 // ----------------------------------------------------------
 
-static tmsize_t 
+static tmsize_t
 _tiffReadProc(thandle_t handle, void *buf, tmsize_t size) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-	return fio->io->read_proc(buf, (unsigned)size, 1, fio->handle) * size;
+	return (tmsize_t)FreeImage_ReadBytes(fio->io, fio->handle, buf, (size_t)size);
 }
 
 static tmsize_t
 _tiffWriteProc(thandle_t handle, void *buf, tmsize_t size) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-	return fio->io->write_proc(buf, (unsigned)size, 1, fio->handle) * size;
+	return (tmsize_t)FreeImage_WriteBytes(fio->io, fio->handle, buf, (size_t)size);
 }
 
 static toff_t
 _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
 	if(whence == SEEK_SET) {
-		fio->io->seek_proc(fio->handle, fio->start + (long)off, SEEK_SET);
+		fio->io->seek_proc(fio->handle, fio->start + (INT64)off, SEEK_SET);
 	} else {
-		fio->io->seek_proc(fio->handle, (long)off, whence);
+		fio->io->seek_proc(fio->handle, (INT64)off, whence);
 	}
 	return (toff_t)(fio->io->tell_proc(fio->handle) - fio->start);
 }
@@ -171,9 +171,9 @@ _tiffCloseProc(thandle_t fd) {
 static toff_t
 _tiffSizeProc(thandle_t handle) {
     fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-    long currPos = fio->io->tell_proc(fio->handle);
+    const INT64 currPos = fio->io->tell_proc(fio->handle);
     fio->io->seek_proc(fio->handle, 0, SEEK_END);
-    long fileSize = fio->io->tell_proc(fio->handle);
+    const INT64 fileSize = fio->io->tell_proc(fio->handle);
     fio->io->seek_proc(fio->handle, currPos, SEEK_SET);
     return (fileSize > fio->start) ? (toff_t)(fileSize - fio->start) : 0;
 }
@@ -859,7 +859,7 @@ tiff_read_exif_profile(FreeImageIO *io, fi_handle handle, TIFF *tiff, FIBITMAP *
 	// get the IFD offset
 	if(TIFFGetField(tiff, TIFFTAG_EXIFIFD, &exif_offset)) {
 
-		const long tell_pos = io->tell_proc(handle);
+		const INT64 tell_pos = io->tell_proc(handle);
 		const uint16_t cur_dir = TIFFCurrentDirectory(tiff);
 
 		// read EXIF tags
@@ -1092,7 +1092,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	fio->io = io;
 	fio->handle = handle;
 	fio->thumbnailCount = 0;
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 	fio->start = (start > 0) ? start : 0;
 
 	if (read) {
@@ -1329,7 +1329,7 @@ ReadThumbnail(FreeImageIO *io, fi_handle handle, void *data, TIFF *tiff, FIBITMA
 
 		if(!TIFFLastDirectory(tiff)) {
 			// save current position
-			const long tell_pos = io->tell_proc(handle);
+			const INT64 tell_pos = io->tell_proc(handle);
 			const uint16_t cur_dir = TIFFCurrentDirectory(tiff);
 			
 			// load the thumbnail
@@ -1358,7 +1358,7 @@ ReadThumbnail(FreeImageIO *io, fi_handle handle, void *data, TIFF *tiff, FIBITMA
 		if(TIFFGetField(tiff, TIFFTAG_SUBIFD, &subIFD_count, &subIFD_offsets)) {
 			if(subIFD_count > 0) {
 				// save current position
-				const long tell_pos = io->tell_proc(handle);
+				const INT64 tell_pos = io->tell_proc(handle);
 				const uint16_t cur_dir = TIFFCurrentDirectory(tiff);
 
 				// this code can cause unwanted recursion causing an overflow, because of the way TIFFSetSubDirectory work

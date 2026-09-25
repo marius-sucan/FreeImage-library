@@ -35,13 +35,21 @@ myWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 }
 
 static int DLL_CALLCONV
-mySeekProc(fi_handle handle, long offset, int origin) {
-	return fseek((FILE *)handle, offset, origin);
+mySeekProc(fi_handle handle, INT64 offset, int origin) {
+#ifdef _WIN32
+	return _fseeki64((FILE *)handle, offset, origin);
+#else
+	return fseeko((FILE *)handle, (off_t)offset, origin);
+#endif
 }
 
-static long DLL_CALLCONV
+static INT64 DLL_CALLCONV
 myTellProc(fi_handle handle) {
-	return ftell((FILE *)handle);
+#ifdef _WIN32
+	return _ftelli64((FILE *)handle);
+#else
+	return (INT64)ftello((FILE *)handle);
+#endif
 }
 
 BOOL testStreamMultiPageOpen(const char *input, int flags) {

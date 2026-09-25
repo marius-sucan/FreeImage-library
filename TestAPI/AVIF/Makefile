@@ -1,5 +1,5 @@
 # AVIF tests; build the library first (make -f Makefile.gnu dist)
-# targets: run, asan-run, narrowio-step; scratch files in $AVIF_TEST_TMP
+# targets: run, asan-run; scratch files in $AVIF_TEST_TMP
 
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
@@ -27,12 +27,12 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) decode-asan narrowio-asan narrowio-step
+	rm -f $(TESTS) decode-asan narrowio-asan
 
 clean: clean-bin
-	rm -rf asan-obj step-obj libfreeimage-asan.a libfreeimage-narrowstep.a fi_avif_*
+	rm -rf asan-obj libfreeimage-asan.a fi_avif_*
 
-.PHONY: default all run clean clean-bin asan-lib asan-run narrowio-step
+.PHONY: default all run clean clean-bin asan-lib asan-run
 
 # --- AddressSanitizer -------------------------------------------------------
 # only the plugin, libavif and dav1d are instrumented
@@ -58,13 +58,3 @@ asan-run: asan-obj/.built
 	gcc $(CFLAGS) -fsanitize=address $(INC) decode.c -o decode-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	gcc $(CFLAGS) -fsanitize=address $(INC) narrowio.c -o narrowio-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 	./decode-asan && ./narrowio-asan
-
-# --- stepped seek -----------------------------------------------------------
-# rebuild the plugin with a tiny seek step (the Win64 32-bit long path)
-narrowio-step: narrowio.c ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginAVIF.cpp
-	rm -rf step-obj && mkdir -p step-obj
-	cp ../../Dist/libfreeimage.a libfreeimage-narrowstep.a
-	g++ -c $(LIBCXXFLAGS) -DFI_AVIF_SEEK_STEP_MAX=4096 $(LIBINC) ../../Source/FreeImage/PluginAVIF.cpp -o step-obj/PluginAVIF.o
-	ar r libfreeimage-narrowstep.a step-obj/PluginAVIF.o
-	gcc $(CFLAGS) $(INC) narrowio.c -o narrowio-step libfreeimage-narrowstep.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
-	./narrowio-step 4096

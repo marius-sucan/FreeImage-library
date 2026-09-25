@@ -83,16 +83,16 @@ _g3UnmapProc(thandle_t, void* base, toff_t size) {
 
 static tmsize_t
 G3GetFileSize(FreeImageIO *io, fi_handle handle) {
-    long currentPos = io->tell_proc(handle);
+    INT64 currentPos = io->tell_proc(handle);
     io->seek_proc(handle, 0, SEEK_END);
-    long fileSize = io->tell_proc(handle);
+    INT64 fileSize = io->tell_proc(handle);
     io->seek_proc(handle, currentPos, SEEK_SET);
-    return fileSize;
+    return (fileSize > currentPos) ? (tmsize_t)(fileSize - currentPos) : 0;
 }
 
 static BOOL 
 G3ReadFile(FreeImageIO *io, fi_handle handle, uint8_t *tif_rawdata, tmsize_t tif_rawdatasize) {
-	return ((tmsize_t)(io->read_proc(tif_rawdata, (unsigned)tif_rawdatasize, 1, handle) * tif_rawdatasize) == tif_rawdatasize);
+	return ((tmsize_t)FreeImage_ReadBytes(io, handle, tif_rawdata, (size_t)tif_rawdatasize) == tif_rawdatasize);
 }
 
 // ==========================================================

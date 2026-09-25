@@ -140,28 +140,28 @@ namespace FreeImageAPI.IO
 		/// <summary>
 		/// Moves the streams position.
 		/// </summary>
-		static int streamSeek(fi_handle handle, int offset, SeekOrigin origin)
+		static int streamSeek(fi_handle handle, long offset, SeekOrigin origin)
 		{
 			Stream stream = handle.GetObject() as Stream;
 			if (stream == null)
 			{
 				return 1;
 			}
-			stream.Seek((long)offset, origin);
+			stream.Seek(offset, origin);
 			return 0;
 		}
 
 		/// <summary>
 		/// Returns the streams current position
 		/// </summary>
-		static int streamTell(fi_handle handle)
+		static long streamTell(fi_handle handle)
 		{
 			Stream stream = handle.GetObject() as Stream;
 			if (stream == null)
 			{
 				return -1;
 			}
-			return (int)stream.Position;
+			return stream.Position;
 		}
 	}
 }

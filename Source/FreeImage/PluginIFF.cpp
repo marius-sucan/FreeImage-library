@@ -251,7 +251,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if (ch_size > size)
 				size = ch_size;
 
-			unsigned ch_end = io->tell_proc(handle) + ch_size;
+			INT64 ch_end = io->tell_proc(handle) + ch_size;
 
 			if (ch_type == ID_BMHD) {			// Bitmap Header
 				if (ch_size < sizeof(BMHD))

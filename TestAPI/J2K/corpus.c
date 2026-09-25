@@ -72,8 +72,8 @@ static void dump_raw(FIBITMAP *dib, const char *dir, const char *name) {
 /* FreeImageIO over a FILE*, for loads at an offset */
 static unsigned DLL_CALLCONV io_read(void *b, unsigned s, unsigned c, fi_handle h) { return (unsigned)fread(b, s, c, (FILE*)h); }
 static unsigned DLL_CALLCONV io_write(void *b, unsigned s, unsigned c, fi_handle h) { return (unsigned)fwrite(b, s, c, (FILE*)h); }
-static int DLL_CALLCONV io_seek(fi_handle h, long o, int w) { return fseek((FILE*)h, o, w); }
-static long DLL_CALLCONV io_tell(fi_handle h) { return ftell((FILE*)h); }
+static int DLL_CALLCONV io_seek(fi_handle h, INT64 o, int w) { return fseeko((FILE*)h, (off_t)o, w); }
+static INT64 DLL_CALLCONV io_tell(fi_handle h) { return (INT64)ftello((FILE*)h); }
 
 static FIBITMAP *load_at_offset(FREE_IMAGE_FORMAT fif, const char *path, long offset, int flags) {
     FreeImageIO io = { io_read, io_write, io_seek, io_tell };

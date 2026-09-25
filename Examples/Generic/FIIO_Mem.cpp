@@ -108,7 +108,7 @@ fiio_mem_WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle
 }
 
 int
-fiio_mem_SeekProc(fi_handle handle, long offset, int origin) {
+fiio_mem_SeekProc(fi_handle handle, INT64 offset, int origin) {
 	switch(origin) { //0 to filelen-1 are 'inside' the file
 	default:
 	case SEEK_SET: //can fseek() to 0-7FFFFFFF always
@@ -136,7 +136,7 @@ fiio_mem_SeekProc(fi_handle handle, long offset, int origin) {
 	return -1;
 }
 
-long
+INT64
 fiio_mem_TellProc(fi_handle handle) {
 	return FIIOMEM(curpos);
 }

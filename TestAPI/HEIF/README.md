@@ -7,7 +7,7 @@ samples the repository does not carry. Each prints a report and exits non-zero o
 | test | what it covers |
 |---|---|
 | `decode` | Loads the 34 still-image files in `data/` (libheif's test images and fuzzing corpus, pillow-heif's synthetic images and six files derived from three of libheif's, see `data/README.md`) and checks everything the plugin decides: detection (an AVIF is left to the AVIF plugin, a HEIF carrying a codec FreeImage does not have is claimed and refused with a message), the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`, monochrome to 8-bit or `FIT_UINT16`), the geometry after the `clap`/`irot`/`imir` transforms and their direction, ICC/Exif/XMP (including the block a `mini` box stores without an `exif_tiff_header_offset`), the `thmb` thumbnail, the page count of multi-image files, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. |
-| `narrowio` | Streams a file through a `FreeImageIO` whose absolute seeks and tells refuse anything past a cap, and loads a HEIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
+| `narrowio` | Streams a file and a sequence through a `FreeImageIO` of the test's own (64-bit positions through `fseeko`/`ftello`), and loads a HEIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
 | `sequence` | Image sequences (animated HEIC), on the `seq-*` files of `data/`: the frame count, size and type, and the FIMD_ANIMATION tags of every page (`FrameTime` from the track's sample tables - libheif's own decode attaches each duration to a later frame - `Loop` from the edit list, the canvas); that a page is the same picture read in order, backwards, at random, twice, one per session or from memory, although libheif decodes a track forwards only; header-only pages; `HEIF_PLAYBACK` (32-bit, equal to the plain page converted); which pages a file gets (a thumbnail track written first, a file with a still image and a sequence, a frame padded by its encoder); an ICC profile in the sample entry; damage (a track that yields no frame, too many frames, a file cut short); and the frames rebuilt as an animated WebP through the page API. |
 | `thirdparty` | Files other HEIF writers produced, downloaded into `samples/` by `fetch_samples.sh` (see `samples/README.md` for their sources and terms): Nokia's example image sequences, bursts and collections, and the MPEG conformance suite's image-sequence files (C001, C026-C032, C036-C038, C041). Page counts, sizes, frame durations, loop counts, animation tags and a pixel checksum per file, each cross-checked against ffmpeg before it was pinned; every sequence is also read backwards, at random, header-only, played and from memory. |
 
@@ -18,28 +18,12 @@ Build the library first (`make` in the repo root), then:
     make run            # decode + narrowio + sequence
     make asan-run       # the same, with the plugin, libheif and libde265 rebuilt with
                         # AddressSanitizer and linked ahead of the library
-    make narrowio-step  # the stepped seek, see below
     make thirdparty-run # fetch the third-party samples (about 12 MB) and run thirdparty
     make thirdparty-asan-run   # the same with the AddressSanitizer objects
     ./decode --png      # also writes every decoded page as fi_heif_<file>_<page>.png
 
 Scratch files are written to `$HEIF_TEST_TMP`, or the current directory.
 `make clean` removes them.
-
-## The one branch that needs a special build
-
-`FreeImageIO` seeks and tells with a `long`, which is 32-bit on Win64. Past 2 GB
-the plugin cannot learn the file size and reaches offsets by rewinding and
-stepping forward with `SEEK_CUR`. Where `long` is 64-bit that branch is
-unreachable, so `PluginHEIF.cpp` takes an overridable bound:
-
-    make narrowio-step
-
-rebuilds `PluginHEIF.o` with `-DFI_HEIF_SEEK_STEP_MAX=4096` into a private copy
-of the library and runs `narrowio` with a 4 KB cap on absolute seeks and tells.
-Expected: `load -> ok`, `pixels -> exact`, one refused tell (the file size
-becomes unknown) and a non-zero number of forward steps with `SEEK_CUR`. No
-absolute seek is refused, because the plugin never attempts one past the bound.
 
 ## What "expected" looks like
 

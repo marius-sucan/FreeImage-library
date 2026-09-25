@@ -450,7 +450,7 @@ namespace FreeImageAPI.Plugins
 		/// <summary>
 		/// Seeks in an unmanaged stream.
 		/// </summary>
-		protected int Seek(FreeImageIO io, fi_handle handle, int offset, SeekOrigin origin)
+		protected int Seek(FreeImageIO io, fi_handle handle, long offset, SeekOrigin origin)
 		{
 			return io.seekProc(handle, offset, origin);
 		}
@@ -458,7 +458,7 @@ namespace FreeImageAPI.Plugins
 		/// <summary>
 		/// Retrieves the position of an unmanaged stream.
 		/// </summary>
-		protected int Tell(FreeImageIO io, fi_handle handle)
+		protected long Tell(FreeImageIO io, fi_handle handle)
 		{
 			return io.tellProc(handle);
 		}

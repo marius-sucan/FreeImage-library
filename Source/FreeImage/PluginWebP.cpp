@@ -111,16 +111,20 @@ ReadFileToWebPData(FreeImageIO *io, fi_handle handle, WebPData * const bitstream
 
   try {
 	  // Read the input file and put it in memory
-	  long start_pos = io->tell_proc(handle);
+	  const INT64 start_pos = io->tell_proc(handle);
 	  io->seek_proc(handle, 0, SEEK_END);
-	  size_t file_length = (size_t)(io->tell_proc(handle) - start_pos);
+	  const INT64 end_pos = io->tell_proc(handle);
 	  io->seek_proc(handle, start_pos, SEEK_SET);
+	  if(end_pos < start_pos) {
+		  throw "Error while reading input stream";
+	  }
+	  const size_t file_length = (size_t)(end_pos - start_pos);
 	  // one byte spare: a cut image chunk may need a pad byte
 	  raw_data = (uint8_t*)malloc(file_length + 1);
 	  if(!raw_data) {
 		  throw FI_MSG_ERROR_MEMORY;
 	  }
-	  if(io->read_proc(raw_data, 1, (unsigned)file_length, handle) != file_length) {
+	  if(FreeImage_ReadBytes(io, handle, raw_data, file_length) != file_length) {
 		  throw "Error while reading input stream";
 	  }
 	  
@@ -1025,7 +1029,7 @@ WebP_AssembleAndWrite(WebPMux *mux, FreeImageIO *io, fi_handle handle) {
 
 	if(WebPMuxAssemble(mux, &output_data) != WEBP_MUX_OK) {
 		FreeImage_OutputMessageProc(s_format_id, "Failed to create webp output file");
-	} else if(io->write_proc((void*)output_data.bytes, 1, (unsigned)output_data.size, handle) != output_data.size) {
+	} else if(FreeImage_WriteBytes(io, handle, output_data.bytes, output_data.size) != output_data.size) {
 		FreeImage_OutputMessageProc(s_format_id, "Failed to write webp output file");
 	} else {
 		bResult = TRUE;

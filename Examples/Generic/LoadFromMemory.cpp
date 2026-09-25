@@ -65,7 +65,7 @@ _WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 }
 
 static int DLL_CALLCONV
-_SeekProc(fi_handle handle, long offset, int origin) {
+_SeekProc(fi_handle handle, INT64 offset, int origin) {
 	if (origin == SEEK_SET) {
 		g_load_address = (BYTE *)handle + offset;
 	} else if (origin == SEEK_END) {
@@ -77,11 +77,11 @@ _SeekProc(fi_handle handle, long offset, int origin) {
 	return 0;
 }
 
-static long DLL_CALLCONV
+static INT64 DLL_CALLCONV
 _TellProc(fi_handle handle) {
 	assert((BYTE *)g_load_address >= (BYTE *)handle);
 
-	return (long)((BYTE *)g_load_address - (BYTE *)handle);
+	return (INT64)((BYTE *)g_load_address - (BYTE *)handle);
 }
 
 // ----------------------------------------------------------

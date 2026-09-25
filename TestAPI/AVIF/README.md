@@ -7,7 +7,7 @@ on failure.
 | test | what it covers |
 |---|---|
 | `decode` | Loads every file in `data/` (libavif's and libheif's corpora plus two files derived from them, see `data/README.md`) and checks everything the plugin decides: detection, the bitmap type picked per pixel format (8-bit to 24/32-bit, 10/12-bit to `FIT_RGB16`/`FIT_RGBA16`), the `clap`/`irot`/`imir` transforms, ICC/Exif/XMP, the page count of image sequences and the `FIMD_ANIMATION` tags on every one of their pages - including a file retimed so that each frame lasts a different, non-whole number of milliseconds, and a round trip that rebuilds it as an animated WebP through the page API to see what those tags are worth to a writer - the `AVIF_PLAYBACK` pages of a sequence against the pages loaded without it, what `FreeImage_CloseMultiBitmap()` returns for a document opened read-write in a format that has no writer, header-only loads, memory streams, a truncated stream, and a pixel checksum per file. One file is expected to be refused. |
-| `narrowio` | Streams a file through a `FreeImageIO` whose absolute seeks and tells refuse anything past a cap, and loads an AVIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
+| `narrowio` | Streams a file through a `FreeImageIO` of the test's own (64-bit positions through `fseeko`/`ftello`), and loads an AVIF that sits behind 777 bytes of junk with `FreeImage_LoadFromHandle`. The pixels must equal a plain `FreeImage_Load`. |
 
 ## Running
 
@@ -16,26 +16,10 @@ Build the library first (`make` in the repo root), then:
     make run            # decode + narrowio
     make asan-run       # the same, with the plugin, libavif and dav1d rebuilt with
                         # AddressSanitizer and linked ahead of the library
-    make narrowio-step  # the stepped seek, see below
     ./decode --png      # also writes every decoded page as fi_avif_<file>_<page>.png
 
 Scratch files are written to `$AVIF_TEST_TMP`, or the current directory.
 `make clean` removes them.
-
-## The one branch that needs a special build
-
-`FreeImageIO` seeks and tells with a `long`, which is 32-bit on Win64. Past 2 GB
-the plugin cannot learn the file size and reaches offsets by rewinding and
-stepping forward with `SEEK_CUR`. Where `long` is 64-bit that branch is
-unreachable, so `PluginAVIF.cpp` takes an overridable bound:
-
-    make narrowio-step
-
-rebuilds `PluginAVIF.o` with `-DFI_AVIF_SEEK_STEP_MAX=4096` into a private copy
-of the library and runs `narrowio` with a 4 KB cap on absolute seeks and tells.
-Expected: `load -> ok`, `pixels -> exact`, one refused tell (the file size
-becomes unknown) and a non-zero number of forward steps with `SEEK_CUR`. No
-absolute seek is refused, because the plugin never attempts one past the bound.
 
 ## What "expected" looks like
 

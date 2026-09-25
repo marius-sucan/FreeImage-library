@@ -2,9 +2,6 @@ decode
 narrowio
 decode-asan
 narrowio-asan
-narrowio-step
 asan-obj/
-step-obj/
 libfreeimage-asan.a
-libfreeimage-narrowstep.a
 fi_avif_*

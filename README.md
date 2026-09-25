@@ -30,7 +30,7 @@ Fixes:
 - fixed FreeImage_Copy() to not crash with very large images [over 5000 mgpx];
 - fixed FreeImage_Rescale() to work with very large images [over 5000 mgpx]; it no longer screws up the colors;
 - fixed FreeImage_RescaleRawBits() reading the wrong rows of FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF and FIT_RGBAF sources whose pitch is not a multiple of the sample size;
-- fixed TIFF files saved to memory carrying a byte of uninitialised heap memory: a write past the end of a memory stream leaves zeros, as in a file; a write near a memory stream's 2 GB limit no longer overflows on Windows;
+- fixed TIFF files saved to memory carrying a byte of uninitialised heap memory: a write past the end of a memory stream leaves zeros, as in a file; the stream's growth is computed in 64 bits;
 - fixed FreeImage_SaveMultiBitmapToMemory() writing into, and crashing on, a memory stream that wraps the caller's buffer; it returns FALSE, as FreeImage_SaveToMemory() does;
 - fixed FreeImage_Rotate() to work with very large images [over 5000 mgpx];
 - fixed a data race in the 1-bit 90/180/270 rotation;
@@ -54,9 +54,12 @@ Fixes:
 - fixed header-only loads (FIF_LOAD_NOPIXELS) of CMYK TIFF files without TIFF_CMYK describing the CMYK data: they reported 32 or 64 bits and the CMYK profile of the file, while a load returns 24- or 48-bit RGB without it, and a float CMYK file loaded header-only although it cannot be loaded;
 - fixed header-only loads of PSD files: CMYK and multichannel files described the CMYK data instead of the RGB image a load without PSD_CMYK returns, a multichannel file loaded with PSD_CMYK missed its fourth channel and CMYK flag, and indexed and bitmap files got a grey palette; CMYK and multichannel files loaded as RGB also lost their thumbnail;
 - fixed heap overflows loading TIFF files FreeImage stores in pixels of another size than the file's (2-sample 8-bit, float grey with alpha, 16-bit colour with extra samples): tiled ones wrote past the image and are now refused; striped ones read past their strip or, when planar, wrote past the image, and now keep the samples that fit;
+- fixed the I/O layer's 2 GB file limit on Windows: FreeImageIO's seek_proc and tell_proc carry INT64 positions (long is 32-bit there), FreeImage_Load(), FreeImage_Save() and the multi-page cache seek in 64 bits, every plugin and the TIFF, OpenEXR, JPEG XR, JPEG 2000, LibRaw, HEIF, AVIF and WebP glue keep 64-bit positions, and reads or writes of more than 4 GB go through the callbacks in pieces; the G3 plugin also reads a stream that does not start at byte zero;
+- fixed memory streams: FreeImage_OpenMemory() with a buffer of 2 GB or more read nothing, and a stream FreeImage grows stopped at 2 GB; both hold what memory allows, FreeImage_AcquireMemory() returns FALSE past 4 GB (FreeImage_ReadMemory() still reads it) and FreeImage_TellMemory() returns -1 past what a long holds;
 - and many other fixes
 
 Changes:
+- FreeImageIO's seek_proc takes an INT64 offset and tell_proc returns INT64; a FreeImageIO built with long callbacks must be recompiled on Windows, where long is 32-bit (the structure's layout and every export are unchanged);
 - FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - FreeImage_Rescale(), FreeImage_RescaleRect(), FreeImage_RescaleRawBits() and FreeImage_MakeThumbnail() resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter, instead of a blank image, TRUE with nothing written or no thumbnail; integer samples round half away from zero and saturate at their type's limits, complex images are filtered per real and imaginary part, and a thumbnail made with convert set is an 8-bit image, as for FIT_FLOAT;

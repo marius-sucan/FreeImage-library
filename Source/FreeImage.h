@@ -593,8 +593,9 @@ FI_STRUCT (FITAG) { void *data; };
 typedef void* fi_handle;
 typedef unsigned (DLL_CALLCONV *FI_ReadProc) (void *buffer, unsigned size, unsigned count, fi_handle handle);
 typedef unsigned (DLL_CALLCONV *FI_WriteProc) (void *buffer, unsigned size, unsigned count, fi_handle handle);
-typedef int (DLL_CALLCONV *FI_SeekProc) (fi_handle handle, long offset, int origin);
-typedef long (DLL_CALLCONV *FI_TellProc) (fi_handle handle);
+// positions are 64-bit: long is 32 bits on Windows
+typedef int (DLL_CALLCONV *FI_SeekProc) (fi_handle handle, INT64 offset, int origin);
+typedef INT64 (DLL_CALLCONV *FI_TellProc) (fi_handle handle);
 
 #if (defined(_WIN32) || defined(__WIN32__))
 #pragma pack(push, 1)

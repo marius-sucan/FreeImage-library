@@ -152,7 +152,7 @@ struct MNGGlobals {
 };
 
 struct MNGFrame {
-	long offset;			//! first chunk: IHDR, JHDR or BASI
+	INT64 offset;			//! first chunk: IHDR, JHDR or BASI
 	DWORD length;			//! through the CRC of IEND
 	BOOL is_jng;
 	BOOL is_basi;
@@ -257,11 +257,11 @@ WarnComplex(MNGinfo *info) {
 // Walking the stream
 // ==========================================================
 
-static long
+static INT64
 MNG_GetFileLength(FreeImageIO *io, fi_handle handle) {
-	const long start_pos = io->tell_proc(handle);
+	const INT64 start_pos = io->tell_proc(handle);
 	io->seek_proc(handle, 0, SEEK_END);
-	const long file_length = io->tell_proc(handle);
+	const INT64 file_length = io->tell_proc(handle);
 	io->seek_proc(handle, start_pos, SEEK_SET);
 	return file_length;
 }
@@ -279,17 +279,17 @@ ReadChunkHeader(FreeImageIO *io, fi_handle handle, DWORD *length, DWORD *type) {
 
 // *cut: the file ends inside the stream after some of its image data; the stream runs to the end of the file
 static BOOL
-ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_length, DWORD *out_length, BOOL *cut) {
+ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, INT64 start, INT64 file_length, DWORD *out_length, BOOL *cut) {
 	io->seek_proc(handle, start, SEEK_SET);
 	*cut = FALSE;
 	BOOL has_data = FALSE;
 
 	while(TRUE) {
-		const long pos = io->tell_proc(handle);
+		const INT64 pos = io->tell_proc(handle);
 		DWORD length = 0, type = 0;
 		const BOOL header = (pos >= 0) && (pos + 8 <= file_length) && ReadChunkHeader(io, handle, &length, &type);
 		const BOOL data = header && ((type == CHUNK_IDAT) || (type == CHUNK_JDAT)) && (pos + 8 < file_length);
-		if(!header || (length > (DWORD)file_length) || (pos + 8 + (long)length + 4 > file_length)) {
+		if(!header || ((INT64)length > file_length) || (pos + 8 + (INT64)length + 4 > file_length)) {
 			if(has_data || data) {
 				*out_length = (DWORD)(file_length - start);
 				*cut = TRUE;
@@ -298,10 +298,10 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_leng
 			return FALSE;
 		}
 		has_data |= data;
-		io->seek_proc(handle, (long)length + 4, SEEK_CUR);
+		io->seek_proc(handle, (INT64)length + 4, SEEK_CUR);
 
 		if(type == CHUNK_IEND) {
-			const long end = io->tell_proc(handle);
+			const INT64 end = io->tell_proc(handle);
 			if(end <= start) {
 				return FALSE;
 			}
@@ -312,7 +312,7 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, long start, long file_leng
 }
 
 static BOOL
-ReadBytesAt(FreeImageIO *io, fi_handle handle, long offset, DWORD length, std::vector<BYTE>& out) {
+ReadBytesAt(FreeImageIO *io, fi_handle handle, INT64 offset, DWORD length, std::vector<BYTE>& out) {
 	if(length == 0) {
 		return FALSE;
 	}
@@ -488,11 +488,11 @@ ParseBACK(const BYTE *payload, DWORD length, MNGinfo *info) {
 
 // skip a zero-count LOOP up to its matching ENDL
 static BOOL
-SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
+SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, INT64 file_length) {
 	int depth = 1;
 
 	while(depth > 0) {
-		const long chunk_start = io->tell_proc(handle);
+		const INT64 chunk_start = io->tell_proc(handle);
 		if((chunk_start < 0) || (chunk_start + MNG_CHUNK_OVERHEAD > file_length)) {
 			return FALSE;
 		}
@@ -500,8 +500,8 @@ SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
 		if(!ReadChunkHeader(io, handle, &length, &type)) {
 			return FALSE;
 		}
-		const long payload_start = chunk_start + 8;
-		if((length > (DWORD)file_length) || (payload_start + (long)length + 4 > file_length)) {
+		const INT64 payload_start = chunk_start + 8;
+		if(((INT64)length > file_length) || (payload_start + (INT64)length + 4 > file_length)) {
 			return FALSE;
 		}
 
@@ -515,7 +515,7 @@ SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, long file_length) {
 			return TRUE;
 		}
 
-		io->seek_proc(handle, payload_start + (long)length + 4, SEEK_SET);
+		io->seek_proc(handle, payload_start + (INT64)length + 4, SEEK_SET);
 	}
 
 	return TRUE;
@@ -591,8 +591,8 @@ FindObject(std::vector<MNGObject>& objects, WORD id) {
 // ==========================================================
 
 static BOOL
-ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
-	const long file_length = MNG_GetFileLength(io, handle);
+ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
+	const INT64 file_length = MNG_GetFileLength(io, handle);
 	if(file_length <= start + MNG_SIGNATURE_SIZE) {
 		return FALSE;
 	}
@@ -625,7 +625,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 	std::vector<BYTE> payload;
 
 	while(!seen_mend) {
-		const long chunk_start = io->tell_proc(handle);
+		const INT64 chunk_start = io->tell_proc(handle);
 		if((chunk_start < 0) || (chunk_start + MNG_CHUNK_OVERHEAD > file_length)) {
 			break;
 		}
@@ -634,13 +634,13 @@ ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 		if(!ReadChunkHeader(io, handle, &length, &type)) {
 			break;
 		}
-		const long payload_start = chunk_start + 8;
-		if((length > (DWORD)file_length) || (payload_start + (long)length + 4 > file_length)) {
+		const INT64 payload_start = chunk_start + 8;
+		if(((INT64)length > file_length) || (payload_start + (INT64)length + 4 > file_length)) {
 			FreeImage_OutputMessageProc(s_format_id,
 				"MNG: a chunk claims %u bytes, which runs past the end of the file", length);
 			break;
 		}
-		const long next_chunk = payload_start + (long)length + 4;
+		const INT64 next_chunk = payload_start + (INT64)length + 4;
 
 		// skip embedded streams whole, so their PLTE is not taken as global
 		if((type == CHUNK_IHDR) || (type == CHUNK_JHDR) || (type == CHUNK_BASI) || (type == CHUNK_DHDR)) {
@@ -724,7 +724,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 				}
 			}
 
-			io->seek_proc(handle, chunk_start + (long)stream_length, SEEK_SET);
+			io->seek_proc(handle, chunk_start + (INT64)stream_length, SEEK_SET);
 			continue;
 		}
 
@@ -761,7 +761,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, long start, MNGinfo *info) {
 			}
 
 			std::vector<BYTE> crc_bytes;
-			if(!ReadBytesAt(io, handle, payload_start + (long)length, 4, crc_bytes)) {
+			if(!ReadBytesAt(io, handle, payload_start + (INT64)length, 4, crc_bytes)) {
 				break;
 			}
 			if(crc != GetDWORD(&crc_bytes[0])) {
@@ -1830,7 +1830,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	info->read = TRUE;
 
 	// the MNG need not start at byte 0 of the stream
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 	if(!Validate(io, handle)) {
 		delete info;
 		return NULL;

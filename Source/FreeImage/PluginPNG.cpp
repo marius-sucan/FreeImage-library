@@ -49,7 +49,7 @@
 typedef struct {
     FreeImageIO *s_io;
     fi_handle    s_handle;
-    long         s_end;		// end of the stream, -1 when unknown
+    INT64        s_end;		// end of the stream, -1 when unknown
     BOOL         s_cut;		// the stream ended inside IDAT data
 } fi_ioStructure, *pfi_ioStructure;
 
@@ -81,9 +81,9 @@ _ReadProc(png_structp png_ptr, unsigned char *data, png_size_t size) {
 #ifdef PNG_IO_STATE_SUPPORTED
 	// an IDAT that runs past the end of the stream is shortened to the bytes that are there
 	if((size == 8) && (pfio->s_end >= 0) && ((png_get_io_state(png_ptr) & PNG_IO_MASK_LOC) == PNG_IO_CHUNK_HDR) && (memcmp(data + 4, "IDAT", 4) == 0)) {
-		const long here = pfio->s_io->tell_proc(pfio->s_handle);
+		const INT64 here = pfio->s_io->tell_proc(pfio->s_handle);
 		const png_uint_32 length = ((png_uint_32)data[0] << 24) | ((png_uint_32)data[1] << 16) | ((png_uint_32)data[2] << 8) | (png_uint_32)data[3];
-		if((here >= 0) && (here <= pfio->s_end) && ((unsigned long)(pfio->s_end - here) < (unsigned long)length)) {
+		if((here >= 0) && (here <= pfio->s_end) && ((UINT64)(pfio->s_end - here) < (UINT64)length)) {
 			const png_uint_32 available = (png_uint_32)(pfio->s_end - here);
 			data[0] = (BYTE)(available >> 24);
 			data[1] = (BYTE)(available >> 16);
@@ -299,7 +299,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	BYTE png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 	BYTE signature[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 
 	io->read_proc(&signature, 1, 8, handle);
 
@@ -541,7 +541,7 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 }
 
 // moves to the end of the stream and returns its offset, or -1
-static long
+static INT64
 StreamEnd(FreeImageIO *io, fi_handle handle) {
 	return (io->seek_proc(handle, 0, SEEK_END) == 0) ? io->tell_proc(handle) : -1;
 }
@@ -663,7 +663,7 @@ SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 
 // end >= 0: an IDAT the stream cuts off is read as far as it goes; *cut: a cut worth reading again that way
 static FIBITMAP *
-LoadPNG(FreeImageIO *io, fi_handle handle, int flags, long end, BOOL *cut) {
+LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 	png_structp png_ptr = NULL;
 	png_infop info_ptr = NULL;
 	png_uint_32 width, height;
@@ -966,12 +966,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		return NULL;
 	}
 	// where to read the image again if the stream cuts it off; header-only loads read no image data
-	const long start = (flags & FIF_LOAD_NOPIXELS) ? -1 : io->tell_proc(handle);
+	const INT64 start = (flags & FIF_LOAD_NOPIXELS) ? -1 : io->tell_proc(handle);
 	BOOL cut = FALSE;
 	FIBITMAP *dib = LoadPNG(io, handle, flags, -1, (start >= 0) ? &cut : NULL);
 	if (cut) {
 		// the stream ends inside the image data: read it again, the last IDAT shortened to the bytes that are there
-		const long end = StreamEnd(io, handle);
+		const INT64 end = StreamEnd(io, handle);
 		if (io->seek_proc(handle, start, SEEK_SET) == 0) {
 			dib = LoadPNG(io, handle, flags, (end > start) ? end : -1, NULL);
 		} else {

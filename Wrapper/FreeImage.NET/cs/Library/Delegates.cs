@@ -85,14 +85,14 @@ namespace FreeImageAPI.IO
 	/// <param name="offset">Number of bytes from origin.</param>
 	/// <param name="origin">Initial position.</param>
 	/// <returns>If successful 0 is returned; otherwise a nonzero value. </returns>
-	public delegate int SeekProc(fi_handle handle, int offset, SeekOrigin origin);
+	public delegate int SeekProc(fi_handle handle, long offset, SeekOrigin origin);
 
 	/// <summary>
 	/// Delegate to the C++ function <b>ftell</b>.
 	/// </summary>
 	/// <param name="handle">Handle/stream to retrieve its currents position from.</param>
 	/// <returns>The current position.</returns>
-	public delegate int TellProc(fi_handle handle);
+	public delegate long TellProc(fi_handle handle);
 
 	// Delegates used by 'Plugin' structure
 }

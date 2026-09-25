@@ -19,6 +19,11 @@
 // Use at your own risk!
 // ==========================================================
 
+// 64-bit off_t on 32-bit POSIX; must precede every include
+#if !defined(_WIN32) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include "FreeImage.h"
 #include "Utilities.h"
 #include "FreeImageIO.h"
@@ -27,26 +32,44 @@
 // File IO functions
 // =====================================================================
 
+int
+FreeImage_fseek64(FILE *file, INT64 offset, int origin) {
+#ifdef _WIN32
+	return _fseeki64(file, offset, origin);
+#else
+	return fseeko(file, (off_t)offset, origin);
+#endif
+}
+
+INT64
+FreeImage_ftell64(FILE *file) {
+#ifdef _WIN32
+	return _ftelli64(file);
+#else
+	return (INT64)ftello(file);
+#endif
+}
+
 // static: names like _ReadProc must not leak out of the static library
 
-static unsigned DLL_CALLCONV 
+static unsigned DLL_CALLCONV
 _ReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	return (unsigned)fread(buffer, size, count, (FILE *)handle);
 }
 
-static unsigned DLL_CALLCONV 
+static unsigned DLL_CALLCONV
 _WriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	return (unsigned)fwrite(buffer, size, count, (FILE *)handle);
 }
 
 static int DLL_CALLCONV
-_SeekProc(fi_handle handle, long offset, int origin) {
-	return fseek((FILE *)handle, offset, origin);
+_SeekProc(fi_handle handle, INT64 offset, int origin) {
+	return FreeImage_fseek64((FILE *)handle, offset, origin);
 }
 
-static long DLL_CALLCONV
+static INT64 DLL_CALLCONV
 _TellProc(fi_handle handle) {
-	return ftell((FILE *)handle);
+	return FreeImage_ftell64((FILE *)handle);
 }
 
 // ----------------------------------------------------------
@@ -63,9 +86,12 @@ SetDefaultIO(FreeImageIO *io) {
 // Memory IO functions
 // =====================================================================
 
+// the most a memory stream holds: what size_t addresses, halved
+static const INT64 FI_MEMORY_MAX = (INT64)(std::numeric_limits<size_t>::max() >> 1);
+
 /**
 The _MemoryReadProc function reads up to count items of size bytes from the input stream and stores them in buffer.
-_MemoryReadProc returns the number of full items actually read, 
+_MemoryReadProc returns the number of full items actually read,
 which may be less than count if an error occurs or if the end of the file is encountered before reaching count.
 If size or count is 0, _MemoryReadProc returns 0 and the buffer contents are unchanged
 
@@ -83,30 +109,27 @@ _MemoryReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	// 64-bit product; the stream is int-sized, so refuse anything larger
 	const UINT64 required_bytes = (UINT64)size * (UINT64)count;
-	const int remaining_bytes = mem_header->file_length - mem_header->current_position;
+	const INT64 remaining_bytes = mem_header->file_length - mem_header->current_position;
 
-	if ((required_bytes <= (UINT64)std::numeric_limits<int>::max()) && (remaining_bytes > 0)) {
-		if ((int)required_bytes <= remaining_bytes) {
+	if (remaining_bytes > 0) {
+		if (required_bytes <= (UINT64)remaining_bytes) {
 			// copy size bytes count times
 			memcpy(buffer, (char*)mem_header->data + mem_header->current_position, (size_t)required_bytes);
-			mem_header->current_position += (int)required_bytes;
+			mem_header->current_position += (INT64)required_bytes;
 			return count;
 		}
-		else {
-			// if there isn't required_bytes bytes left to read, set pos to eof and return a short count
-			memcpy(buffer, (char*)mem_header->data + mem_header->current_position, (size_t)remaining_bytes);
-			mem_header->current_position = mem_header->file_length;
-			return (unsigned)(remaining_bytes / size);
-		}
+		// if there isn't required_bytes bytes left to read, set pos to eof and return a short count
+		memcpy(buffer, (char*)mem_header->data + mem_header->current_position, (size_t)remaining_bytes);
+		mem_header->current_position = mem_header->file_length;
+		return (unsigned)((UINT64)remaining_bytes / size);
 	}
-	
+
 	// if size or count is 0, _MemoryReadProc returns 0 and the buffer contents are unchanged.
 	return 0;
 }
 
-unsigned DLL_CALLCONV 
+unsigned DLL_CALLCONV
 _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	if (!handle || !buffer) {
 		return 0;
@@ -116,37 +139,32 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 
 	const UINT64 wanted = (UINT64)size * (UINT64)count;
 
-	if (wanted > (UINT64)std::numeric_limits<int>::max()) {
+	// a write that cannot end below FI_MEMORY_MAX is refused before any allocation
+	if ((wanted >= (UINT64)FI_MEMORY_MAX) || (mem_header->current_position >= FI_MEMORY_MAX - (INT64)wanted)) {
 		return 0;
 	}
 
-	const long required_bytes = (long)wanted;
-
-	// in 64 bits, since long may be 32; the block holds at most 0x7FFFFFFE bytes
-	const INT64 required_end = (INT64)mem_header->current_position + required_bytes;
-	if( required_end >= 0x7FFFFFFF ) {
-		return 0;
-	}
+	const INT64 required_bytes = (INT64)wanted;
+	const INT64 required_end = mem_header->current_position + required_bytes;
 
 	// double the data block size if we need to
 	while( required_end >= mem_header->data_length ) {
-		long newdatalen = 0;
+		INT64 newdatalen = 0;
 
-		// if we are at or above 1G, we cant double without going negative
-		if( mem_header->data_length & 0x40000000 ) {
-			// max 2G
-			if( mem_header->data_length == 0x7FFFFFFF ) {
-				return 0;
-			}
-			newdatalen = 0x7FFFFFFF;
-		} else if( mem_header->data_length == 0 ) {
+		if( mem_header->data_length == 0 ) {
 			// default to 4K if nothing yet
 			newdatalen = 4096;
+		} else if( mem_header->data_length >= FI_MEMORY_MAX / 2 ) {
+			// cannot double: stop at the limit
+			if( mem_header->data_length >= FI_MEMORY_MAX ) {
+				return 0;
+			}
+			newdatalen = FI_MEMORY_MAX;
 		} else {
 			// double size
-			newdatalen = mem_header->data_length << 1;
+			newdatalen = mem_header->data_length * 2;
 		}
-		void *newdata = realloc(mem_header->data, newdatalen);
+		void *newdata = realloc(mem_header->data, (size_t)newdatalen);
 		if(!newdata) {
 			return 0;
 		}
@@ -156,10 +174,10 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 
 	// a write past the end leaves a gap, which reads as zeros, as in a file
 	if( mem_header->current_position > mem_header->file_length ) {
-		memset((char *)mem_header->data + mem_header->file_length, 0, mem_header->current_position - mem_header->file_length);
+		memset((char *)mem_header->data + mem_header->file_length, 0, (size_t)(mem_header->current_position - mem_header->file_length));
 	}
 
-	memcpy((char *)mem_header->data + mem_header->current_position, buffer, required_bytes);
+	memcpy((char *)mem_header->data + mem_header->current_position, buffer, (size_t)required_bytes);
 	mem_header->current_position += required_bytes;
 
 	if( mem_header->current_position > mem_header->file_length ) {
@@ -170,62 +188,52 @@ _MemoryWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) 
 }
 
 /**
-The _MemorySeekProc function moves the file pointer (if any) associated with stream to a new location that is offset bytes from origin. 
+The _MemorySeekProc function moves the file pointer (if any) associated with stream to a new location that is offset bytes from origin.
 The next operation on the stream takes place at the new location. On a stream open for update, the next operation can be either a read or a write.
 The argument origin must be one of the following constants, defined in STDIO.H:
 	SEEK_CUR	Current position of file pointer.
 	SEEK_END	End of file.
 	SEEK_SET	Beginning of file.
-You can use _MemorySeekProc to reposition the pointer anywhere in a file. 
-The pointer can also be positioned beyond the end of the file. 
+You can use _MemorySeekProc to reposition the pointer anywhere in a file.
+The pointer can also be positioned beyond the end of the file.
 
 @param handle
 @param offset
 @param origin
 @return If successful, returns 0. Otherwise, returns -1.
 */
-int DLL_CALLCONV 
-_MemorySeekProc(fi_handle handle, long offset, int origin) {
+int DLL_CALLCONV
+_MemorySeekProc(fi_handle handle, INT64 offset, int origin) {
 	if (!handle) {
 		return -1;
 	}
 
 	FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(((FIMEMORY*)handle)->data);
 
-	// you can use _MemorySeekProc to reposition the pointer anywhere in a file
-	// the pointer can also be positioned beyond the end of the file
+	INT64 base = 0;
 
-	switch (origin) { //0 to filelen-1 are 'inside' the file
-		default:
-		case SEEK_SET: //can fseek() to 0-7FFFFFFF always
-			if ((offset >= 0) && (offset <= std::numeric_limits<int>::max())) {
-				// the 64-bit long offset may overflow when casted to int
-				mem_header->current_position = offset;
-				return 0;
-			}
-			break;
-
+	switch (origin) {
 		case SEEK_CUR:
-			if (((mem_header->current_position + offset) >= 0) && ((mem_header->current_position + offset) <= std::numeric_limits<int>::max())) {
-				// the 64-bit result may overflow when casted to int
-				mem_header->current_position += offset;
-				return 0;
-			}
+			base = mem_header->current_position;
 			break;
-
 		case SEEK_END:
-			if (((mem_header->file_length + offset) >= 0) && ((mem_header->file_length + offset) <= std::numeric_limits<int>::max())) {
-				// the 64-bit result may overflow when casted to int
-				mem_header->current_position = mem_header->file_length + offset;
-				return 0;
-			}
+			base = mem_header->file_length;
+			break;
+		default:
+			// SEEK_SET
 			break;
 	}
 
-	return -1;
+	// the pointer can also be positioned beyond the end of the file
+	if ((offset < -base) || (offset > FI_MEMORY_MAX - base)) {
+		return -1;
+	}
+
+	mem_header->current_position = base + offset;
+	return 0;
 }
 
-long DLL_CALLCONV 
+INT64 DLL_CALLCONV
 _MemoryTellProc(fi_handle handle) {
 	if (!handle) {
 		return -1;

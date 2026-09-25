@@ -31,8 +31,8 @@ extern "C" {
 	// forward decls
 	unsigned __stdcall ReadProc (void *buffer, unsigned size, unsigned count, fi_handle handle);
 	unsigned __stdcall WriteProc (void *buffer, unsigned size, unsigned count, fi_handle handle);
-	int      __stdcall SeekProc (fi_handle handle, long offset, int origin);
-	long     __stdcall TellProc(fi_handle handle);	
+	int      __stdcall SeekProc (fi_handle handle, INT64 offset, int origin);
+	INT64    __stdcall TellProc(fi_handle handle);	
 
 	#pragma pack(push, 1)
 	__nogc struct UNMANAGED_HANDLER {

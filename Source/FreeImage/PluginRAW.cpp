@@ -43,8 +43,8 @@ class LibRaw_freeimage_datastream : public LibRaw_abstract_datastream {
 private: 
 	FreeImageIO *_io;
 	fi_handle _handle;
-	long _start;
-	long _eof;
+	INT64 _start;
+	INT64 _eof;
 	INT64 _fsize;
 
 public:
@@ -52,46 +52,49 @@ public:
 		_start = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
 		_eof = io->tell_proc(handle);
-		_fsize = (INT64)_eof - (INT64)_start;
+		_fsize = _eof - _start;
 		io->seek_proc(handle, _start, SEEK_SET);
 	}
 
 	~LibRaw_freeimage_datastream() {
 	}
 
-    int valid() { 
+    int valid() {
 		return (_io && _handle) ? 1 : 0;
 	}
 
-    int read(void *buffer, size_t size, size_t count) { 
-		return _io->read_proc(buffer, (unsigned)size, (unsigned)count, _handle);
+    int read(void *buffer, size_t size, size_t count) {
+		if(size == 0) {
+			return 0;
+		}
+		return (int)(FreeImage_ReadBytes(_io, _handle, buffer, size * count) / size);
 	}
 
 	// LibRaw offsets are relative to where the stream started
-    int seek(INT64 offset, int origin) { 
+    int seek(INT64 offset, int origin) {
 		INT64 target;
 
 		switch(origin) {
 			case SEEK_SET:
-				target = (INT64)_start + offset;
+				target = _start + offset;
 				break;
 			case SEEK_END:
-				target = (INT64)_eof + offset;
+				target = _eof + offset;
 				break;
 			case SEEK_CUR:
 			default:
-				target = (INT64)_io->tell_proc(_handle) + offset;
+				target = _io->tell_proc(_handle) + offset;
 				break;
 		}
-		if(target < (INT64)_start) {
+		if(target < _start) {
 			return -1;
 		}
 
-		return _io->seek_proc(_handle, (long)target, SEEK_SET);
+		return _io->seek_proc(_handle, target, SEEK_SET);
 	}
 
-    INT64 tell() { 
-        return (INT64)_io->tell_proc(_handle) - (INT64)_start;
+    INT64 tell() {
+        return _io->tell_proc(_handle) - _start;
     }
 	
 	INT64 size() {
@@ -652,7 +655,7 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	// some RAW files have a magic signature (most of them have a TIFF signature)
 	// try to check this in order to speed up the file identification
 	{
-		long tell = io->tell_proc(handle);
+		INT64 tell = io->tell_proc(handle);
 		if( HasMagicHeader(io, handle) ) {
 			return TRUE;
 		} else {

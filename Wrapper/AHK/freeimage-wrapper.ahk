@@ -285,7 +285,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 }
 
 FreeImage_LoadFromHandle(FIF, pIO, hHandle, flags:=0) {
-; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle; FIF=-1 detects the format
+; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle; seek takes an Int64 offset and tell returns Int64; FIF=-1 detects the format
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromHandle(pIO, hHandle)
    Return DllCall(getFIMfunc("LoadFromHandle"), "Int", FIF, "UPtr", pIO, "UPtr", hHandle, "Int", flags, "UPtr")

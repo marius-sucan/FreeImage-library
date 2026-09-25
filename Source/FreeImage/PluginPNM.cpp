@@ -253,7 +253,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 	// a cut or damaged image keeps the rows read before it
 	BOOL reading_pixels = FALSE;
-	long pixels_start = 0;
+	INT64 pixels_start = 0;
 	RGBQUAD *pal;	// pointer to dib palette
 	int i;
 

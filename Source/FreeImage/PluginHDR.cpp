@@ -689,7 +689,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		// read the image pixels and fill the dib; nothing is kept of a huge claim a few bytes long
-		const long pixels_start = io->tell_proc(handle);
+		const INT64 pixels_start = io->tell_proc(handle);
 		const UINT64 raster = (UINT64)width * height * sizeof(FIRGBF);
 
 		if(bYmajor) {

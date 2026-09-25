@@ -31,44 +31,44 @@ static OPJ_UINT64
 _LengthProc(J2KFIO_t *fio) {
 	// length from the stream start; OpenJPEG needs it when Psot is 0
 	fio->io->seek_proc(fio->handle, 0, SEEK_END);
-	long end_pos = fio->io->tell_proc(fio->handle);
+	const INT64 end_pos = fio->io->tell_proc(fio->handle);
 	fio->io->seek_proc(fio->handle, fio->start, SEEK_SET);
 	return (end_pos > fio->start) ? (OPJ_UINT64)(end_pos - fio->start) : 0;
 }
 
-static OPJ_SIZE_T 
+static OPJ_SIZE_T
 _ReadProc(void *p_buffer, OPJ_SIZE_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
-	OPJ_SIZE_T l_nb_read = fio->io->read_proc(p_buffer, 1, (unsigned)p_nb_bytes, fio->handle);
+	OPJ_SIZE_T l_nb_read = FreeImage_ReadBytes(fio->io, fio->handle, p_buffer, p_nb_bytes);
 	if (!l_nb_read && p_nb_bytes) {
 		fio->eof = TRUE;
 	}
 	return l_nb_read ? l_nb_read : (OPJ_SIZE_T)-1;
 }
 
-static OPJ_SIZE_T 
+static OPJ_SIZE_T
 _WriteProc(void *p_buffer, OPJ_SIZE_T p_nb_bytes, void *p_user_data) {
-	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;  
-	return fio->io->write_proc(p_buffer, 1, (unsigned)p_nb_bytes, fio->handle);
+	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
+	return FreeImage_WriteBytes(fio->io, fio->handle, p_buffer, p_nb_bytes);
 }
 
-static OPJ_OFF_T 
+static OPJ_OFF_T
 _SkipProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
-	if( fio->io->seek_proc(fio->handle, (long)p_nb_bytes, SEEK_CUR) ) {
+	if( fio->io->seek_proc(fio->handle, (INT64)p_nb_bytes, SEEK_CUR) ) {
 		return -1;
 	}
 	return p_nb_bytes;
 }
 
-static OPJ_BOOL 
+static OPJ_BOOL
 _SeekProc(OPJ_OFF_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
 	// positions are relative to where the stream started, not the file
-	if( (p_nb_bytes < 0) || (p_nb_bytes > (OPJ_OFF_T)(LONG_MAX - fio->start)) ) {
+	if( (p_nb_bytes < 0) || (p_nb_bytes > (OPJ_OFF_T)(std::numeric_limits<INT64>::max() - fio->start)) ) {
 		return OPJ_FALSE;
 	}
-	if( fio->io->seek_proc(fio->handle, fio->start + (long)p_nb_bytes, SEEK_SET) ) {
+	if( fio->io->seek_proc(fio->handle, fio->start + (INT64)p_nb_bytes, SEEK_SET) ) {
 		return OPJ_FALSE;
 	}
 	return OPJ_TRUE;
@@ -85,7 +85,7 @@ opj_freeimage_stream_create(FreeImageIO *io, fi_handle handle, BOOL bRead) {
 	if(fio) {
 		fio->io = io;
 		fio->handle = handle;
-		const long start = io->tell_proc(handle);
+		const INT64 start = io->tell_proc(handle);
 		fio->start = (start > 0) ? start : 0;
 		fio->eof = FALSE;
 
@@ -125,7 +125,7 @@ opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FORMAT
 		return 0;
 	}
 	OPJ_UINT64 threads = 0;
-	const long start = io->tell_proc(handle);
+	const INT64 start = io->tell_proc(handle);
 	J2KFIO_t *fio = opj_freeimage_stream_create(io, handle, TRUE);
 	if(fio) {
 		opj_codec_t *codec = opj_create_decompress(format);

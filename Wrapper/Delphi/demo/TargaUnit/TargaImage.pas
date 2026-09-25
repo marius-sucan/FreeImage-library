@@ -83,13 +83,13 @@ begin
   Result := stream.Write(buffer^, bytesToWrite);
 end;
 
-function FI_SeekProc(handle : fi_handle; offset : longint; origin : integer) : Integer; stdcall;
+function FI_SeekProc(handle : fi_handle; offset : Int64; origin : integer) : Integer; stdcall;
 begin
-  TStream(handle).Seek(offset, origin);
+  TStream(handle).Seek(offset, TSeekOrigin(origin));
   Result := 0;
 end;
 
-function FI_TellProc(handle : fi_handle) : LongInt; stdcall;
+function FI_TellProc(handle : fi_handle) : Int64; stdcall;
 begin
   Result := TStream(handle).Position;
 end;

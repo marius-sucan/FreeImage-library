@@ -1,36 +1,29 @@
-/* HEIF stream I/O test: 32-bit seek caps, and a HEIF not at offset 0 */
+/* HEIF stream I/O test: a FreeImageIO of our own, and a HEIF not at offset 0 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <limits.h>
 #include "FreeImage.h"
 
 #define SAMPLE "data/rainbow-451x461.heic"
 #define SEQUENCE "data/seq-bframes.heics"
 #define JUNK 777
 
-static long g_cap = LONG_MAX;
-static int g_refused_seeks = 0, g_refused_tells = 0, g_steps = 0;
-
 static void message(FREE_IMAGE_FORMAT fif, const char *msg) {
     printf("    [%s] %s\n", fif == FIF_UNKNOWN ? "?" : FreeImage_GetFormatFromFIF(fif), msg);
 }
 
+/* 64-bit positions, as the callbacks carry them */
 static unsigned DLL_CALLCONV rd(void *buf, unsigned size, unsigned count, fi_handle h) {
     return (unsigned)fread(buf, size, count, (FILE *)h);
 }
 static unsigned DLL_CALLCONV wr(void *buf, unsigned size, unsigned count, fi_handle h) {
     return (unsigned)fwrite(buf, size, count, (FILE *)h);
 }
-static int DLL_CALLCONV sk(fi_handle h, long offset, int origin) {
-    if (origin == SEEK_SET && offset > g_cap) { g_refused_seeks++; return -1; }
-    if (origin == SEEK_CUR && offset > 0) g_steps++;
-    return fseek((FILE *)h, offset, origin);
+static int DLL_CALLCONV sk(fi_handle h, INT64 offset, int origin) {
+    return fseeko((FILE *)h, (off_t)offset, origin);
 }
-static long DLL_CALLCONV tl(fi_handle h) {
-    long pos = ftell((FILE *)h);
-    if (pos > g_cap) { g_refused_tells++; return -1; }
-    return pos;
+static INT64 DLL_CALLCONV tl(fi_handle h) {
+    return (INT64)ftello((FILE *)h);
 }
 
 static unsigned long long sum_pixels(FIBITMAP *d) {
@@ -50,11 +43,18 @@ static const char *tmppath(const char *name) {
     return buf;
 }
 
-int main(int argc, char **argv) {
+/* JUNK bytes, then the file */
+static void write_behind_junk(const char *path, const char *src) {
+    FILE *out = fopen(path, "wb"); FILE *in = fopen(src, "rb"); BYTE buf[4096]; size_t n;
+    for (n = 0; n < JUNK; n++) fputc((int)(n * 7), out);
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
+    fclose(in); fclose(out);
+}
+
+int main(void) {
     FreeImageIO io = { rd, wr, sk, tl };
     FIBITMAP *ref, *d; FILE *f; unsigned long long want; int failures = 0;
 
-    if (argc > 1) g_cap = atol(argv[1]);
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(message);
 
@@ -63,25 +63,18 @@ int main(int argc, char **argv) {
     want = sum_pixels(ref);
     printf("reference: %ux%u %u bpp, sum %016llx\n", FreeImage_GetWidth(ref), FreeImage_GetHeight(ref), FreeImage_GetBPP(ref), want);
 
-    /* 1. capped absolute seeks and tells */
+    /* 1. through our FreeImageIO */
     f = fopen(SAMPLE, "rb");
     d = FreeImage_LoadFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);
     fclose(f);
-    printf("capped I/O (cap %ld): load -> %s, refused %d absolute seeks and %d tells, %d forward steps with SEEK_CUR\n",
-           g_cap, d ? "ok" : "FAILED", g_refused_seeks, g_refused_tells, g_steps);
+    printf("handle stream: load -> %s\n", d ? "ok" : "FAILED");
     if (!d) failures++;
     else { if (sum_pixels(d) != want) { printf("    pixels differ\n"); failures++; } else printf("    pixels -> exact\n"); FreeImage_Unload(d); }
-    /* with a cap, the stepped path must have run */
-    if (g_cap < LONG_MAX && (g_refused_tells == 0 || g_steps == 0)) { printf("    the cap was never hit: nothing was exercised\n"); failures++; }
 
     /* 2. HEIF after junk, loaded from the current position */
     {
         const char *path = tmppath("fi_heif_offset.bin");
-        FILE *out = fopen(path, "wb"); FILE *in = fopen(SAMPLE, "rb"); BYTE buf[4096]; size_t n;
-        for (n = 0; n < JUNK; n++) fputc((int)(n * 7), out);
-        while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
-        fclose(in); fclose(out);
-        g_cap = LONG_MAX;
+        write_behind_junk(path, SAMPLE);
         f = fopen(path, "rb");
         fseek(f, JUNK, SEEK_SET);
         if (FreeImage_GetFileTypeFromHandle(&io, (fi_handle)f, 0) != FIF_HEIF) { printf("offset stream: not detected as HEIF\n"); failures++; }
@@ -93,10 +86,9 @@ int main(int argc, char **argv) {
         remove(path);
     }
 
-    /* 3. a sequence through the capped I/O, backwards; then after junk */
+    /* 3. a sequence through our FreeImageIO, backwards; then after junk */
     {
         const char *path = tmppath("fi_heif_offset_seq.bin");
-        FILE *out, *in; BYTE buf[4096]; size_t n;
         unsigned long long sums[16];
         FIMULTIBITMAP *plain = FreeImage_OpenMultiBitmap(FIF_HEIF, SEQUENCE, FALSE, TRUE, TRUE, 0);
         FIMULTIBITMAP *mb;
@@ -109,8 +101,6 @@ int main(int argc, char **argv) {
         }
         if (plain) FreeImage_CloseMultiBitmap(plain, 0);
 
-        if (argc > 1) g_cap = atol(argv[1]);
-        g_refused_seeks = g_refused_tells = g_steps = 0;
         f = fopen(SEQUENCE, "rb");
         mb = FreeImage_OpenMultiBitmapFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);
         for (p = pages - 1; mb && p >= 0; p--) {
@@ -120,15 +110,10 @@ int main(int argc, char **argv) {
         }
         if (mb) FreeImage_CloseMultiBitmap(mb, 0);
         fclose(f);
-        printf("sequence, capped I/O, backwards: %d of %d pages exact, refused %d absolute seeks and %d tells, %d forward steps\n",
-               exact, pages, g_refused_seeks, g_refused_tells, g_steps);
+        printf("sequence, handle stream, backwards: %d of %d pages exact\n", exact, pages);
         if (pages != 10 || exact != pages) failures++;
-        if (g_cap < LONG_MAX && (g_refused_tells == 0 || g_steps == 0)) { printf("    the cap was never hit: nothing was exercised\n"); failures++; }
 
-        out = fopen(path, "wb"); in = fopen(SEQUENCE, "rb");
-        for (n = 0; n < JUNK; n++) fputc((int)(n * 7), out);
-        while ((n = fread(buf, 1, sizeof(buf), in)) > 0) fwrite(buf, 1, n, out);
-        fclose(in); fclose(out);
+        write_behind_junk(path, SEQUENCE);
         f = fopen(path, "rb");
         fseek(f, JUNK, SEEK_SET);
         d = FreeImage_LoadFromHandle(FIF_HEIF, &io, (fi_handle)f, 0);

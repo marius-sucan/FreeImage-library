@@ -194,7 +194,7 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	hex_table['f'] = 15;
 
 	ptr = *dataP;
-	const long data_start = io->tell_proc(handle);
+	const INT64 data_start = io->tell_proc(handle);
 
 	if(version == 10) {
 		for( bytes = 0; bytes < raster_length; bytes += 2 ) {

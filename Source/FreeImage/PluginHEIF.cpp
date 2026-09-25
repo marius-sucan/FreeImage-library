@@ -82,17 +82,10 @@ GetProcessorCount() {
 //   heif_reader over FreeImageIO
 // ----------------------------------------------------------
 
-#ifndef FI_HEIF_SEEK_STEP_MAX
-#define FI_HEIF_SEEK_STEP_MAX LONG_MAX
-#endif
-
-/** read_proc takes an 'unsigned' size */
-#define FI_HEIF_READ_CHUNK 0x40000000u
-
 typedef struct tagHEIFStream {
 	FreeImageIO *io;
 	fi_handle handle;
-	long base;				//! stream offset of the first HEIF byte
+	INT64 base;				//! stream offset of the first HEIF byte
 	uint64_t position;		//! relative to 'base'
 	BOOL size_known;
 	uint64_t size;			//! bytes from 'base' to the end
@@ -101,70 +94,16 @@ typedef struct tagHEIFStream {
 	BOOL overspent;
 } HEIFStream;
 
-/** seek to base + offset, stepping past what a 'long' holds */
+/** seek to base + offset */
 static BOOL
 HEIF_SeekTo(HEIFStream *s, uint64_t offset) {
-	const long span = (s->base <= FI_HEIF_SEEK_STEP_MAX) ? (FI_HEIF_SEEK_STEP_MAX - s->base) : 0;
-	if(offset <= (uint64_t)span) {
-		return (s->io->seek_proc(s->handle, s->base + (long)offset, SEEK_SET) == 0) ? TRUE : FALSE;
-	}
-	if(s->io->seek_proc(s->handle, s->base, SEEK_SET) != 0) {
+	if(offset > (uint64_t)(INT64_MAX - s->base)) {
 		return FALSE;
 	}
-	uint64_t remaining = offset;
-	while(remaining > 0) {
-		const long step = (remaining > (uint64_t)FI_HEIF_SEEK_STEP_MAX) ? (long)FI_HEIF_SEEK_STEP_MAX : (long)remaining;
-		if(s->io->seek_proc(s->handle, step, SEEK_CUR) != 0) {
-			return FALSE;
-		}
-		remaining -= (uint64_t)step;
-	}
-	return TRUE;
+	return (s->io->seek_proc(s->handle, s->base + (INT64)offset, SEEK_SET) == 0) ? TRUE : FALSE;
 }
 
-/** is there a byte at 'offset'? Leaves the position undefined */
-static BOOL
-HEIF_Probe(HEIFStream *s, uint64_t offset) {
-	BYTE b;
-	return (HEIF_SeekTo(s, offset) && (s->io->read_proc(&b, 1, 1, s->handle) == 1)) ? TRUE : FALSE;
-}
-
-static BOOL
-HEIF_MeasureStream(HEIFStream *s) {
-	const uint64_t step = (uint64_t)FI_HEIF_SEEK_STEP_MAX;
-	uint64_t lo = 0;	// a byte exists at 'lo' (or the stream is empty)
-	uint64_t hi;		// no byte exists at 'hi'
-
-	if(!HEIF_Probe(s, 0)) {
-		s->size = 0;
-		s->size_known = TRUE;
-		return TRUE;
-	}
-	for(int steps = 1; ; steps++) {
-		if(steps > 64) {
-			return FALSE;
-		}
-		const uint64_t next = lo + step;
-		if(!HEIF_Probe(s, next)) {
-			hi = next;
-			break;
-		}
-		lo = next;
-	}
-	while(hi - lo > 1) {
-		const uint64_t mid = lo + (hi - lo) / 2;
-		if(HEIF_Probe(s, mid)) {
-			lo = mid;
-		} else {
-			hi = mid;
-		}
-	}
-	s->size = hi;
-	s->size_known = TRUE;
-	return TRUE;
-}
-
-/** libheif callback: tracked position; tell_proc is 32-bit on Win64 */
+/** libheif callback: tracked position */
 static int64_t
 HEIF_GetPosition(void *userdata) {
 	HEIFStream *s = (HEIFStream*)userdata;
@@ -182,17 +121,7 @@ HEIF_Read(void *data, size_t size, void *userdata) {
 		}
 		s->spent += size;
 	}
-	BYTE *dst = (BYTE*)data;
-	size_t total = 0;
-	while(total < size) {
-		const size_t left = size - total;
-		const unsigned chunk = (left > (size_t)FI_HEIF_READ_CHUNK) ? FI_HEIF_READ_CHUNK : (unsigned)left;
-		const unsigned got = s->io->read_proc(dst + total, 1, chunk, s->handle);
-		if(got == 0) {
-			break;
-		}
-		total += got;
-	}
+	const size_t total = FreeImage_ReadBytes(s->io, s->handle, data, size);
 	s->position += total;
 	return (total == size) ? 0 : -1;
 }
@@ -1468,16 +1397,12 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	if(s->base < 0) {
 		s->base = 0;
 	}
-	// length from tell_proc, else by probing (32-bit 'long')
 	if(io->seek_proc(handle, 0, SEEK_END) == 0) {
-		const long end = io->tell_proc(handle);
+		const INT64 end = io->tell_proc(handle);
 		if(end >= s->base) {
 			s->size = (uint64_t)(end - s->base);
 			s->size_known = TRUE;
 		}
-	}
-	if(!s->size_known) {
-		HEIF_MeasureStream(s);
 	}
 	io->seek_proc(handle, s->base, SEEK_SET);
 	s->position = 0;
