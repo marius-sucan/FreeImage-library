@@ -1300,7 +1300,7 @@ DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		}
 	}
 
-	FIMEMORY *hmem = FreeImage_OpenMemory(&stream[0], (DWORD)stream.size());
+	FIMEMORY *hmem = FreeImage_OpenMemory64(&stream[0], (UINT64)stream.size());
 	if(!hmem) {
 		return NULL;
 	}

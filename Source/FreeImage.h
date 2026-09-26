@@ -879,6 +879,11 @@ DLL_API BOOL DLL_CALLCONV FreeImage_SeekMemory(FIMEMORY *stream, long offset, in
 DLL_API BOOL DLL_CALLCONV FreeImage_AcquireMemory(FIMEMORY *stream, BYTE **data, DWORD *size_in_bytes);
 DLL_API unsigned DLL_CALLCONV FreeImage_ReadMemory(void *buffer, unsigned size, unsigned count, FIMEMORY *stream);
 DLL_API unsigned DLL_CALLCONV FreeImage_WriteMemory(const void *buffer, unsigned size, unsigned count, FIMEMORY *stream);
+// the same with 64-bit sizes and positions: DWORD is 32 bits, and long too on Windows
+DLL_API FIMEMORY *DLL_CALLCONV FreeImage_OpenMemory64(BYTE *data FI_DEFAULT(0), UINT64 size_in_bytes FI_DEFAULT(0));
+DLL_API INT64 DLL_CALLCONV FreeImage_TellMemory64(FIMEMORY *stream);
+DLL_API BOOL DLL_CALLCONV FreeImage_SeekMemory64(FIMEMORY *stream, INT64 offset, int origin);
+DLL_API BOOL DLL_CALLCONV FreeImage_AcquireMemory64(FIMEMORY *stream, BYTE **data, UINT64 *size_in_bytes);
 
 DLL_API FIMULTIBITMAP *DLL_CALLCONV FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int flags FI_DEFAULT(0));
 DLL_API BOOL DLL_CALLCONV FreeImage_SaveMultiBitmapToMemory(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, FIMEMORY *stream, int flags);

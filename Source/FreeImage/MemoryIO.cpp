@@ -33,6 +33,17 @@
 
 FIMEMORY * DLL_CALLCONV 
 FreeImage_OpenMemory(BYTE *data, DWORD size_in_bytes) {
+	return FreeImage_OpenMemory64(data, (UINT64)size_in_bytes);
+}
+
+FIMEMORY * DLL_CALLCONV
+FreeImage_OpenMemory64(BYTE *data, UINT64 size_in_bytes) {
+	// a wrapped buffer must fit the address space and an INT64 position
+	if(data && ((size_in_bytes > (UINT64)(std::numeric_limits<INT64>::max)()) || (size_in_bytes > (UINT64)(std::numeric_limits<size_t>::max)()))) {
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_OpenMemory64: the buffer is larger than the address space");
+		return NULL;
+	}
+
 	// allocate a memory handle
 	FIMEMORY *stream = (FIMEMORY*)malloc(sizeof(FIMEMORY));
 	if(stream) {
@@ -121,12 +132,25 @@ FreeImage_AcquireMemory(FIMEMORY *stream, BYTE **data, DWORD *size_in_bytes) {
 		FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(stream->data);
 
 		if (mem_header->file_length > (INT64)0xFFFFFFFFu) {
-			FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_AcquireMemory: the memory stream holds more than 4 GB");
+			FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_AcquireMemory: the memory stream holds more than 4 GB, use FreeImage_AcquireMemory64()");
 			return FALSE;
 		}
 
 		*data = (BYTE*)mem_header->data;
 		*size_in_bytes = (DWORD)mem_header->file_length;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+BOOL DLL_CALLCONV
+FreeImage_AcquireMemory64(FIMEMORY *stream, BYTE **data, UINT64 *size_in_bytes) {
+	if (stream) {
+		FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(stream->data);
+
+		*data = (BYTE*)mem_header->data;
+		*size_in_bytes = (UINT64)mem_header->file_length;
 		return TRUE;
 	}
 
@@ -146,6 +170,11 @@ Moves the memory pointer to a specified location
 */
 BOOL DLL_CALLCONV
 FreeImage_SeekMemory(FIMEMORY *stream, long offset, int origin) {
+	return FreeImage_SeekMemory64(stream, (INT64)offset, origin);
+}
+
+BOOL DLL_CALLCONV
+FreeImage_SeekMemory64(FIMEMORY *stream, INT64 offset, int origin) {
 	FreeImageIO io;
 	SetMemoryIO(&io);
 
@@ -164,15 +193,20 @@ Gets the current position of a memory pointer
 */
 long DLL_CALLCONV
 FreeImage_TellMemory(FIMEMORY *stream) {
+	const INT64 position = FreeImage_TellMemory64(stream);
+	return (position <= (INT64)LONG_MAX) ? (long)position : -1L;
+}
+
+INT64 DLL_CALLCONV
+FreeImage_TellMemory64(FIMEMORY *stream) {
 	FreeImageIO io;
 	SetMemoryIO(&io);
 
 	if (stream != NULL) {
-		const INT64 position = io.tell_proc((fi_handle)stream);
-		return (position <= (INT64)LONG_MAX) ? (long)position : -1L;
+		return io.tell_proc((fi_handle)stream);
 	}
 
-	return -1L;
+	return -1;
 }
 
 // =====================================================================

@@ -61,11 +61,14 @@ The review found one regression the change brought to every platform (HEIF over 
 
 A differential test read 186 files (every tracked sample, and a generated file per writable format, multi-page and thumbnail variants included) through `FreeImage_Load`, a `FreeImageIO` at byte 0, behind 777 bytes of junk, with `SEEK_END` refused, header-only at byte 0 and behind junk, from memory, and page by page through both multi-page openers. qpv and the fixed branch give identical results on Linux, and their saved files are byte-identical. Windows x86 and x64 give Linux's results, except for three J2K files read with `SEEK_END` refused (the OpenJPEG assert below; Windows builds define `NDEBUG`) and, on x86 only, the two lossy DWAA/DWAB EXR files, whose floating-point decode differs under x87 on the unfixed branch too.
 
+## Added afterwards
+
+The memory stream exports keep their 32-bit types: `FreeImage_OpenMemory()` and `FreeImage_AcquireMemory()` take a `DWORD`, `FreeImage_SeekMemory()` and `FreeImage_TellMemory()` a `long`. At the maintainer's request, `FreeImage_OpenMemory64()`, `FreeImage_AcquireMemory64()`, `FreeImage_SeekMemory64()` and `FreeImage_TellMemory64()` now carry `UINT64` sizes and `INT64` positions (32-bit Windows exports `@12`, `@12`, `@16` and `@4`), the old exports call them, and the AHK wrapper wraps them from v2.03. `FreeImage_ReadMemory()` and `FreeImage_WriteMemory()` keep `fread()`'s item size and count, whose product already reaches past 4 GB.
+
 ## Seen, not fixed
 
 - OpenJPEG asserts `m_user_data_length >= m_byte_offset` when a J2K or JP2 stream's length is unknown (its `SEEK_END` fails), although 0 means unknown there. `Makefile.gnu` builds without `NDEBUG`, so the Linux library aborts (qpv too); builds with `NDEBUG` fail the load cleanly.
 - `Makefile.mingw` lacks `-DAVIF_ENABLE_EXPERIMENTAL_MINI=1`, which every other build defines: a MinGW build does not read mini AVIF files, which fall to the HEIF plugin and fail.
-- The memory stream exports keep 32-bit types: `FreeImage_OpenMemory()` and `FreeImage_AcquireMemory()` take a `DWORD`, `FreeImage_SeekMemory()` and `FreeImage_TellMemory()` a `long`. A stream past 4 GB cannot be wrapped or acquired, and on Windows a position past 2 GB cannot be told or seeked to through them. Widening them means new exports and wrapper updates: a decision for the maintainer.
 - On macOS `int64_t` is `long long`, so, as on Windows, a C++ `FreeImageIO` written with `long` callbacks no longer compiles (the binaries stay compatible).
 - The Managed C++ wrapper's `SeekProc` (`FreeImageIO.Net.cpp`) returns `Stream::Seek()`'s new position where FreeImage expects 0; the file uses Managed Extensions syntax (`__nogc`), which current compilers no longer build.
 - `mng_CopyRemoveChunks()` allocates the stream's size plus the chunk's for a removal and writes it all back, leaving uninitialised bytes after IEND in the in-memory PNG; the decoder stops at IEND.
