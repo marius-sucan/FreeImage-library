@@ -313,6 +313,39 @@ TransposeBytes(double *const out, const BYTE *const *const line, const INT64 k0,
 	}
 }
 
+// n samples of a row to out: each 16 as SplitBytes pairs, the rest in order
+static inline void
+ConvertByteRow(double *const out, const BYTE *const in, const INT64 n) {
+	INT64 k = 0;
+	for (; k + 16 <= n; k += 16) {
+		__m128d pair[8];
+		SplitBytes(pair, _mm_loadu_si128((const __m128i *)(in + k)));
+		for (int s = 0; s < 8; s++) {
+			_mm_store_pd(out + k + 2 * s, pair[s]);
+		}
+	}
+	for (; k < n; k++) {
+		out[k] = in[k];
+	}
+}
+
+// 8 sums of SplitBytes pairs to 16 bytes in sample order, (int)(v + 0.5) saturated to 0..255 as the scalar kernels round
+static inline __m128i
+PackPairSums(const __m128d *const sum) {
+	const __m128d half = _mm_set1_pd(0.5);
+	__m128i t[8];
+	for (int m = 0; m < 8; m++) {
+		t[m] = _mm_cvttpd_epi32(_mm_add_pd(sum[m], half));
+	}
+	const __m128i a = _mm_unpacklo_epi32(t[0], t[1]);
+	const __m128i b = _mm_unpacklo_epi32(t[2], t[3]);
+	const __m128i c = _mm_unpacklo_epi32(t[4], t[5]);
+	const __m128i d = _mm_unpacklo_epi32(t[6], t[7]);
+	const __m128i lo = _mm_packs_epi32(_mm_unpacklo_epi64(a, b), _mm_unpacklo_epi64(c, d));
+	const __m128i hi = _mm_packs_epi32(_mm_unpackhi_epi64(a, b), _mm_unpackhi_epi64(c, d));
+	return _mm_packus_epi16(lo, hi);
+}
+
 // 12 or 16 sums to bytes, (int)(v + 0.5) saturated to 0..255 as the scalar kernels round
 template <int VALUES> static inline void
 PackSums(BYTE *const bytes, const __m128d *const sum) {
@@ -432,49 +465,6 @@ HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const un
 	HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
 }
 
-#if defined(_MSC_VER) && defined(FI_RESIZE_SSE2)
-// 8-bit samples 16 at a time, their sums in registers through every tap; MSVC only: GCC vectorises the block loop better
-static inline INT64
-VerticalStrips(CWeightsTable &weightsTable, const INT64 y, const INT64 taps, const BYTE *const src_rows, const INT64 src_pitch, BYTE *const dst, const INT64 samples) {
-	const __m128i zero = _mm_setzero_si128();
-	const __m128d half = _mm_set1_pd(0.5);
-	INT64 x = 0;
-	for (; x + 16 <= samples; x += 16) {
-		__m128d s0 = _mm_setzero_pd(), s1 = s0, s2 = s0, s3 = s0, s4 = s0, s5 = s0, s6 = s0, s7 = s0;
-		const BYTE *pixel = src_rows + x;
-		for (INT64 i = 0; i < taps; i++) {
-			const __m128d w = _mm_set1_pd(weightsTable.getWeight((unsigned)y, (unsigned)i));
-			const __m128i b = _mm_loadu_si128((const __m128i *)pixel);
-			const __m128i lo = _mm_unpacklo_epi8(b, zero), hi = _mm_unpackhi_epi8(b, zero);
-			const __m128i q0 = _mm_unpacklo_epi16(lo, zero), q1 = _mm_unpackhi_epi16(lo, zero);
-			const __m128i q2 = _mm_unpacklo_epi16(hi, zero), q3 = _mm_unpackhi_epi16(hi, zero);
-			s0 = _mm_add_pd(s0, _mm_mul_pd(w, _mm_cvtepi32_pd(q0)));
-			s1 = _mm_add_pd(s1, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q0, 0xEE))));
-			s2 = _mm_add_pd(s2, _mm_mul_pd(w, _mm_cvtepi32_pd(q1)));
-			s3 = _mm_add_pd(s3, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q1, 0xEE))));
-			s4 = _mm_add_pd(s4, _mm_mul_pd(w, _mm_cvtepi32_pd(q2)));
-			s5 = _mm_add_pd(s5, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q2, 0xEE))));
-			s6 = _mm_add_pd(s6, _mm_mul_pd(w, _mm_cvtepi32_pd(q3)));
-			s7 = _mm_add_pd(s7, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q3, 0xEE))));
-			pixel += src_pitch;
-		}
-		// (int)(v + 0.5), saturated to 0..255 by the packs
-		const __m128i i0 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s0, half)), _mm_cvttpd_epi32(_mm_add_pd(s1, half)));
-		const __m128i i1 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s2, half)), _mm_cvttpd_epi32(_mm_add_pd(s3, half)));
-		const __m128i i2 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s4, half)), _mm_cvttpd_epi32(_mm_add_pd(s5, half)));
-		const __m128i i3 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s6, half)), _mm_cvttpd_epi32(_mm_add_pd(s7, half)));
-		_mm_storeu_si128((__m128i *)(dst + x), _mm_packus_epi16(_mm_packs_epi32(i0, i1), _mm_packs_epi32(i2, i3)));
-	}
-	return x;
-}
-#endif
-
-// samples of a row VerticalStrips filtered; the block loop does the rest
-template <class T> static inline INT64
-VerticalStrips(CWeightsTable &, const INT64, const INT64, const BYTE *const, const INT64, T *const, const INT64) {
-	return 0;
-}
-
 // vertical pass for plain sample arrays, row by row: every source row is read sequentially
 template <class T, int SPP> static void
 VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
@@ -490,7 +480,7 @@ VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const IN
 		T *const dst_bits = (T *)FreeImage_GetScanLine(dst, dst_row_bias + y);
 		double value[VERTICAL_BLOCK];
 
-		for (INT64 x0 = VerticalStrips(weightsTable, y, iLimit, src_rows, src_pitch, dst_bits, samples); x0 < samples; x0 += VERTICAL_BLOCK) {
+		for (INT64 x0 = 0; x0 < samples; x0 += VERTICAL_BLOCK) {
 			const INT64 count = MIN((INT64)VERTICAL_BLOCK, samples - x0);
 			for (INT64 k = 0; k < count; k++) {
 				value[k] = 0;
@@ -507,6 +497,150 @@ VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const IN
 			StoreSamples(dst_bits + x0, value, count);
 		}
 	}
+}
+
+#ifdef FI_RESIZE_SSE2
+// destination rows of a work item of the vertical byte kernel: neighbouring rows share most of their source rows
+static const INT64 VERTICAL_RUN = 16;
+// bytes of converted source rows a work item holds, a window of them: its block of samples follows
+static const INT64 VERTICAL_RING_BYTES = 64 << 10;
+// samples of a block: at least a cache line of each source row
+static const INT64 VERTICAL_BLOCK_MIN = 64;
+// taps per source row below which converting on every tap beats the ring
+static const double VERTICAL_RING_USES = 1.5;
+#endif
+
+// vertical pass for 8-bit samples by blocks of samples and runs of rows, taps in VerticalFilterSamples' order; a ring converts rows feeding several taps once
+template <int SPP> static void
+VerticalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
+#ifdef FI_RESIZE_SSE2
+	const INT64 src_pitch = FreeImage_GetPitch(src);
+	const BYTE *const src_base = FreeImage_GetBits(src) + (INT64)src_offset_x * SPP;
+	const INT64 samples = (INT64)width * SPP;
+	const INT64 capacity = weightsTable.getWindowSize();
+	const INT64 block = CLAMP<INT64>((VERTICAL_RING_BYTES / (capacity * (INT64)sizeof(double))) & ~(INT64)15, VERTICAL_BLOCK_MIN, 256);
+	if (capacity * block * (INT64)sizeof(double) > RING_MAX_BYTES) {
+		VerticalFilterSamples<BYTE, SPP>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
+		return;
+	}
+	const INT64 blocks = (samples + block - 1) / block;
+	const INT64 items = blocks * (((INT64)y_end - (INT64)y_begin + VERTICAL_RUN - 1) / VERTICAL_RUN);
+	double taps_total = 0;
+	INT64 span_end = 0;
+	for (unsigned y = y_begin; y < y_end; y++) {
+		taps_total += weightsTable.getRightBoundary(y) - weightsTable.getLeftBoundary(y);
+		span_end = MAX(span_end, (INT64)weightsTable.getRightBoundary(y));
+	}
+	const BOOL direct = (y_begin < y_end) && (taps_total < VERTICAL_RING_USES * (double)(span_end - (INT64)weightsTable.getLeftBoundary(y_begin)));
+
+	#pragma omp parallel default(shared)
+	{
+		void *const mem = direct ? NULL : malloc((size_t)(capacity * block) * sizeof(double) + 15);
+		double *const ring = mem ? (double *)(((size_t)mem + 15) & ~(size_t)15) : NULL;
+
+		#pragma omp for schedule(dynamic)
+		for (INT64 item = 0; item < items; item++) {
+			const INT64 x0 = (item % blocks) * block;
+			const INT64 n = MIN(block, samples - x0);
+			const INT64 ya = (INT64)y_begin + (item / blocks) * VERTICAL_RUN;
+			const INT64 yb = MIN((INT64)y_end, ya + VERTICAL_RUN);
+
+			// the ring holds source rows [left, next), row r in slot r % capacity
+			INT64 left = weightsTable.getLeftBoundary((unsigned)ya), slot = 0, next = left, next_slot = 0;
+			for (INT64 y = ya; y < yb; y++) {
+				const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)y);
+				const INT64 taps = weightsTable.getRightBoundary((unsigned)y) - iLeft;
+				const double *const weights = weightsTable.getWeights((unsigned)y);
+				BYTE *const dst_bits = FreeImage_GetScanLine(dst, (int)(dst_row_bias + y)) + x0;
+
+				if (!ring) {
+					// every tap converts its 16 samples
+					const BYTE *const rows = src_base + (src_row_bias + iLeft) * src_pitch + x0;
+					INT64 k = 0;
+					for (; k + 16 <= n; k += 16) {
+						__m128d sum[8];
+						for (int m = 0; m < 8; m++) {
+							sum[m] = _mm_setzero_pd();
+						}
+						const BYTE *pixel = rows + k;
+						for (INT64 i = 0; i < taps; i++) {
+							const __m128d w = _mm_set1_pd(weights[i]);
+							__m128d pair[8];
+							SplitBytes(pair, _mm_loadu_si128((const __m128i *)pixel));
+							for (int m = 0; m < 8; m++) {
+								sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, pair[m]));
+							}
+							pixel += src_pitch;
+						}
+						_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
+					}
+					for (; k < n; k++) {
+						const BYTE *pixel = rows + k;
+						double value = 0;
+						for (INT64 i = 0; i < taps; i++) {
+							value += weights[i] * (double)*pixel;
+							pixel += src_pitch;
+						}
+						dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
+					}
+					continue;
+				}
+
+				slot += iLeft - left;
+				while (slot >= capacity) {
+					slot -= capacity;
+				}
+				left = iLeft;
+				if (next < iLeft) {
+					next = iLeft;
+					next_slot = slot;
+				}
+				for (; next < iLeft + taps; next++) {
+					ConvertByteRow(ring + next_slot * block, src_base + (src_row_bias + next) * src_pitch + x0, n);
+					if (++next_slot == capacity) {
+						next_slot = 0;
+					}
+				}
+
+				INT64 k = 0;
+				for (; k + 16 <= n; k += 16) {
+					__m128d sum[8];
+					for (int m = 0; m < 8; m++) {
+						sum[m] = _mm_setzero_pd();
+					}
+					const double *row = ring + slot * block + k;
+					const double *const end = ring + capacity * block + k;
+					for (INT64 i = 0; i < taps; i++) {
+						const __m128d w = _mm_set1_pd(weights[i]);
+						for (int m = 0; m < 8; m++) {
+							sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, _mm_load_pd(row + 2 * m)));
+						}
+						row += block;
+						if (row == end) {
+							row = ring + k;
+						}
+					}
+					_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
+				}
+				for (; k < n; k++) {
+					double value = 0;
+					INT64 s = slot;
+					for (INT64 i = 0; i < taps; i++) {
+						value += weights[i] * ring[s * block + k];
+						if (++s == capacity) {
+							s = 0;
+						}
+					}
+					dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
+				}
+			}
+		}
+
+		free(mem);
+	}
+	return;
+#endif
+	VerticalFilterSamples<BYTE, SPP>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
 }
 
 // a nearest-neighbour resize to this many pixels or more shares its rows between threads; waking them costs more below
@@ -2085,7 +2219,7 @@ void CResizeEngine::verticalFilter(CWeightsTable &weightsTable, FIBITMAP *const 
                         }
                      } else {
                         // we do not have a palette
-                        VerticalFilterSamples<BYTE, 1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
+                        VerticalFilterBytes<1>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                      }
                   }
                   break;
@@ -2278,11 +2412,11 @@ void CResizeEngine::verticalFilter(CWeightsTable &weightsTable, FIBITMAP *const 
             break;
 
             case 24:
-               VerticalFilterSamples<BYTE, 3>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
+               VerticalFilterBytes<3>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                break;
 
             case 32:
-               VerticalFilterSamples<BYTE, 4>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
+               VerticalFilterBytes<4>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
                break;
          }
       }
