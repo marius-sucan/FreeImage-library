@@ -199,6 +199,10 @@ BandRows(unsigned width, unsigned bpp, unsigned window, unsigned rows) {
 static const double HORIZONTAL_TAP_COST = 2;
 static const double COLUMN_TAP_COST = 2.5;
 
+// measured costs in the byte kernels, in their vertical taps: a horizontal tap, and a pixel the horizontal pass writes
+static const double BYTE_HORIZONTAL_TAP_COST = 0.8;
+static const double BYTE_HORIZONTAL_PIXEL_COST = 4;
+
 // how much cheaper the other order's taps must be to leave the width rule; more for 128-bit pixels, memory-bound vertically
 static const double ORDER_MARGIN = 1.1;
 static const double WIDE_ORDER_MARGIN = 2;
@@ -218,6 +222,16 @@ static double
 VerticalTapCost(FREE_IMAGE_TYPE type, unsigned src_bpp, const RGBQUAD *src_pal, unsigned dst_bpp) {
 	const BOOL rows = (type != FIT_BITMAP) || (!src_pal && (src_bpp == dst_bpp) && ((src_bpp == 8) || (src_bpp == 24) || (src_bpp == 32)));
 	return rows ? 1 : COLUMN_TAP_COST;
+}
+
+// whether every pass of either order runs the byte kernels: 8-, 24- or 32-bit samples without a palette, one depth throughout
+static BOOL
+ByteKernels(FREE_IMAGE_TYPE type, unsigned src_bpp, const RGBQUAD *src_pal, unsigned tmp_bpp, unsigned dst_bpp) {
+	BOOL sse2 = FALSE;
+#ifdef FI_RESIZE_SSE2
+	sse2 = TRUE;
+#endif
+	return sse2 && (type == FIT_BITMAP) && !src_pal && (src_bpp == tmp_bpp) && (tmp_bpp == dst_bpp) && ((src_bpp == 8) || (src_bpp == 24) || (src_bpp == 32));
 }
 
 // horizontal pass for plain sample arrays: SPP samples per pixel, each filtered on its own
@@ -1173,11 +1187,18 @@ BOOL CResizeEngine::scaleInBands(FIBITMAP *const src, const unsigned src_offset_
 	}
 	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(src);
 
-	// horizontal first unless the width grows, or the other order when its taps are clearly cheaper
+	// horizontal first unless the width grows, or the other order when its taps are clearly cheaper; the byte kernels take the cheaper one
 	const double taps_x = TotalTaps(weightsX, dst_width), taps_y = TotalTaps(weightsY, dst_height);
-	const double cost_xy = HORIZONTAL_TAP_COST * taps_x * src_height + VerticalTapCost(image_type, tmp_bpp, NULL, FreeImage_GetBPP(dst)) * taps_y * dst_width;
-	const double cost_yx = VerticalTapCost(image_type, FreeImage_GetBPP(src), src_pal, tmp_bpp) * taps_y * src_width + HORIZONTAL_TAP_COST * taps_x * dst_height;
-	const double margin = (FreeImage_GetBPP(src) >= 128) ? WIDE_ORDER_MARGIN : ORDER_MARGIN;
+	double cost_xy, cost_yx, margin;
+	if (ByteKernels(image_type, FreeImage_GetBPP(src), src_pal, tmp_bpp, FreeImage_GetBPP(dst))) {
+		cost_xy = (BYTE_HORIZONTAL_TAP_COST * taps_x + BYTE_HORIZONTAL_PIXEL_COST * dst_width) * src_height + taps_y * dst_width;
+		cost_yx = taps_y * src_width + (BYTE_HORIZONTAL_TAP_COST * taps_x + BYTE_HORIZONTAL_PIXEL_COST * dst_width) * dst_height;
+		margin = 1;
+	} else {
+		cost_xy = HORIZONTAL_TAP_COST * taps_x * src_height + VerticalTapCost(image_type, tmp_bpp, NULL, FreeImage_GetBPP(dst)) * taps_y * dst_width;
+		cost_yx = VerticalTapCost(image_type, FreeImage_GetBPP(src), src_pal, tmp_bpp) * taps_y * src_width + HORIZONTAL_TAP_COST * taps_x * dst_height;
+		margin = (FreeImage_GetBPP(src) >= 128) ? WIDE_ORDER_MARGIN : ORDER_MARGIN;
+	}
 	const BOOL xy = (dst_width <= src_width) ? (cost_xy <= margin * cost_yx) : (cost_yx > margin * cost_xy);
 
 	if (xy) {
