@@ -248,12 +248,7 @@ Gates on the final code, and on each commit where it matters:
 
 - **Your machine.** The 2.0x of `a13e209` was not reproduced (1.31-1.37x per core here, hidden at 8 threads), and nothing here
   ran on an 8-core CPU or on the full 44.5 GB image.
-- **AVX2.** The horizontal tap loop is now bound by the two SSE2 multiply/add ports: 0.5 cycles per sample-tap. 256-bit
-  multiplies and adds (no FMA, which would change the output) would halve that on AVX2 CPUs like yours, about 1.4-1.6x on the
-  big pass by estimate. It needs runtime CPU dispatch, and under MSVC a separately compiled file or care with VEX encoding;
-  not started.
-- **`/QIntel-jcc-erratum`.** Not added to the project: it removes the up-to-36% code-placement swings of the previous report on
-  Intel 6th-10th gen, and does nothing for your 11th gen. A one-line `AdditionalOptions` if you want it for QPV's users.
+- **AVX2 and `/QIntel-jcc-erratum`**: done since, see section 7.
 - **Other image types** (16-bit, float, palette, 1- and 4-bit) keep their kernels and `d60316b`'s GCC-fitted order rule.
 - **The fit's data** was taken before `C2` gained its direct path for box reductions; that path makes vertical-first box
   reductions about 12% faster, in cases where the rule already takes that order.
@@ -387,6 +382,11 @@ geomean SSE2/b5c8f48 0.974 (0.80-1.03); AVX2/b5c8f48 0.851 (0.67-0.99)
 - The resize oracle passes all 485,333 checks on both paths, at 1 and 8 threads, under GCC (`041cca732abc5b44`, also with ASan
   and UBSan) and MSVC (`f9ef8449cb22d09d`): the hashes of `b5c8f48`. The differential is identical to `b5c8f48`'s, on both paths.
 - Warnings as before under GCC -Wall -Wextra and for aarch64, x86 and x64 Linux and Windows (zig clang).
+- The same holds after link-time code generation, as the DLL is built: in an MSVC exe linked with `/GL` and `/LTCG`, the map
+  places every VEX instruction of Resize.obj inside the AVX2 kernels, and all 77 FMA instructions of the exe inside the CRT's own
+  `sin`, `cos`, `pow` and `log10`, which choose their FMA3 paths at run time themselves.
+- testAPI and the toolkit dump were not rerun on the AVX2 objects: the 12,252-signature differential is identical to
+  `b5c8f48`'s on both paths.
 
 ### 7.6 `/QIntel-jcc-erratum`
 
