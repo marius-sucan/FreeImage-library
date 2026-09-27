@@ -124,6 +124,7 @@
       <StructMemberAlignment>16Bytes</StructMemberAlignment>
       <DebugInformationFormat>None</DebugInformationFormat>
       <OpenMPSupport>true</OpenMPSupport>
+      <AdditionalOptions>/QIntel-jcc-erratum %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -179,6 +180,7 @@ copy Source\FreeImage.h Dist\x32
       <DebugInformationFormat>None</DebugInformationFormat>
       <OmitFramePointers>true</OmitFramePointers>
       <OpenMPSupport>true</OpenMPSupport>
+      <AdditionalOptions>/QIntel-jcc-erratum %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
