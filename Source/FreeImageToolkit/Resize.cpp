@@ -325,6 +325,49 @@ HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const un
 	HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
 }
 
+#if defined(_MSC_VER) && defined(FI_RESIZE_SSE2)
+// 8-bit samples 16 at a time, their sums in registers through every tap; MSVC only: GCC vectorises the block loop better
+static inline INT64
+VerticalStrips(CWeightsTable &weightsTable, const INT64 y, const INT64 taps, const BYTE *const src_rows, const INT64 src_pitch, BYTE *const dst, const INT64 samples) {
+	const __m128i zero = _mm_setzero_si128();
+	const __m128d half = _mm_set1_pd(0.5);
+	INT64 x = 0;
+	for (; x + 16 <= samples; x += 16) {
+		__m128d s0 = _mm_setzero_pd(), s1 = s0, s2 = s0, s3 = s0, s4 = s0, s5 = s0, s6 = s0, s7 = s0;
+		const BYTE *pixel = src_rows + x;
+		for (INT64 i = 0; i < taps; i++) {
+			const __m128d w = _mm_set1_pd(weightsTable.getWeight((unsigned)y, (unsigned)i));
+			const __m128i b = _mm_loadu_si128((const __m128i *)pixel);
+			const __m128i lo = _mm_unpacklo_epi8(b, zero), hi = _mm_unpackhi_epi8(b, zero);
+			const __m128i q0 = _mm_unpacklo_epi16(lo, zero), q1 = _mm_unpackhi_epi16(lo, zero);
+			const __m128i q2 = _mm_unpacklo_epi16(hi, zero), q3 = _mm_unpackhi_epi16(hi, zero);
+			s0 = _mm_add_pd(s0, _mm_mul_pd(w, _mm_cvtepi32_pd(q0)));
+			s1 = _mm_add_pd(s1, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q0, 0xEE))));
+			s2 = _mm_add_pd(s2, _mm_mul_pd(w, _mm_cvtepi32_pd(q1)));
+			s3 = _mm_add_pd(s3, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q1, 0xEE))));
+			s4 = _mm_add_pd(s4, _mm_mul_pd(w, _mm_cvtepi32_pd(q2)));
+			s5 = _mm_add_pd(s5, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q2, 0xEE))));
+			s6 = _mm_add_pd(s6, _mm_mul_pd(w, _mm_cvtepi32_pd(q3)));
+			s7 = _mm_add_pd(s7, _mm_mul_pd(w, _mm_cvtepi32_pd(_mm_shuffle_epi32(q3, 0xEE))));
+			pixel += src_pitch;
+		}
+		// (int)(v + 0.5), saturated to 0..255 by the packs
+		const __m128i i0 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s0, half)), _mm_cvttpd_epi32(_mm_add_pd(s1, half)));
+		const __m128i i1 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s2, half)), _mm_cvttpd_epi32(_mm_add_pd(s3, half)));
+		const __m128i i2 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s4, half)), _mm_cvttpd_epi32(_mm_add_pd(s5, half)));
+		const __m128i i3 = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(s6, half)), _mm_cvttpd_epi32(_mm_add_pd(s7, half)));
+		_mm_storeu_si128((__m128i *)(dst + x), _mm_packus_epi16(_mm_packs_epi32(i0, i1), _mm_packs_epi32(i2, i3)));
+	}
+	return x;
+}
+#endif
+
+// samples of a row VerticalStrips filtered; the block loop does the rest
+template <class T> static inline INT64
+VerticalStrips(CWeightsTable &, const INT64, const INT64, const BYTE *const, const INT64, T *const, const INT64) {
+	return 0;
+}
+
 // vertical pass for plain sample arrays, row by row: every source row is read sequentially
 template <class T, int SPP> static void
 VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
@@ -340,7 +383,7 @@ VerticalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const IN
 		T *const dst_bits = (T *)FreeImage_GetScanLine(dst, dst_row_bias + y);
 		double value[VERTICAL_BLOCK];
 
-		for (INT64 x0 = 0; x0 < samples; x0 += VERTICAL_BLOCK) {
+		for (INT64 x0 = VerticalStrips(weightsTable, y, iLimit, src_rows, src_pitch, dst_bits, samples); x0 < samples; x0 += VERTICAL_BLOCK) {
 			const INT64 count = MIN((INT64)VERTICAL_BLOCK, samples - x0);
 			for (INT64 k = 0; k < count; k++) {
 				value[k] = 0;
