@@ -1,5 +1,8 @@
 # FreeImage_Rescale speed: HEAD against ab5ff8e, and against QPV's 29 August DLL
 
+> The kernels of §8 (`1eb0175`, `06d69d9`) and the pass order for 8-, 24- and 32-bit images were replaced by `394d42a`,
+> `59cf8ef` and `b5c8f48`: see RESIZE-SPEED-HUGE-IMAGES.md.
+
 2026-09-27. HEAD is `b6e3af3` (`worktree-io64`), whose resize sources are the same as `qpv`'s and were last
 changed by `d60316b`; the fix in §8 was committed after it, as `1eb0175` and `06d69d9`. The question: HEAD is about
 25% slower than `ab5ff8e` on very large images, with any filter, on an 8-core machine. Which commit did it, and why?
