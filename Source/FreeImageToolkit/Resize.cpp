@@ -254,73 +254,180 @@ HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const 
 }
 
 #ifdef FI_RESIZE_SSE2
-// source pixels a horizontal tile holds: 16 KB of floats at 4 samples and 2 rows, it stays in L1
-static const INT64 TILE_PIXELS = 512;
+// rows the byte kernel filters together: 12 or 16 samples a tap keep 6 or 8 sums in flight
+template <int SPP> struct ByteRows {
+	enum { N = (SPP >= 2) ? 4 : 16 };
+};
+
+// pixels the ring holds besides a window: it converts this far ahead
+static const INT64 RING_AHEAD = 128;
+// bytes of a thread's ring beyond which the plain kernels run instead
+static const INT64 RING_MAX_BYTES = 4 << 20;
+
+// 16 bytes to 8 pairs of doubles, pair j = bytes j and j + 8, by masks, shifts and 2^52 + b - 2^52: exact, and no shuffles
+static inline void
+SplitBytes(__m128d *const pair, const __m128i v) {
+	const __m128i m8 = _mm_set1_epi16(0x00FF);
+	const __m128i m16 = _mm_set1_epi32(0x0000FFFF);
+	const __m128i m32 = _mm_set_epi32(0, -1, 0, -1);
+	const __m128i e = _mm_set_epi32(0x43300000, 0, 0x43300000, 0);
+	const __m128d bias = _mm_set1_pd(4503599627370496.0);
+	const __m128i w0 = _mm_and_si128(v, m8);
+	const __m128i w1 = _mm_srli_epi16(v, 8);
+	const __m128i d0 = _mm_and_si128(w0, m16);
+	const __m128i d1 = _mm_and_si128(w1, m16);
+	const __m128i d2 = _mm_srli_epi32(w0, 16);
+	const __m128i d3 = _mm_srli_epi32(w1, 16);
+	pair[0] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_and_si128(d0, m32), e)), bias);
+	pair[1] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_and_si128(d1, m32), e)), bias);
+	pair[2] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_and_si128(d2, m32), e)), bias);
+	pair[3] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_and_si128(d3, m32), e)), bias);
+	pair[4] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_srli_epi64(d0, 32), e)), bias);
+	pair[5] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_srli_epi64(d1, 32), e)), bias);
+	pair[6] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_srli_epi64(d2, 32), e)), bias);
+	pair[7] = _mm_sub_pd(_mm_castsi128_pd(_mm_or_si128(_mm_srli_epi64(d3, 32), e)), bias);
+}
+
+// samples [k0, k1) of the rows to out[(k - k0) * ROWS + row]
+template <int ROWS> static inline void
+TransposeBytes(double *const out, const BYTE *const *const line, const INT64 k0, const INT64 k1) {
+	for (int j = 0; j < ROWS; j += 2) {
+		const BYTE *const a = line[j];
+		const BYTE *const b = line[j + 1];
+		double *o = out + j;
+		INT64 k = k0;
+		for (; k + 8 <= k1; k += 8) {
+			// samples k..k+7 of row a, then of row b: pair s is (a, b) of sample k + s
+			__m128d pair[8];
+			SplitBytes(pair, _mm_unpacklo_epi64(_mm_loadl_epi64((const __m128i *)(a + k)), _mm_loadl_epi64((const __m128i *)(b + k))));
+			for (int s = 0; s < 8; s++) {
+				_mm_store_pd(o + s * ROWS, pair[s]);
+			}
+			o += 8 * ROWS;
+		}
+		for (; k < k1; k++) {
+			o[0] = a[k];
+			o[1] = b[k];
+			o += ROWS;
+		}
+	}
+}
+
+// 12 or 16 sums to bytes, (int)(v + 0.5) saturated to 0..255 as the scalar kernels round
+template <int VALUES> static inline void
+PackSums(BYTE *const bytes, const __m128d *const sum) {
+	const __m128d half = _mm_set1_pd(0.5);
+	__m128i q[VALUES / 4];
+	for (int v = 0; v < VALUES / 4; v++) {
+		q[v] = _mm_unpacklo_epi64(_mm_cvttpd_epi32(_mm_add_pd(sum[2 * v], half)), _mm_cvttpd_epi32(_mm_add_pd(sum[2 * v + 1], half)));
+	}
+	_mm_storeu_si128((__m128i *)bytes, _mm_packus_epi16(_mm_packs_epi32(q[0], q[1]), _mm_packs_epi32(q[2], q[VALUES / 4 - 1])));
+}
 #endif
 
-// horizontal pass for 8-bit samples, two rows at a time: one SSE2 lane per row, each sum's taps in the order of HorizontalFilterSamples
+// horizontal pass for 8-bit samples, ByteRows rows at a time, a lane each, taps in HorizontalFilterSamples' order; a ring converts each pixel once
 template <int SPP> static void
 HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
 #ifdef FI_RESIZE_SSE2
-	if ((INT64)weightsTable.getWindowSize() <= TILE_PIXELS) {
-		#pragma omp parallel for schedule(dynamic) default(shared)
-		for (INT64 y = 0; y < rows; y += 2) {
-			const bool pair = (y + 1 < rows);
-			const BYTE *const row0 = FreeImage_GetScanLine(src, (int)(src_row + y)) + (INT64)src_offset_x * SPP;
-			const BYTE *const row1 = pair ? FreeImage_GetScanLine(src, (int)(src_row + y + 1)) + (INT64)src_offset_x * SPP : row0;
-			BYTE *const dst0 = FreeImage_GetScanLine(dst, (int)(dst_row + y));
-			BYTE *const dst1 = pair ? FreeImage_GetScanLine(dst, (int)(dst_row + y + 1)) : NULL;
-			float tile[TILE_PIXELS * 4 * 2];
+	enum { ROWS = ByteRows<SPP>::N, VALUES = SPP * ByteRows<SPP>::N };
+	const INT64 capacity = (INT64)weightsTable.getWindowSize() + RING_AHEAD;
+	if (capacity * VALUES * (INT64)sizeof(double) > RING_MAX_BYTES) {
+		HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
+		return;
+	}
+	INT64 end = 0;
+	for (unsigned x = 0; x < dst_width; x++) {
+		end = MAX(end, (INT64)weightsTable.getRightBoundary(x));
+	}
+	const INT64 groups = ((INT64)rows + ROWS - 1) / ROWS;
 
-			for (INT64 x = 0; x < dst_width; ) {
-				// the right boundaries are not monotonic: the tile spans the widest one of its run
-				const INT64 lo = weightsTable.getLeftBoundary((unsigned)x);
-				INT64 hi = lo, x1 = x;
-				for (; x1 < dst_width; x1++) {
-					const INT64 right = MAX(hi, (INT64)weightsTable.getRightBoundary((unsigned)x1));
-					if (right - lo > TILE_PIXELS) {
+	#pragma omp parallel default(shared)
+	{
+		void *const block = malloc((size_t)capacity * VALUES * sizeof(double) + 15);
+		double *const ring = block ? (double *)(((size_t)block + 15) & ~(size_t)15) : NULL;
+
+		#pragma omp for schedule(dynamic)
+		for (INT64 g = 0; g < groups; g++) {
+			const INT64 y0 = g * ROWS;
+			const INT64 count = MIN((INT64)ROWS, (INT64)rows - y0);
+			if (!ring) {
+				HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, (unsigned)(src_row + y0), src_offset_x, dst, (unsigned)(dst_row + y0), (unsigned)count, dst_width);
+				continue;
+			}
+			// a group short of rows filters its last row again and stores it once
+			const BYTE *line[ROWS];
+			BYTE *out[ROWS];
+			for (int r = 0; r < ROWS; r++) {
+				const INT64 y = y0 + MIN((INT64)r, count - 1);
+				line[r] = FreeImage_GetScanLine(src, (int)(src_row + y)) + (INT64)src_offset_x * SPP;
+				out[r] = FreeImage_GetScanLine(dst, (int)(dst_row + y));
+			}
+
+			// the ring holds pixels [left, next), pixel p in slot p % capacity
+			INT64 left = 0, slot = 0, next = 0, next_slot = 0;
+			for (INT64 x = 0; x < dst_width; x++) {
+				const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)x);
+				const INT64 iRight = weightsTable.getRightBoundary((unsigned)x);
+				slot += iLeft - left;
+				while (slot >= capacity) {
+					slot -= capacity;
+				}
+				left = iLeft;
+				if (next < iLeft) {
+					next = iLeft;
+					next_slot = slot;
+				}
+				if (next < iRight) {
+					const INT64 stop = MIN(MIN(end, iLeft + capacity), MAX(iRight, next + RING_AHEAD));
+					while (next < stop) {
+						const INT64 n = MIN(stop - next, capacity - next_slot);
+						TransposeBytes<ROWS>(ring + next_slot * VALUES, line, next * SPP, (next + n) * SPP);
+						next += n;
+						next_slot += n;
+						if (next_slot == capacity) {
+							next_slot = 0;
+						}
+					}
+				}
+
+				__m128d sum[VALUES / 2];
+				for (int v = 0; v < VALUES / 2; v++) {
+					sum[v] = _mm_setzero_pd();
+				}
+				const double *const weights = weightsTable.getWeights((unsigned)x);
+				const INT64 taps = iRight - iLeft;
+				const double *pixel = ring + slot * VALUES;
+				// the window runs to the end of the ring, then on from its start
+				INT64 i = 0, stop = MIN(taps, capacity - slot);
+				for (;;) {
+					for (; i < stop; i++) {
+						const __m128d w = _mm_set1_pd(weights[i]);
+						for (int v = 0; v < VALUES / 2; v++) {
+							sum[v] = _mm_add_pd(sum[v], _mm_mul_pd(w, _mm_load_pd(pixel + 2 * v)));
+						}
+						pixel += VALUES;
+					}
+					if (i == taps) {
 						break;
 					}
-					hi = right;
+					pixel = ring;
+					stop = taps;
 				}
 
-				// tile[2 * sample + row]: BYTE to float is exact
-				const BYTE *const b0 = row0 + lo * SPP;
-				const BYTE *const b1 = row1 + lo * SPP;
-				for (INT64 k = 0; k < (hi - lo) * SPP; k++) {
-					tile[2 * k] = (float)b0[k];
-					tile[2 * k + 1] = (float)b1[k];
-				}
-
-				for (; x < x1; x++) {
-					const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)x);
-					const INT64 iLimit = weightsTable.getRightBoundary((unsigned)x) - iLeft;
-					const float *pixel = tile + (iLeft - lo) * SPP * 2;
-					__m128d sum[SPP];
-					for (int j = 0; j < SPP; j++) {
-						sum[j] = _mm_setzero_pd();
-					}
-					for (INT64 i = 0; i < iLimit; i++) {
-						const __m128d weight = _mm_set1_pd(weightsTable.getWeight((unsigned)x, (unsigned)i));
-						for (int j = 0; j < SPP; j++) {
-							const __m128d samples = _mm_cvtps_pd(_mm_castsi128_ps(_mm_loadl_epi64((const __m128i *)(pixel + 2 * j))));
-							sum[j] = _mm_add_pd(sum[j], _mm_mul_pd(weight, samples));
-						}
-						pixel += SPP * 2;
-					}
-					double value[SPP][2];
-					for (int j = 0; j < SPP; j++) {
-						_mm_storeu_pd(value[j], sum[j]);
-						dst0[x * SPP + j] = (BYTE)CLAMP<int>((int)(value[j][0] + 0.5), 0, 0xFF);
-						if (pair) {
-							dst1[x * SPP + j] = (BYTE)CLAMP<int>((int)(value[j][1] + 0.5), 0, 0xFF);
-						}
+				BYTE bytes[16];
+				PackSums<VALUES>(bytes, sum);
+				for (INT64 r = 0; r < count; r++) {
+					BYTE *const d = out[r] + x * SPP;
+					for (int c = 0; c < SPP; c++) {
+						d[c] = bytes[c * ROWS + r];
 					}
 				}
 			}
 		}
-		return;
+
+		free(block);
 	}
+	return;
 #endif
 	HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
 }

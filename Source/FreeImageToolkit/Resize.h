@@ -89,6 +89,11 @@ public:
 		return m_WeightTable[dst_pos].Weights[src_pos];
 	}
 
+	/// Weights of a destination pixel, the first one at its left boundary
+	const double *getWeights(unsigned dst_pos) const {
+		return m_WeightTable[dst_pos].Weights;
+	}
+
 	/** Retrieve left boundary of source line buffer
 	@param dst_pos Pixel position in destination line buffer
 	@return Returns the left boundary of source line buffer
