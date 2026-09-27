@@ -24,16 +24,17 @@ I. Prerequisites
 I. Prerequisites
 =====================================================================
 
-The procedures described in this document have been developed and
-tested using the following free tools:
+The procedures described in this document use the following free
+tools:
 
-1. MinGW GCC Version 4.4.0 (Core and C++ including required libs)
-2. MinGW GNU Binutils Version 2.19.1
-3. MinGW GNU Make Version 3.81-20080326-3
-4. MinGW Runtime Version 3.15.2
-5. MinGW API for MS-Windows Version 3.13
-6. GnuWin32 Package CoreUtils Version 5.3.0 (only for building)
-7. GnuWin32 Package Sed Version 4.2 (only for creating the GCC
+1. MinGW-w64 GCC with POSIX threads (winpthreads), with its
+   Binutils (dlltool, windres) and runtime, as MSYS2 or WinLibs
+   ship it. The x86_64 compiler builds a 64-bit DLL.
+2. GNU Make 4.0 or later (mingw32-make.exe)
+3. cp and rm from MSYS2, Git for Windows (its usr\bin folder) or
+   the GnuWin32 package CoreUtils (only for the Dist folder and
+   the targets 'install' and 'clean')
+4. GnuWin32 Package Sed Version 4.2 (only for creating the GCC
    import library)*
 
 * Sed is only needed to create a GCC-native import library from
@@ -41,25 +42,23 @@ tested using the following free tools:
   supports linking against MSVC lib files, this process seems to
   be obsolete. See section 1.
 
-Basically, no version dependent capabilities are used so, this
-should also work with older versions of the tools mentioned above.
-Similarly, the GnuWin32 packages (which I just prefer over MSYS)
-could likely be replaced by a properly installed MSYS environment.
+Older tools do not work: libheif needs C++20 and OpenEXR C++17
+(GCC 13 builds both), and the makefile hands the object list, which
+is longer than a Windows command line, to the tools in a file
+written with the $(file) function of GNU Make 4.0.
 
 Furthermore, the following preconditions should be met:
 
-1. The folders 'bin' under both the MinGW and the GnuWin32
-   installation directory should have been added to the PATH
-   environment variable. Likely it is best adding these
-   directories permanently to PATH through the System
-   Properties dialog on the Control Panel.
+1. The folder 'bin' of MinGW-w64 and the folder holding cp and
+   rm should have been added to the PATH environment variable.
+   Likely it is best adding these directories permanently to
+   PATH through the System Properties dialog on the Control
+   Panel.
 
-2. The MinGW Make package only provides a 'mingw32-make.exe'
-   executable. There is no alias 'make.exe'. However, make is
-   preconfigured to use 'make' as the default $(MAKE) command.
-   This seems to be a bug in the MinGW GNU Make distribution.
-   Thus, a copy of 'mingw32-make.exe' named 'make.exe' should
-   be placed into MinGW's 'bin' directory.
+2. Makefile.mingw is run directly, with 'mingw32-make -f
+   Makefile.mingw'. The top-level Makefile picks it only when
+   'uname' prints 'windows32', as the GnuWin32 one does; the
+   uname of MSYS2 and Git for Windows makes it take Makefile.gnu.
 
 
 
@@ -173,27 +172,35 @@ The following procedure creates the FreeImage dynamic link library
 (DLL) from the sources, installs it and also creates a static
 FreeImage library:
 
-1.) Open a DOS shell (run application cmd.exe)
+1.) Open a DOS shell (run application cmd.exe), or the shell of
+    the MSYS2 environment whose compiler you use (UCRT64, MINGW64)
 
-2.) Ensure, that the 'bin' folders of both MinGW and GnuWin32 are
-    added to the PATH environment variable (see Prerequisites).
+2.) Ensure, that the 'bin' folder of MinGW-w64 and the folder
+    holding cp and rm are added to the PATH environment variable
+    (see Prerequisites).
 
 3.) Create the FreeImage dynamic link library (DLL):
 
-    C:\>make
+    C:\>mingw32-make -f Makefile.mingw -j8
+
+    -j8 runs eight compilers at a time. The target 'FreeImage'
+    builds FreeImage.dll and FreeImage.lib without copying them
+    to the Dist folder, so it needs no cp:
+
+    C:\>mingw32-make -f Makefile.mingw -j8 FreeImage
 
 4.) Install the FreeImage dynamic link library (DLL):
 
-    C:\>make install
+    C:\>mingw32-make -f Makefile.mingw install
 
 5.) Clean all files produced by the recent build process:
 
-    C:\>make clean
+    C:\>mingw32-make -f Makefile.mingw clean
 
 6.) Create a static FreeImage library:
 
     C:\>set FREEIMAGE_LIBRARY_TYPE=STATIC
-    C:\>make
+    C:\>mingw32-make -f Makefile.mingw -j8
 
 You should be able to link progams with the -lFreeImage option
 after the shared library is compiled and installed. You can also
@@ -217,8 +224,11 @@ Microsoft Visual Studio.
 4. Useful links
 =====================================================================
 
-- The MinGW homepage:
-     http://www.mingw.org/
+- The MinGW-w64 homepage:
+     https://www.mingw-w64.org/
+
+- MSYS2, which ships MinGW-w64 GCC, GNU Make and cp/rm:
+     https://www.msys2.org/
 
 - The GnuWin32 homepage:
      http://gnuwin32.sourceforge.net/

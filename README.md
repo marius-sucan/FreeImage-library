@@ -42,6 +42,7 @@ Fixes:
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed Makefile.srcs / fipMakefile.srcs omitting tif_hash_set.c, which left libfreeimage.so with undefined TIFFHashSet* symbols;
+- fixed Makefile.mingw not building with MinGW-w64 on Windows: LibJXR's guiddef.h and _byteswap_ulong clashed with MinGW-w64's headers, the object list is longer than a Windows command line, and cmd.exe has no uname; see README.minGW;
 - fixed loading from a stream that does not start at byte zero in the SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins and in multi-page documents opened from a handle or memory; TIFF, EXR, JXR, TGA and ICO also save correctly there;
 - fixed TIFF IPTC metadata being cut to a quarter on save and read past its buffer on load; big-endian TIFFs with IPTC crashed;
 - fixed CMYK PSD files loading and saving with the black channel reversed, and a bad PSD thumbnail failing or crashing the whole load;
