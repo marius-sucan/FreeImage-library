@@ -75,6 +75,11 @@ public:
 		return m_bValid;
 	}
 
+	/// Largest number of source pixels one destination pixel reads
+	unsigned getWindowSize() const {
+		return m_WindowSize;
+	}
+
 	/** Retrieve a filter weight, given source and destination positions
 	@param dst_pos Pixel position in destination line buffer
 	@param src_pos Pixel position in source line buffer

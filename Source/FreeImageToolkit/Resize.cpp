@@ -23,6 +23,11 @@
 
 #include "Resize.h"
 
+#if defined(_M_X64) || defined(_M_AMD64) || defined(__x86_64__) || defined(__SSE2__) || (defined(_M_IX86_FP) && (_M_IX86_FP >= 2))
+#include <emmintrin.h>
+#define FI_RESIZE_SSE2
+#endif
+
 /**
 Returns the color type of a bitmap. In contrast to FreeImage_GetColorType,
 this function optionally supports a boolean OUT parameter, that receives TRUE,
@@ -246,6 +251,78 @@ HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const 
 			dst_bits += SPP;
 		}
 	}
+}
+
+#ifdef FI_RESIZE_SSE2
+// source pixels a horizontal tile holds: 16 KB of floats at 4 samples and 2 rows, it stays in L1
+static const INT64 TILE_PIXELS = 512;
+#endif
+
+// horizontal pass for 8-bit samples, two rows at a time: one SSE2 lane per row, each sum's taps in the order of HorizontalFilterSamples
+template <int SPP> static void
+HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
+#ifdef FI_RESIZE_SSE2
+	if ((INT64)weightsTable.getWindowSize() <= TILE_PIXELS) {
+		#pragma omp parallel for schedule(dynamic) default(shared)
+		for (INT64 y = 0; y < rows; y += 2) {
+			const bool pair = (y + 1 < rows);
+			const BYTE *const row0 = FreeImage_GetScanLine(src, (int)(src_row + y)) + (INT64)src_offset_x * SPP;
+			const BYTE *const row1 = pair ? FreeImage_GetScanLine(src, (int)(src_row + y + 1)) + (INT64)src_offset_x * SPP : row0;
+			BYTE *const dst0 = FreeImage_GetScanLine(dst, (int)(dst_row + y));
+			BYTE *const dst1 = pair ? FreeImage_GetScanLine(dst, (int)(dst_row + y + 1)) : NULL;
+			float tile[TILE_PIXELS * 4 * 2];
+
+			for (INT64 x = 0; x < dst_width; ) {
+				// the right boundaries are not monotonic: the tile spans the widest one of its run
+				const INT64 lo = weightsTable.getLeftBoundary((unsigned)x);
+				INT64 hi = lo, x1 = x;
+				for (; x1 < dst_width; x1++) {
+					const INT64 right = MAX(hi, (INT64)weightsTable.getRightBoundary((unsigned)x1));
+					if (right - lo > TILE_PIXELS) {
+						break;
+					}
+					hi = right;
+				}
+
+				// tile[2 * sample + row]: BYTE to float is exact
+				const BYTE *const b0 = row0 + lo * SPP;
+				const BYTE *const b1 = row1 + lo * SPP;
+				for (INT64 k = 0; k < (hi - lo) * SPP; k++) {
+					tile[2 * k] = (float)b0[k];
+					tile[2 * k + 1] = (float)b1[k];
+				}
+
+				for (; x < x1; x++) {
+					const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)x);
+					const INT64 iLimit = weightsTable.getRightBoundary((unsigned)x) - iLeft;
+					const float *pixel = tile + (iLeft - lo) * SPP * 2;
+					__m128d sum[SPP];
+					for (int j = 0; j < SPP; j++) {
+						sum[j] = _mm_setzero_pd();
+					}
+					for (INT64 i = 0; i < iLimit; i++) {
+						const __m128d weight = _mm_set1_pd(weightsTable.getWeight((unsigned)x, (unsigned)i));
+						for (int j = 0; j < SPP; j++) {
+							const __m128d samples = _mm_cvtps_pd(_mm_castsi128_ps(_mm_loadl_epi64((const __m128i *)(pixel + 2 * j))));
+							sum[j] = _mm_add_pd(sum[j], _mm_mul_pd(weight, samples));
+						}
+						pixel += SPP * 2;
+					}
+					double value[SPP][2];
+					for (int j = 0; j < SPP; j++) {
+						_mm_storeu_pd(value[j], sum[j]);
+						dst0[x * SPP + j] = (BYTE)CLAMP<int>((int)(value[j][0] + 0.5), 0, 0xFF);
+						if (pair) {
+							dst1[x * SPP + j] = (BYTE)CLAMP<int>((int)(value[j][1] + 0.5), 0, 0xFF);
+						}
+					}
+				}
+			}
+		}
+		return;
+	}
+#endif
+	HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
 }
 
 // vertical pass for plain sample arrays, row by row: every source row is read sequentially
@@ -1235,7 +1312,7 @@ void CResizeEngine::horizontalFilter(CWeightsTable &weightsTable, FIBITMAP *cons
                         }
                      } else {
                         // we do not have a palette
-                        HorizontalFilterSamples<BYTE, 1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
+                        HorizontalFilterBytes<1>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                      }
                   }
                   break;
@@ -1427,11 +1504,11 @@ void CResizeEngine::horizontalFilter(CWeightsTable &weightsTable, FIBITMAP *cons
             break;
 
             case 24:
-               HorizontalFilterSamples<BYTE, 3>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
+               HorizontalFilterBytes<3>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                break;
 
             case 32:
-               HorizontalFilterSamples<BYTE, 4>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
+               HorizontalFilterBytes<4>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
                break;
          }
       }
