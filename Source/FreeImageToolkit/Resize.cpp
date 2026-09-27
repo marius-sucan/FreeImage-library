@@ -28,6 +28,22 @@
 #define FI_RESIZE_SSE2
 #endif
 
+// AVX2 kernels on x64, chosen at run time; not with MinGW's GCC, which misaligns spilled AVX registers (GCC bug 54412)
+#if defined(FI_RESIZE_SSE2) && (defined(_M_X64) || defined(__x86_64__)) && !defined(_M_ARM64EC) && !(defined(__MINGW32__) && !defined(__clang__))
+#include <immintrin.h>
+#define FI_RESIZE_AVX2
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+// MSVC gives the code around AVX intrinsics VEX encoding, so a function holding them stays out of its callers
+#define FI_AVX2 __declspec(noinline)
+#define FI_AVX2_INLINE __forceinline
+#else
+#include <cpuid.h>
+#define FI_AVX2 __attribute__((target("avx2"), noinline))
+#define FI_AVX2_INLINE inline __attribute__((target("avx2"), always_inline))
+#endif
+#endif
+
 /**
 Returns the color type of a bitmap. In contrast to FreeImage_GetColorType,
 this function optionally supports a boolean OUT parameter, that receives TRUE,
@@ -268,6 +284,12 @@ HorizontalFilterSamples(CWeightsTable &weightsTable, FIBITMAP *const src, const 
 }
 
 #ifdef FI_RESIZE_SSE2
+#if defined(_MSC_VER) && !defined(__clang__)
+#define FI_RESIZE_INLINE __forceinline
+#else
+#define FI_RESIZE_INLINE inline __attribute__((always_inline))
+#endif
+
 // rows the byte kernel filters together: 12 or 16 samples a tap keep 6 or 8 sums in flight
 template <int SPP> struct ByteRows {
 	enum { N = (SPP >= 2) ? 4 : 16 };
@@ -278,8 +300,52 @@ static const INT64 RING_AHEAD = 128;
 // bytes of a thread's ring beyond which the plain kernels run instead
 static const INT64 RING_MAX_BYTES = 4 << 20;
 
+#ifdef FI_RESIZE_AVX2
+// whether the CPU runs AVX2 and the OS saves the YMM registers
+static bool
+DetectAVX2() {
+	unsigned c1, b7, xcr0;
+#if defined(_MSC_VER) && !defined(__clang__)
+	int info[4];
+	__cpuid(info, 0);
+	if (info[0] < 7) {
+		return false;
+	}
+	__cpuid(info, 1);
+	c1 = (unsigned)info[2];
+	__cpuidex(info, 7, 0);
+	b7 = (unsigned)info[1];
+	// OSXSAVE and AVX before XGETBV
+	if ((c1 & (3u << 27)) != (3u << 27)) {
+		return false;
+	}
+	xcr0 = (unsigned)_xgetbv(0);
+#else
+	unsigned a, b, c, d;
+	if (__get_cpuid_max(0, NULL) < 7) {
+		return false;
+	}
+	__cpuid(1, a, b, c, d);
+	c1 = c;
+	__cpuid_count(7, 0, a, b, c, d);
+	b7 = b;
+	if ((c1 & (3u << 27)) != (3u << 27)) {
+		return false;
+	}
+	__asm__ __volatile__("xgetbv" : "=a"(xcr0), "=d"(d) : "c"(0));
+#endif
+	return ((xcr0 & 6) == 6) && ((b7 & (1u << 5)) != 0);
+}
+
+static bool
+HasAVX2() {
+	static const bool avx2 = DetectAVX2();
+	return avx2;
+}
+#endif
+
 // 16 bytes to 8 pairs of doubles, pair j = bytes j and j + 8, by masks, shifts and 2^52 + b - 2^52: exact, and no shuffles
-static inline void
+static FI_RESIZE_INLINE void
 SplitBytes(__m128d *const pair, const __m128i v) {
 	const __m128i m8 = _mm_set1_epi16(0x00FF);
 	const __m128i m16 = _mm_set1_epi32(0x0000FFFF);
@@ -303,7 +369,7 @@ SplitBytes(__m128d *const pair, const __m128i v) {
 }
 
 // samples [k0, k1) of the rows to out[(k - k0) * ROWS + row]
-template <int ROWS> static inline void
+template <int ROWS> static FI_RESIZE_INLINE void
 TransposeBytes(double *const out, const BYTE *const *const line, const INT64 k0, const INT64 k1) {
 	for (int j = 0; j < ROWS; j += 2) {
 		const BYTE *const a = line[j];
@@ -328,7 +394,7 @@ TransposeBytes(double *const out, const BYTE *const *const line, const INT64 k0,
 }
 
 // n samples of a row to out: each 16 as SplitBytes pairs, the rest in order
-static inline void
+static FI_RESIZE_INLINE void
 ConvertByteRow(double *const out, const BYTE *const in, const INT64 n) {
 	INT64 k = 0;
 	for (; k + 16 <= n; k += 16) {
@@ -344,7 +410,7 @@ ConvertByteRow(double *const out, const BYTE *const in, const INT64 n) {
 }
 
 // 8 sums of SplitBytes pairs to 16 bytes in sample order, (int)(v + 0.5) saturated to 0..255 as the scalar kernels round
-static inline __m128i
+static FI_RESIZE_INLINE __m128i
 PackPairSums(const __m128d *const sum) {
 	const __m128d half = _mm_set1_pd(0.5);
 	__m128i t[8];
@@ -361,7 +427,7 @@ PackPairSums(const __m128d *const sum) {
 }
 
 // 12 or 16 sums to bytes, (int)(v + 0.5) saturated to 0..255 as the scalar kernels round
-template <int VALUES> static inline void
+template <int VALUES> static FI_RESIZE_INLINE void
 PackSums(BYTE *const bytes, const __m128d *const sum) {
 	const __m128d half = _mm_set1_pd(0.5);
 	__m128i q[VALUES / 4];
@@ -370,18 +436,181 @@ PackSums(BYTE *const bytes, const __m128d *const sum) {
 	}
 	_mm_storeu_si128((__m128i *)bytes, _mm_packus_epi16(_mm_packs_epi32(q[0], q[1]), _mm_packs_epi32(q[2], q[VALUES / 4 - 1])));
 }
+
+// the pixels [left, next) of a group of rows, as doubles, pixel p in slot p % capacity
+struct ByteRing {
+	double *ring;
+	INT64 capacity, left, slot, next, next_slot;
+};
+
+// moves the ring to the window [iLeft, iRight), converting ahead up to end; returns the window's first slot
+template <int SPP, int ROWS> static FI_RESIZE_INLINE INT64
+MoveRing(ByteRing &r, const BYTE *const *const line, const INT64 iLeft, const INT64 iRight, const INT64 end) {
+	r.slot += iLeft - r.left;
+	while (r.slot >= r.capacity) {
+		r.slot -= r.capacity;
+	}
+	r.left = iLeft;
+	if (r.next < iLeft) {
+		r.next = iLeft;
+		r.next_slot = r.slot;
+	}
+	if (r.next < iRight) {
+		const INT64 stop = MIN(MIN(end, iLeft + r.capacity), MAX(iRight, r.next + RING_AHEAD));
+		while (r.next < stop) {
+			const INT64 n = MIN(stop - r.next, r.capacity - r.next_slot);
+			TransposeBytes<ROWS>(r.ring + r.next_slot * SPP * ROWS, line, r.next * SPP, (r.next + n) * SPP);
+			r.next += n;
+			r.next_slot += n;
+			if (r.next_slot == r.capacity) {
+				r.next_slot = 0;
+			}
+		}
+	}
+	return r.slot;
+}
+
+// a destination pixel's bytes, [channel][row], to the rows of its group
+template <int SPP, int ROWS> static FI_RESIZE_INLINE void
+ScatterBytes(BYTE *const *const out, const INT64 count, const INT64 x, const BYTE *const bytes) {
+	for (INT64 r = 0; r < count; r++) {
+		BYTE *const d = out[r] + x * SPP;
+		for (int c = 0; c < SPP; c++) {
+			d[c] = bytes[c * ROWS + r];
+		}
+	}
+}
+
+// the destination pixels of a group of rows, sums of two in SSE2 registers
+template <int SPP> static FI_RESIZE_INLINE void
+FilterGroup(CWeightsTable &weightsTable, ByteRing &r, const BYTE *const *const line, BYTE *const *const out, const INT64 count, const unsigned dst_width, const INT64 end) {
+	enum { ROWS = ByteRows<SPP>::N, VALUES = SPP * ByteRows<SPP>::N };
+	for (INT64 x = 0; x < dst_width; x++) {
+		const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)x);
+		const INT64 taps = weightsTable.getRightBoundary((unsigned)x) - iLeft;
+		const INT64 slot = MoveRing<SPP, ROWS>(r, line, iLeft, iLeft + taps, end);
+		const double *const weights = weightsTable.getWeights((unsigned)x);
+		__m128d sum[VALUES / 2];
+		for (int v = 0; v < VALUES / 2; v++) {
+			sum[v] = _mm_setzero_pd();
+		}
+		// the window runs to the end of the ring, then on from its start
+		const double *pixel = r.ring + slot * VALUES;
+		INT64 i = 0, stop = MIN(taps, r.capacity - slot);
+		for (;;) {
+			for (; i < stop; i++) {
+				const __m128d w = _mm_set1_pd(weights[i]);
+				for (int v = 0; v < VALUES / 2; v++) {
+					sum[v] = _mm_add_pd(sum[v], _mm_mul_pd(w, _mm_load_pd(pixel + 2 * v)));
+				}
+				pixel += VALUES;
+			}
+			if (i == taps) {
+				break;
+			}
+			pixel = r.ring;
+			stop = taps;
+		}
+		BYTE bytes[16];
+		PackSums<VALUES>(bytes, sum);
+		ScatterBytes<SPP, ROWS>(out, count, x, bytes);
+	}
+}
+
+#ifdef FI_RESIZE_AVX2
+// 12 or 16 sums, in 3 or 4 AVX2 registers, to bytes as PackSums
+template <int VALUES> static FI_AVX2_INLINE void
+PackSumsAVX2(BYTE *const bytes, const __m256d *const sum) {
+	const __m256d half = _mm256_set1_pd(0.5);
+	__m128i q[VALUES / 4];
+	for (int v = 0; v < VALUES / 4; v++) {
+		q[v] = _mm256_cvttpd_epi32(_mm256_add_pd(sum[v], half));
+	}
+	_mm_storeu_si128((__m128i *)bytes, _mm_packus_epi16(_mm_packs_epi32(q[0], q[1]), _mm_packs_epi32(q[2], q[VALUES / 4 - 1])));
+}
+
+// FilterGroup two destination pixels at a time with AVX2: a pixel both windows read is loaded once for both sums
+template <int SPP> static FI_AVX2 void
+FilterGroupAVX2(CWeightsTable &weightsTable, ByteRing &r, const BYTE *const *const line, BYTE *const *const out, const INT64 count, const unsigned dst_width, const INT64 end) {
+	enum { ROWS = ByteRows<SPP>::N, VALUES = SPP * ByteRows<SPP>::N };
+	for (INT64 x = 0; x < dst_width; x += 2) {
+		const INT64 x1 = MIN(x + 1, (INT64)dst_width - 1);
+		const INT64 a0 = weightsTable.getLeftBoundary((unsigned)x), a1 = weightsTable.getRightBoundary((unsigned)x);
+		const INT64 b0 = weightsTable.getLeftBoundary((unsigned)x1), b1 = (x1 > x) ? weightsTable.getRightBoundary((unsigned)x1) : b0;
+		const INT64 stop = MAX(a1, b1);
+		INT64 slot = MoveRing<SPP, ROWS>(r, line, a0, stop, end);
+		const double *wa = weightsTable.getWeights((unsigned)x);
+		const double *wb = weightsTable.getWeights((unsigned)x1);
+		__m256d sa[VALUES / 4], sb[VALUES / 4];
+		for (int v = 0; v < VALUES / 4; v++) {
+			sa[v] = _mm256_setzero_pd();
+			sb[v] = _mm256_setzero_pd();
+		}
+		// stretches where the windows reading a pixel stay the same and the ring does not wrap; each sum takes its taps in order
+		for (INT64 p = a0; p < stop; ) {
+			INT64 q = MIN(stop, p + (r.capacity - slot));
+			if (b0 > p) {
+				q = MIN(q, b0);
+			}
+			if (a1 > p) {
+				q = MIN(q, a1);
+			}
+			if (b1 > p) {
+				q = MIN(q, b1);
+			}
+			const double *pixel = r.ring + slot * VALUES;
+			const bool in_a = (p < a1), in_b = (p >= b0) && (p < b1);
+			if (in_a && in_b) {
+				for (INT64 k = p; k < q; k++) {
+					const __m256d wx = _mm256_broadcast_sd(wa++);
+					const __m256d wy = _mm256_broadcast_sd(wb++);
+					for (int v = 0; v < VALUES / 4; v++) {
+						const __m256d s = _mm256_load_pd(pixel + 4 * v);
+						sa[v] = _mm256_add_pd(sa[v], _mm256_mul_pd(wx, s));
+						sb[v] = _mm256_add_pd(sb[v], _mm256_mul_pd(wy, s));
+					}
+					pixel += VALUES;
+				}
+			} else if (in_a) {
+				for (INT64 k = p; k < q; k++) {
+					const __m256d wx = _mm256_broadcast_sd(wa++);
+					for (int v = 0; v < VALUES / 4; v++) {
+						sa[v] = _mm256_add_pd(sa[v], _mm256_mul_pd(wx, _mm256_load_pd(pixel + 4 * v)));
+					}
+					pixel += VALUES;
+				}
+			} else if (in_b) {
+				for (INT64 k = p; k < q; k++) {
+					const __m256d wy = _mm256_broadcast_sd(wb++);
+					for (int v = 0; v < VALUES / 4; v++) {
+						sb[v] = _mm256_add_pd(sb[v], _mm256_mul_pd(wy, _mm256_load_pd(pixel + 4 * v)));
+					}
+					pixel += VALUES;
+				}
+			}
+			slot += q - p;
+			if (slot == r.capacity) {
+				slot = 0;
+			}
+			p = q;
+		}
+		BYTE bytes[16];
+		PackSumsAVX2<VALUES>(bytes, sa);
+		ScatterBytes<SPP, ROWS>(out, count, x, bytes);
+		if (x1 > x) {
+			PackSumsAVX2<VALUES>(bytes, sb);
+			ScatterBytes<SPP, ROWS>(out, count, x1, bytes);
+		}
+	}
+}
+#endif
 #endif
 
-// horizontal pass for 8-bit samples, ByteRows rows at a time, a lane each, taps in HorizontalFilterSamples' order; a ring converts each pixel once
-template <int SPP> static void
-HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
 #ifdef FI_RESIZE_SSE2
+// horizontal pass for 8-bit samples, ByteRows rows at a time, a lane each, taps in HorizontalFilterSamples' order; a ring converts each pixel once
+template <int SPP, bool AVX2> static void
+HorizontalFilterRing(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width, const INT64 capacity) {
 	enum { ROWS = ByteRows<SPP>::N, VALUES = SPP * ByteRows<SPP>::N };
-	const INT64 capacity = (INT64)weightsTable.getWindowSize() + RING_AHEAD;
-	if (capacity * VALUES * (INT64)sizeof(double) > RING_MAX_BYTES) {
-		HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
-		return;
-	}
 	INT64 end = 0;
 	for (unsigned x = 0; x < dst_width; x++) {
 		end = MAX(end, (INT64)weightsTable.getRightBoundary(x));
@@ -390,91 +619,57 @@ HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const un
 
 	#pragma omp parallel default(shared)
 	{
-		void *const block = malloc((size_t)capacity * VALUES * sizeof(double) + 15);
-		double *const ring = block ? (double *)(((size_t)block + 15) & ~(size_t)15) : NULL;
+		void *const block = malloc((size_t)capacity * VALUES * sizeof(double) + 31);
+		ByteRing r = { block ? (double *)(((size_t)block + 31) & ~(size_t)31) : NULL, capacity, 0, 0, 0, 0 };
 
 		#pragma omp for schedule(dynamic)
 		for (INT64 g = 0; g < groups; g++) {
 			const INT64 y0 = g * ROWS;
 			const INT64 count = MIN((INT64)ROWS, (INT64)rows - y0);
-			if (!ring) {
+			if (!r.ring) {
 				HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, (unsigned)(src_row + y0), src_offset_x, dst, (unsigned)(dst_row + y0), (unsigned)count, dst_width);
 				continue;
 			}
 			// a group short of rows filters its last row again and stores it once
 			const BYTE *line[ROWS];
 			BYTE *out[ROWS];
-			for (int r = 0; r < ROWS; r++) {
-				const INT64 y = y0 + MIN((INT64)r, count - 1);
-				line[r] = FreeImage_GetScanLine(src, (int)(src_row + y)) + (INT64)src_offset_x * SPP;
-				out[r] = FreeImage_GetScanLine(dst, (int)(dst_row + y));
+			for (int k = 0; k < ROWS; k++) {
+				const INT64 y = y0 + MIN((INT64)k, count - 1);
+				line[k] = FreeImage_GetScanLine(src, (int)(src_row + y)) + (INT64)src_offset_x * SPP;
+				out[k] = FreeImage_GetScanLine(dst, (int)(dst_row + y));
 			}
-
-			// the ring holds pixels [left, next), pixel p in slot p % capacity
-			INT64 left = 0, slot = 0, next = 0, next_slot = 0;
-			for (INT64 x = 0; x < dst_width; x++) {
-				const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)x);
-				const INT64 iRight = weightsTable.getRightBoundary((unsigned)x);
-				slot += iLeft - left;
-				while (slot >= capacity) {
-					slot -= capacity;
-				}
-				left = iLeft;
-				if (next < iLeft) {
-					next = iLeft;
-					next_slot = slot;
-				}
-				if (next < iRight) {
-					const INT64 stop = MIN(MIN(end, iLeft + capacity), MAX(iRight, next + RING_AHEAD));
-					while (next < stop) {
-						const INT64 n = MIN(stop - next, capacity - next_slot);
-						TransposeBytes<ROWS>(ring + next_slot * VALUES, line, next * SPP, (next + n) * SPP);
-						next += n;
-						next_slot += n;
-						if (next_slot == capacity) {
-							next_slot = 0;
-						}
-					}
-				}
-
-				__m128d sum[VALUES / 2];
-				for (int v = 0; v < VALUES / 2; v++) {
-					sum[v] = _mm_setzero_pd();
-				}
-				const double *const weights = weightsTable.getWeights((unsigned)x);
-				const INT64 taps = iRight - iLeft;
-				const double *pixel = ring + slot * VALUES;
-				// the window runs to the end of the ring, then on from its start
-				INT64 i = 0, stop = MIN(taps, capacity - slot);
-				for (;;) {
-					for (; i < stop; i++) {
-						const __m128d w = _mm_set1_pd(weights[i]);
-						for (int v = 0; v < VALUES / 2; v++) {
-							sum[v] = _mm_add_pd(sum[v], _mm_mul_pd(w, _mm_load_pd(pixel + 2 * v)));
-						}
-						pixel += VALUES;
-					}
-					if (i == taps) {
-						break;
-					}
-					pixel = ring;
-					stop = taps;
-				}
-
-				BYTE bytes[16];
-				PackSums<VALUES>(bytes, sum);
-				for (INT64 r = 0; r < count; r++) {
-					BYTE *const d = out[r] + x * SPP;
-					for (int c = 0; c < SPP; c++) {
-						d[c] = bytes[c * ROWS + r];
-					}
-				}
+			r.left = r.slot = r.next = r.next_slot = 0;
+#ifdef FI_RESIZE_AVX2
+			if (AVX2) {
+				FilterGroupAVX2<SPP>(weightsTable, r, line, out, count, dst_width, end);
+				continue;
 			}
+#endif
+			FilterGroup<SPP>(weightsTable, r, line, out, count, dst_width, end);
 		}
 
 		free(block);
 	}
-	return;
+}
+#endif
+
+// horizontal pass for 8-bit samples: the ring kernels on x86 and x64, AVX2 where the CPU has it
+template <int SPP> static void
+HorizontalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const unsigned src_row, const unsigned src_offset_x, FIBITMAP *const dst, const unsigned dst_row, const unsigned rows, const unsigned dst_width) {
+#ifdef FI_RESIZE_SSE2
+	const INT64 capacity = (INT64)weightsTable.getWindowSize() + RING_AHEAD;
+#ifdef FI_RESIZE_AVX2
+	// two windows, for two destination pixels at a time
+	const INT64 capacity2 = capacity + weightsTable.getWindowSize();
+	if (HasAVX2() && (capacity2 * SPP * ByteRows<SPP>::N * (INT64)sizeof(double) <= RING_MAX_BYTES)) {
+		HorizontalFilterRing<SPP, true>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width, capacity2);
+		return;
+	}
+#endif
+	if (capacity * SPP * ByteRows<SPP>::N * (INT64)sizeof(double) <= RING_MAX_BYTES) {
+		HorizontalFilterRing<SPP, false>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width, capacity);
+		return;
+	}
 #endif
 	HorizontalFilterSamples<BYTE, SPP>(weightsTable, src, src_row, src_offset_x, dst, dst_row, rows, dst_width);
 }
@@ -522,21 +717,247 @@ static const INT64 VERTICAL_RING_BYTES = 64 << 10;
 static const INT64 VERTICAL_BLOCK_MIN = 64;
 // taps per source row below which converting on every tap beats the ring
 static const double VERTICAL_RING_USES = 1.5;
+
+// samples of a block for a ring of capacity rows
+static INT64
+VerticalBlockSize(const INT64 capacity) {
+	return CLAMP<INT64>((VERTICAL_RING_BYTES / (capacity * (INT64)sizeof(double))) & ~(INT64)15, VERTICAL_BLOCK_MIN, 256);
+}
+
+// the source rows [left, next) of a block, as doubles, row r in slot r % capacity; without a ring every tap converts
+struct RowRing {
+	double *ring;
+	INT64 capacity, block, left, slot, next, next_slot;
+};
+
+// the samples [x0, x0 + n) of a work item: source row r at src + (row_bias + r) * pitch, destination row y of dst
+struct SampleBlock {
+	const BYTE *src;
+	INT64 pitch, row_bias;
+	FIBITMAP *dst;
+	INT64 dst_row_bias, x0, n;
+};
+
+// moves the ring to the rows [iLeft, iRight), converting the new ones; returns iLeft's slot
+static FI_RESIZE_INLINE INT64
+MoveRowRing(RowRing &r, const SampleBlock &b, const INT64 iLeft, const INT64 iRight) {
+	r.slot += iLeft - r.left;
+	while (r.slot >= r.capacity) {
+		r.slot -= r.capacity;
+	}
+	r.left = iLeft;
+	if (r.next < iLeft) {
+		r.next = iLeft;
+		r.next_slot = r.slot;
+	}
+	for (; r.next < iRight; r.next++) {
+		ConvertByteRow(r.ring + r.next_slot * r.block, b.src + (b.row_bias + r.next) * b.pitch, b.n);
+		if (++r.next_slot == r.capacity) {
+			r.next_slot = 0;
+		}
+	}
+	return r.slot;
+}
+
+// a destination row of a block, every tap converting its 16 samples straight from the source
+static FI_RESIZE_INLINE void
+DirectRow(const SampleBlock &b, BYTE *const dst_bits, const INT64 iLeft, const INT64 taps, const double *const weights) {
+	const BYTE *const rows = b.src + (b.row_bias + iLeft) * b.pitch;
+	INT64 k = 0;
+	for (; k + 16 <= b.n; k += 16) {
+		__m128d sum[8];
+		for (int m = 0; m < 8; m++) {
+			sum[m] = _mm_setzero_pd();
+		}
+		const BYTE *pixel = rows + k;
+		for (INT64 i = 0; i < taps; i++) {
+			const __m128d w = _mm_set1_pd(weights[i]);
+			__m128d pair[8];
+			SplitBytes(pair, _mm_loadu_si128((const __m128i *)pixel));
+			for (int m = 0; m < 8; m++) {
+				sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, pair[m]));
+			}
+			pixel += b.pitch;
+		}
+		_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
+	}
+	for (; k < b.n; k++) {
+		const BYTE *pixel = rows + k;
+		double value = 0;
+		for (INT64 i = 0; i < taps; i++) {
+			value += weights[i] * (double)*pixel;
+			pixel += b.pitch;
+		}
+		dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
+	}
+}
+
+// the samples [k, n) of a destination row, one at a time from the ring
+static FI_RESIZE_INLINE void
+RingTail(const RowRing &r, BYTE *const dst_bits, INT64 k, const INT64 n, const INT64 slot, const INT64 taps, const double *const weights) {
+	for (; k < n; k++) {
+		double value = 0;
+		INT64 s = slot;
+		for (INT64 i = 0; i < taps; i++) {
+			value += weights[i] * r.ring[s * r.block + k];
+			if (++s == r.capacity) {
+				s = 0;
+			}
+		}
+		dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
+	}
+}
+
+// the destination rows [ya, yb) of a block, 16 sums in SSE2 registers through every tap
+static FI_RESIZE_INLINE void
+FilterBlock(CWeightsTable &weightsTable, RowRing &r, const SampleBlock &b, const INT64 ya, const INT64 yb) {
+	r.left = r.next = weightsTable.getLeftBoundary((unsigned)ya);
+	r.slot = r.next_slot = 0;
+	for (INT64 y = ya; y < yb; y++) {
+		const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)y);
+		const INT64 taps = weightsTable.getRightBoundary((unsigned)y) - iLeft;
+		const double *const weights = weightsTable.getWeights((unsigned)y);
+		BYTE *const dst_bits = FreeImage_GetScanLine(b.dst, (int)(b.dst_row_bias + y)) + b.x0;
+		if (!r.ring) {
+			DirectRow(b, dst_bits, iLeft, taps, weights);
+			continue;
+		}
+		const INT64 slot = MoveRowRing(r, b, iLeft, iLeft + taps);
+		INT64 k = 0;
+		for (; k + 16 <= b.n; k += 16) {
+			__m128d sum[8];
+			for (int m = 0; m < 8; m++) {
+				sum[m] = _mm_setzero_pd();
+			}
+			const double *row = r.ring + slot * r.block + k;
+			const double *const end = r.ring + r.capacity * r.block + k;
+			for (INT64 i = 0; i < taps; i++) {
+				const __m128d w = _mm_set1_pd(weights[i]);
+				for (int m = 0; m < 8; m++) {
+					sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, _mm_load_pd(row + 2 * m)));
+				}
+				row += r.block;
+				if (row == end) {
+					row = r.ring + k;
+				}
+			}
+			_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
+		}
+		RingTail(r, dst_bits, k, b.n, slot, taps, weights);
+	}
+}
+
+#ifdef FI_RESIZE_AVX2
+// FilterBlock two destination rows at a time with AVX2: a source row both windows read is loaded once for both
+static FI_AVX2 void
+FilterBlockAVX2(CWeightsTable &weightsTable, RowRing &r, const SampleBlock &b, const INT64 ya, const INT64 yb) {
+	r.left = r.next = weightsTable.getLeftBoundary((unsigned)ya);
+	r.slot = r.next_slot = 0;
+	for (INT64 y = ya; y < yb; y += 2) {
+		const INT64 y1 = MIN(y + 1, yb - 1);
+		const INT64 a0 = weightsTable.getLeftBoundary((unsigned)y), a1 = weightsTable.getRightBoundary((unsigned)y);
+		const INT64 b0 = weightsTable.getLeftBoundary((unsigned)y1), b1 = (y1 > y) ? weightsTable.getRightBoundary((unsigned)y1) : b0;
+		const double *const wa = weightsTable.getWeights((unsigned)y);
+		const double *const wb = weightsTable.getWeights((unsigned)y1);
+		BYTE *const da = FreeImage_GetScanLine(b.dst, (int)(b.dst_row_bias + y)) + b.x0;
+		BYTE *const db = FreeImage_GetScanLine(b.dst, (int)(b.dst_row_bias + y1)) + b.x0;
+		if (!r.ring) {
+			DirectRow(b, da, a0, a1 - a0, wa);
+			if (y1 > y) {
+				DirectRow(b, db, b0, b1 - b0, wb);
+			}
+			continue;
+		}
+		const INT64 stop = MAX(a1, b1);
+		const INT64 slot = MoveRowRing(r, b, a0, stop);
+		INT64 k = 0;
+		for (; k + 16 <= b.n; k += 16) {
+			__m256d sa[4], sb[4];
+			for (int v = 0; v < 4; v++) {
+				sa[v] = _mm256_setzero_pd();
+				sb[v] = _mm256_setzero_pd();
+			}
+			// stretches where the windows reading a row stay the same and the ring does not wrap; each sum takes its taps in order
+			const double *xa = wa, *xb = wb;
+			INT64 s = slot;
+			for (INT64 p = a0; p < stop; ) {
+				INT64 q = MIN(stop, p + (r.capacity - s));
+				if (b0 > p) {
+					q = MIN(q, b0);
+				}
+				if (a1 > p) {
+					q = MIN(q, a1);
+				}
+				if (b1 > p) {
+					q = MIN(q, b1);
+				}
+				const double *row = r.ring + s * r.block + k;
+				const bool in_a = (p < a1), in_b = (p >= b0) && (p < b1);
+				if (in_a && in_b) {
+					for (INT64 i = p; i < q; i++) {
+						const __m256d wx = _mm256_broadcast_sd(xa++);
+						const __m256d wy = _mm256_broadcast_sd(xb++);
+						for (int v = 0; v < 4; v++) {
+							const __m256d t = _mm256_load_pd(row + 4 * v);
+							sa[v] = _mm256_add_pd(sa[v], _mm256_mul_pd(wx, t));
+							sb[v] = _mm256_add_pd(sb[v], _mm256_mul_pd(wy, t));
+						}
+						row += r.block;
+					}
+				} else if (in_a) {
+					for (INT64 i = p; i < q; i++) {
+						const __m256d wx = _mm256_broadcast_sd(xa++);
+						for (int v = 0; v < 4; v++) {
+							sa[v] = _mm256_add_pd(sa[v], _mm256_mul_pd(wx, _mm256_load_pd(row + 4 * v)));
+						}
+						row += r.block;
+					}
+				} else if (in_b) {
+					for (INT64 i = p; i < q; i++) {
+						const __m256d wy = _mm256_broadcast_sd(xb++);
+						for (int v = 0; v < 4; v++) {
+							sb[v] = _mm256_add_pd(sb[v], _mm256_mul_pd(wy, _mm256_load_pd(row + 4 * v)));
+						}
+						row += r.block;
+					}
+				}
+				s += q - p;
+				if (s == r.capacity) {
+					s = 0;
+				}
+				p = q;
+			}
+			// each sum holds two SplitBytes pairs
+			__m128d pair[8];
+			for (int v = 0; v < 4; v++) {
+				pair[2 * v] = _mm256_castpd256_pd128(sa[v]);
+				pair[2 * v + 1] = _mm256_extractf128_pd(sa[v], 1);
+			}
+			_mm_storeu_si128((__m128i *)(da + k), PackPairSums(pair));
+			if (y1 > y) {
+				for (int v = 0; v < 4; v++) {
+					pair[2 * v] = _mm256_castpd256_pd128(sb[v]);
+					pair[2 * v + 1] = _mm256_extractf128_pd(sb[v], 1);
+				}
+				_mm_storeu_si128((__m128i *)(db + k), PackPairSums(pair));
+			}
+		}
+		RingTail(r, da, k, b.n, slot, a1 - a0, wa);
+		if (y1 > y) {
+			INT64 s = slot + (b0 - a0);
+			while (s >= r.capacity) {
+				s -= r.capacity;
+			}
+			RingTail(r, db, k, b.n, s, b1 - b0, wb);
+		}
+	}
+}
 #endif
 
 // vertical pass for 8-bit samples by blocks of samples and runs of rows, taps in VerticalFilterSamples' order; a ring converts rows feeding several taps once
-template <int SPP> static void
-VerticalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
-#ifdef FI_RESIZE_SSE2
-	const INT64 src_pitch = FreeImage_GetPitch(src);
-	const BYTE *const src_base = FreeImage_GetBits(src) + (INT64)src_offset_x * SPP;
-	const INT64 samples = (INT64)width * SPP;
-	const INT64 capacity = weightsTable.getWindowSize();
-	const INT64 block = CLAMP<INT64>((VERTICAL_RING_BYTES / (capacity * (INT64)sizeof(double))) & ~(INT64)15, VERTICAL_BLOCK_MIN, 256);
-	if (capacity * block * (INT64)sizeof(double) > RING_MAX_BYTES) {
-		VerticalFilterSamples<BYTE, SPP>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
-		return;
-	}
+template <bool AVX2> static void
+VerticalFilterRing(CWeightsTable &weightsTable, const BYTE *const src, const INT64 src_pitch, const INT64 src_row_bias, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const INT64 samples, const INT64 capacity) {
+	const INT64 block = VerticalBlockSize(capacity);
 	const INT64 blocks = (samples + block - 1) / block;
 	const INT64 items = blocks * (((INT64)y_end - (INT64)y_begin + VERTICAL_RUN - 1) / VERTICAL_RUN);
 	double taps_total = 0;
@@ -549,110 +970,48 @@ VerticalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const INT6
 
 	#pragma omp parallel default(shared)
 	{
-		void *const mem = direct ? NULL : malloc((size_t)(capacity * block) * sizeof(double) + 15);
-		double *const ring = mem ? (double *)(((size_t)mem + 15) & ~(size_t)15) : NULL;
+		void *const mem = direct ? NULL : malloc((size_t)(capacity * block) * sizeof(double) + 31);
+		RowRing r = { mem ? (double *)(((size_t)mem + 31) & ~(size_t)31) : NULL, capacity, block, 0, 0, 0, 0 };
 
 		#pragma omp for schedule(dynamic)
 		for (INT64 item = 0; item < items; item++) {
 			const INT64 x0 = (item % blocks) * block;
-			const INT64 n = MIN(block, samples - x0);
+			const SampleBlock b = { src + x0, src_pitch, src_row_bias, dst, dst_row_bias, x0, MIN(block, samples - x0) };
 			const INT64 ya = (INT64)y_begin + (item / blocks) * VERTICAL_RUN;
 			const INT64 yb = MIN((INT64)y_end, ya + VERTICAL_RUN);
-
-			// the ring holds source rows [left, next), row r in slot r % capacity
-			INT64 left = weightsTable.getLeftBoundary((unsigned)ya), slot = 0, next = left, next_slot = 0;
-			for (INT64 y = ya; y < yb; y++) {
-				const INT64 iLeft = weightsTable.getLeftBoundary((unsigned)y);
-				const INT64 taps = weightsTable.getRightBoundary((unsigned)y) - iLeft;
-				const double *const weights = weightsTable.getWeights((unsigned)y);
-				BYTE *const dst_bits = FreeImage_GetScanLine(dst, (int)(dst_row_bias + y)) + x0;
-
-				if (!ring) {
-					// every tap converts its 16 samples
-					const BYTE *const rows = src_base + (src_row_bias + iLeft) * src_pitch + x0;
-					INT64 k = 0;
-					for (; k + 16 <= n; k += 16) {
-						__m128d sum[8];
-						for (int m = 0; m < 8; m++) {
-							sum[m] = _mm_setzero_pd();
-						}
-						const BYTE *pixel = rows + k;
-						for (INT64 i = 0; i < taps; i++) {
-							const __m128d w = _mm_set1_pd(weights[i]);
-							__m128d pair[8];
-							SplitBytes(pair, _mm_loadu_si128((const __m128i *)pixel));
-							for (int m = 0; m < 8; m++) {
-								sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, pair[m]));
-							}
-							pixel += src_pitch;
-						}
-						_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
-					}
-					for (; k < n; k++) {
-						const BYTE *pixel = rows + k;
-						double value = 0;
-						for (INT64 i = 0; i < taps; i++) {
-							value += weights[i] * (double)*pixel;
-							pixel += src_pitch;
-						}
-						dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
-					}
-					continue;
-				}
-
-				slot += iLeft - left;
-				while (slot >= capacity) {
-					slot -= capacity;
-				}
-				left = iLeft;
-				if (next < iLeft) {
-					next = iLeft;
-					next_slot = slot;
-				}
-				for (; next < iLeft + taps; next++) {
-					ConvertByteRow(ring + next_slot * block, src_base + (src_row_bias + next) * src_pitch + x0, n);
-					if (++next_slot == capacity) {
-						next_slot = 0;
-					}
-				}
-
-				INT64 k = 0;
-				for (; k + 16 <= n; k += 16) {
-					__m128d sum[8];
-					for (int m = 0; m < 8; m++) {
-						sum[m] = _mm_setzero_pd();
-					}
-					const double *row = ring + slot * block + k;
-					const double *const end = ring + capacity * block + k;
-					for (INT64 i = 0; i < taps; i++) {
-						const __m128d w = _mm_set1_pd(weights[i]);
-						for (int m = 0; m < 8; m++) {
-							sum[m] = _mm_add_pd(sum[m], _mm_mul_pd(w, _mm_load_pd(row + 2 * m)));
-						}
-						row += block;
-						if (row == end) {
-							row = ring + k;
-						}
-					}
-					_mm_storeu_si128((__m128i *)(dst_bits + k), PackPairSums(sum));
-				}
-				for (; k < n; k++) {
-					double value = 0;
-					INT64 s = slot;
-					for (INT64 i = 0; i < taps; i++) {
-						value += weights[i] * ring[s * block + k];
-						if (++s == capacity) {
-							s = 0;
-						}
-					}
-					dst_bits[k] = (BYTE)CLAMP<int>((int)(value + 0.5), 0, 0xFF);
-				}
+#ifdef FI_RESIZE_AVX2
+			if (AVX2) {
+				FilterBlockAVX2(weightsTable, r, b, ya, yb);
+				continue;
 			}
+#endif
+			FilterBlock(weightsTable, r, b, ya, yb);
 		}
 
 		free(mem);
 	}
-	return;
+}
+#endif
+
+// vertical pass for 8-bit samples: the ring kernels on x86 and x64, AVX2 where the CPU has it
+template <int SPP> static void
+VerticalFilterBytes(CWeightsTable &weightsTable, FIBITMAP *const src, const INT64 src_row_bias, const unsigned src_offset_x, FIBITMAP *const dst, const INT64 dst_row_bias, const unsigned y_begin, const unsigned y_end, const unsigned width) {
+#ifdef FI_RESIZE_SSE2
+	const BYTE *const src_bits = FreeImage_GetBits(src) + (INT64)src_offset_x * SPP;
+	const INT64 src_pitch = FreeImage_GetPitch(src);
+	const INT64 samples = (INT64)width * SPP;
+	const INT64 window = weightsTable.getWindowSize();
+#ifdef FI_RESIZE_AVX2
+	// two windows, for two destination rows at a time
+	if (HasAVX2() && (2 * window * VerticalBlockSize(2 * window) * (INT64)sizeof(double) <= RING_MAX_BYTES)) {
+		VerticalFilterRing<true>(weightsTable, src_bits, src_pitch, src_row_bias, dst, dst_row_bias, y_begin, y_end, samples, 2 * window);
+		return;
+	}
+#endif
+	if (window * VerticalBlockSize(window) * (INT64)sizeof(double) <= RING_MAX_BYTES) {
+		VerticalFilterRing<false>(weightsTable, src_bits, src_pitch, src_row_bias, dst, dst_row_bias, y_begin, y_end, samples, window);
+		return;
+	}
 #endif
 	VerticalFilterSamples<BYTE, SPP>(weightsTable, src, src_row_bias, src_offset_x, dst, dst_row_bias, y_begin, y_end, width);
 }
