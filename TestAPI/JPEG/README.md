@@ -10,8 +10,8 @@ be run again at the next one.
 | test | what it covers |
 |---|---|
 | `decode` | Loads the sixteen files of `data/` and checks geometry, depth, colour type, decoded pixels and attached metadata against a recorded table, plus format detection, a memory stream and a header-only load for each. Both IDCTs are recorded, since `JPEG_DEFAULT`/`JPEG_FAST` and `JPEG_ACCURATE` are different code. |
-| `regress` | Round-trips the three exportable depths through a file *and* a memory stream across fourteen save modes, asserting the two agree byte for byte; checks that the depths JPEG cannot carry are refused and that 32-bit CMYK is not; checks that a CMYK file's profile is kept with `JPEG_CMYK` and dropped when the file loads as RGB; records the quantisation tables actually emitted; and exercises all seven lossless transforms and `FreeImage_JPEGCrop` on an MCU-aligned image and a ragged one. |
-| `robust` | Truncations, junk appended past EOI, single-byte corruptions, 64-byte regions wiped, rewritten segment lengths, and SOF dimensions set to zero or to values that would overflow a size computation - 55332 damaged inputs across eight files, each decoded with six load flag combinations, plus 120 truncated inputs through the lossless transform path. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
+| `regress` | Round-trips the three exportable depths through a file *and* a memory stream across fourteen save modes, asserting the two agree byte for byte; checks that the depths JPEG cannot carry are refused and that 32-bit CMYK is not; checks that a CMYK file's profile is kept with `JPEG_CMYK` and dropped when the file loads as RGB; records the quantisation tables actually emitted; exercises all seven lossless transforms and `FreeImage_JPEGCrop` on an MCU-aligned image and a ragged one; and checks, for every Exif Orientation value spliced into a file in memory, that a header-only load with `JPEG_EXIFROTATE` has the size of the turned image the full load returns and keeps the ICC profile, and that a malformed Orientation tag turns nothing. |
+| `robust` | Truncations, junk appended past EOI, single-byte corruptions, 64-byte regions wiped, rewritten segment lengths, and SOF dimensions set to zero or to values that would overflow a size computation - 64554 damaged inputs across eight files, each decoded with seven load flag combinations, plus 120 truncated inputs through the lossless transform path. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
 
 There is also `oracle.c`, which is a tool rather than a test: `make oracle`
 builds it, `run` ignores it, and it asserts nothing. It prints one diffable
@@ -29,8 +29,8 @@ important half is running it **before** the old library is replaced.
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # all three
-    make asan-run       # rebuild the whole of Source/LibJPEG, PluginJPEG.cpp
-                        # and JPEGTransform.cpp with AddressSanitizer, and run
+    make asan-run       # rebuild the whole of Source/LibJPEG, PluginJPEG.cpp,
+                        # JPEGTransform.cpp and Exif.cpp with AddressSanitizer, and run
                         # all three with those objects linked ahead of the
                         # library
 

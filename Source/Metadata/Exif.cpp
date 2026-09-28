@@ -1038,8 +1038,18 @@ RotateExif(FIBITMAP **dib) {
 		// process Exif rotation
 		FITAG *tag = NULL;
 		FreeImage_GetMetadata(FIMD_EXIF_MAIN, *dib, "Orientation", &tag);
-		if((tag != NULL) && (FreeImage_GetTagID(tag) == TAG_ORIENTATION)) {
+		if((tag != NULL) && (FreeImage_GetTagID(tag) == TAG_ORIENTATION) && FreeImage_GetTagValue(tag) && (FreeImage_GetTagLength(tag) >= sizeof(WORD))) {
 			const WORD orientation = *((WORD *)FreeImage_GetTagValue(tag));
+			if(!FreeImage_HasPixels(*dib)) {
+				// a header takes the size of the rotated pixels
+				if((orientation >= 5) && (orientation <= 8)) {
+					BITMAPINFOHEADER *bih = FreeImage_GetInfoHeader(*dib);
+					const LONG width = bih->biWidth;
+					bih->biWidth = bih->biHeight;
+					bih->biHeight = width;
+				}
+				return;
+			}
 			switch (orientation) {
 				case 1:		// "top, left side" => 0°
 					break;

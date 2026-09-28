@@ -22,7 +22,7 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- AddressSanitizer -------------------------------------------------------
-# asan-run instruments LibJPEG, PluginJPEG and JPEGTransform too
+# asan-run instruments LibJPEG, PluginJPEG, JPEGTransform and the Exif reader too
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
@@ -37,7 +37,7 @@ ASAN        = -fsanitize=address -fno-omit-frame-pointer
 
 # only the LibJPEG files in Makefile.srcs (not the sample programs)
 JPEG_C   = $(patsubst %,../../%,$(shell grep -o 'Source/LibJPEG/[A-Za-z0-9_]*\.c' ../../Makefile.srcs | sort -u))
-JPEG_CXX = ../../Source/FreeImage/PluginJPEG.cpp ../../Source/FreeImageToolkit/JPEGTransform.cpp
+JPEG_CXX = ../../Source/FreeImage/PluginJPEG.cpp ../../Source/FreeImageToolkit/JPEGTransform.cpp ../../Source/Metadata/Exif.cpp
 
 asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libfreeimage.a $(JPEG_C) $(JPEG_CXX)
 	rm -rf asan-obj && mkdir -p asan-obj

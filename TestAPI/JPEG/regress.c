@@ -99,6 +99,42 @@ static const QExpect QTABLE[] = {
 };
 #define NQ ((int)(sizeof(QTABLE) / sizeof(QTABLE[0])))
 
+/* ---- a JPEG with one Exif Orientation entry and an ICC profile -------- */
+/* SOI, APP1 "Exif" whose IFD0 holds the entry as given, APP2 ICC_PROFILE, then the rest of jpg */
+static BYTE *with_orientation(const BYTE *jpg, long n, WORD type, DWORD count, WORD value, long *outlen) {
+    static const BYTE ICC_HDR[14] = { 'I', 'C', 'C', '_', 'P', 'R', 'O', 'F', 'I', 'L', 'E', 0, 1, 1 };
+    const long app1 = 2 + 2 + 6 + 8 + 2 + 12 + 4;
+    const long app2 = 2 + 2 + (long)sizeof ICC_HDR + 132;
+    BYTE *out = (BYTE *)malloc((size_t)(n + app1 + app2));
+    BYTE *p = out;
+    if (!out) return NULL;
+    *p++ = 0xFF; *p++ = 0xD8;
+    *p++ = 0xFF; *p++ = 0xE1; *p++ = (BYTE)((app1 - 2) >> 8); *p++ = (BYTE)(app1 - 2);
+    memcpy(p, "Exif\0\0II*\0\x08\0\0\0", 14); p += 14;
+    *p++ = 1; *p++ = 0;
+    *p++ = 0x12; *p++ = 0x01; *p++ = (BYTE)type; *p++ = 0;
+    *p++ = (BYTE)count; *p++ = (BYTE)(count >> 8); *p++ = (BYTE)(count >> 16); *p++ = (BYTE)(count >> 24);
+    *p++ = (BYTE)value; *p++ = (BYTE)(value >> 8); *p++ = 0; *p++ = 0;
+    memset(p, 0, 4); p += 4;
+    *p++ = 0xFF; *p++ = 0xE2; *p++ = (BYTE)((app2 - 2) >> 8); *p++ = (BYTE)(app2 - 2);
+    memcpy(p, ICC_HDR, sizeof ICC_HDR); p += sizeof ICC_HDR;
+    memset(p, 0, 132);
+    p[3] = 132;
+    memcpy(p + 16, "RGB ", 4);
+    memcpy(p + 36, "acsp", 4);
+    p += 132;
+    memcpy(p, jpg + 2, (size_t)(n - 2)); p += n - 2;
+    *outlen = (long)(p - out);
+    return out;
+}
+
+static FIBITMAP *load_buffer(BYTE *buf, long len, int flags) {
+    FIMEMORY *m = FreeImage_OpenMemory(buf, (DWORD)len);
+    FIBITMAP *dib = m ? FreeImage_LoadFromMemory(FIF_JPEG, m, flags) : NULL;
+    if (m) FreeImage_CloseMemory(m);
+    return dib;
+}
+
 int main(void) {
     FIBITMAP *src, *grey, *pal, *rgba, *cmyk;
     char path[512], path2[512];
@@ -485,6 +521,64 @@ int main(void) {
             }
             FreeImage_Unload(m);
         }
+    }
+
+    /* --- 6. the Exif orientation, header-only and full ------------------ */
+    printf("\nJPEG_EXIFROTATE, header-only and full\n");
+    {
+        static const struct { const char *name; WORD type; DWORD count; WORD value; int flags; int turned; } ORIENT[] = {
+            { "Orientation 1",                 3, 1, 1, 0,              0 },
+            { "Orientation 2",                 3, 1, 2, 0,              0 },
+            { "Orientation 3",                 3, 1, 3, 0,              0 },
+            { "Orientation 4",                 3, 1, 4, 0,              0 },
+            { "Orientation 5",                 3, 1, 5, 0,              1 },
+            { "Orientation 6",                 3, 1, 6, 0,              1 },
+            { "Orientation 7",                 3, 1, 7, 0,              1 },
+            { "Orientation 8",                 3, 1, 8, 0,              1 },
+            { "Orientation 6, scaled to 64",   3, 1, 6, 64 << 16,       1 },
+            { "Orientation 8, JPEG_GREYSCALE", 3, 1, 8, JPEG_GREYSCALE, 1 },
+            { "Orientation 9",                 3, 1, 9, 0,              0 },
+            { "Orientation 6 as a BYTE",       1, 1, 6, 0,              0 },
+            { "Orientation with no value",     3, 0, 6, 0,              0 },
+        };
+        long n = 0;
+        BYTE *base = slurp("data/fi_jpeg_420.jpg", &n);
+        if (!base) fail("orientation", "cannot read data/fi_jpeg_420.jpg");
+        for (i = 0; base && i < (int)(sizeof ORIENT / sizeof ORIENT[0]); i++) {
+            long len = 0;
+            BYTE *buf = with_orientation(base, n, ORIENT[i].type, ORIENT[i].count, ORIENT[i].value, &len);
+            FIBITMAP *plain = buf ? load_buffer(buf, len, ORIENT[i].flags | FIF_LOAD_NOPIXELS) : NULL;
+            FIBITMAP *full = buf ? load_buffer(buf, len, ORIENT[i].flags | JPEG_EXIFROTATE) : NULL;
+            FIBITMAP *hdr = buf ? load_buffer(buf, len, ORIENT[i].flags | JPEG_EXIFROTATE | FIF_LOAD_NOPIXELS) : NULL;
+            if (!plain || !full || !hdr) {
+                fail(ORIENT[i].name, "a load failed: %s", msgbuf);
+            } else {
+                unsigned w = FreeImage_GetWidth(plain), h = FreeImage_GetHeight(plain);
+                unsigned want_w = ORIENT[i].turned ? h : w, want_h = ORIENT[i].turned ? w : h;
+                if (FreeImage_GetWidth(full) != want_w || FreeImage_GetHeight(full) != want_h)
+                    fail(ORIENT[i].name, "full load %ux%u, want %ux%u",
+                         FreeImage_GetWidth(full), FreeImage_GetHeight(full), want_w, want_h);
+                else if (FreeImage_GetWidth(hdr) != want_w || FreeImage_GetHeight(hdr) != want_h)
+                    fail(ORIENT[i].name, "header-only load %ux%u, the full load %ux%u",
+                         FreeImage_GetWidth(hdr), FreeImage_GetHeight(hdr), want_w, want_h);
+                else if (FreeImage_HasPixels(hdr))
+                    fail(ORIENT[i].name, "FIF_LOAD_NOPIXELS returned pixels");
+                else if (FreeImage_GetBPP(hdr) != FreeImage_GetBPP(full) ||
+                         FreeImage_GetPitch(hdr) != FreeImage_GetPitch(full))
+                    fail(ORIENT[i].name, "header %ubpp pitch %u, full load %ubpp pitch %u",
+                         FreeImage_GetBPP(hdr), FreeImage_GetPitch(hdr),
+                         FreeImage_GetBPP(full), FreeImage_GetPitch(full));
+                else if (FreeImage_GetICCProfile(hdr)->size != 132)
+                    fail(ORIENT[i].name, "the header-only load lost the ICC profile");
+                else
+                    ok("%-30s %ux%u -> %ux%u", ORIENT[i].name, w, h, want_w, want_h);
+            }
+            if (plain) FreeImage_Unload(plain);
+            if (full) FreeImage_Unload(full);
+            if (hdr) FreeImage_Unload(hdr);
+            free(buf);
+        }
+        free(base);
     }
 
     if (src) FreeImage_Unload(src);

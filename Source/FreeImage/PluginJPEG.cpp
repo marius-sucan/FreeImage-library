@@ -1294,6 +1294,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if (header_only) {
 				// release JPEG decompression object
 				jpeg_destroy_decompress(&cinfo);
+				// the header describes the rotated image
+				if((flags & JPEG_EXIFROTATE) == JPEG_EXIFROTATE) {
+					RotateExif(&dib);
+				}
 				// return header data
 				return dib;
 			}

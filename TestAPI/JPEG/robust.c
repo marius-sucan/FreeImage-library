@@ -26,7 +26,7 @@ static void DLL_CALLCONV quiet(FREE_IMAGE_FORMAT fif, const char *msg) {
 static void try_buffer(const BYTE *buf, long len) {
     static const int flags[] = {
         JPEG_DEFAULT, JPEG_ACCURATE, JPEG_CMYK, JPEG_GREYSCALE,
-        JPEG_EXIFROTATE, FIF_LOAD_NOPIXELS
+        JPEG_EXIFROTATE, FIF_LOAD_NOPIXELS, JPEG_EXIFROTATE | FIF_LOAD_NOPIXELS
     };
     unsigned f;
     for (f = 0; f < sizeof flags / sizeof flags[0]; f++) {
