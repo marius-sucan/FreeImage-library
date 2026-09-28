@@ -1026,6 +1026,25 @@ jpegxr_read_exif_gps_profile(FIBITMAP *dib, const BYTE *profile, unsigned length
 // ==========================================================
 
 /**
+Replace a dib with its rotated copy, to which FreeImage_Rotate gives neither the ICC profile nor the thumbnail
+@param dib Input / Output dib
+@param rotated Rotated copy of the dib, or NULL
+*/
+static void
+ReplaceWithRotated(FIBITMAP **dib, FIBITMAP *rotated) {
+	if(rotated) {
+		const FIICCPROFILE *profile = FreeImage_GetICCProfile(*dib);
+		FreeImage_CreateICCProfile(rotated, profile->data, (long)profile->size);
+		FreeImage_GetICCProfile(rotated)->flags = profile->flags;
+		// again after the profile, which drops the Exif InterColorProfile tag
+		FreeImage_CloneMetadata(rotated, *dib);
+		FreeImage_SetThumbnail(rotated, FreeImage_GetThumbnail(*dib));
+	}
+	FreeImage_Unload(*dib);
+	*dib = rotated;
+}
+
+/**
 Rotate a dib according to Exif info
 @param dib Input / Output dib to rotate
 @see PluginJPEG.cpp
@@ -1034,7 +1053,6 @@ void
 RotateExif(FIBITMAP **dib) {
 	// check for Exif rotation
 	if(FreeImage_GetMetadataCount(FIMD_EXIF_MAIN, *dib)) {
-		FIBITMAP *rotated = NULL;
 		// process Exif rotation
 		FITAG *tag = NULL;
 		FreeImage_GetMetadata(FIMD_EXIF_MAIN, *dib, "Orientation", &tag);
@@ -1057,34 +1075,24 @@ RotateExif(FIBITMAP **dib) {
 					FreeImage_FlipHorizontal(*dib);
 					break;
 				case 3:		// "bottom, right side" => -180°
-					rotated = FreeImage_Rotate(*dib, 180);
-					FreeImage_Unload(*dib);
-					*dib = rotated;
+					ReplaceWithRotated(dib, FreeImage_Rotate(*dib, 180));
 					break;
 				case 4:		// "bottom, left side" => flip up-down
 					FreeImage_FlipVertical(*dib);
 					break;
 				case 5:		// "left side, top" => +90° + flip up-down
-					rotated = FreeImage_Rotate(*dib, 90);
-					FreeImage_Unload(*dib);
-					*dib = rotated;
+					ReplaceWithRotated(dib, FreeImage_Rotate(*dib, 90));
 					FreeImage_FlipVertical(*dib);
 					break;
 				case 6:		// "right side, top" => -90°
-					rotated = FreeImage_Rotate(*dib, -90);
-					FreeImage_Unload(*dib);
-					*dib = rotated;
+					ReplaceWithRotated(dib, FreeImage_Rotate(*dib, -90));
 					break;
 				case 7:		// "right side, bottom" => -90° + flip up-down
-					rotated = FreeImage_Rotate(*dib, -90);
-					FreeImage_Unload(*dib);
-					*dib = rotated;
+					ReplaceWithRotated(dib, FreeImage_Rotate(*dib, -90));
 					FreeImage_FlipVertical(*dib);
 					break;
 				case 8:		// "left side, bottom" => +90°
-					rotated = FreeImage_Rotate(*dib, 90);
-					FreeImage_Unload(*dib);
-					*dib = rotated;
+					ReplaceWithRotated(dib, FreeImage_Rotate(*dib, 90));
 					break;
 				default:
 					break;

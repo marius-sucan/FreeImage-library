@@ -99,33 +99,93 @@ static const QExpect QTABLE[] = {
 };
 #define NQ ((int)(sizeof(QTABLE) / sizeof(QTABLE[0])))
 
-/* ---- a JPEG with one Exif Orientation entry and an ICC profile -------- */
-/* SOI, APP1 "Exif" whose IFD0 holds the entry as given, APP2 ICC_PROFILE, then the rest of jpg */
-static BYTE *with_orientation(const BYTE *jpg, long n, WORD type, DWORD count, WORD value, long *outlen) {
-    static const BYTE ICC_HDR[14] = { 'I', 'C', 'C', '_', 'P', 'R', 'O', 'F', 'I', 'L', 'E', 0, 1, 1 };
-    const long app1 = 2 + 2 + 6 + 8 + 2 + 12 + 4;
-    const long app2 = 2 + 2 + (long)sizeof ICC_HDR + 132;
-    BYTE *out = (BYTE *)malloc((size_t)(n + app1 + app2));
-    BYTE *p = out;
-    if (!out) return NULL;
-    *p++ = 0xFF; *p++ = 0xD8;
-    *p++ = 0xFF; *p++ = 0xE1; *p++ = (BYTE)((app1 - 2) >> 8); *p++ = (BYTE)(app1 - 2);
-    memcpy(p, "Exif\0\0II*\0\x08\0\0\0", 14); p += 14;
-    *p++ = 1; *p++ = 0;
-    *p++ = 0x12; *p++ = 0x01; *p++ = (BYTE)type; *p++ = 0;
-    *p++ = (BYTE)count; *p++ = (BYTE)(count >> 8); *p++ = (BYTE)(count >> 16); *p++ = (BYTE)(count >> 24);
-    *p++ = (BYTE)value; *p++ = (BYTE)(value >> 8); *p++ = 0; *p++ = 0;
-    memset(p, 0, 4); p += 4;
-    *p++ = 0xFF; *p++ = 0xE2; *p++ = (BYTE)((app2 - 2) >> 8); *p++ = (BYTE)(app2 - 2);
-    memcpy(p, ICC_HDR, sizeof ICC_HDR); p += sizeof ICC_HDR;
+/* ---- a JPEG with an Exif Orientation entry ---------------------------- */
+typedef struct {
+    const char *name;
+    const char *base;                   /* the file the segments go into */
+    WORD type; DWORD count; WORD value; /* the Orientation entry */
+    int flags;                          /* besides JPEG_EXIFROTATE */
+    int turned;                         /* width and height swap */
+    int app2;                           /* a profile in APP2 ICC_PROFILE */
+    int exif_icc;                       /* a profile in the Exif InterColorProfile tag */
+    int thumb;                          /* an IFD1 thumbnail */
+} Orient;
+
+static void put16(BYTE *p, unsigned v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); }
+static void put32(BYTE *p, unsigned long v) { put16(p, (unsigned)(v & 0xFFFF)); put16(p + 2, (unsigned)(v >> 16)); }
+
+static void fake_icc(BYTE *p) {
     memset(p, 0, 132);
     p[3] = 132;
     memcpy(p + 16, "RGB ", 4);
     memcpy(p + 36, "acsp", 4);
-    p += 132;
+}
+
+/* SOI, APP1 "Exif" (IFD0: Orientation, InterColorProfile; IFD1: the thumbnail), APP2 ICC_PROFILE, then the rest of jpg */
+static BYTE *with_orientation(const BYTE *jpg, long n, const Orient *o, const BYTE *thumb, long thumb_len, long *outlen) {
+    static const BYTE ICC_HDR[14] = { 'I', 'C', 'C', '_', 'P', 'R', 'O', 'F', 'I', 'L', 'E', 0, 1, 1 };
+    const int entries = o->exif_icc ? 2 : 1;
+    const long ifd0 = 8, icc_at = ifd0 + 2 + 12 * entries + 4;
+    const long ifd1 = icc_at + (o->exif_icc ? 132 : 0);
+    const long thumb_at = ifd1 + 2 + 12 * 2 + 4;
+    const long tiff_len = o->thumb ? thumb_at + thumb_len : ifd1;
+    const long app1 = 2 + 2 + 6 + tiff_len;
+    const long app2 = o->app2 ? 2 + 2 + (long)sizeof ICC_HDR + 132 : 0;
+    BYTE *out = (BYTE *)malloc((size_t)(n + app1 + app2));
+    BYTE *p = out, *t;
+    if (!out) return NULL;
+    *p++ = 0xFF; *p++ = 0xD8;
+    *p++ = 0xFF; *p++ = 0xE1; *p++ = (BYTE)((app1 - 2) >> 8); *p++ = (BYTE)(app1 - 2);
+    memcpy(p, "Exif\0\0", 6); p += 6;
+    /* offsets count from the TIFF header */
+    t = p;
+    memset(t, 0, (size_t)tiff_len);
+    memcpy(t, "II*\0", 4); put32(t + 4, ifd0);
+    put16(t + ifd0, entries);
+    put16(t + ifd0 + 2, 0x0112); put16(t + ifd0 + 4, o->type); put32(t + ifd0 + 6, o->count); put16(t + ifd0 + 10, o->value);
+    if (o->exif_icc) {
+        put16(t + ifd0 + 14, 0x8773); put16(t + ifd0 + 16, 7); put32(t + ifd0 + 18, 132); put32(t + ifd0 + 22, icc_at);
+        fake_icc(t + icc_at);
+    }
+    put32(t + ifd0 + 2 + 12 * entries, o->thumb ? ifd1 : 0);
+    if (o->thumb) {
+        put16(t + ifd1, 2);
+        put16(t + ifd1 + 2, 0x0201); put16(t + ifd1 + 4, 4); put32(t + ifd1 + 6, 1); put32(t + ifd1 + 10, thumb_at);
+        put16(t + ifd1 + 14, 0x0202); put16(t + ifd1 + 16, 4); put32(t + ifd1 + 18, 1); put32(t + ifd1 + 22, thumb_len);
+        memcpy(t + thumb_at, thumb, (size_t)thumb_len);
+    }
+    p += tiff_len;
+    if (o->app2) {
+        *p++ = 0xFF; *p++ = 0xE2; *p++ = (BYTE)((app2 - 2) >> 8); *p++ = (BYTE)(app2 - 2);
+        memcpy(p, ICC_HDR, sizeof ICC_HDR); p += sizeof ICC_HDR;
+        fake_icc(p); p += 132;
+    }
     memcpy(p, jpg + 2, (size_t)(n - 2)); p += n - 2;
     *outlen = (long)(p - out);
     return out;
+}
+
+static unsigned exif_icc_len(FIBITMAP *dib) {
+    FITAG *tag = NULL;
+    return FreeImage_GetMetadata(FIMD_EXIF_MAIN, dib, "InterColorProfile", &tag) && tag ? FreeImage_GetTagLength(tag) : 0;
+}
+
+/* what a full load with JPEG_EXIFROTATE must keep, and a header-only load must agree with; NULL if all is well */
+static const char *check_turned(FIBITMAP *full, FIBITMAP *hdr, const Orient *o) {
+    FIICCPROFILE *fp = FreeImage_GetICCProfile(full), *hp = FreeImage_GetICCProfile(hdr);
+    FIBITMAP *ft = FreeImage_GetThumbnail(full), *ht = FreeImage_GetThumbnail(hdr);
+    if (FreeImage_HasPixels(hdr)) return "FIF_LOAD_NOPIXELS returned pixels";
+    if (FreeImage_GetBPP(hdr) != FreeImage_GetBPP(full) || FreeImage_GetPitch(hdr) != FreeImage_GetPitch(full))
+        return "the header-only load has another depth or pitch";
+    if (fp->size != (o->app2 ? 132u : 0u)) return "the full load lost the ICC profile";
+    if (hp->size != fp->size || hp->flags != fp->flags) return "the header-only load has another ICC profile";
+    if (FreeImage_GetColorType(hdr) != FreeImage_GetColorType(full)) return "the two loads have another colour type";
+    if (!ft != !o->thumb) return "the full load lost the thumbnail";
+    if (!ht != !ft || (ft && (FreeImage_GetWidth(ht) != FreeImage_GetWidth(ft) || FreeImage_GetHeight(ht) != FreeImage_GetHeight(ft))))
+        return "the header-only load has another thumbnail";
+    if (exif_icc_len(full) != (o->exif_icc ? 132u : 0u)) return "the full load lost the Exif InterColorProfile tag";
+    if (exif_icc_len(hdr) != exif_icc_len(full)) return "the header-only load has another Exif InterColorProfile tag";
+    return NULL;
 }
 
 static FIBITMAP *load_buffer(BYTE *buf, long len, int flags) {
@@ -526,59 +586,64 @@ int main(void) {
     /* --- 6. the Exif orientation, header-only and full ------------------ */
     printf("\nJPEG_EXIFROTATE, header-only and full\n");
     {
-        static const struct { const char *name; WORD type; DWORD count; WORD value; int flags; int turned; } ORIENT[] = {
-            { "Orientation 1",                 3, 1, 1, 0,              0 },
-            { "Orientation 2",                 3, 1, 2, 0,              0 },
-            { "Orientation 3",                 3, 1, 3, 0,              0 },
-            { "Orientation 4",                 3, 1, 4, 0,              0 },
-            { "Orientation 5",                 3, 1, 5, 0,              1 },
-            { "Orientation 6",                 3, 1, 6, 0,              1 },
-            { "Orientation 7",                 3, 1, 7, 0,              1 },
-            { "Orientation 8",                 3, 1, 8, 0,              1 },
-            { "Orientation 6, scaled to 64",   3, 1, 6, 64 << 16,       1 },
-            { "Orientation 8, JPEG_GREYSCALE", 3, 1, 8, JPEG_GREYSCALE, 1 },
-            { "Orientation 9",                 3, 1, 9, 0,              0 },
-            { "Orientation 6 as a BYTE",       1, 1, 6, 0,              0 },
-            { "Orientation with no value",     3, 0, 6, 0,              0 },
+        const char *RGB = "data/fi_jpeg_420.jpg", *CMYK = "data/fi_jpeg_cmyk.jpg";
+        const Orient ORIENT[] = {
+            /* name                              base  type count value flags          turned app2 exif_icc thumb */
+            { "Orientation 1",                   RGB,  3, 1, 1, 0,              0, 1, 0, 0 },
+            { "Orientation 2",                   RGB,  3, 1, 2, 0,              0, 1, 0, 0 },
+            { "Orientation 3",                   RGB,  3, 1, 3, 0,              0, 1, 0, 0 },
+            { "Orientation 4",                   RGB,  3, 1, 4, 0,              0, 1, 0, 0 },
+            { "Orientation 5",                   RGB,  3, 1, 5, 0,              1, 1, 0, 0 },
+            { "Orientation 6",                   RGB,  3, 1, 6, 0,              1, 1, 0, 0 },
+            { "Orientation 7",                   RGB,  3, 1, 7, 0,              1, 1, 0, 0 },
+            { "Orientation 8",                   RGB,  3, 1, 8, 0,              1, 1, 0, 0 },
+            { "Orientation 6, scaled to 64",     RGB,  3, 1, 6, 64 << 16,       1, 1, 0, 0 },
+            { "Orientation 8, JPEG_GREYSCALE",   RGB,  3, 1, 8, JPEG_GREYSCALE, 1, 1, 0, 0 },
+            { "Orientation 6, JPEG_CMYK",        CMYK, 3, 1, 6, JPEG_CMYK,      1, 1, 0, 0 },
+            { "Orientation 8, JPEG_CMYK only",   CMYK, 3, 1, 8, JPEG_CMYK,      1, 0, 0, 0 },
+            { "Orientation 3, a thumbnail",      RGB,  3, 1, 3, 0,              0, 1, 0, 1 },
+            { "Orientation 6, a thumbnail",      RGB,  3, 1, 6, 0,              1, 1, 0, 1 },
+            { "Orientation 8, a thumbnail only", RGB,  3, 1, 8, 0,              1, 0, 0, 1 },
+            { "Orientation 6, Exif profile tag", RGB,  3, 1, 6, 0,              1, 0, 1, 0 },
+            { "Orientation 9",                   RGB,  3, 1, 9, 0,              0, 1, 0, 0 },
+            { "Orientation 6 as a BYTE",         RGB,  1, 1, 6, 0,              0, 1, 0, 0 },
+            { "Orientation with no value",       RGB,  3, 0, 6, 0,              0, 1, 0, 0 },
         };
-        long n = 0;
-        BYTE *base = slurp("data/fi_jpeg_420.jpg", &n);
-        if (!base) fail("orientation", "cannot read data/fi_jpeg_420.jpg");
-        for (i = 0; base && i < (int)(sizeof ORIENT / sizeof ORIENT[0]); i++) {
-            long len = 0;
-            BYTE *buf = with_orientation(base, n, ORIENT[i].type, ORIENT[i].count, ORIENT[i].value, &len);
-            FIBITMAP *plain = buf ? load_buffer(buf, len, ORIENT[i].flags | FIF_LOAD_NOPIXELS) : NULL;
-            FIBITMAP *full = buf ? load_buffer(buf, len, ORIENT[i].flags | JPEG_EXIFROTATE) : NULL;
-            FIBITMAP *hdr = buf ? load_buffer(buf, len, ORIENT[i].flags | JPEG_EXIFROTATE | FIF_LOAD_NOPIXELS) : NULL;
+        long tn = 0;
+        BYTE *thumb = slurp("data/fi_jpeg_1x1.jpg", &tn);
+        if (!thumb) fail("orientation", "cannot read data/fi_jpeg_1x1.jpg");
+        for (i = 0; thumb && i < (int)(sizeof ORIENT / sizeof ORIENT[0]); i++) {
+            const Orient *o = &ORIENT[i];
+            long n = 0, len = 0;
+            BYTE *base = slurp(o->base, &n);
+            BYTE *buf = base ? with_orientation(base, n, o, thumb, tn, &len) : NULL;
+            FIBITMAP *plain = buf ? load_buffer(buf, len, o->flags | FIF_LOAD_NOPIXELS) : NULL;
+            FIBITMAP *full = buf ? load_buffer(buf, len, o->flags | JPEG_EXIFROTATE) : NULL;
+            FIBITMAP *hdr = buf ? load_buffer(buf, len, o->flags | JPEG_EXIFROTATE | FIF_LOAD_NOPIXELS) : NULL;
             if (!plain || !full || !hdr) {
-                fail(ORIENT[i].name, "a load failed: %s", msgbuf);
+                fail(o->name, "a load failed: %s", msgbuf);
             } else {
                 unsigned w = FreeImage_GetWidth(plain), h = FreeImage_GetHeight(plain);
-                unsigned want_w = ORIENT[i].turned ? h : w, want_h = ORIENT[i].turned ? w : h;
+                unsigned want_w = o->turned ? h : w, want_h = o->turned ? w : h;
+                const char *why;
                 if (FreeImage_GetWidth(full) != want_w || FreeImage_GetHeight(full) != want_h)
-                    fail(ORIENT[i].name, "full load %ux%u, want %ux%u",
+                    fail(o->name, "full load %ux%u, want %ux%u",
                          FreeImage_GetWidth(full), FreeImage_GetHeight(full), want_w, want_h);
                 else if (FreeImage_GetWidth(hdr) != want_w || FreeImage_GetHeight(hdr) != want_h)
-                    fail(ORIENT[i].name, "header-only load %ux%u, the full load %ux%u",
+                    fail(o->name, "header-only load %ux%u, the full load %ux%u",
                          FreeImage_GetWidth(hdr), FreeImage_GetHeight(hdr), want_w, want_h);
-                else if (FreeImage_HasPixels(hdr))
-                    fail(ORIENT[i].name, "FIF_LOAD_NOPIXELS returned pixels");
-                else if (FreeImage_GetBPP(hdr) != FreeImage_GetBPP(full) ||
-                         FreeImage_GetPitch(hdr) != FreeImage_GetPitch(full))
-                    fail(ORIENT[i].name, "header %ubpp pitch %u, full load %ubpp pitch %u",
-                         FreeImage_GetBPP(hdr), FreeImage_GetPitch(hdr),
-                         FreeImage_GetBPP(full), FreeImage_GetPitch(full));
-                else if (FreeImage_GetICCProfile(hdr)->size != 132)
-                    fail(ORIENT[i].name, "the header-only load lost the ICC profile");
+                else if ((why = check_turned(full, hdr, o)) != NULL)
+                    fail(o->name, "%s", why);
                 else
-                    ok("%-30s %ux%u -> %ux%u", ORIENT[i].name, w, h, want_w, want_h);
+                    ok("%-32s %ux%u -> %ux%u", o->name, w, h, want_w, want_h);
             }
             if (plain) FreeImage_Unload(plain);
             if (full) FreeImage_Unload(full);
             if (hdr) FreeImage_Unload(hdr);
             free(buf);
+            free(base);
         }
-        free(base);
+        free(thumb);
     }
 
     if (src) FreeImage_Unload(src);
