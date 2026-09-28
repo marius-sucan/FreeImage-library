@@ -10,6 +10,7 @@ static const char *FILES[] = {
 	"data/fi_raw_bggr.dng",       /* the other Bayer phase                 */
 	"data/fi_raw_nopreview.dng",  /* no preview: a different thumbnail path */
 	"data/fi_raw_odd.dng",        /* odd dimensions                        */
+	"data/fi_raw_rot90.dng",      /* Orientation 6: the turned sizes       */
 };
 #define NFILES ((int)(sizeof(FILES) / sizeof(FILES[0])))
 
@@ -130,6 +131,16 @@ int main(void) {
 			memcpy(tmp, orig, (size_t)n);
 			tmp[k] ^= 0xFF;
 			try_load(tmp, n, RAW_PREVIEW);
+		}
+
+		/* header-only loads of every path, dense over the 1 KB of IFDs */
+		for (k = 0; k < n && k < 1024; k++) {
+			memcpy(tmp, orig, (size_t)n);
+			tmp[k] ^= 0xFF;
+			try_load(tmp, n, FIF_LOAD_NOPIXELS);
+			try_load(tmp, n, FIF_LOAD_NOPIXELS | RAW_HALFSIZE);
+			try_load(tmp, n, FIF_LOAD_NOPIXELS | RAW_PREVIEW);
+			try_load(tmp, n, FIF_LOAD_NOPIXELS | RAW_UNPROCESSED);
 		}
 
 		printf("  %-30s %ld cases\n", FILES[i], cases - before);

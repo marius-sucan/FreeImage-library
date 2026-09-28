@@ -11,6 +11,8 @@ static const char *FILES[] = {
 	"data/fi_raw_bggr.dng",       /* the other Bayer phase                      */
 	"data/fi_raw_nopreview.dng",  /* no embedded preview: RAW_PREVIEW falls back */
 	"data/fi_raw_odd.dng",        /* odd dimensions, no margin                  */
+	"data/fi_raw_rot90.dng",      /* Orientation 6: the processed image turns   */
+	"data/fi_raw_rot180.dng",     /* Orientation 3: turned, the same size       */
 };
 #define NFILES ((int)(sizeof(FILES) / sizeof(FILES[0])))
 
@@ -274,6 +276,98 @@ static void test_paths(void) {
 	}
 }
 
+/* --- a header-only load describes the full load --------------------------- */
+static int same_raw_keys(FIBITMAP *a, FIBITMAP *b) {
+	static const char *KEYS[] = {
+		"Raw.Output.Width", "Raw.Output.Height", "Raw.Frame.Left", "Raw.Frame.Top",
+		"Raw.Frame.Width", "Raw.Frame.Height", "Raw.BayerPattern",
+	};
+	int k;
+	if (FreeImage_GetMetadataCount(FIMD_COMMENTS, a) != FreeImage_GetMetadataCount(FIMD_COMMENTS, b))
+		return 0;
+	for (k = 0; k < (int)(sizeof(KEYS) / sizeof(KEYS[0])); k++)
+		if (strcmp(meta_str(a, KEYS[k]), meta_str(b, KEYS[k])) != 0) return 0;
+	return 1;
+}
+
+static void test_header(void) {
+	static const struct { const char *name; int flags; } PATHS[] = {
+		{ "default16",   0                          },
+		{ "display8",    RAW_DISPLAY                },
+		{ "halfsize",    RAW_HALFSIZE               },
+		{ "half8",       RAW_HALFSIZE | RAW_DISPLAY },
+		{ "preview",     RAW_PREVIEW                },
+		{ "unprocessed", RAW_UNPROCESSED            },
+	};
+	const int NPATHS = (int)(sizeof(PATHS) / sizeof(PATHS[0]));
+	int i, j;
+	printf("-- a header-only load describes the full load, on every path\n");
+	for (i = 0; i < NFILES; i++) {
+		int agreed = 0;
+		for (j = 0; j < NPATHS; j++) {
+			FIBITMAP *full = FreeImage_Load(FIF_RAW, FILES[i], PATHS[j].flags);
+			FIBITMAP *hdr  = FreeImage_Load(FIF_RAW, FILES[i], PATHS[j].flags | FIF_LOAD_NOPIXELS);
+			if (!full || !hdr) {
+				fail(FILES[i], PATHS[j].name, "full load %s, header-only load %s",
+				     full ? "loaded" : "failed", hdr ? "loaded" : "failed");
+			} else if (FreeImage_HasPixels(hdr)) {
+				fail(FILES[i], PATHS[j].name, "FIF_LOAD_NOPIXELS returned pixels");
+			} else if (FreeImage_GetWidth(hdr) != FreeImage_GetWidth(full) ||
+			           FreeImage_GetHeight(hdr) != FreeImage_GetHeight(full)) {
+				fail(FILES[i], PATHS[j].name, "header %ux%u, full load %ux%u",
+				     FreeImage_GetWidth(hdr), FreeImage_GetHeight(hdr),
+				     FreeImage_GetWidth(full), FreeImage_GetHeight(full));
+			} else if (FreeImage_GetImageType(hdr) != FreeImage_GetImageType(full) ||
+			           FreeImage_GetBPP(hdr) != FreeImage_GetBPP(full)) {
+				fail(FILES[i], PATHS[j].name, "header type %d/%ubpp, full load %d/%ubpp",
+				     (int)FreeImage_GetImageType(hdr), FreeImage_GetBPP(hdr),
+				     (int)FreeImage_GetImageType(full), FreeImage_GetBPP(full));
+			} else if (FreeImage_GetICCProfile(hdr)->size != FreeImage_GetICCProfile(full)->size) {
+				fail(FILES[i], PATHS[j].name, "header profile %d bytes, full load %d",
+				     (int)FreeImage_GetICCProfile(hdr)->size, (int)FreeImage_GetICCProfile(full)->size);
+			} else if (!same_raw_keys(hdr, full)) {
+				fail(FILES[i], PATHS[j].name, "the Raw.* keys differ from the full load's");
+			} else {
+				agreed++;
+			}
+			if (full) FreeImage_Unload(full);
+			if (hdr)  FreeImage_Unload(hdr);
+		}
+		if (agreed == NPATHS)
+			printf("  ok   %-30s %d paths agree\n", FILES[i], agreed);
+	}
+}
+
+/* --- the Orientation tag -------------------------------------------------- */
+static void test_orientation(void) {
+	static const struct { const char *file; int turned; } ROT[] = {
+		{ "data/fi_raw_rot90.dng",  1 },
+		{ "data/fi_raw_rot180.dng", 0 },
+		{ "data/fi_raw_rggb.dng",   0 },
+	};
+	int i;
+	printf("-- a turned camera turns the processed image, not the CFA field\n");
+	for (i = 0; i < (int)(sizeof(ROT) / sizeof(ROT[0])); i++) {
+		FIBITMAP *full = FreeImage_Load(FIF_RAW, ROT[i].file, 0);
+		FIBITMAP *un   = FreeImage_Load(FIF_RAW, ROT[i].file, RAW_UNPROCESSED);
+		if (!full || !un) {
+			fail(ROT[i].file, "orientation", "load failed");
+		} else {
+			/* Raw.Output.* is the processed size before the turn */
+			long ow = meta_long(un, "Raw.Output.Width", -1), oh = meta_long(un, "Raw.Output.Height", -1);
+			long want_w = ROT[i].turned ? oh : ow, want_h = ROT[i].turned ? ow : oh;
+			if ((long)FreeImage_GetWidth(full) != want_w || (long)FreeImage_GetHeight(full) != want_h)
+				fail(ROT[i].file, "orientation", "processed %ux%u, want %ldx%ld",
+				     FreeImage_GetWidth(full), FreeImage_GetHeight(full), want_w, want_h);
+			else
+				printf("  ok   %-30s %ldx%ld frame -> %ux%u\n", ROT[i].file, ow, oh,
+				       FreeImage_GetWidth(full), FreeImage_GetHeight(full));
+		}
+		if (full) FreeImage_Unload(full);
+		if (un) FreeImage_Unload(un);
+	}
+}
+
 /* --- cropping ------------------------------------------------------------- */
 static void test_crop(void) {
 	static const struct {
@@ -394,6 +488,8 @@ static void test_bayer(void) {
 		{ "data/fi_raw_bggr.dng",      "BGGRBGGRBGGRBGGR" },
 		{ "data/fi_raw_nopreview.dng", "RGGBRGGBRGGBRGGB" },
 		{ "data/fi_raw_odd.dng",       "RGGBRGGBRGGBRGGB" },
+		{ "data/fi_raw_rot90.dng",     "RGGBRGGBRGGBRGGB" },
+		{ "data/fi_raw_rot180.dng",    "RGGBRGGBRGGBRGGB" },
 	};
 	int i;
 	printf("-- Raw.BayerPattern follows the file's CFAPattern\n");
@@ -418,6 +514,8 @@ int main(void) {
 	test_stream();
 	test_offset();
 	test_paths();
+	test_header();
+	test_orientation();
 	test_crop();
 	test_icc();
 	test_bayer();

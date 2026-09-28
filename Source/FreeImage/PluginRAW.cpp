@@ -234,11 +234,12 @@ libraw_ConvertProcessedRawToDib(LibRaw *RawProcessor) {
 /**
 Convert a processed raw image to a FIBITMAP
 @param image Processed raw image
+@param header_only TRUE to allocate the header only
 @return Returns the converted dib if successfull, returns NULL otherwise
 @see libraw_LoadEmbeddedPreview
 */
 static FIBITMAP * 
-libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image) {
+libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image, BOOL header_only) {
 	FIBITMAP *dib = NULL;
 
 	try {
@@ -247,9 +248,12 @@ libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image) {
 		unsigned bpp = image->bits;
 		if(bpp == 16) {
 			// allocate output dib
-			dib = FreeImage_AllocateT(FIT_RGB16, width, height);
+			dib = FreeImage_AllocateHeaderT(header_only, FIT_RGB16, width, height);
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
+			}
+			if(header_only) {
+				return dib;
 			}
 			// write data
 			WORD *raw_data = (WORD*)image->data;
@@ -264,9 +268,12 @@ libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image) {
 			}
 		} else if(bpp == 8) {
 			// allocate output dib
-			dib = FreeImage_AllocateT(FIT_BITMAP, width, height, 24);
+			dib = FreeImage_AllocateHeaderT(header_only, FIT_BITMAP, width, height, 24);
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
+			}
+			if(header_only) {
+				return dib;
 			}
 			// write data
 			BYTE *raw_data = (BYTE*)image->data;
@@ -325,9 +332,9 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 				dib = FreeImage_LoadFromMemory(fif, hmem, flags);
 				// close the stream
 				FreeImage_CloseMemory(hmem);
-			} else if((flags & FIF_LOAD_NOPIXELS) != FIF_LOAD_NOPIXELS) {
+			} else {
 				// convert processed data to output dib
-				dib = libraw_ConvertProcessedImageToDib(thumb_image);
+				dib = libraw_ConvertProcessedImageToDib(thumb_image, (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS);
 			}
 		} else {
 			throw "LibRaw : failed to run dcraw_make_mem_thumb";
@@ -354,10 +361,11 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 Load raw data and convert to FIBITMAP
 @param RawProcessor Libraw handle
 @param bitspersample Output bitdepth (8- or 16-bit)
+@param header_only TRUE to allocate the header only
 @return Returns the loaded dib if successfull, returns NULL otherwise
 */
 static FIBITMAP * 
-libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample) {
+libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 	FIBITMAP *dib = NULL;
 
 	try {
@@ -385,6 +393,24 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample) {
 
 		// -----------------------
 
+		if(header_only) {
+			// the size dcraw_process() gives the image: half size, Fuji rotation, pixel aspect and flip
+			if(RawProcessor->adjust_sizes_info_only() != LIBRAW_SUCCESS) {
+				throw "LibRaw : failed to compute the output size";
+			}
+			const unsigned width = RawProcessor->imgdata.sizes.iwidth;
+			const unsigned height = RawProcessor->imgdata.sizes.iheight;
+			if(bitspersample == 16) {
+				dib = FreeImage_AllocateHeaderT(TRUE, FIT_RGB16, width, height);
+			} else {
+				dib = FreeImage_AllocateHeaderT(TRUE, FIT_BITMAP, width, height, 24);
+			}
+			if(!dib) {
+				throw FI_MSG_ERROR_DIB_MEMORY;
+			}
+			return dib;
+		}
+
 		// unpack data
 		if(RawProcessor->unpack() != LIBRAW_SUCCESS) {
 			throw "LibRaw : failed to unpack data";
@@ -410,15 +436,16 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample) {
 Load the Bayer matrix (unprocessed raw data) as a FIT_UINT16 image. 
 Note that some formats don't have a Bayer matrix (e.g. Foveon, Canon sRAW, demosaiced DNG files). 
 @param RawProcessor Libraw handle
+@param header_only TRUE to allocate the header only
 @return Returns the loaded dib if successfull, returns NULL otherwise
 */
 static FIBITMAP * 
-libraw_LoadUnprocessedData(LibRaw *RawProcessor) {
+libraw_LoadUnprocessedData(LibRaw *RawProcessor, BOOL header_only) {
 	FIBITMAP *dib = NULL;
 
 	try {
 		// unpack data
-		if(RawProcessor->unpack() != LIBRAW_SUCCESS) {
+		if(!header_only && (RawProcessor->unpack() != LIBRAW_SUCCESS)) {
 			throw "LibRaw : failed to unpack data";
 		}
 
@@ -433,18 +460,21 @@ libraw_LoadUnprocessedData(LibRaw *RawProcessor) {
 		const size_t line_size = width * sizeof(WORD);
 		const WORD *src_bits = (WORD*)RawProcessor->imgdata.rawdata.raw_image;
 
-		if(src_bits) {
-			dib = FreeImage_AllocateT(FIT_UINT16, width, height);
+		// the raw image is not read before unpack()
+		if(src_bits || header_only) {
+			dib = FreeImage_AllocateHeaderT(header_only, FIT_UINT16, width, height);
 		}
 		if(!dib) {
 			throw FI_MSG_ERROR_DIB_MEMORY;
 		}
 
 		// retrieve the raw image
-		for(unsigned y = 0; y < height; y++) {
-			WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
-			memcpy(dst_bits, src_bits, line_size);
-			src_bits += width;
+		if(!header_only) {
+			for(unsigned y = 0; y < height; y++) {
+				WORD *dst_bits = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
+				memcpy(dst_bits, src_bits, line_size);
+				src_bits += width;
+			}
 		}
 
 		// store metadata needed for post-processing
@@ -756,29 +786,26 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw "LibRaw : failed to open input stream (unknown format)";
 		}
 
-		if(header_only) {
-			// header only mode
-			dib = FreeImage_AllocateHeaderT(header_only, FIT_RGB16, RawProcessor->imgdata.sizes.width, RawProcessor->imgdata.sizes.height);
-		}
-		else if((flags & RAW_UNPROCESSED) == RAW_UNPROCESSED) {
+		// a header-only load takes its load's path: each sizes and turns the image its own way
+		if((flags & RAW_UNPROCESSED) == RAW_UNPROCESSED) {
 			// load raw data without post-processing (i.e. as a Bayer matrix)
-			dib = libraw_LoadUnprocessedData(RawProcessor);
+			dib = libraw_LoadUnprocessedData(RawProcessor, header_only);
 		}
 		else if((flags & RAW_PREVIEW) == RAW_PREVIEW) {
 			// try to get the embedded JPEG
-			dib = libraw_LoadEmbeddedPreview(RawProcessor, 0);
+			dib = libraw_LoadEmbeddedPreview(RawProcessor, header_only ? FIF_LOAD_NOPIXELS : 0);
 			if(!dib) {
 				// no JPEG preview: try to load as 8-bit/sample (i.e. RGB 24-bit)
-				dib = libraw_LoadRawData(RawProcessor, 8);
+				dib = libraw_LoadRawData(RawProcessor, 8, header_only);
 			}
 		} 
 		else if((flags & RAW_DISPLAY) == RAW_DISPLAY) {
 			// load raw data as 8-bit/sample (i.e. RGB 24-bit)
-			dib = libraw_LoadRawData(RawProcessor, 8);
+			dib = libraw_LoadRawData(RawProcessor, 8, header_only);
 		} 
 		else {
 			// default: load raw data as linear 16-bit/sample (i.e. RGB 48-bit)
-			dib = libraw_LoadRawData(RawProcessor, 16);
+			dib = libraw_LoadRawData(RawProcessor, 16, header_only);
 		}
 
 		// save ICC profile if present

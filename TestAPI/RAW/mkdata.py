@@ -183,10 +183,11 @@ def preview_rgb(width, height):
 
 
 def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
-             prev_w=0, prev_h=0, crop=(0, 0, 0, 0), icc=False):
+             prev_w=0, prev_h=0, crop=(0, 0, 0, 0), icc=False, orientation=0):
     """Assemble a DNG.  crop is (left, top, right, bottom): the margins the
     ActiveArea tag hides, so the post-processed image comes out smaller than
-    the CFA field and a mishandled margin is visible."""
+    the CFA field and a mishandled margin is visible.  orientation is the
+    TIFF Orientation tag, which LibRaw applies to the processed image."""
     left, top, right, bottom = crop
     act_w = raw_w - left - right
     act_h = raw_h - top - bottom
@@ -201,6 +202,8 @@ def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
     ifd0.set(271, ASCII, "FreeImage")           # Make
     ifd0.set(272, ASCII, model)                 # Model
     ifd0.set(273, LONG, [0])                    # StripOffsets (patched)
+    if orientation:
+        ifd0.set(274, SHORT, [orientation])     # Orientation
     ifd0.set(277, SHORT, [3])                   # SamplesPerPixel
     ifd0.set(278, LONG, [prev_h])               # RowsPerStrip
     ifd0.set(279, LONG, [prev_w * prev_h * 3])  # StripByteCounts
@@ -284,6 +287,17 @@ def main():
     w2, h2 = 70, 46
     files.append(("fi_raw_odd.dng",
                   make_dng(w2, h2, RGGB, bayer(w2, h2, RGGB), "Synth Odd")))
+
+    # a camera turned 90 degrees; an odd active height, so half size rounds
+    files.append(("fi_raw_rot90.dng",
+                  make_dng(w, h, RGGB, bayer(w, h, RGGB), "Synth Rot90",
+                           prev_w=48, prev_h=32, crop=(4, 4, 4, 6),
+                           orientation=6)))
+
+    # turned 180 degrees: the size stays as it is
+    files.append(("fi_raw_rot180.dng",
+                  make_dng(w2, h2, RGGB, bayer(w2, h2, RGGB), "Synth Rot180",
+                           orientation=3)))
 
     for name, data in files:
         path = os.path.join(out, name)
