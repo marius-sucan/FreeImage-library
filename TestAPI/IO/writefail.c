@@ -2,14 +2,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "FreeImage.h"
-
+// windows.h before FreeImage.h, which otherwise defines its guard and stands in for its types
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <signal.h>
 #include <unistd.h>
 #endif
+#include "FreeImage.h"
 
 static int failures = 0;
 
