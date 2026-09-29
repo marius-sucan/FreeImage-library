@@ -68,11 +68,13 @@ Fixes:
 - fixed saves returning TRUE when a write failed, as on a full disk: FreeImage_SaveToHandle() and FreeImage_SaveMultiBitmapToHandle() return FALSE when a write falls short, whether or not the plugin noticed (the PNG, TIFF, TGA, GIF, ICO, PFM, PNM, WBMP, JNG, MNG, APNG and JPEG XR writers did not), and FreeImage_Save() and FreeImage_SaveU() check the last bytes fclose() writes;
 - fixed a PNG save compressing the rest of the image after a write failed, and leaking its palette and row buffer when libpng stopped with an error;
 - fixed some uncompressed PSB files over 4 GB, such as an 8-bit 65536 x 65536 one, being refused as invalid: a buffer check computed the image size in 32 bits;
+- fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it: classic TIFF offsets are 32-bit and libtiff's refusals went unchecked; such a file is written as BigTIFF, and a failed write fails the save;
 - fixed SGI RLE files whose rows start 2 GB or more into the file loading other data in those rows: the row offsets are unsigned, and a row whose start cannot be reached is left blank;
 - and many other fixes
 
 Changes:
 - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64(): memory streams with UINT64 sizes and INT64 positions, where FreeImage_OpenMemory() and FreeImage_AcquireMemory() stop at 4 GB and, on Windows, FreeImage_SeekMemory() and FreeImage_TellMemory() at 2 GB; the old exports are unchanged;
+- the TIFF writer takes the flag TIFF_BIGTIFF_FORMAT (0x20000) to write BigTIFF, whose offsets are 64-bit; it writes BigTIFF by itself only for a file that would pass 4 GB, the most a classic TIFF holds, so smaller files stay readable by classic TIFF readers;
 - FreeImageIO's seek_proc takes an INT64 offset and tell_proc returns INT64; a FreeImageIO built with long callbacks must be recompiled on Windows, where long is 32-bit (the structure's layout and every export are unchanged);
 - FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;

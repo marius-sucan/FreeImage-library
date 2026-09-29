@@ -635,13 +635,96 @@ FreeImage_OpenMultiBitmapFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_h
 	return NULL;
 }
 
+// every page, through the plugin of 'node', into io and handle
+static BOOL
+FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io, fi_handle handle, int flags) {
+	BOOL success = TRUE;
+
+	// dst data
+	void *data = FreeImage_Open(node, io, handle, FALSE);
+	// src data
+	void *data_read = NULL;
+
+	if(header->handle) {
+		// open src
+		header->io.seek_proc(header->handle, header->start, SEEK_SET);
+		data_read = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
+	}
+
+	// write all the pages to the file using handle and io
+	
+	int count = 0;
+	
+	for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); i++) {
+		if (success) {
+			switch(i->m_type) {
+				case BLOCK_CONTINUEUS:
+				{
+					for (int j = i->getStart(); j <= i->getEnd(); j++) {
+
+						// load the original source data, with pixels even if the bitmap was opened header-only
+						FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ?
+							header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
+
+						if (dib == NULL) {
+							success = FALSE;
+							break;
+						}
+
+						// save the data
+						success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
+						count++;
+
+						FreeImage_Unload(dib);
+
+						if (!success) {
+							break;
+						}
+					}
+
+					break;
+				}
+				
+				case BLOCK_REFERENCE:
+				{
+					FIBITMAP *dib = FreeImage_LoadPageFromCache(header, *i);
+
+					if (dib == NULL) {
+						success = FALSE;
+						break;
+					}
+
+					// save the data
+
+					success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
+					count++;
+
+					// unload the dib
+
+					FreeImage_Unload(dib);
+
+					break;
+				}
+			}
+		} else {
+			break;
+		}
+	}
+
+	// close the files
+
+	FreeImage_Close(header->node, &header->io, header->handle, data_read);
+
+	FreeImage_Close(node, io, handle, data);
+
+	return success;
+}
+
 BOOL DLL_CALLCONV
 FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, FreeImageIO *io, fi_handle handle, int flags) {
 	if(!bitmap || !bitmap->data || !io || !handle) {
 		return FALSE;
 	}
-
-	BOOL success = TRUE;
 
 	// retrieve the plugin list to find the node belonging to this plugin
 	PluginList *list = FreeImage_GetPluginList();
@@ -668,85 +751,20 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 			// a write that falls short fails the save, whether or not the plugin noticed
 			WriteCheckIO check;
 			SetWriteCheckIO(&check, io, handle);
-			io = &check.io;
-			handle = (fi_handle)&check;
+			const INT64 start = io->tell_proc(handle);
 
-			// dst data
-			void *data = FreeImage_Open(node, io, handle, FALSE);
-			// src data
-			void *data_read = NULL;
-			
-			if(header->handle) {
-				// open src
-				header->io.seek_proc(header->handle, header->start, SEEK_SET);
-				data_read = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
-			}
-			
-			// write all the pages to the file using handle and io
-			
-			int count = 0;
-			
-			for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); i++) {
-				if (success) {
-					switch(i->m_type) {
-						case BLOCK_CONTINUEUS:
-						{
-							for (int j = i->getStart(); j <= i->getEnd(); j++) {
+			BOOL success = FreeImage_SavePages(node, header, &check.io, (fi_handle)&check, flags);
 
-								// load the original source data, with pixels even if the bitmap was opened header-only
-								FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ?
-									header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
-
-								if (dib == NULL) {
-									success = FALSE;
-									break;
-								}
-
-								// save the data
-								success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
-								count++;
-
-								FreeImage_Unload(dib);
-
-								if (!success) {
-									break;
-								}
-							}
-
-							break;
-						}
-						
-						case BLOCK_REFERENCE:
-						{
-							FIBITMAP *dib = FreeImage_LoadPageFromCache(header, *i);
-
-							if (dib == NULL) {
-								success = FALSE;
-								break;
-							}
-
-							// save the data
-
-							success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
-							count++;
-
-							// unload the dib
-
-							FreeImage_Unload(dib);
-
-							break;
-						}
-					}
+			// classic TIFF offsets are 32-bit: a document that ran into 4 GB is written again as BigTIFF
+			if (!success && !check.failed && (fif == FIF_TIFF) && ((flags & TIFF_BIGTIFF_FORMAT) != TIFF_BIGTIFF_FORMAT)
+				&& (start >= 0) && TIFFPassedClassicLimit(io, handle, start)) {
+				if (io->seek_proc(handle, start, SEEK_SET) == 0) {
+					FreeImage_OutputMessageProc(fif, "The file passes 4 GB, the most a classic TIFF holds: it is written as BigTIFF");
+					success = FreeImage_SavePages(node, header, &check.io, (fi_handle)&check, flags | TIFF_BIGTIFF_FORMAT);
 				} else {
-					break;
+					FreeImage_OutputMessageProc(fif, "The file passes 4 GB, the most a classic TIFF holds, and cannot be written again: save it with TIFF_BIGTIFF_FORMAT");
 				}
 			}
-			
-			// close the files
-			
-			FreeImage_Close(header->node, &header->io, header->handle, data_read);
-
-			FreeImage_Close(node, io, handle, data);
 
 			return (success && !check.failed) ? TRUE : FALSE;
 		}

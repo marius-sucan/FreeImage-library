@@ -121,6 +121,9 @@ static void ReadThumbnail(FreeImageIO *io, fi_handle handle, void *data, TIFF *t
 
 static int s_format_id;
 
+// a libtiff write that failed; Save says it, or saves again as BigTIFF
+static const char *FI_MSG_ERROR_TIFF_WRITE = "Error while writing TIFF: the file could not be written";
+
 typedef struct {
 	//! FreeImage IO functions
     FreeImageIO *io;
@@ -132,6 +135,12 @@ typedef struct {
 	unsigned thumbnailCount;
 	//! Handle position of the TIFF header, which libtiff offsets count from
 	INT64 start;
+	//! While writing, the end of what was written, where libtiff appends; -1 otherwise
+	INT64 end;
+	//! The file being written is BigTIFF
+	BOOL bigtiff;
+	//! A write libtiff reported failed
+	BOOL write_error;
 } fi_TIFFIO;
 
 // ----------------------------------------------------------
@@ -147,7 +156,14 @@ _tiffReadProc(thandle_t handle, void *buf, tmsize_t size) {
 static tmsize_t
 _tiffWriteProc(thandle_t handle, void *buf, tmsize_t size) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-	return (tmsize_t)FreeImage_WriteBytes(fio->io, fio->handle, buf, (size_t)size);
+	const tmsize_t written = (tmsize_t)FreeImage_WriteBytes(fio->io, fio->handle, buf, (size_t)size);
+	if(fio->end >= 0) {
+		const INT64 pos = fio->io->tell_proc(fio->handle);
+		if(pos > fio->end) {
+			fio->end = pos;
+		}
+	}
+	return written;
 }
 
 static toff_t
@@ -159,6 +175,9 @@ _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 			return (toff_t)-1;
 		}
 		fio->io->seek_proc(fio->handle, fio->start + (INT64)off, SEEK_SET);
+	} else if((whence == SEEK_END) && (fio->end >= 0)) {
+		// a second attempt writes over the first rather than after it
+		fio->io->seek_proc(fio->handle, fio->end + (INT64)off, SEEK_SET);
 	} else {
 		fio->io->seek_proc(fio->handle, (INT64)off, whence);
 	}
@@ -1098,14 +1117,16 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	fio->thumbnailCount = 0;
 	const INT64 start = io->tell_proc(handle);
 	fio->start = (start > 0) ? start : 0;
+	fio->tif = NULL;
+	fio->end = -1;
+	fio->bigtiff = FALSE;
+	fio->write_error = FALSE;
 
-	if (read) {
-		fio->tif = TIFFFdOpen((thandle_t)fio, "", "r");
-	} else {
-		// mode = "w"	: write Classic TIFF
-		// mode = "w8"	: write Big TIFF
-		fio->tif = TIFFFdOpen((thandle_t)fio, "", "w");
+	if (!read) {
+		// Save opens it: classic TIFF or BigTIFF depends on the image
+		return fio;
 	}
+	fio->tif = TIFFFdOpen((thandle_t)fio, "", "r");
 	if(fio->tif == NULL) {
 		free(fio);
 		FreeImage_OutputMessageProc(s_format_id, "Error while opening TIFF: data is invalid");
@@ -1118,7 +1139,9 @@ static void DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	if(data) {
 		fi_TIFFIO *fio = (fi_TIFFIO*)data;
-		TIFFClose(fio->tif);
+		if(fio->tif) {
+			TIFFClose(fio->tif);
+		}
 		free(fio);
 	}
 }
@@ -2412,6 +2435,46 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 // --------------------------------------------------------------------------
 
+// a row libtiff cannot write frees the row buffer and ends the save
+static void
+WriteRow(fi_TIFFIO *fio, TIFF *out, BYTE *buffer, uint32_t row) {
+	if(TIFFWriteScanline(out, buffer, row, 0) < 0) {
+		free(buffer);
+		fio->write_error = TRUE;
+		throw FI_MSG_ERROR_TIFF_WRITE;
+	}
+}
+
+// uncompressed pixels alone past 4 GB: BigTIFF at once, rather than writing 4 GB twice
+static BOOL
+NeedsBigTIFF(FIBITMAP *dib, int flags) {
+	if(((flags & (TIFF_PACKBITS | TIFF_DEFLATE | TIFF_ADOBE_DEFLATE | TIFF_NONE)) != TIFF_NONE) || ((flags & TIFF_LOGLUV) == TIFF_LOGLUV)) {
+		return FALSE;
+	}
+	UINT64 line = FreeImage_GetLine(dib);
+	if((FreeImage_GetImageType(dib) == FIT_BITMAP) && (FreeImage_GetBPP(dib) == 8) && FreeImage_IsTransparent(dib)) {
+		line *= 2;
+	}
+	return (line * FreeImage_GetHeight(dib) + ((UINT64)64 << 20) > (UINT64)0xFFFFFFFFu) ? TRUE : FALSE;
+}
+
+// libtiff refuses the strip or directory, far under 64 MB, that would cross 4 GB
+static BOOL
+PassedClassicLimit(INT64 size) {
+	return (size + ((INT64)64 << 20) > (INT64)0xFFFFFFFFu) ? TRUE : FALSE;
+}
+
+BOOL
+TIFFPassedClassicLimit(FreeImageIO *io, fi_handle handle, INT64 start) {
+	const INT64 here = io->tell_proc(handle);
+	if((here < 0) || (io->seek_proc(handle, 0, SEEK_END) != 0)) {
+		return FALSE;
+	}
+	const INT64 end = io->tell_proc(handle);
+	io->seek_proc(handle, here, SEEK_SET);
+	return ((end >= start) && PassedClassicLimit(end - start)) ? TRUE : FALSE;
+}
+
 /**
 Save a single image into a TIF
 
@@ -2667,7 +2730,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 
 							// write the scanline to disc
 
-							TIFFWriteScanline(out, buffer, height - y - 1, 0);
+							WriteRow(fio, out, buffer, height - y - 1);
 						}
 
 						free(buffer);
@@ -2683,7 +2746,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 							// get a copy of the scanline
 							memcpy(buffer, FreeImage_GetScanLine(dib, height - y - 1), pitch);
 							// write the scanline to disc
-							TIFFWriteScanline(out, buffer, y, 0);
+							WriteRow(fio, out, buffer, y);
 						}
 						free(buffer);
 					}
@@ -2718,7 +2781,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 #endif
 						// write the scanline to disc
 
-						TIFFWriteScanline(out, buffer, y, 0);
+						WriteRow(fio, out, buffer, y);
 					}
 
 					free(buffer);
@@ -2739,7 +2802,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 				// get a copy of the scanline and convert from RGB to XYZ
 				tiff_ConvertLineRGBToXYZ(buffer, FreeImage_GetScanLine(dib, height - y - 1), width);
 				// write the scanline to disc
-				TIFFWriteScanline(out, buffer, y, 0);
+				WriteRow(fio, out, buffer, y);
 			}
 			free(buffer);
 		} else {
@@ -2754,24 +2817,27 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 				// get a copy of the scanline
 				memcpy(buffer, FreeImage_GetScanLine(dib, height - y - 1), pitch);
 				// write the scanline to disc
-				TIFFWriteScanline(out, buffer, y, 0);
+				WriteRow(fio, out, buffer, y);
 			}
 			free(buffer);
 		}
 
-		// write out the directory tag if we wrote a page other than -1 or if we have a thumbnail to write later
+		// here rather than in TIFFClose(), whose failure nobody would see
 
-		if( (page >= 0) || ((ifd == 0) && (ifdCount > 1)) ) {
-			TIFFWriteDirectory(out);
-			// else: TIFFClose will WriteDirectory
+		if(!TIFFWriteDirectory(out)) {
+			fio->write_error = TRUE;
+			throw FI_MSG_ERROR_TIFF_WRITE;
 		}
 
 		return TRUE;
-		
+
 	} catch(const char *text) {
-		FreeImage_OutputMessageProc(s_format_id, text);
+		// Save reports a failed write
+		if(text != FI_MSG_ERROR_TIFF_WRITE) {
+			FreeImage_OutputMessageProc(s_format_id, text);
+		}
 		return FALSE;
-	} 
+	}
 }
 
 static BOOL
@@ -2782,37 +2848,64 @@ CanStore(FIBITMAP *dib) {
 
 static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
-	BOOL bResult = FALSE;
+	fi_TIFFIO *fio = (fi_TIFFIO*)data;
 
 	if(dib && !CanStore(dib)) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
 	}
-	
+	if(!dib || !handle || !fio) {
+		return FALSE;
+	}
+
 	// handle thumbnail as SubIFD
 	FIBITMAP *thumbnail = FreeImage_GetThumbnail(dib);
 	if(thumbnail && !CanStore(thumbnail)) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_WARNING_INVALID_THUMBNAIL);
 		thumbnail = NULL;
 	}
-	const BOOL bHasThumbnail = (thumbnail != NULL);
-	const unsigned ifdCount = bHasThumbnail ? 2 : 1;
-	
-	FIBITMAP *bitmap = dib;
+	const unsigned ifdCount = thumbnail ? 2 : 1;
 
-	for(unsigned ifd = 0; ifd < ifdCount; ifd++) {
-		// redirect dib to thumbnail for the second pass
-		if(ifd == 1) {
-			bitmap = thumbnail;
+	for(int attempt = 0; attempt < 2; attempt++) {
+		// libtiff writes the header when it opens: the first page decides
+		if(!fio->tif) {
+			fio->bigtiff = (attempt > 0) || ((flags & TIFF_BIGTIFF_FORMAT) == TIFF_BIGTIFF_FORMAT) || NeedsBigTIFF(dib, flags);
+			fio->end = fio->start;
+			fio->tif = TIFFFdOpen((thandle_t)fio, "", fio->bigtiff ? "w8" : "w");
+			if(!fio->tif) {
+				FreeImage_OutputMessageProc(s_format_id, "Error while opening TIFF: data is invalid");
+				return FALSE;
+			}
 		}
 
-		bResult = SaveOneTIFF(io, bitmap, handle, page, flags, data, ifd, ifdCount);
-		if(!bResult) {
-			return FALSE;
+		BOOL bResult = TRUE;
+		for(unsigned ifd = 0; bResult && (ifd < ifdCount); ifd++) {
+			bResult = SaveOneTIFF(io, (ifd == 0) ? dib : thumbnail, handle, page, flags, data, ifd, ifdCount);
 		}
+		if(bResult || !fio->write_error) {
+			return bResult;
+		}
+
+		// classic TIFF offsets are 32-bit: a file that ran into 4 GB is written again as BigTIFF
+		if(!fio->bigtiff && PassedClassicLimit(fio->end - fio->start)) {
+			if(page >= 0) {
+				// FreeImage_SaveMultiBitmapToHandle() writes every page again
+				return FALSE;
+			}
+			// its flush writes below 4 GB, where the second attempt writes over it
+			TIFFClose(fio->tif);
+			fio->tif = NULL;
+			fio->write_error = FALSE;
+			if(io->seek_proc(handle, fio->start, SEEK_SET) == 0) {
+				FreeImage_OutputMessageProc(s_format_id, "The file passes 4 GB, the most a classic TIFF holds: it is written as BigTIFF");
+				continue;
+			}
+		}
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_TIFF_WRITE);
+		return FALSE;
 	}
 
-	return bResult;
+	return FALSE;
 }
 
 // ==========================================================

@@ -763,6 +763,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define TIFF_LZW			0x4000	//! save using LZW compression
 #define TIFF_JPEG			0x8000	//! save using JPEG compression
 #define TIFF_LOGLUV			0x10000	//! save using LogLuv compression
+#define TIFF_BIGTIFF_FORMAT	0x20000	//! save as BigTIFF, whose offsets are 64-bit (used anyway for a file that would pass 4 GB)
 #define WBMP_DEFAULT        0
 #define XBM_DEFAULT			0
 #define XPM_DEFAULT			0

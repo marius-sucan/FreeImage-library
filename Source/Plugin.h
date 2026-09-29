@@ -151,4 +151,11 @@ void DLL_CALLCONV InitAPNG(Plugin *plugin, int format_id);
 // TRUE for an animated PNG (acTL chunk present)
 BOOL APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle);
 
+// ==========================================================
+//   Shared between the TIFF plugin and the multi-page functions
+// ==========================================================
+
+// TRUE when a stream written from 'start' ends within reach of 4 GB, which classic TIFF offsets cannot pass
+BOOL TIFFPassedClassicLimit(FreeImageIO *io, fi_handle handle, INT64 start);
+
 #endif //!PLUGIN_H

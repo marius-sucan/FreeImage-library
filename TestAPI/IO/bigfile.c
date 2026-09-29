@@ -157,6 +157,59 @@ static void test_file(const char *name, INT64 strip) {
     remove(path);
 }
 
+/* --- TIFF_BIGTIFF_FORMAT: BigTIFF when asked, classic TIFF otherwise ----------- */
+
+/* "II" then 42 for classic TIFF, 43 for BigTIFF */
+static int tiff_version(const char *path) {
+    BYTE h[4] = { 0 };
+    FILE *f = fopen(path, "rb");
+    size_t n = f ? fread(h, 1, 4, f) : 0;
+    if (f) fclose(f);
+    return (n == 4 && h[0] == 'I' && h[1] == 'I') ? (h[2] | (h[3] << 8)) : -1;
+}
+
+static FIBITMAP *make_page(int page) {
+    int x, y;
+    FIBITMAP *dib = FreeImage_Allocate(W, H, 8, 0, 0, 0);
+    if (!dib) return NULL;
+    for (y = 0; y < H; y++) {
+        BYTE *row = FreeImage_GetScanLine(dib, H - 1 - y);
+        for (x = 0; x < W; x++) row[x] = pixel(x, y, page);
+    }
+    return dib;
+}
+
+static void test_bigtiff_flag(void) {
+    const char *path = tmppath("fi_io_flag.tif");
+    FIBITMAP *pages[2] = { make_page(0), make_page(1) };
+    FIBITMAP *dib;
+    FIMULTIBITMAP *mb;
+    int ok;
+
+    printf("TIFF_BIGTIFF_FORMAT, %dx%d\n", W, H);
+    report("FreeImage_Save, no flag: classic TIFF", FreeImage_Save(FIF_TIFF, pages[0], path, TIFF_DEFAULT) && tiff_version(path) == 42);
+    report("FreeImage_Save, TIFF_BIGTIFF_FORMAT: BigTIFF", FreeImage_Save(FIF_TIFF, pages[0], path, TIFF_BIGTIFF_FORMAT) && tiff_version(path) == 43);
+    dib = FreeImage_Load(FIF_TIFF, path, 0);
+    report("  FreeImage_Load, pixels", check(dib, 0));
+    if (dib) FreeImage_Unload(dib);
+    remove(path);
+
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
+    ok = mb && FreeImage_AppendPageEx(mb, pages[0]) && FreeImage_AppendPageEx(mb, pages[1]);
+    ok = FreeImage_CloseMultiBitmap(mb, TIFF_BIGTIFF_FORMAT | TIFF_LZW) && ok;
+    report("CloseMultiBitmap, TIFF_BIGTIFF_FORMAT: BigTIFF", ok && tiff_version(path) == 43);
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, 0);
+    report("  FreeImage_OpenMultiBitmap -> 2 pages", mb && FreeImage_GetPageCount(mb) == 2);
+    dib = mb ? FreeImage_LockPage(mb, 1) : NULL;
+    report("  page 1 pixels", check(dib, 1));
+    if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    remove(path);
+
+    FreeImage_Unload(pages[0]);
+    FreeImage_Unload(pages[1]);
+}
+
 /* --- sizes taken from a file 4 GB long ----------------------------------------- */
 
 /* extend an open file to 'size' bytes: a hole, then one byte */
@@ -294,6 +347,7 @@ int main(int argc, char **argv) {
     printf("FreeImage %s, %s positions\n", FreeImage_GetVersion(), sizeof(FI_TEST_OFF_T) == 8 ? "64-bit" : "32-bit");
     test_file("fi_io_big2g.tif", (INT64)0xA0000000);      /* 2.5 GB */
     test_file("fi_io_big4g.tif", (INT64)0x120000000);     /* 4.5 GB */
+    test_bigtiff_flag();
     test_tga_rle();
     test_sgi_rle();
     test_webp_4g();

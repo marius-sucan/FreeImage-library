@@ -37,6 +37,10 @@ asan-run: streams.c ../../Dist/libfreeimage.a
 bigsave-run: bigsave
 	./bigsave
 
+# 4.3 GB of RAM and of disk: a TIFF that only BigTIFF holds
+bigsave-4g-run: bigsave
+	./bigsave --4g
+
 memstream-grow: memstream
 	./memstream --grow
 
@@ -46,4 +50,4 @@ clean-bin:
 clean: clean-bin
 	rm -rf fi_io_* asan-obj
 
-.PHONY: default all run asan-run bigsave-run memstream-grow clean clean-bin
+.PHONY: default all run asan-run bigsave-run bigsave-4g-run memstream-grow clean clean-bin
