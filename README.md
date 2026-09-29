@@ -76,6 +76,7 @@ Fixes:
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded: the page cache holds 64-bit sizes; a cache block the cache file could not take stays in memory, and a page that cannot be cached again keeps its old copy;
 - fixed J2K and JP2 saves failing once an image's code could pass the 4 GB OpenJPEG holds in a tile, and writing out of bounds from 2^31 pixels: such an image is encoded in tiles, so a J2K file can pass 4 GB, and a JP2 file that would pass 4 GB, which its 32-bit box length cannot describe, is refused;
 - fixed BMP saves over 4 GB writing a wrapped file size and returning TRUE: bfSize is 32-bit and holds the raw size, RLE or not, so such a save is refused;
+- fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - and many other fixes
 
 Changes:

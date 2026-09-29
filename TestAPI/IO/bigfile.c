@@ -230,6 +230,52 @@ static void test_bmp_4g(void) {
     free(bits);
 }
 
+/* --- a PSD whose pixels pass 2 GB ------------------------------------------------ */
+
+/* a FreeImageIO that keeps the first bytes written and discards the rest */
+typedef struct { INT64 pos, size; BYTE head[32]; } SINK;
+
+static unsigned DLL_CALLCONV sink_rd(void *b, unsigned s, unsigned c, fi_handle h) { return 0; }
+static unsigned DLL_CALLCONV sink_wr(void *b, unsigned s, unsigned c, fi_handle h) {
+    SINK *k = (SINK *)h;
+    const INT64 n = (INT64)s * c;
+    INT64 i;
+    for (i = 0; i < n && k->pos + i < (INT64)sizeof(k->head); i++) k->head[k->pos + i] = ((BYTE *)b)[i];
+    k->pos += n;
+    if (k->pos > k->size) k->size = k->pos;
+    return c;
+}
+static int DLL_CALLCONV sink_sk(fi_handle h, FI_TEST_OFF_T off, int origin) {
+    SINK *k = (SINK *)h;
+    const INT64 base = (origin == SEEK_SET) ? 0 : (origin == SEEK_CUR) ? k->pos : k->size;
+    if (base + (INT64)off < 0) return -1;
+    k->pos = base + (INT64)off;
+    return 0;
+}
+static FI_TEST_OFF_T DLL_CALLCONV sink_tl(fi_handle h) { return (FI_TEST_OFF_T)((SINK *)h)->pos; }
+
+/* the PSD version of a 'side' x 'side' 32-bit image, its rows 4 bytes apart in a small buffer; 0 if not saved */
+static int psd_version(unsigned side, int flags) {
+    FreeImageIO io = { sink_rd, sink_wr, sink_sk, sink_tl };
+    SINK sink;
+    BYTE *bits = (BYTE *)calloc((size_t)side * 8, 1);
+    FIBITMAP *dib = bits ? FreeImage_ConvertFromRawBitsEx(FALSE, bits, FIT_BITMAP, side, side, 4, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK, FALSE) : NULL;
+    int version = 0;
+    memset(&sink, 0, sizeof(sink));
+    if (dib && FreeImage_SaveToHandle(FIF_PSD, dib, &io, (fi_handle)&sink, flags) && !memcmp(sink.head, "8BPS", 4))
+        version = (sink.head[4] << 8) | sink.head[5];
+    if (dib) FreeImage_Unload(dib);
+    free(bits);
+    return version;
+}
+
+static void test_psd_2g(void) {
+    printf("PSD of 32-bit images, into a FreeImageIO that keeps nothing: Photoshop reads PSD up to 2 GB\n");
+    report("20000 x 20000, 1.6 GB of pixels: PSD", psd_version(20000, PSD_DEFAULT) == 1);
+    report("24000 x 24000, 2.3 GB of pixels: PSB", psd_version(24000, PSD_DEFAULT) == 2);
+    report("64 x 64 with PSD_PSB: PSB", psd_version(64, PSD_PSB) == 2);
+}
+
 /* --- sizes taken from a file 4 GB long ----------------------------------------- */
 
 /* extend an open file to 'size' bytes: a hole, then one byte */
@@ -369,6 +415,7 @@ int main(int argc, char **argv) {
     test_file("fi_io_big4g.tif", (INT64)0x120000000);     /* 4.5 GB */
     test_bigtiff_flag();
     test_bmp_4g();
+    test_psd_2g();
     test_tga_rle();
     test_sgi_rle();
     test_webp_4g();

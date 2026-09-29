@@ -2184,7 +2184,9 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 		return false;
 	}
 
-	_headerInfo._Version = (((flags & PSD_PSB) == PSD_PSB) || width > 30000 || height > 30000) ? 2 : 1;
+	// Photoshop reads PSD files up to 2 GB: past it, counting the pixels uncompressed, PSB
+	const UINT64 pixel_bytes = ((UINT64)width * bitspersample + 7) / 8 * height * samplesperpixel;
+	_headerInfo._Version = (((flags & PSD_PSB) == PSD_PSB) || width > 30000 || height > 30000 || (pixel_bytes > (UINT64)0x7FFFFFFF)) ? 2 : 1;
 	_headerInfo._Channels = samplesperpixel;
 	_headerInfo._Height = height;
 	_headerInfo._Width = width;
