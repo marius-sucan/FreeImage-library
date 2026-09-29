@@ -425,6 +425,11 @@ FreeImage_AllocateBitmap(BOOL header_only, BYTE *ext_bits, unsigned ext_pitch, F
 			// initialize metadata models list
 
 			fih->metadata = new(std::nothrow) METADATAMAP;
+			if(!fih->metadata) {
+				FreeImage_Aligned_Free(bitmap->data);
+				free(bitmap);
+				return NULL;
+			}
 
 			// initialize attached thumbnail
 
@@ -619,7 +624,9 @@ FreeImage_Clone(FIBITMAP *dib) {
 						FITAG *dst_tag = FreeImage_CloneTag( (*j).second );
 
 						// assign key and tag value
-						(*dst_tagmap)[dst_key] = dst_tag;
+						if(dst_tag) {
+							(*dst_tagmap)[dst_key] = dst_tag;
+						}
 					}
 
 					// assign model and tagmap
@@ -1214,7 +1221,8 @@ FreeImage_FindFirstMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, FITAG **tag
 	if( (*metadata).find(model) != (*metadata).end() ) {
 		tagmap = (*metadata)[model];
 	}
-	if(tagmap) {
+	// a model whose last tag was removed stays behind, empty
+	if(tagmap && !tagmap->empty()) {
 		// allocate a handle
 		FIMETADATA 	*handle = (FIMETADATA *)malloc(sizeof(FIMETADATA));
 		if(handle) {
@@ -1324,7 +1332,9 @@ FreeImage_CloneMetadata(FIBITMAP *dst, FIBITMAP *src) {
 					FITAG *dst_tag = FreeImage_CloneTag( (*j).second );
 
 					// assign key and tag value
-					(*dst_tagmap)[dst_key] = dst_tag;
+					if(dst_tag) {
+						(*dst_tagmap)[dst_key] = dst_tag;
+					}
 				}
 
 				// assign model and tagmap
@@ -1367,16 +1377,23 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 		if(!tagmap) {
 			// this model, doesn't exist: create it 
 			tagmap = new(std::nothrow) TAGMAP();
+			if(!tagmap) {
+				return FALSE;
+			}
 			(*metadata)[model] = tagmap;
 		}
 		
 		if(tag) {
 			// first check the tag
 			if(FreeImage_GetTagKey(tag) == NULL) {
-				FreeImage_SetTagKey(tag, key);
+				if(!FreeImage_SetTagKey(tag, key)) {
+					return FALSE;
+				}
 			} else if(strcmp(key, FreeImage_GetTagKey(tag)) != 0) {
 				// set the tag key
-				FreeImage_SetTagKey(tag, key);
+				if(!FreeImage_SetTagKey(tag, key)) {
+					return FALSE;
+				}
 			}
 			if(FreeImage_GetTagCount(tag) * FreeImage_TagDataWidth(FreeImage_GetTagType(tag)) != FreeImage_GetTagLength(tag)) {
 				FreeImage_OutputMessageProc(FIF_UNKNOWN, "Invalid data count for tag '%s'", key);
@@ -1402,6 +1419,12 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 					break;
 			}
 
+			// copy first: a failed copy keeps the existing tag
+			FITAG *new_tag = FreeImage_CloneTag(tag);
+			if(!new_tag) {
+				return FALSE;
+			}
+
 			// delete existing tag
 			FITAG *old_tag = (*tagmap)[key];
 			if(old_tag) {
@@ -1409,7 +1432,7 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 			}
 
 			// create a new tag
-			(*tagmap)[key] = FreeImage_CloneTag(tag);
+			(*tagmap)[key] = new_tag;
 		}
 		else {
 			// delete existing tag

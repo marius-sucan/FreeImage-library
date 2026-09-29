@@ -1,9 +1,10 @@
 # I/O layer tests
 
-Five standalone programs for the file positions FreeImage carries: `FreeImageIO`'s
+Six standalone programs for the file positions FreeImage carries: `FreeImageIO`'s
 `seek_proc` and `tell_proc` take and return `INT64`, `FreeImage_Load()` and
 `FreeImage_Save()` seek in 64 bits, memory streams hold what memory allows, an
-image need not start at byte 0 of its stream, and a save whose writes fail says so.
+image need not start at byte 0 of its stream, a save whose writes fail says so,
+and a failed allocation breaks nothing.
 Each prints a report and exits non-zero on failure.
 
 | test | what it covers |
@@ -13,12 +14,13 @@ Each prints a report and exits non-zero on failure.
 | `bigsave` | Saves a 47000 x 47000 8-bit image as an uncompressed TIFF, 2.2 GB, and reloads its header: libtiff writes the IFD past 2 GB, and the file stays classic TIFF. `--4g` saves 65536 x 65600, 4.3 GB, which must come out as BigTIFF. `--full` reloads the pixels too. Needs 2.2 GB of RAM and of disk, 4.3 GB with `--4g`, and as much RAM again with `--full`. |
 | `streams` | Images behind 777 bytes of other data: an ICO saved there (one page, and two through `FreeImage_SaveMultiBitmapToHandle`, which reads page 0 back while it writes page 1) and reloaded, a GIF whose logical screen must come from its own header (with and without `GIF_PLAYBACK`), a multi-page TIFF in a memory stream. A TGA thumbnail claiming more pixels than the file holds is dropped; a TGA written through a `FreeImageIO` whose positions read 5 GB more past the header leaves its thumbnail out, since the footer's offsets are 32-bit, instead of writing it over the pixels. `make asan-run` rebuilds the sources it exercises with AddressSanitizer. |
 | `writefail` | Saves through a `FreeImageIO` whose writes stop after 100 bytes, then half way through the file, as on a full disk, in every writable format and through `FreeImage_SaveMultiBitmapToHandle`: each save must return FALSE, and return at all (a watchdog fails the test after 120 s). On Linux, not as root, `FreeImage_Save` to `/dev/full` must return FALSE too: its last bytes fail in `fclose()`. |
+| `allocfail` | A model whose only tag was deleted must enumerate as empty. Then the 1st, 2nd, ... `malloc`, `calloc` or `realloc` of `libfreeimage.a` fails, one per forked child, until a run gets through with none failing (the three are wrapped at link time): creating, setting and cloning tags, `FreeImage_SetMetadata`, `FreeImage_Clone` and `FreeImage_CloneMetadata` must not crash, and no stored tag may lack its value. The sweeps need `fork()` and GNU ld's `--wrap`: on Windows they are skipped. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run             # bigfile, memstream, streams, writefail
+    make run             # bigfile, memstream, streams, writefail, allocfail
     make asan-run        # streams, with AddressSanitizer
     make memstream-grow  # the 2 GB write
     make bigsave-run     # the 2.2 GB save

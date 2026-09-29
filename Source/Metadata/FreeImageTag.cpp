@@ -83,6 +83,11 @@ FITAG * DLL_CALLCONV
 FreeImage_CloneTag(FITAG *tag) {
 	if(!tag) return NULL;
 
+	// a tag whose value could not be set has nothing to copy
+	if((((FITAGHEADER *)tag->data)->length != 0) && !((FITAGHEADER *)tag->data)->value) {
+		return NULL;
+	}
+
 	// allocate a new tag
 	FITAG *clone = FreeImage_CreateTag();
 	if(!clone) return NULL;
@@ -187,9 +192,13 @@ BOOL DLL_CALLCONV
 FreeImage_SetTagKey(FITAG *tag, const char *key) {
 	if(tag && key) {
 		FITAGHEADER *tag_header = (FITAGHEADER *)tag->data;
-		if(tag_header->key) free(tag_header->key);
-		tag_header->key = (char*)malloc(strlen(key) + 1);
-		strcpy(tag_header->key, key);
+		char *copy = (char*)malloc(strlen(key) + 1);
+		if(!copy) {
+			return FALSE;
+		}
+		strcpy(copy, key);
+		free(tag_header->key);
+		tag_header->key = copy;
 		return TRUE;
 	}
 	return FALSE;
@@ -199,9 +208,13 @@ BOOL DLL_CALLCONV
 FreeImage_SetTagDescription(FITAG *tag, const char *description) {
 	if(tag && description) {
 		FITAGHEADER *tag_header = (FITAGHEADER *)tag->data;
-		if(tag_header->description) free(tag_header->description);
-		tag_header->description = (char*)malloc(strlen(description) + 1);
-		strcpy(tag_header->description, description);
+		char *copy = (char*)malloc(strlen(description) + 1);
+		if(!copy) {
+			return FALSE;
+		}
+		strcpy(copy, description);
+		free(tag_header->description);
+		tag_header->description = copy;
 		return TRUE;
 	}
 	return FALSE;
@@ -257,19 +270,17 @@ FreeImage_SetTagValue(FITAG *tag, const void *value) {
 			return FALSE;
 		}
 
-		if(tag_header->value) {
-			free(tag_header->value);
-		}
+		void *copy = NULL;
 
 		switch(tag_header->type) {
 			case FIDT_ASCII:
 			{
-				tag_header->value = (char*)malloc((tag_header->length + 1) * sizeof(char));
-				if(!tag_header->value) {
+				copy = malloc((tag_header->length + 1) * sizeof(char));
+				if(!copy) {
 					return FALSE;
 				}
 				char *src_data = (char*)value;
-				char *dst_data = (char*)tag_header->value;
+				char *dst_data = (char*)copy;
 				for(DWORD i = 0; i < tag_header->length; i++) {
 					dst_data[i] = src_data[i];
 				}
@@ -278,13 +289,16 @@ FreeImage_SetTagValue(FITAG *tag, const void *value) {
 			break;
 
 			default:
-				tag_header->value = malloc(tag_header->length * sizeof(BYTE));
-				if(!tag_header->value) {
+				copy = malloc(tag_header->length * sizeof(BYTE));
+				if(!copy) {
 					return FALSE;
 				}
-				memcpy(tag_header->value, value, tag_header->length);
+				memcpy(copy, value, tag_header->length);
 				break;
 		}
+
+		free(tag_header->value);
+		tag_header->value = copy;
 		return TRUE;
 	}
 	return FALSE;

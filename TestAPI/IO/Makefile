@@ -17,14 +17,18 @@ LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(GNU_CXX
 ASAN_SRCS   = PluginTARGA PluginICO PluginGIF FreeImageIO MultiPage MemoryIO
 
 default: all
-all: $(TESTS)
+all: $(TESTS) allocfail
 
 # 64-bit off_t for the test's own stdio on 32-bit POSIX
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) -D_FILE_OFFSET_BITS=64 $(INC) $< -o $@ $(LIB)
 
 run: all
-	@for t in bigfile memstream streams writefail; do echo "=== $$t ==="; ./$$t || exit 1; done
+	@for t in bigfile memstream streams writefail allocfail; do echo "=== $$t ==="; ./$$t || exit 1; done
+
+# malloc, calloc and realloc wrapped, so each allocation of libfreeimage.a can fail in turn
+allocfail: allocfail.c ../../Dist/libfreeimage.a
+	gcc $(CFLAGS) $(INC) $< -o $@ -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc $(LIB)
 
 # streams with those sources rebuilt with AddressSanitizer, linked ahead of the library
 asan-run: streams.c ../../Dist/libfreeimage.a
@@ -45,7 +49,7 @@ memstream-grow: memstream
 	./memstream --grow
 
 clean-bin:
-	rm -f $(TESTS) streams-asan
+	rm -f $(TESTS) allocfail streams-asan
 
 clean: clean-bin
 	rm -rf fi_io_* asan-obj
