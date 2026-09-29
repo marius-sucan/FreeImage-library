@@ -49,7 +49,9 @@ _ReadProc(void *p_buffer, OPJ_SIZE_T p_nb_bytes, void *p_user_data) {
 static OPJ_SIZE_T
 _WriteProc(void *p_buffer, OPJ_SIZE_T p_nb_bytes, void *p_user_data) {
 	J2KFIO_t *fio = (J2KFIO_t*)p_user_data;
-	return FreeImage_WriteBytes(fio->io, fio->handle, p_buffer, p_nb_bytes);
+	// OpenJPEG stops only on -1: after a short write it retries forever
+	const OPJ_SIZE_T l_nb_written = FreeImage_WriteBytes(fio->io, fio->handle, p_buffer, p_nb_bytes);
+	return (l_nb_written == p_nb_bytes) ? l_nb_written : (OPJ_SIZE_T)-1;
 }
 
 static OPJ_OFF_T

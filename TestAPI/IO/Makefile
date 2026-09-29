@@ -4,7 +4,7 @@
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
-TESTS   = bigfile memstream bigsave streams
+TESTS   = bigfile memstream bigsave streams writefail
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
@@ -24,7 +24,7 @@ $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) -D_FILE_OFFSET_BITS=64 $(INC) $< -o $@ $(LIB)
 
 run: all
-	@for t in bigfile memstream streams; do echo "=== $$t ==="; ./$$t || exit 1; done
+	@for t in bigfile memstream streams writefail; do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # streams with those sources rebuilt with AddressSanitizer, linked ahead of the library
 asan-run: streams.c ../../Dist/libfreeimage.a

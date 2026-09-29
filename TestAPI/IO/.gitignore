@@ -3,5 +3,6 @@ memstream
 bigsave
 streams
 streams-asan
+writefail
 asan-obj/
 fi_io_*
