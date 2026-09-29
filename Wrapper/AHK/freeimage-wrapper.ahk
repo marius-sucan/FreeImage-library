@@ -258,12 +258,7 @@ FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:
 
 FreeImage_AllocateExT(imageType, width, height, bpp, color:="", options:=0, red_mask:=0, green_mask:=0, blue_mask:=0, hPalette:=0) {
 ; color - "R,G,B,A" for a standard bitmap, else a pointer to a pixel of imageType; blank leaves it black
-; options - 0, or these combined with |:
-; FI_COLOR_IS_RGB_COLOR = 0x00; the color's alpha is ignored: a 32-bit image gets alpha 255; a palettized one gets the nearest palette color
-; FI_COLOR_IS_RGBA_COLOR = 0x01; 8-bit grey, 24 and 32-bit: the alpha blends the color over black; alpha 0 leaves the new area black (transparent at 32-bit)
-; FI_COLOR_FIND_EQUAL_COLOR = 0x02; palettized: the palette entry equal to the color, else the color's alpha as the index
-; FI_COLOR_ALPHA_IS_INDEX = 0x04; palettized: the color's alpha is the palette index to fill with; without a palette, a greyscale one is made
-; FI_COLOR_SET_ALPHA = 0x08; no blending: a 32-bit image gets the color's alpha as its alpha
+; options - see FreeImage_AllocateEx()
    pColor := FIMcolorPointer(color, colorBuf)
    Return DllCall(getFIMfunc("AllocateExT"), "Int", imageType, "Int", width, "Int", height, "Int", bpp, "UPtr", pColor, "Int", options, "UPtr", hPalette, "UInt", red_mask, "UInt", green_mask, "UInt", blue_mask, "UPtr")
 }
@@ -286,11 +281,7 @@ FreeImage_AllocateHeaderForBits(pBits, pitch, imageType, width, height, bpp, red
 FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; flag - 0, or the flags of the file's format below, combined with |:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
-; APNG_PLAYBACK = 2; APNG: the frame as a viewer shows it, composited on the canvas, as 32-bit
-; AVIF_PLAYBACK = 2; AVIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
-; GIF_PLAYBACK = 2; GIF: the frame as a viewer shows it, composited on the logical screen, as 32-bit
-; HEIF_PLAYBACK = 2; HEIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
 ; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
 ; JPEG_FAST = 0x0001; fast DCT: faster, a little less accurate; the default anyway, unless JPEG_ACCURATE is given
@@ -298,7 +289,6 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; JPEG_CMYK = 0x0004; keep a CMYK JPEG as 32-bit CMYK, not converted to 24-bit RGB
 ; JPEG_EXIFROTATE = 0x0008; turn the image upright as its Exif Orientation tag says
 ; JPEG_GREYSCALE = 0x0010; load as an 8-bit greyscale image
-; MNG_PLAYBACK = 2; MNG: the frame as a viewer shows it, composited on the canvas, as 32-bit; not for canvases over 2^28 pixels
 ; PCD_BASE = 1; the 768 x 512 image, as by default
 ; PCD_BASEDIV4 = 2; the 384 x 256 image
 ; PCD_BASEDIV16 = 3; the 192 x 128 image
@@ -312,7 +302,6 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; RAW_UNPROCESSED = 8; the raw sensor data, not demosaiced, as FIT_UINT16
 ; TARGA_LOAD_RGB888 = 1; load 16-bit (RGB555) and 32-bit TGA files as 24-bit RGB, dropping the alpha
 ; TIFF_CMYK = 0x0001; keep a CMYK TIFF as CMYK, not converted to RGB
-; WEBP_PLAYBACK = 0x0001; animated WebP: the frame as a viewer shows it, composited on the canvas, as 32-bit
 
    If !ImgPath
       Return
@@ -332,44 +321,18 @@ FreeImage_LoadFromHandle(FIF, pIO, hHandle, flags:=0) {
 ; seek takes an Int64 offset and tell returns Int64;
 ; FIF=-1 detects the format
 ; on 32-bit AutoHotkey a RegisterCallback() returns 32 bits.
-; flags - 0, or the flags of the file's format below, combined with |:
-; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
-; APNG_PLAYBACK = 2; APNG: the frame as a viewer shows it, composited on the canvas, as 32-bit
-; AVIF_PLAYBACK = 2; AVIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
-; GIF_PLAYBACK = 2; GIF: the frame as a viewer shows it, composited on the logical screen, as 32-bit
-; HEIF_PLAYBACK = 2; HEIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
-; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
-; JPEG_FAST = 0x0001; fast DCT: faster, a little less accurate; the default anyway, unless JPEG_ACCURATE is given
-; JPEG_ACCURATE = 0x0002; accurate DCT and upsampling: the best quality, a little slower
-; JPEG_CMYK = 0x0004; keep a CMYK JPEG as 32-bit CMYK, not converted to 24-bit RGB
-; JPEG_EXIFROTATE = 0x0008; turn the image upright as its Exif Orientation tag says
-; JPEG_GREYSCALE = 0x0010; load as an 8-bit greyscale image
-; MNG_PLAYBACK = 2; MNG: the frame as a viewer shows it, composited on the canvas, as 32-bit; not for canvases over 2^28 pixels
-; PCD_BASE = 1; the 768 x 512 image, as by default
-; PCD_BASEDIV4 = 2; the 384 x 256 image
-; PCD_BASEDIV16 = 3; the 192 x 128 image
-; PNG_IGNOREGAMMA = 1; keep the stored values: no gamma correction from a gAMA chunk (done only without an ICC profile); APNG, MNG frames too
-; PSD_CMYK = 1; keep a CMYK or multichannel PSD as CMYK, not converted to RGB
-; PSD_LAB = 2; keep a Lab PSD's Lab values, not converted to RGB
-; RAW_DEFAULT = 0; linear RGB 48-bit, or 16-bit greyscale from a monochrome camera
-; RAW_PREVIEW = 1; the embedded preview, turned upright; RGB 24-bit from the raw data when there is none
-; RAW_DISPLAY = 2; RGB 24-bit, or 8-bit greyscale from a monochrome camera
-; RAW_HALFSIZE = 4; half the size, decoded faster; combine with RAW_DEFAULT or RAW_DISPLAY
-; RAW_UNPROCESSED = 8; the raw sensor data, not demosaiced, as FIT_UINT16
-; TARGA_LOAD_RGB888 = 1; load 16-bit (RGB555) and 32-bit TGA files as 24-bit RGB, dropping the alpha
-; TIFF_CMYK = 0x0001; keep a CMYK TIFF as CMYK, not converted to RGB
-; WEBP_PLAYBACK = 0x0001; animated WebP: the frame as a viewer shows it, composited on the canvas, as 32-bit
+; flags: see FreeImage_Load()
 
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromHandle(pIO, hHandle)
    Return DllCall(getFIMfunc("LoadFromHandle"), "Int", FIF, "UPtr", pIO, "UPtr", hHandle, "Int", flags, "UPtr")
 }
 
-FreeImage_Save(hImage, ImgPath, ImgArg:=0) {
+FreeImage_Save(hImage, ImgPath, flags:=0) {
 ; Return 0 = failed; 1 = success
-; ImgArg - 0, or the flags of the file's format below, combined with |; JNG takes the JPEG flags, APNG and MNG the PNG ones:
+; flags - 0, or the flags of the file's format below, combined with |
+; (JNG takes the JPEG flags, APNG and MNG the PNG ones)
+;
 ; BMP_SAVE_RLE = 1; RLE-compress an 8-bit image; other bit depths are saved uncompressed
 ; EXR_DEFAULT = 0; half floats with PIZ wavelet compression
 ; EXR_FLOAT = 0x0001; 32-bit floats instead of half floats (larger files)
@@ -428,66 +391,12 @@ FreeImage_Save(hImage, ImgPath, ImgArg:=0) {
       Return
 
    FormatID := FreeImage_GetFIFFromFilename(ImgPath)
-   Return DllCall(getFIMfunc("SaveU"), "Int", FormatID, "UPtr", hImage, "WStr", ImgPath, "Int", ImgArg)
+   Return DllCall(getFIMfunc("SaveU"), "Int", FormatID, "UPtr", hImage, "WStr", ImgPath, "Int", flags)
 }
 
 FreeImage_SaveToHandle(FIF, hImage, pIO, hHandle, flags:=0) {
-; see FreeImage_LoadFromHandle()
-; flags - 0, or the flags of the file's format below, combined with |; JNG takes the JPEG flags, APNG and MNG the PNG ones:
-; BMP_SAVE_RLE = 1; RLE-compress an 8-bit image; other bit depths are saved uncompressed
-; EXR_DEFAULT = 0; half floats with PIZ wavelet compression
-; EXR_FLOAT = 0x0001; 32-bit floats instead of half floats (larger files)
-; EXR_NONE = 0x0002; no compression
-; EXR_ZIP = 0x0004; zlib compression, in blocks of 16 scan lines
-; EXR_PIZ = 0x0008; PIZ wavelet compression, the default
-; EXR_PXR24 = 0x0010; lossy 24-bit float compression
-; EXR_B44 = 0x0020; lossy 44% float compression, 22% with EXR_LC
-; EXR_LC = 0x0040; one luminance and two chroma channels, lossy; RGBF/RGBAF of even width and height only, without EXR_FLOAT
-; J2K_DEFAULT = 0; a 16:1 compression rate; or pass the rate itself, 1 to 1023, where 1 is lossless
-; JP2_DEFAULT = 0; a 16:1 compression rate; or pass the rate itself, 1 to 1023, where 1 is lossless
-; JPEG_DEFAULT = 0; quality 75 with 4:2:0 subsampling; or pass the quality itself, 1 to 100, instead of a JPEG_QUALITY* flag
-; JPEG_QUALITYSUPERB = 0x80; quality 100
-; JPEG_QUALITYGOOD = 0x0100; quality 75, the default
-; JPEG_QUALITYNORMAL = 0x0200; quality 50
-; JPEG_QUALITYAVERAGE = 0x0400; quality 25
-; JPEG_QUALITYBAD = 0x0800; quality 10
-; JPEG_PROGRESSIVE = 0x2000; a progressive JPEG
-; JPEG_SUBSAMPLING_411 = 0x1000; 4:1:1 chroma subsampling, the strongest
-; JPEG_SUBSAMPLING_420 = 0x4000; 4:2:0 chroma subsampling, the default
-; JPEG_SUBSAMPLING_422 = 0x8000; 4:2:2 chroma subsampling
-; JPEG_SUBSAMPLING_444 = 0x10000; no chroma subsampling (4:4:4)
-; JPEG_OPTIMIZE = 0x20000; optimal Huffman tables: a few percent smaller, a little slower
-; JPEG_BASELINE = 0x40000; a basic JPEG: no metadata, ICC profile or other markers
-; JXR_DEFAULT = 0; quality 80, 4:4:4; or pass the quality itself, 1 to 99; under 50, 8-bit images get 4:2:0
-; JXR_LOSSLESS = 0x0064; lossless, the same as quality 100
-; JXR_PROGRESSIVE = 0x2000; a progressive JPEG XR
-; PNG_Z_BEST_SPEED = 0x0001; zlib level 1, the fastest; any level 1 to 9 may be given
-; PNG_Z_DEFAULT_COMPRESSION = 0x0006; zlib level 6, the default
-; PNG_Z_BEST_COMPRESSION = 0x0009; zlib level 9, the smallest
-; PNG_Z_NO_COMPRESSION = 0x0100; no zlib compression
-; PNG_INTERLACED = 0x0200; Adam7 interlacing
-; PNM_SAVE_RAW = 0; binary PBM, PGM or PPM (P4, P5, P6), the default
-; PNM_SAVE_ASCII = 1; text PBM, PGM or PPM (P1, P2, P3)
-; PSD_DEFAULT = 0; RLE compression at 8 bits per channel, none above
-; PSD_CMYK = 1; save a 32- or 64-bit image as CMYK
-; PSD_NONE = 0x0100; no compression
-; PSD_RLE = 0x0200; RLE compression, also at 16 bits per channel; 32-bit float channels stay uncompressed
-; PSD_PSB = 0x2000; Large Document Format (PSB); used anyway past 30000 pixels a side or 2 GB of pixels
-; TARGA_SAVE_RLE = 2; RLE compression
-; TIFF_DEFAULT = 0; CCITT Group 4 compression for 1-bit images, LZW for the others
-; TIFF_CMYK = 0x0001; save a 32- or 64-bit image as CMYK
-; TIFF_PACKBITS = 0x0100; PackBits compression
-; TIFF_DEFLATE = 0x0200; Deflate compression, written as TIFF_ADOBE_DEFLATE
-; TIFF_ADOBE_DEFLATE = 0x0400; Adobe Deflate (zlib) compression
-; TIFF_NONE = 0x0800; no compression
-; TIFF_CCITTFAX3 = 0x1000; CCITT Group 3 fax compression, 1-bit images only
-; TIFF_CCITTFAX4 = 0x2000; CCITT Group 4 fax compression, 1-bit images only
-; TIFF_LZW = 0x4000; LZW compression
-; TIFF_JPEG = 0x8000; JPEG compression, 8-bit greyscale and 24-bit images only; the others get LZW
-; TIFF_LOGLUV = 0x10000; LogLuv compression, RGBF images only
-; TIFF_BIGTIFF_FORMAT = 0x20000; BigTIFF, with 64-bit offsets; used anyway for a file that would pass 4 GB
-; WEBP_DEFAULT = 0; lossy, quality 75; or pass the quality itself, 1 to 100
-; WEBP_LOSSLESS = 0x100; lossless
+; see also FreeImage_LoadFromHandle()
+; flags: see FreeImage_Save()
    Return DllCall(getFIMfunc("SaveToHandle"), "Int", FIF, "UPtr", hImage, "UPtr", pIO, "UPtr", hHandle, "Int", flags)
 }
 
@@ -539,13 +448,13 @@ FreeImage_GetColorsUsed(hImage) {
 }
 
 FreeImage_GetHistogram(hImage, channel, ByRef histoArray) {
-   ; RGB    = 0 ; red, green and blue channels
-   ; RED    = 1 ; red channel
-   ; GREEN  = 2 ; green channel
-   ; BLUE   = 3 ; blue channel
-   ; ALPHA  = 4 ; alpha channel
-   ; BLACK  = 5 ; black channel
-   ; the function works only on 8, 24 and 32 bits images
+; RGB    = 0 ; red, green and blue channels
+; RED    = 1 ; red channel
+; GREEN  = 2 ; green channel
+; BLUE   = 3 ; blue channel
+; ALPHA  = 4 ; alpha channel
+; BLACK  = 5 ; black channel
+; the function works only on 8, 24 and 32 bits images
 
    VarSetCapacity(histo, 1024, 0)
    E := DllCall(getFIMfunc("GetHistogram"), "UPtr", hImage, "UPtr", &histo, "Int", channel)
@@ -931,7 +840,7 @@ FreeImage_GetBits(hImage) {
 ; correctly, according to the results of FreeImage_GetBPP, FreeImage_GetRedMask,
 ; FreeImage_GetGreenMask and FreeImage_GetBlueMask.
 ; For performance reasons, the address returned by FreeImage_GetBits is aligned on
-; a 16 bytes alignment boundary
+; a 16 bytes alignment boundary.
 ; This function returns a pointer to the equivalent of Scan0
 ; when one locks the bits of a bitmap in GDI+.
 
@@ -951,7 +860,7 @@ FreeImage_GetPixelIndex(hImage, xPos, yPos) {
    RetValue := DllCall(getFIMfunc("GetPixelIndex"), "UPtr", hImage, "Uint", xPos, "Uint", yPos, "UPtr", &IndexNum)
    If RetValue
       return NumGet(IndexNum, 0, "Uchar")
-   else
+   Else
       return RetValue
 }
 
@@ -1252,35 +1161,20 @@ FreeImage_ApplyICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 ; FreeImage_ConvertToICCProfile() in place, for showing an image: a palette changes its colors,
 ; a CMYK image becomes RGBA with opaque alpha
 ; Return value: 1 -- succes; 0 -- fail, or the pixel format would change
-; flags - one rendering intent, and the options combined with |:
-; FICMS_INTENT_PERCEPTUAL = 0x00; perceptual rendering intent, the default
-; FICMS_INTENT_RELATIVE_COLORIMETRIC = 0x01; media-relative colorimetric rendering intent
-; FICMS_INTENT_SATURATION = 0x02; saturation rendering intent
-; FICMS_INTENT_ABSOLUTE_COLORIMETRIC = 0x03; ICC-absolute colorimetric rendering intent
-; FICMS_BLACKPOINT_COMPENSATION = 0x0100; map the black point of the source to the black point of the destination
+; flags: see FreeImage_ConvertToICCProfile()
    Return DllCall(getFIMfunc("ApplyICCProfile"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags)
 }
 
 FreeImage_ConvertToCMYK(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 ; pProfile - a CMYK profile; 0 - the device CMYK of FreeImage's loaders; returns 32-bit or 64-bit CMYK
 ; with pProfile 0, an image that is already CMYK comes back as a copy, its profile kept
-; flags - one rendering intent, and the options combined with |:
-; FICMS_INTENT_PERCEPTUAL = 0x00; perceptual rendering intent, the default
-; FICMS_INTENT_RELATIVE_COLORIMETRIC = 0x01; media-relative colorimetric rendering intent
-; FICMS_INTENT_SATURATION = 0x02; saturation rendering intent
-; FICMS_INTENT_ABSOLUTE_COLORIMETRIC = 0x03; ICC-absolute colorimetric rendering intent
-; FICMS_BLACKPOINT_COMPENSATION = 0x0100; map the black point of the source to the black point of the destination
+; flags: see FreeImage_ConvertToICCProfile()
    Return DllCall(getFIMfunc("ConvertToCMYK"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags, "UPtr")
 }
 
 FreeImage_ConvertCMYKToRGB(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 ; for a CMYK image (loaded with JPEG_CMYK, TIFF_CMYK or PSD_CMYK); pProfile - an RGB profile, 0 - sRGB
-; flags - one rendering intent, and the options combined with |:
-; FICMS_INTENT_PERCEPTUAL = 0x00; perceptual rendering intent, the default
-; FICMS_INTENT_RELATIVE_COLORIMETRIC = 0x01; media-relative colorimetric rendering intent
-; FICMS_INTENT_SATURATION = 0x02; saturation rendering intent
-; FICMS_INTENT_ABSOLUTE_COLORIMETRIC = 0x03; ICC-absolute colorimetric rendering intent
-; FICMS_BLACKPOINT_COMPENSATION = 0x0100; map the black point of the source to the black point of the destination
+; flags: see FreeImage_ConvertToICCProfile()
    Return DllCall(getFIMfunc("ConvertCMYKToRGB"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags, "UPtr")
 }
 
@@ -1415,18 +1309,7 @@ imgFormat parameter takes integer values from 0 to 39 relevant I/O image format 
 
 FreeImage_OpenMultiBitmapFromHandle(FIF, pIO, hHandle, flags:=0) {
 ; see FreeImage_LoadFromHandle(); hHandle must stay valid until FreeImage_CloseMultiBitmap(), which discards edits: save them with FreeImage_SaveMultiBitmapToHandle()
-; flags - 0, or these combined with |; a single-page format takes its FreeImage_Load() flags:
-; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the properties: each page's size, type, metadata and frame time; no pixels
-; APNG_PLAYBACK = 2; APNG: every frame as a viewer shows it, composited on the canvas, as 32-bit
-; AVIF_PLAYBACK = 2; AVIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; GIF_LOAD256 = 1; GIF: frames with a palette of 16 colours or fewer load as 8-bit, not as 1-bit or 4-bit
-; GIF_PLAYBACK = 2; GIF: every frame as a viewer shows it, composited on the logical screen, as 32-bit
-; HEIF_PLAYBACK = 2; HEIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; ICO_MAKEALPHA = 1; ICO: icons of under 32 bits load as 32-bit, with an alpha channel made from the AND mask
-; MNG_PLAYBACK = 2; MNG: every frame as a viewer shows it, composited on the canvas, as 32-bit; not for canvases over 2^28 pixels
-; PNG_IGNOREGAMMA = 1; APNG, MNG: no gamma correction from a frame's gAMA chunk
-; TIFF_CMYK = 0x0001; TIFF: CMYK pages stay CMYK, not converted to RGB
-; WEBP_PLAYBACK = 0x0001; animated WebP: every frame as a viewer shows it, composited on the canvas, as 32-bit
+; flags: see FreeImage_OpenMultiBitmap()
    Return DllCall(getFIMfunc("OpenMultiBitmapFromHandle"), "Int", FIF, "UPtr", pIO, "UPtr", hHandle, "Int", flags, "UPtr")
 }
 
@@ -1461,26 +1344,7 @@ FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 
 FreeImage_SaveMultiBitmapToHandle(FIF, hFIMULTIBITMAP, pIO, hHandle, flags:=0) {
 ; see FreeImage_LoadFromHandle()
-; flags - 0, or these combined with |; GIF and ICO take none:
-; PNG_Z_BEST_SPEED = 0x0001; APNG, MNG: zlib level 1, the fastest; any level 1 to 9 may be given
-; PNG_Z_DEFAULT_COMPRESSION = 0x0006; APNG, MNG: zlib level 6, the default
-; PNG_Z_BEST_COMPRESSION = 0x0009; APNG, MNG: zlib level 9, the smallest
-; PNG_Z_NO_COMPRESSION = 0x0100; APNG, MNG: no zlib compression
-; PNG_INTERLACED = 0x0200; MNG: Adam7-interlaced frames
-; TIFF_DEFAULT = 0; CCITT Group 4 compression for 1-bit images, LZW for the others
-; TIFF_CMYK = 0x0001; save a 32- or 64-bit image as CMYK
-; TIFF_PACKBITS = 0x0100; PackBits compression
-; TIFF_DEFLATE = 0x0200; Deflate compression, written as TIFF_ADOBE_DEFLATE
-; TIFF_ADOBE_DEFLATE = 0x0400; Adobe Deflate (zlib) compression
-; TIFF_NONE = 0x0800; no compression
-; TIFF_CCITTFAX3 = 0x1000; CCITT Group 3 fax compression, 1-bit images only
-; TIFF_CCITTFAX4 = 0x2000; CCITT Group 4 fax compression, 1-bit images only
-; TIFF_LZW = 0x4000; LZW compression
-; TIFF_JPEG = 0x8000; JPEG compression, 8-bit greyscale and 24-bit images only; the others get LZW
-; TIFF_LOGLUV = 0x10000; LogLuv compression, RGBF images only
-; TIFF_BIGTIFF_FORMAT = 0x20000; BigTIFF, with 64-bit offsets; used anyway for a file that would pass 4 GB
-; WEBP_DEFAULT = 0; lossy, quality 75; or pass the quality itself, 1 to 100
-; WEBP_LOSSLESS = 0x100; lossless
+; flags: see FreeImage_CloseMultiBitmap()
    Return DllCall(getFIMfunc("SaveMultiBitmapToHandle"), "Int", FIF, "UPtr", hFIMULTIBITMAP, "UPtr", pIO, "UPtr", hHandle, "Int", flags)
 }
 
@@ -1617,95 +1481,13 @@ FreeImage_AcquireMemory64(hMemory, ByRef BufAdr, ByRef BufSize) {
 
 FreeImage_SaveToMemory(FIF, hImage, hMemory, Flags:=0) {
 ; 0:BMP 2:JPG 13:PNG 18:TIF 25:GIF
-; Flags - 0, or the flags of the file's format below, combined with |; JNG takes the JPEG flags, APNG and MNG the PNG ones:
-; BMP_SAVE_RLE = 1; RLE-compress an 8-bit image; other bit depths are saved uncompressed
-; EXR_DEFAULT = 0; half floats with PIZ wavelet compression
-; EXR_FLOAT = 0x0001; 32-bit floats instead of half floats (larger files)
-; EXR_NONE = 0x0002; no compression
-; EXR_ZIP = 0x0004; zlib compression, in blocks of 16 scan lines
-; EXR_PIZ = 0x0008; PIZ wavelet compression, the default
-; EXR_PXR24 = 0x0010; lossy 24-bit float compression
-; EXR_B44 = 0x0020; lossy 44% float compression, 22% with EXR_LC
-; EXR_LC = 0x0040; one luminance and two chroma channels, lossy; RGBF/RGBAF of even width and height only, without EXR_FLOAT
-; J2K_DEFAULT = 0; a 16:1 compression rate; or pass the rate itself, 1 to 1023, where 1 is lossless
-; JP2_DEFAULT = 0; a 16:1 compression rate; or pass the rate itself, 1 to 1023, where 1 is lossless
-; JPEG_DEFAULT = 0; quality 75 with 4:2:0 subsampling; or pass the quality itself, 1 to 100, instead of a JPEG_QUALITY* flag
-; JPEG_QUALITYSUPERB = 0x80; quality 100
-; JPEG_QUALITYGOOD = 0x0100; quality 75, the default
-; JPEG_QUALITYNORMAL = 0x0200; quality 50
-; JPEG_QUALITYAVERAGE = 0x0400; quality 25
-; JPEG_QUALITYBAD = 0x0800; quality 10
-; JPEG_PROGRESSIVE = 0x2000; a progressive JPEG
-; JPEG_SUBSAMPLING_411 = 0x1000; 4:1:1 chroma subsampling, the strongest
-; JPEG_SUBSAMPLING_420 = 0x4000; 4:2:0 chroma subsampling, the default
-; JPEG_SUBSAMPLING_422 = 0x8000; 4:2:2 chroma subsampling
-; JPEG_SUBSAMPLING_444 = 0x10000; no chroma subsampling (4:4:4)
-; JPEG_OPTIMIZE = 0x20000; optimal Huffman tables: a few percent smaller, a little slower
-; JPEG_BASELINE = 0x40000; a basic JPEG: no metadata, ICC profile or other markers
-; JXR_DEFAULT = 0; quality 80, 4:4:4; or pass the quality itself, 1 to 99; under 50, 8-bit images get 4:2:0
-; JXR_LOSSLESS = 0x0064; lossless, the same as quality 100
-; JXR_PROGRESSIVE = 0x2000; a progressive JPEG XR
-; PNG_Z_BEST_SPEED = 0x0001; zlib level 1, the fastest; any level 1 to 9 may be given
-; PNG_Z_DEFAULT_COMPRESSION = 0x0006; zlib level 6, the default
-; PNG_Z_BEST_COMPRESSION = 0x0009; zlib level 9, the smallest
-; PNG_Z_NO_COMPRESSION = 0x0100; no zlib compression
-; PNG_INTERLACED = 0x0200; Adam7 interlacing
-; PNM_SAVE_RAW = 0; binary PBM, PGM or PPM (P4, P5, P6), the default
-; PNM_SAVE_ASCII = 1; text PBM, PGM or PPM (P1, P2, P3)
-; PSD_DEFAULT = 0; RLE compression at 8 bits per channel, none above
-; PSD_CMYK = 1; save a 32- or 64-bit image as CMYK
-; PSD_NONE = 0x0100; no compression
-; PSD_RLE = 0x0200; RLE compression, also at 16 bits per channel; 32-bit float channels stay uncompressed
-; PSD_PSB = 0x2000; Large Document Format (PSB); used anyway past 30000 pixels a side or 2 GB of pixels
-; TARGA_SAVE_RLE = 2; RLE compression
-; TIFF_DEFAULT = 0; CCITT Group 4 compression for 1-bit images, LZW for the others
-; TIFF_CMYK = 0x0001; save a 32- or 64-bit image as CMYK
-; TIFF_PACKBITS = 0x0100; PackBits compression
-; TIFF_DEFLATE = 0x0200; Deflate compression, written as TIFF_ADOBE_DEFLATE
-; TIFF_ADOBE_DEFLATE = 0x0400; Adobe Deflate (zlib) compression
-; TIFF_NONE = 0x0800; no compression
-; TIFF_CCITTFAX3 = 0x1000; CCITT Group 3 fax compression, 1-bit images only
-; TIFF_CCITTFAX4 = 0x2000; CCITT Group 4 fax compression, 1-bit images only
-; TIFF_LZW = 0x4000; LZW compression
-; TIFF_JPEG = 0x8000; JPEG compression, 8-bit greyscale and 24-bit images only; the others get LZW
-; TIFF_LOGLUV = 0x10000; LogLuv compression, RGBF images only
-; TIFF_BIGTIFF_FORMAT = 0x20000; BigTIFF, with 64-bit offsets; used anyway for a file that would pass 4 GB
-; WEBP_DEFAULT = 0; lossy, quality 75; or pass the quality itself, 1 to 100
-; WEBP_LOSSLESS = 0x100; lossless
+; Flags: FreeImage_Save()
    Return DllCall(getFIMfunc("SaveToMemory"), "Int", FIF, "UPtr", hImage, "UPtr", hMemory, "Int", Flags)
 }
 
 FreeImage_LoadFromMemory(FIF, hMemory, flags:=0) {
-; FIF=-1 detects the format
-; flags - 0, or the flags of the file's format below, combined with |:
-; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
-; APNG_PLAYBACK = 2; APNG: the frame as a viewer shows it, composited on the canvas, as 32-bit
-; AVIF_PLAYBACK = 2; AVIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
-; GIF_PLAYBACK = 2; GIF: the frame as a viewer shows it, composited on the logical screen, as 32-bit
-; HEIF_PLAYBACK = 2; HEIF image sequence: the frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
-; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
-; JPEG_FAST = 0x0001; fast DCT: faster, a little less accurate; the default anyway, unless JPEG_ACCURATE is given
-; JPEG_ACCURATE = 0x0002; accurate DCT and upsampling: the best quality, a little slower
-; JPEG_CMYK = 0x0004; keep a CMYK JPEG as 32-bit CMYK, not converted to 24-bit RGB
-; JPEG_EXIFROTATE = 0x0008; turn the image upright as its Exif Orientation tag says
-; JPEG_GREYSCALE = 0x0010; load as an 8-bit greyscale image
-; MNG_PLAYBACK = 2; MNG: the frame as a viewer shows it, composited on the canvas, as 32-bit; not for canvases over 2^28 pixels
-; PCD_BASE = 1; the 768 x 512 image, as by default
-; PCD_BASEDIV4 = 2; the 384 x 256 image
-; PCD_BASEDIV16 = 3; the 192 x 128 image
-; PNG_IGNOREGAMMA = 1; keep the stored values: no gamma correction from a gAMA chunk (done only without an ICC profile); APNG, MNG frames too
-; PSD_CMYK = 1; keep a CMYK or multichannel PSD as CMYK, not converted to RGB
-; PSD_LAB = 2; keep a Lab PSD's Lab values, not converted to RGB
-; RAW_DEFAULT = 0; linear RGB 48-bit, or 16-bit greyscale from a monochrome camera
-; RAW_PREVIEW = 1; the embedded preview, turned upright; RGB 24-bit from the raw data when there is none
-; RAW_DISPLAY = 2; RGB 24-bit, or 8-bit greyscale from a monochrome camera
-; RAW_HALFSIZE = 4; half the size, decoded faster; combine with RAW_DEFAULT or RAW_DISPLAY
-; RAW_UNPROCESSED = 8; the raw sensor data, not demosaiced, as FIT_UINT16
-; TARGA_LOAD_RGB888 = 1; load 16-bit (RGB555) and 32-bit TGA files as 24-bit RGB, dropping the alpha
-; TIFF_CMYK = 0x0001; keep a CMYK TIFF as CMYK, not converted to RGB
-; WEBP_PLAYBACK = 0x0001; animated WebP: the frame as a viewer shows it, composited on the canvas, as 32-bit
+; pass FIF = -1 to detect the format
+; flags: see FreeImage_Load()
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromMemory(hMemory)
    Return DllCall(getFIMfunc("LoadFromMemory"), "Int", FIF, "UPtr", hMemory, "Int", flags, "UPtr")
@@ -1723,44 +1505,14 @@ FreeImage_WriteMemory(pBuffer, size, count, hMemory) {
 
 FreeImage_LoadMultiBitmapFromMemory(FIF, hMemory, flags:=0) {
 ; FIF=-1 detects the format; hMemory must stay open until FreeImage_CloseMultiBitmap(), which discards edits: save them with FreeImage_SaveMultiBitmapToMemory()
-; flags - 0, or these combined with |; a single-page format takes its FreeImage_Load() flags:
-; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the properties: each page's size, type, metadata and frame time; no pixels
-; APNG_PLAYBACK = 2; APNG: every frame as a viewer shows it, composited on the canvas, as 32-bit
-; AVIF_PLAYBACK = 2; AVIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; GIF_LOAD256 = 1; GIF: frames with a palette of 16 colours or fewer load as 8-bit, not as 1-bit or 4-bit
-; GIF_PLAYBACK = 2; GIF: every frame as a viewer shows it, composited on the logical screen, as 32-bit
-; HEIF_PLAYBACK = 2; HEIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
-; ICO_MAKEALPHA = 1; ICO: icons of under 32 bits load as 32-bit, with an alpha channel made from the AND mask
-; MNG_PLAYBACK = 2; MNG: every frame as a viewer shows it, composited on the canvas, as 32-bit; not for canvases over 2^28 pixels
-; PNG_IGNOREGAMMA = 1; APNG, MNG: no gamma correction from a frame's gAMA chunk
-; TIFF_CMYK = 0x0001; TIFF: CMYK pages stay CMYK, not converted to RGB
-; WEBP_PLAYBACK = 0x0001; animated WebP: every frame as a viewer shows it, composited on the canvas, as 32-bit
+; flags: see FreeImage_OpenMultiBitmap()
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromMemory(hMemory)
    Return DllCall(getFIMfunc("LoadMultiBitmapFromMemory"), "Int", FIF, "UPtr", hMemory, "Int", flags, "UPtr")
 }
 
 FreeImage_SaveMultiBitmapToMemory(FIF, hFIMULTIBITMAP, hMemory, flags:=0) {
-; flags - 0, or these combined with |; GIF and ICO take none:
-; PNG_Z_BEST_SPEED = 0x0001; APNG, MNG: zlib level 1, the fastest; any level 1 to 9 may be given
-; PNG_Z_DEFAULT_COMPRESSION = 0x0006; APNG, MNG: zlib level 6, the default
-; PNG_Z_BEST_COMPRESSION = 0x0009; APNG, MNG: zlib level 9, the smallest
-; PNG_Z_NO_COMPRESSION = 0x0100; APNG, MNG: no zlib compression
-; PNG_INTERLACED = 0x0200; MNG: Adam7-interlaced frames
-; TIFF_DEFAULT = 0; CCITT Group 4 compression for 1-bit images, LZW for the others
-; TIFF_CMYK = 0x0001; save a 32- or 64-bit image as CMYK
-; TIFF_PACKBITS = 0x0100; PackBits compression
-; TIFF_DEFLATE = 0x0200; Deflate compression, written as TIFF_ADOBE_DEFLATE
-; TIFF_ADOBE_DEFLATE = 0x0400; Adobe Deflate (zlib) compression
-; TIFF_NONE = 0x0800; no compression
-; TIFF_CCITTFAX3 = 0x1000; CCITT Group 3 fax compression, 1-bit images only
-; TIFF_CCITTFAX4 = 0x2000; CCITT Group 4 fax compression, 1-bit images only
-; TIFF_LZW = 0x4000; LZW compression
-; TIFF_JPEG = 0x8000; JPEG compression, 8-bit greyscale and 24-bit images only; the others get LZW
-; TIFF_LOGLUV = 0x10000; LogLuv compression, RGBF images only
-; TIFF_BIGTIFF_FORMAT = 0x20000; BigTIFF, with 64-bit offsets; used anyway for a file that would pass 4 GB
-; WEBP_DEFAULT = 0; lossy, quality 75; or pass the quality itself, 1 to 100
-; WEBP_LOSSLESS = 0x100; lossless
+; flags: FreeImage_CloseMultiBitmap()
    Return DllCall(getFIMfunc("SaveMultiBitmapToMemory"), "Int", FIF, "UPtr", hFIMULTIBITMAP, "UPtr", hMemory, "Int", flags)
 }
 
