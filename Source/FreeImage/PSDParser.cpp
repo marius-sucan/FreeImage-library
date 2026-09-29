@@ -1499,7 +1499,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	const unsigned dstLineSize = FreeImage_GetPitch(bitmap);
 	BYTE* const dst_first_line = FreeImage_GetScanLine(bitmap, nHeight - 1);//<*** flipped
 	BYTE* line_start = new BYTE[lineSize]; //< fileline cache
-   const unsigned dst_buffer_size = dstLineSize * nHeight;
+   const UINT64 dst_buffer_size = (UINT64)dstLineSize * nHeight;
 
 	// a cut file keeps what it holds: the first channel row the data does not reach
 	bool cut = false;
@@ -1518,7 +1518,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 				const unsigned limitLineSize = MIN(dstLineSize, lineSize);
 
 				BYTE* dst_line_start = dst_first_line + channelOffset;
-				if (channelOffset + lineSize > dst_buffer_size) {
+				if ((UINT64)channelOffset + lineSize > dst_buffer_size) {
 					// Fix for CVE-2020-24295 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2020-24295.patch 
 					throw "Invalid PSD image";
 				}
