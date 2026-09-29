@@ -97,7 +97,10 @@ _ReadProc(png_structp png_ptr, unsigned char *data, png_size_t size) {
 static void
 _WriteProc(png_structp png_ptr, unsigned char *data, png_size_t size) {
     pfi_ioStructure pfio = (pfi_ioStructure)png_get_io_ptr(png_ptr);
-    pfio->s_io->write_proc(data, (unsigned int)size, 1, pfio->s_handle);
+    // libpng would compress the rest of the image into a stream that no longer takes it
+    if (pfio->s_io->write_proc(data, (unsigned int)size, 1, pfio->s_handle) != 1) {
+        png_error(png_ptr, "Write error: the PNG could not be written");
+    }
 }
 
 static void
@@ -987,7 +990,9 @@ static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
 	png_structp png_ptr;
 	png_infop info_ptr;
-	png_colorp palette = NULL;
+	// both change after setjmp(), so they must be volatile to be freed after a longjmp
+	png_colorp volatile palette = NULL;
+	BYTE * volatile row_buffer = NULL;
 	png_uint_32 width, height;
 	BOOL has_alpha_channel = FALSE;
 
@@ -1034,8 +1039,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			// error handling functions in the png_create_write_struct() call.
 
 			if (setjmp(png_jmpbuf(png_ptr)))  {
-				// if we get here, we had a problem reading the file
+				// if we get here, we had a problem writing the file
 
+				free(row_buffer);
+				if (palette) {
+					png_free(png_ptr, palette);
+				}
 				png_destroy_write_struct(&png_ptr, &info_ptr);
 
 				return FALSE;
@@ -1238,17 +1247,21 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 
 			if ((pixel_depth == 32) && (!has_alpha_channel)) {
-				BYTE *buffer = (BYTE *)malloc(width * 3);
+				row_buffer = (BYTE *)malloc(width * 3);
+				if (!row_buffer) {
+					throw FI_MSG_ERROR_MEMORY;
+				}
 
 				// transparent conversion to 24-bit
 				// the number of passes is either 1 for non-interlaced images, or 7 for interlaced images
 				for (int pass = 0; pass < number_passes; pass++) {
 					for (png_uint_32 k = 0; k < height; k++) {
-						FreeImage_ConvertLine32To24(buffer, FreeImage_GetScanLine(dib, height - k - 1), width);
-						png_write_row(png_ptr, buffer);
+						FreeImage_ConvertLine32To24(row_buffer, FreeImage_GetScanLine(dib, height - k - 1), width);
+						png_write_row(png_ptr, row_buffer);
 					}
 				}
-				free(buffer);
+				free(row_buffer);
+				row_buffer = NULL;
 			} else {
 				// the number of passes is either 1 for non-interlaced images, or 7 for interlaced images
 				for (int pass = 0; pass < number_passes; pass++) {
@@ -1273,7 +1286,11 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			return TRUE;
 
 		} catch (const char *text) {
+			free(row_buffer);
 			if(png_ptr) {
+				if (palette) {
+					png_free(png_ptr, palette);
+				}
 				png_destroy_write_struct(&png_ptr, &info_ptr);
 			}
 			FreeImage_OutputMessageProc(s_format_id, text);
