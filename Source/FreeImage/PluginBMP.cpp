@@ -1517,6 +1517,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			bitmapfileheader.bfOffBits += 3 * sizeof(DWORD);
 		}
 
+		// bfSize is 32-bit, and holds the size uncompressed, RLE or not
+		if ((UINT64)bitmapfileheader.bfOffBits + dst_height * dst_pitch > (UINT64)0xFFFFFFFFu) {
+			FreeImage_OutputMessageProc(s_format_id, "A BMP file cannot pass 4 GB, the most its 32-bit size field holds");
+			return FALSE;
+		}
+
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapFileHeader(&bitmapfileheader);
 #endif

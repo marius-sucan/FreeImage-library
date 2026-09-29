@@ -210,6 +210,26 @@ static void test_bigtiff_flag(void) {
     FreeImage_Unload(pages[1]);
 }
 
+/* --- a BMP that would pass 4 GB ------------------------------------------------ */
+
+/* 65536 x 65600 8-bit, its rows 1 byte apart in a small buffer: the save must stop before it reads any */
+static void test_bmp_4g(void) {
+    const char *path = tmppath("fi_io_big.bmp");
+    BYTE *bits = (BYTE *)calloc(65536 + 65600, 1);
+    FIBITMAP *dib = bits ? FreeImage_ConvertFromRawBitsEx(FALSE, bits, FIT_BITMAP, 65536, 65600, 1, 8, 0, 0, 0, FALSE) : NULL;
+    FILE *f;
+
+    printf("fi_io_big.bmp: 65536 x 65600 8-bit, 4.3 GB as a BMP, whose size field is 32-bit\n");
+    report("FreeImage_Save refuses it", dib && !FreeImage_Save(FIF_BMP, dib, path, BMP_DEFAULT));
+    report("  with BMP_SAVE_RLE too", dib && !FreeImage_Save(FIF_BMP, dib, path, BMP_SAVE_RLE));
+    f = fopen(path, "rb");
+    report("  and leaves no file", f == NULL);
+    if (f) fclose(f);
+    remove(path);
+    if (dib) FreeImage_Unload(dib);
+    free(bits);
+}
+
 /* --- sizes taken from a file 4 GB long ----------------------------------------- */
 
 /* extend an open file to 'size' bytes: a hole, then one byte */
@@ -348,6 +368,7 @@ int main(int argc, char **argv) {
     test_file("fi_io_big2g.tif", (INT64)0xA0000000);      /* 2.5 GB */
     test_file("fi_io_big4g.tif", (INT64)0x120000000);     /* 4.5 GB */
     test_bigtiff_flag();
+    test_bmp_4g();
     test_tga_rle();
     test_sgi_rle();
     test_webp_4g();
