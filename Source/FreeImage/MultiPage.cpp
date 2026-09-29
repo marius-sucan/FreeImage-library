@@ -665,6 +665,12 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 				return FALSE;
 			}
 
+			// a write that falls short fails the save, whether or not the plugin noticed
+			WriteCheckIO check;
+			SetWriteCheckIO(&check, io, handle);
+			io = &check.io;
+			handle = (fi_handle)&check;
+
 			// dst data
 			void *data = FreeImage_Open(node, io, handle, FALSE);
 			// src data
@@ -740,9 +746,9 @@ FreeImage_SaveMultiBitmapToHandle(FREE_IMAGE_FORMAT fif, FIMULTIBITMAP *bitmap, 
 			
 			FreeImage_Close(header->node, &header->io, header->handle, data_read);
 
-			FreeImage_Close(node, io, handle, data); 
-			
-			return success;
+			FreeImage_Close(node, io, handle, data);
+
+			return (success && !check.failed) ? TRUE : FALSE;
 		}
 	}
 

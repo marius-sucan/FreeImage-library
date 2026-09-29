@@ -96,9 +96,23 @@ int main(void) {
         BYTE *line = FreeImage_GetScanLine(rgb, y);
         for (unsigned x = 0; x < 96 * 3; x++) { seed = seed * 1103515245u + 12345u; line[x] = (BYTE)(seed >> 16); }
     }
+    FIBITMAP *rgba = FreeImage_ConvertTo32Bits(rgb);
+    FIBITMAP *grey = FreeImage_ConvertTo8Bits(rgb);
+    FIBITMAP *mono = FreeImage_Threshold(rgb, 128);
+    FIBITMAP *flt = FreeImage_ConvertToFloat(rgb);
+    FIBITMAP *rgbf = FreeImage_ConvertToRGBF(rgb);
+    FIBITMAP *square = FreeImage_Rescale(rgb, 64, 64, FILTER_BOX);
 
     struct { FREE_IMAGE_FORMAT fif; FIBITMAP *dib; int flags; const char *name; } t[] = {
-        { FIF_J2K, rgb, 0, "J2K" }, { FIF_JP2, rgb, 0, "JP2" },
+        { FIF_BMP, rgb, 0, "BMP" }, { FIF_ICO, square, 0, "ICO" }, { FIF_JPEG, rgb, 0, "JPEG" }, { FIF_JNG, rgb, 0, "JNG" },
+        { FIF_PBM, mono, PNM_SAVE_ASCII, "PBM ascii" }, { FIF_PBMRAW, mono, PNM_SAVE_RAW, "PBM raw" },
+        { FIF_PGM, grey, PNM_SAVE_ASCII, "PGM ascii" }, { FIF_PGMRAW, grey, PNM_SAVE_RAW, "PGM raw" },
+        { FIF_PPM, rgb, PNM_SAVE_ASCII, "PPM ascii" }, { FIF_PPMRAW, rgb, PNM_SAVE_RAW, "PPM raw" },
+        { FIF_PNG, rgb, 0, "PNG" }, { FIF_TARGA, rgb, 0, "TGA" }, { FIF_TIFF, rgb, 0, "TIFF" }, { FIF_TIFF, rgb, TIFF_NONE, "TIFF_NONE" },
+        { FIF_WBMP, mono, 0, "WBMP" }, { FIF_PSD, rgb, 0, "PSD" }, { FIF_XPM, rgb, 0, "XPM" }, { FIF_GIF, grey, 0, "GIF" },
+        { FIF_HDR, rgbf, 0, "HDR" }, { FIF_EXR, rgbf, 0, "EXR" }, { FIF_J2K, rgb, 0, "J2K" }, { FIF_JP2, rgb, 0, "JP2" },
+        { FIF_PFM, flt, 0, "PFM" }, { FIF_WEBP, rgb, 0, "WebP" }, { FIF_JXR, rgb, 0, "JXR" }, { FIF_MNG, rgba, 0, "MNG" },
+        { FIF_APNG, rgba, 0, "APNG" },
     };
     for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
         char what[128];
@@ -113,6 +127,43 @@ int main(void) {
         snprintf(what, sizeof(what), "  writes stop half way -> FALSE");
         report(what, !ok);
     }
+
+    /* FreeImage_SaveMultiBitmapToHandle: two GIF pages */
+    {
+        char path[1024];
+        const char *dir = getenv("IO_TEST_TMP");
+        snprintf(path, sizeof(path), "%s/fi_io_writefail.tif", (dir && *dir) ? dir : ".");
+        FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
+        BOOL whole = FALSE, cut = TRUE;
+        if (mb) {
+            FreeImageIO io = { s_read, s_write, s_seek, s_tell };
+            FreeImage_AppendPage(mb, grey);
+            FreeImage_AppendPage(mb, grey);
+            for (int pass = 0; pass < 2; pass++) {
+                sink_t k;
+                memset(&k, 0, sizeof(k));
+                k.budget = pass ? 1000 : ((INT64)1 << 40);
+                k.cap = 1 << 16;
+                k.buf = (BYTE *)malloc((size_t)k.cap);
+                const BOOL ok = FreeImage_SaveMultiBitmapToHandle(FIF_GIF, mb, &io, (fi_handle)&k, 0);
+                if (pass) cut = ok; else whole = ok && (k.len > 1000);
+                free(k.buf);
+            }
+            FreeImage_CloseMultiBitmap(mb, 0);
+            remove(path);
+        }
+        report("two GIF pages through FreeImage_SaveMultiBitmapToHandle", whole);
+        report("  writes stop after 1000 bytes -> FALSE", !cut);
+    }
+
+#if !defined(_WIN32) && defined(__linux__)
+    /* a disk that fills while stdio flushes: FreeImage_Save must see fclose() fail (never as root: a failed save removes its file) */
+    if (geteuid() != 0) {
+        FIBITMAP *tiny = FreeImage_Allocate(16, 16, 24, 0, 0, 0);
+        report("FreeImage_Save to /dev/full -> FALSE", !FreeImage_Save(FIF_BMP, tiny, "/dev/full", 0));
+        FreeImage_Unload(tiny);
+    }
+#endif
 
     FreeImage_DeInitialise();
     printf("--- %d failure(s) ---\n", failures);

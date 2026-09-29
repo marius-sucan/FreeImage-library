@@ -65,6 +65,7 @@ Fixes:
 - fixed memory streams: FreeImage_OpenMemory() with a buffer of 2 GB or more read nothing, and a stream FreeImage grows stopped at 2 GB; both hold what memory allows, FreeImage_AcquireMemory() returns FALSE past 4 GB (FreeImage_ReadMemory() still reads it) and FreeImage_TellMemory() returns -1 past what a long holds, where their 64-bit variants go on;
 - fixed sizes that 32-bit builds cut short: a WebP in a stream of 4 GB - 1 bytes overflowed its buffer, an RLE TGA with over 4 GB after its pixels decoded garbage (black on 64-bit builds), G3 and MNG streams past 4 GB were read in part, and a wrapped memory buffer over 2 GB could not seek past 2 GB; FreeImage_LoadMultiBitmapFromMemory() on Windows took a stream position past 2 GB for 0; on 32-bit Linux, FreeImage_Load(), FreeImage_Save(), the multi-page functions and the JPEG transforms open files over 2 GB;
 - fixed a J2K or JP2 save never returning when a write failed, as on a full disk: OpenJPEG retried the short write forever;
+- fixed saves returning TRUE when a write failed, as on a full disk: FreeImage_SaveToHandle() and FreeImage_SaveMultiBitmapToHandle() return FALSE when a write falls short, whether or not the plugin noticed (the PNG, TIFF, TGA, GIF, ICO, PFM, PNM, WBMP, JNG, MNG, APNG and JPEG XR writers did not), and FreeImage_Save() and FreeImage_SaveU() check the last bytes fclose() writes;
 - and many other fixes
 
 Changes:

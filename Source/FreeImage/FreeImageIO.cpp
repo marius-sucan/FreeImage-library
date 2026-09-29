@@ -252,3 +252,46 @@ SetMemoryIO(FreeImageIO *io) {
 	io->tell_proc  = _MemoryTellProc;
 	io->write_proc = _MemoryWriteProc;
 }
+
+// =====================================================================
+// Write check functions
+// =====================================================================
+
+static unsigned DLL_CALLCONV
+_CheckReadProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
+	WriteCheckIO *check = (WriteCheckIO*)handle;
+	return check->base->read_proc(buffer, size, count, check->handle);
+}
+
+static unsigned DLL_CALLCONV
+_CheckWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
+	WriteCheckIO *check = (WriteCheckIO*)handle;
+	const unsigned written = check->base->write_proc(buffer, size, count, check->handle);
+	if (size && count && (written < count)) {
+		check->failed = TRUE;
+	}
+	return written;
+}
+
+static int DLL_CALLCONV
+_CheckSeekProc(fi_handle handle, INT64 offset, int origin) {
+	WriteCheckIO *check = (WriteCheckIO*)handle;
+	return check->base->seek_proc(check->handle, offset, origin);
+}
+
+static INT64 DLL_CALLCONV
+_CheckTellProc(fi_handle handle) {
+	WriteCheckIO *check = (WriteCheckIO*)handle;
+	return check->base->tell_proc(check->handle);
+}
+
+void
+SetWriteCheckIO(WriteCheckIO *check, FreeImageIO *base, fi_handle handle) {
+	check->io.read_proc  = _CheckReadProc;
+	check->io.seek_proc  = _CheckSeekProc;
+	check->io.tell_proc  = _CheckTellProc;
+	check->io.write_proc = _CheckWriteProc;
+	check->base = base;
+	check->handle = handle;
+	check->failed = FALSE;
+}

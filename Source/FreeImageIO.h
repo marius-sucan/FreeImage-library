@@ -60,4 +60,14 @@ void SetDefaultIO(FreeImageIO *io);
 
 void SetMemoryIO(FreeImageIO *io);
 
+// a FreeImageIO over another that remembers a write it did not complete; the handle is the structure
+struct WriteCheckIO {
+	FreeImageIO io;
+	FreeImageIO *base;
+	fi_handle handle;
+	BOOL failed;
+};
+
+void SetWriteCheckIO(WriteCheckIO *check, FreeImageIO *base, fi_handle handle);
+
 #endif // !FREEIMAGE_IO_H

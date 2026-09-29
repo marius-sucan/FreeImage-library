@@ -456,13 +456,17 @@ FreeImage_SaveToHandle(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, FreeImageIO *io, fi
 		
 		if (node) {
 			if(node->m_plugin->save_proc != NULL) {
-				void *data = FreeImage_Open(node, io, handle, FALSE);
-					
-				BOOL result = node->m_plugin->save_proc(io, dib, handle, -1, flags, data);
-					
-				FreeImage_Close(node, io, handle, data);
-					
-				return result;
+				// a write that falls short fails the save, whether or not the plugin noticed
+				WriteCheckIO check;
+				SetWriteCheckIO(&check, io, handle);
+
+				void *data = FreeImage_Open(node, &check.io, (fi_handle)&check, FALSE);
+
+				BOOL result = node->m_plugin->save_proc(&check.io, dib, (fi_handle)&check, -1, flags, data);
+
+				FreeImage_Close(node, &check.io, (fi_handle)&check, data);
+
+				return (result && !check.failed) ? TRUE : FALSE;
 			}
 		}
 	}
@@ -481,7 +485,11 @@ FreeImage_Save(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, const char *filename, int f
 	if (handle) {
 		BOOL success = FreeImage_SaveToHandle(fif, dib, &io, (fi_handle)handle, flags);
 
-		fclose(handle);
+		// the last buffered bytes reach the disk here
+		if ((fclose(handle) != 0) && success) {
+			FreeImage_OutputMessageProc((int)fif, "FreeImage_Save: failed to write %s", filename);
+			success = FALSE;
+		}
 
 		if (!success) {
 			// do not leave a partial image behind
@@ -506,7 +514,11 @@ FreeImage_SaveU(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, const wchar_t *filename, i
 	if (handle) {
 		BOOL success = FreeImage_SaveToHandle(fif, dib, &io, (fi_handle)handle, flags);
 
-		fclose(handle);
+		// the last buffered bytes reach the disk here
+		if ((fclose(handle) != 0) && success) {
+			FreeImage_OutputMessageProc((int)fif, "FreeImage_SaveU: failed to write the output file");
+			success = FALSE;
+		}
 
 		if (!success) {
 			_wremove(filename);
