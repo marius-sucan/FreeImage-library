@@ -1,6 +1,6 @@
 ﻿; FreeImage v3.18+ library wrapper for AHK v1.1.
 ; Available at:
-; https://github.com/marius-sucan/FreeImage-library/tree/qpv/Wrapper
+; https://github.com/marius-sucan/FreeImage-library/tree/qpv/
 ; Dependency:
 ; AHK v1.1 GDI+ library wrapper: https://github.com/marius-sucan/AHK-GDIp-Library-Compilation
 ; Author: Marius Șucan
@@ -8,17 +8,13 @@
 ; Change log:
 ; =============================
 ;
-; 26 September 2026 - v2.03
-; - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64():
-;   memory streams of 4 GB and more, and positions past 2 GB
-;
-; 24 September 2026 - v2.02
+; 29 September 2026 - v2.01
 ; - added the color management functions (ICC profiles, Little CMS): FreeImage_ConvertToICCProfile(), FreeImage_ApplyICCProfile(),
 ;   FreeImage_ConvertToCMYK(), FreeImage_ConvertCMYKToRGB(), FreeImage_SoftProof(), FreeImage_GetBuiltInICCProfile(),
 ;   FreeImage_GetICCProfileDescription(), FreeImage_GetICCProfileColorSpace() and FreeImage_GetICCProfileData()
 ;
-; 23 September 2026 - v2.01
-; - FreeImage_FillBackground() takes three parameters again, as in FreeImage 3.18; options 8 (FI_COLOR_SET_ALPHA) replaces applyAlpha
+; - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64():
+;   memory streams of 4 GB and more, and positions past 2 GB
 ;
 ; 22 September 2026 - v2.00
 ; - implemented all the remaining functions, except the ANSI variants
@@ -187,7 +183,7 @@ FreeImage_GetVersion() {
 }
 
 FreeImage_GetLibVersion() {
-   Return 2.03 ; samedi 26 septembre 2026
+   Return 2.01 ; mardi 29 septembre 2026
 }
 
 FreeImage_GetCopyrightMessage() {
@@ -276,6 +272,9 @@ FreeImage_AllocateHeaderForBits(pBits, pitch, imageType, width, height, bpp, red
 }
 
 FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
+; To retrieve only the image properties
+; pass the flag FIF_LOAD_NOPIXELS = 0x8000
+
    If !ImgPath
       Return
 
@@ -289,8 +288,12 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 }
 
 FreeImage_LoadFromHandle(FIF, pIO, hHandle, flags:=0) {
-; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle; seek takes an Int64 offset and tell returns Int64; FIF=-1 detects the format
-; on 32-bit AutoHotkey a RegisterCallback() returns 32 bits and cannot be tell: load from a memory stream there (FreeImage_OpenMemory64)
+; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle; FIF=-1 detects the format
+; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle;
+; seek takes an Int64 offset and tell returns Int64;
+; FIF=-1 detects the format
+; on 32-bit AutoHotkey a RegisterCallback() returns 32 bits.
+
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromHandle(pIO, hHandle)
    Return DllCall(getFIMfunc("LoadFromHandle"), "Int", FIF, "UPtr", pIO, "UPtr", hHandle, "Int", flags, "UPtr")
@@ -298,8 +301,7 @@ FreeImage_LoadFromHandle(FIF, pIO, hHandle, flags:=0) {
 
 FreeImage_Save(hImage, ImgPath, ImgArg:=0) {
 ; Return 0 = failed; 1 = success
-; FIMfrmt := {"BMP":0, "JPG":2, "JPEG":2, "PNG":13, "TIF":18, "TIFF":18, "GIF":25}
-   If (!hImage || !ImgPath)
+   If (hImage="" || !ImgPath)
       Return
 
    FormatID := FreeImage_GetFIFFromFilename(ImgPath)
@@ -704,6 +706,9 @@ FreeImage_FIFSupportsICCProfiles(FIF) {
 }
 
 FreeImage_FIFSupportsNoPixels(FIF) {
+; To retrieve only the image properties
+; pass the flag FIF_LOAD_NOPIXELS = 0x8000
+; to FreeImage_Load() or FreeImage_OpenMultiBitmap()
    Return DllCall(getFIMfunc("FIFSupportsNoPixels"), "Int", FIF)
 }
 
@@ -1040,6 +1045,7 @@ FreeImage_CreateICCProfile(hImage, pData, size) {
 FreeImage_DestroyICCProfile(hImage) {
    Return DllCall(getFIMfunc("DestroyICCProfile"), "UPtr", hImage)
 }
+
 
 FreeImage_GetICCProfileData(hImage, ByRef size) {
 ; returns a pointer to the image's own ICC profile, 0 if it has none; size receives its byte count
@@ -1685,7 +1691,7 @@ FreeImage_FlipVertical(hImage) {
 
 FreeImage_Rescale(hImage, w, h, filter:=3) {
 ; Filter parameter options
-; -1 = FILTER_NEAREST;   Nearest neighbour, the fastest: copies the nearest pixel and keeps the pixel format
+; -1 = FILTER_NEAREST;   Nearest neighbour, the fastest mode
 ; 0 = FILTER_BOX;        Box, pulse, Fourier window, 1st order (constant) B-Spline
 ; 1 = FILTER_BICUBIC;    Mitchell and Netravali's two-param cubic filter
 ; 2 = FILTER_BILINEAR;   Bilinear filter
@@ -1699,9 +1705,8 @@ FreeImage_Rescale(hImage, w, h, filter:=3) {
 }
 
 FreeImage_RescaleRect(hImage, dstW, dstH, x, y, w, h, filter:=0, flags:=2) {
-; Filter parameter options
-; see FreeImage_Rescale()
-
+; Filter parameter options, see FreeImage_Rescale()
+;
 ; Flags options:
 ; FI_RESCALE_DEFAULT         0x00   // default options; none of the following other options apply
 ; FI_RESCALE_TRUE_COLOR      0x01   // for non-transparent greyscale images, convert to 24-bit if src bitdepth <= 8 (default is a 8-bit greyscale image). 
@@ -1722,13 +1727,7 @@ FreeImage_RescaleRectRawBits(srcBits, dstBits, FimType, imgW, imgH, srcStride, d
 }
 
 FreeImage_MakeThumbnail(hImage, squareSize, convert:=1) {
-; Filter parameter options
-; 0 = FILTER_BOX;        Box, pulse, Fourier window, 1st order (constant) B-Spline
-; 1 = FILTER_BICUBIC;    Mitchell and Netravali's two-param cubic filter
-; 2 = FILTER_BILINEAR;   Bilinear filter
-; 3 = FILTER_BSPLINE;    4th order (cubic) B-Spline
-; 4 = FILTER_CATMULLROM; Catmull-Rom spline, Overhauser spline
-; 5 = FILTER_LANCZOS3;   Lanczos-windowed sinc filter
+; Filter parameter options, see FreeImage_Rescale()
 
    Return DllCall(getFIMfunc("MakeThumbnail"), "UPtr", hImage, "Int", squareSize, "Int", convert, "UPtr")
 }
