@@ -189,14 +189,14 @@ libraw_ConvertProcessedRawToDib(LibRaw *RawProcessor) {
 		// get image info
 		RawProcessor->get_mem_image_format(&width, &height, &colors, &bpp);
 
-		// only 3-color images supported...
-		if(colors != 3) {
-			throw "LibRaw : only 3-color images supported";
+		// 3 colors, or 1 from a monochrome sensor
+		if((colors != 1) && (colors != 3)) {
+			throw "LibRaw : only 1- and 3-color images supported";
 		}
 
 		if(bpp == 16) {
 			// allocate output dib
-			dib = FreeImage_AllocateT(FIT_RGB16, width, height);
+			dib = FreeImage_AllocateT((colors == 3) ? FIT_RGB16 : FIT_UINT16, width, height);
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
 			}
@@ -207,7 +207,7 @@ libraw_ConvertProcessedRawToDib(LibRaw *RawProcessor) {
 #endif
 
 			// allocate output dib
-			dib = FreeImage_AllocateT(FIT_BITMAP, width, height, 24);
+			dib = FreeImage_AllocateT(FIT_BITMAP, width, height, 8 * colors);
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
 			}
@@ -424,10 +424,12 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 			}
 			const unsigned width = RawProcessor->imgdata.sizes.iwidth;
 			const unsigned height = RawProcessor->imgdata.sizes.iheight;
+			// a monochrome sensor stays one color
+			const int colors = (RawProcessor->imgdata.idata.colors == 1) ? 1 : 3;
 			if(bitspersample == 16) {
-				dib = FreeImage_AllocateHeaderT(TRUE, FIT_RGB16, width, height);
+				dib = FreeImage_AllocateHeaderT(TRUE, (colors == 3) ? FIT_RGB16 : FIT_UINT16, width, height);
 			} else {
-				dib = FreeImage_AllocateHeaderT(TRUE, FIT_BITMAP, width, height, 24);
+				dib = FreeImage_AllocateHeaderT(TRUE, FIT_BITMAP, width, height, 8 * colors);
 			}
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;

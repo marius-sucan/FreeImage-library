@@ -13,8 +13,13 @@ static const char *FILES[] = {
 	"data/fi_raw_odd.dng",        /* odd dimensions, no margin                  */
 	"data/fi_raw_rot90.dng",      /* Orientation 6: the processed image turns   */
 	"data/fi_raw_rot180.dng",     /* Orientation 3: turned, the same size       */
+	"data/fi_raw_mono.dng",       /* monochrome, a greyscale preview            */
+	"data/fi_raw_mono_rot270.dng", /* the same, Orientation 8                   */
 };
 #define NFILES ((int)(sizeof(FILES) / sizeof(FILES[0])))
+
+/* a monochrome sensor decodes to one color, and LibRaw halves only Bayer data */
+static int is_mono(const char *file) { return strstr(file, "_mono") != NULL; }
 
 static int failures = 0;
 
@@ -221,21 +226,26 @@ static void test_paths(void) {
 		if (!full || !hdr || !half || !disp) {
 			fail(FILES[i], "paths", "one of the loads failed");
 		} else {
+			const int mono = is_mono(FILES[i]);
 			unsigned w = FreeImage_GetWidth(full), h = FreeImage_GetHeight(full);
+			unsigned half_w = mono ? w : w / 2, half_h = mono ? h : h / 2;
 			if (FreeImage_GetWidth(hdr) != w || FreeImage_GetHeight(hdr) != h)
 				fail(FILES[i], "header", "size %ux%u, full load %ux%u",
 				     FreeImage_GetWidth(hdr), FreeImage_GetHeight(hdr), w, h);
 			if (FreeImage_HasPixels(hdr))
 				fail(FILES[i], "header", "FIF_LOAD_NOPIXELS returned pixels");
-			if (FreeImage_GetWidth(half) != w / 2 || FreeImage_GetHeight(half) != h / 2)
+			if (FreeImage_GetWidth(half) != half_w || FreeImage_GetHeight(half) != half_h)
 				fail(FILES[i], "halfsize", "%ux%u, want %ux%u",
-				     FreeImage_GetWidth(half), FreeImage_GetHeight(half), w / 2, h / 2);
-			if (FreeImage_GetImageType(full) != FIT_RGB16 || FreeImage_GetBPP(full) != 48)
-				fail(FILES[i], "default", "want FIT_RGB16/48bpp, got type %d/%ubpp",
+				     FreeImage_GetWidth(half), FreeImage_GetHeight(half), half_w, half_h);
+			if (FreeImage_GetImageType(full) != (mono ? FIT_UINT16 : FIT_RGB16) ||
+			    FreeImage_GetBPP(full) != (mono ? 16u : 48u))
+				fail(FILES[i], "default", "want %s, got type %d/%ubpp", mono ? "FIT_UINT16/16bpp" : "FIT_RGB16/48bpp",
 				     (int)FreeImage_GetImageType(full), FreeImage_GetBPP(full));
-			if (FreeImage_GetImageType(disp) != FIT_BITMAP || FreeImage_GetBPP(disp) != 24)
-				fail(FILES[i], "display", "want FIT_BITMAP/24bpp, got type %d/%ubpp",
+			if (FreeImage_GetImageType(disp) != FIT_BITMAP || FreeImage_GetBPP(disp) != (mono ? 8u : 24u))
+				fail(FILES[i], "display", "want FIT_BITMAP/%ubpp, got type %d/%ubpp", mono ? 8u : 24u,
 				     (int)FreeImage_GetImageType(disp), FreeImage_GetBPP(disp));
+			if (mono && (FreeImage_GetColorType(full) != FIC_MINISBLACK || FreeImage_GetColorType(disp) != FIC_MINISBLACK))
+				fail(FILES[i], "mono", "the greyscale loads are not FIC_MINISBLACK");
 			if (FreeImage_GetWidth(disp) != w || FreeImage_GetHeight(disp) != h)
 				fail(FILES[i], "display", "size differs from the 16-bit load");
 			printf("  ok   %-30s %ux%u, half %ux%u\n", FILES[i], w, h,
@@ -403,6 +413,7 @@ static void test_orientation(void) {
 		{ "data/fi_raw_rot90.dng",  1 },
 		{ "data/fi_raw_rot180.dng", 0 },
 		{ "data/fi_raw_rggb.dng",   0 },
+		{ "data/fi_raw_mono_rot270.dng", 1 },
 	};
 	int i;
 	printf("-- a turned camera turns the processed image, not the CFA field\n");

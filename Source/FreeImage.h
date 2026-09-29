@@ -743,9 +743,9 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define PSD_RLE				0x0200	//! save using RLE compression
 #define PSD_PSB             0x2000  //! save using Adobe Large Document Format (use | to combine with other save flags)
 #define RAS_DEFAULT         0
-#define RAW_DEFAULT         0		//! load the file as linear RGB 48-bit
+#define RAW_DEFAULT         0		//! load the file as linear RGB 48-bit, or 16-bit greyscale from a monochrome camera
 #define RAW_PREVIEW			1		//! try to load the embedded JPEG preview with included Exif Data or default to RGB 24-bit
-#define RAW_DISPLAY			2		//! load the file as RGB 24-bit
+#define RAW_DISPLAY			2		//! load the file as RGB 24-bit, or 8-bit greyscale from a monochrome camera
 #define RAW_HALFSIZE		4		//! output a half-size color image
 #define RAW_UNPROCESSED		8		//! output a FIT_UINT16 raw Bayer image
 #define SGI_DEFAULT			0

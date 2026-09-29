@@ -60,6 +60,20 @@ static const Expect TABLE[] = {
 	{ "data/fi_raw_rot180.dng",      "unprocessed", RAW_UNPROCESSED,  FIT_UINT16,   70, 46, 16, 0x09b64a078b123623ULL,    0 },
 	{ "data/fi_raw_rot180.dng",      "halfsize",    RAW_HALFSIZE,     FIT_RGB16,    35, 23, 48, 0x82f629a8d928235bULL,    0 },
 	{ "data/fi_raw_rot180.dng",      "header",      HDR,              FIT_RGB16,    70, 46, 48, 0x0000000000000000ULL,    0 },
+
+	{ "data/fi_raw_mono.dng",        "default16",   0,                FIT_UINT16,   96, 64, 16, 0x357bfea0f16eafd7ULL,    0 },
+	{ "data/fi_raw_mono.dng",        "display8",    RAW_DISPLAY,      FIT_BITMAP,   96, 64,  8, 0x61e625ed68cf1be6ULL,    0 },
+	{ "data/fi_raw_mono.dng",        "preview",     RAW_PREVIEW,      FIT_BITMAP,   48, 32,  8, 0xd9614654565d8701ULL,    0 },
+	{ "data/fi_raw_mono.dng",        "unprocessed", RAW_UNPROCESSED,  FIT_UINT16,   96, 64, 16, 0x357bfea0f16eafd7ULL,    0 },
+	{ "data/fi_raw_mono.dng",        "halfsize",    RAW_HALFSIZE,     FIT_UINT16,   96, 64, 16, 0x357bfea0f16eafd7ULL,    0 },
+	{ "data/fi_raw_mono.dng",        "header",      HDR,              FIT_UINT16,   96, 64, 16, 0x0000000000000000ULL,    0 },
+
+	{ "data/fi_raw_mono_rot270.dng", "default16",   0,                FIT_UINT16,   64, 96, 16, 0xa7bc6ba2ab45fe07ULL,    0 },
+	{ "data/fi_raw_mono_rot270.dng", "display8",    RAW_DISPLAY,      FIT_BITMAP,   64, 96,  8, 0xf391275ac62af9e4ULL,    0 },
+	{ "data/fi_raw_mono_rot270.dng", "preview",     RAW_PREVIEW,      FIT_BITMAP,   32, 48,  8, 0xe8a64c906a678151ULL,    0 },
+	{ "data/fi_raw_mono_rot270.dng", "unprocessed", RAW_UNPROCESSED,  FIT_UINT16,   96, 64, 16, 0x357bfea0f16eafd7ULL,    0 },
+	{ "data/fi_raw_mono_rot270.dng", "halfsize",    RAW_HALFSIZE,     FIT_UINT16,   64, 96, 16, 0xa7bc6ba2ab45fe07ULL,    0 },
+	{ "data/fi_raw_mono_rot270.dng", "header",      HDR,              FIT_UINT16,   64, 96, 16, 0x0000000000000000ULL,    0 },
 };
 #define NCASES ((int)(sizeof(TABLE) / sizeof(TABLE[0])))
 
@@ -79,6 +93,9 @@ static const ExpectMeta META[] = {
 	/* the keys describe the CFA field, which a turned camera does not turn */
 	{ "data/fi_raw_rot90.dng",     "88", "54", "4", "4", "88", "54", "RGGBRGGBRGGBRGGB" },
 	{ "data/fi_raw_rot180.dng",    "70", "46", "0", "0", "70", "46", "RGGBRGGBRGGBRGGB" },
+	/* a monochrome field has no Bayer pattern */
+	{ "data/fi_raw_mono.dng",      "96", "64", "0", "0", "96", "64", "" },
+	{ "data/fi_raw_mono_rot270.dng", "96", "64", "0", "0", "96", "64", "" },
 };
 #define NMETA ((int)(sizeof(META) / sizeof(META[0])))
 
