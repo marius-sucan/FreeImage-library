@@ -147,8 +147,14 @@ void testPluginCloseResult() {
 
 // A plugin out of memory fails the save
 // ----------------------------------------------------------
+// a load throws too while this is set
+static BOOL s_throw_load = FALSE;
+
 static FIBITMAP * DLL_CALLCONV
 TestLoad(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+	if (s_throw_load) {
+		throw std::bad_alloc();
+	}
 	return FreeImage_Allocate(8, 8, 24);
 }
 
@@ -192,7 +198,7 @@ static BOOL fileMatches(const char *pattern) {
 #endif
 }
 
-// nothing escapes a save whose plugin throws; the files close and nothing is left behind
+// nothing escapes a save or load whose plugin throws; the files close and nothing is left behind
 void testPluginOutOfMemory() {
 	printf("testPluginOutOfMemory ...\n");
 
@@ -241,6 +247,26 @@ void testPluginOutOfMemory() {
 	assert(!bResult);
 	assert(!fileMatches("out-of-memory.throws"));
 	s_throw_page = 1;
+
+	// loads, and a page of a document
+	s_throw_load = TRUE;
+	hmem = FreeImage_OpenMemory();
+	assert(hmem != NULL);
+	FIBITMAP *loaded = FreeImage_LoadFromMemory(fif, hmem, 0);
+	assert(loaded == NULL);
+	FreeImage_CloseMemory(hmem);
+	FILE *file = fopen("out-of-memory.throws", "wb");
+	assert(file != NULL);
+	fputc(0, file);
+	fclose(file);
+	mpage = FreeImage_OpenMultiBitmap(fif, "out-of-memory.throws", FALSE, TRUE, TRUE);
+	assert(mpage != NULL);
+	loaded = FreeImage_LockPage(mpage, 0);
+	assert(loaded == NULL);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	remove("out-of-memory.throws");
+	s_throw_load = FALSE;
 
 	// every open was closed
 	assert(s_opens == s_closes);

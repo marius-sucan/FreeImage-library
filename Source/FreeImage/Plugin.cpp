@@ -393,12 +393,24 @@ FreeImage_LoadFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_handle handl
 		
 		if (node != NULL) {
 			if(node->m_plugin->load_proc != NULL) {
-				void *data = FreeImage_Open(node, io, handle, TRUE);
-					
-				FIBITMAP *bitmap = node->m_plugin->load_proc(io, handle, -1, flags, data);
-					
-				FreeImage_Close(node, io, handle, data);
-					
+				void *data = NULL;
+				BOOL opened = FALSE;
+				FIBITMAP *bitmap = NULL;
+
+				// a plugin out of memory throws: the load fails, the plugin still closes
+				try {
+					data = FreeImage_Open(node, io, handle, TRUE);
+					opened = TRUE;
+
+					bitmap = node->m_plugin->load_proc(io, handle, -1, flags, data);
+				} catch (std::bad_alloc &) {
+					FreeImage_OutputMessageProc((int)fif, FI_MSG_ERROR_MEMORY);
+				}
+
+				if (opened) {
+					FreeImage_Close(node, io, handle, data);
+				}
+
 				return bitmap;
 			}
 		}

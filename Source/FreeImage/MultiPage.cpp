@@ -1125,25 +1125,32 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 
 	FIBITMAP *dib = NULL;
 
-	if (block->m_type == BLOCK_REFERENCE) {
-		// cached page: lockable even with no file yet (create_new)
-		dib = FreeImage_LoadPageFromCache(header, *block);
-	} else {
-		if (header->handle == NULL) {
-			return NULL;
+	// a plugin out of memory throws: the page stays unlocked
+	try {
+		if (block->m_type == BLOCK_REFERENCE) {
+			// cached page: lockable even with no file yet (create_new)
+			dib = FreeImage_LoadPageFromCache(header, *block);
+		} else {
+			if (header->handle == NULL) {
+				return NULL;
+			}
+			FreeImage_GetReadData(header);
+
+			// NULL read_data is valid: many plugins have no open_proc
+
+			if (header->node->m_plugin->load_proc != NULL) {
+				dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, header->load_flags, header->read_data);
+			}
 		}
-		FreeImage_GetReadData(header);
 
-		// NULL read_data is valid: many plugins have no open_proc
-
-		if (header->node->m_plugin->load_proc != NULL) {
-			dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, header->load_flags, header->read_data);
+		if (dib != NULL) {
+			// stays valid: mutators refuse to run while a page is locked
+			header->locked_pages[dib] = page;
 		}
-	}
-
-	if (dib != NULL) {
-		// stays valid: mutators refuse to run while a page is locked
-		header->locked_pages[dib] = page;
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
+		FreeImage_Unload(dib);
+		return NULL;
 	}
 
 	return dib;
