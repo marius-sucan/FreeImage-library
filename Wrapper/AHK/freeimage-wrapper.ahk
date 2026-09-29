@@ -290,6 +290,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 
 FreeImage_LoadFromHandle(FIF, pIO, hHandle, flags:=0) {
 ; pIO - a FreeImageIO: pointers to the stdcall read, write, seek and tell procs, which get hHandle; seek takes an Int64 offset and tell returns Int64; FIF=-1 detects the format
+; on 32-bit AutoHotkey a RegisterCallback() returns 32 bits and cannot be tell: load from a memory stream there (FreeImage_OpenMemory64)
    If (FIF=-1 || FIF="")
       FIF := FreeImage_GetFileTypeFromHandle(pIO, hHandle)
    Return DllCall(getFIMfunc("LoadFromHandle"), "Int", FIF, "UPtr", pIO, "UPtr", hHandle, "Int", flags, "UPtr")

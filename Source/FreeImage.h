@@ -593,7 +593,7 @@ FI_STRUCT (FITAG) { void *data; };
 typedef void* fi_handle;
 typedef unsigned (DLL_CALLCONV *FI_ReadProc) (void *buffer, unsigned size, unsigned count, fi_handle handle);
 typedef unsigned (DLL_CALLCONV *FI_WriteProc) (void *buffer, unsigned size, unsigned count, fi_handle handle);
-// positions are 64-bit: long is 32 bits on Windows
+// positions are 64-bit, long being 32 bits on Windows: a callback written with long must be rewritten, not cast
 typedef int (DLL_CALLCONV *FI_SeekProc) (fi_handle handle, INT64 offset, int origin);
 typedef INT64 (DLL_CALLCONV *FI_TellProc) (fi_handle handle);
 
