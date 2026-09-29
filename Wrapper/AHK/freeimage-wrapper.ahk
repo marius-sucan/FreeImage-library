@@ -18,7 +18,6 @@
 ;
 ; 22 September 2026 - v2.00
 ; - implemented all the remaining functions, except the ANSI variants
-; - bug fixes: FreeImage_Rotate(), the JPEG transforms, FreeImage_DeletePageEx(), FreeImage_SimpleGetPageCount(), the memory stream functions, and pointers truncated on x64
 ; - FreeImage_OpenMultiBitmap() takes Unicode paths; added FreeImage_GetFrameDelays() and the *PageEx() functions
 ; - AVIF, HEIF and APNG in FreeImage_GetFileType()
 ;
@@ -1353,31 +1352,19 @@ FreeImage_GetPageCount(hFIMULTIBITMAP) {
 }
 
 FreeImage_AppendPage(hFIMULTIBITMAP, hImage) {
-   DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage)
-}
-
-FreeImage_AppendPageEx(hFIMULTIBITMAP, hImage) {
    ; Returns TRUE when the page was added. It is refused when the format cannot encode the
    ; bitmap, and FreeImage_CloseMultiBitmap() then returns FALSE, although it saves the other pages.
-   Return DllCall(getFIMfunc("AppendPageEx"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int")
+   Return DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int")
 }
 
 FreeImage_InsertPage(hFIMULTIBITMAP, PageNumber, hImage) {
-   DllCall(getFIMfunc("InsertPage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "UPtr", hImage)
-}
-
-FreeImage_InsertPageEx(hFIMULTIBITMAP, PageNumber, hImage) {
    ; Returns TRUE when the page was inserted.
-   Return DllCall(getFIMfunc("InsertPageEx"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "UPtr", hImage, "Int")
+   Return DllCall(getFIMfunc("InsertPage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "UPtr", hImage, "Int")
 }
 
 FreeImage_DeletePage(hFIMULTIBITMAP, PageNumber) {
-   DllCall(getFIMfunc("DeletePage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber)
-}
-
-FreeImage_DeletePageEx(hFIMULTIBITMAP, PageNumber) {
    ; Returns TRUE when the page was deleted.
-   Return DllCall(getFIMfunc("DeletePageEx"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "Int")
+   Return DllCall(getFIMfunc("DeletePage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "Int")
 }
 
 FreeImage_MovePage(hFIMULTIBITMAP, Target, PageNumber) {
@@ -2078,8 +2065,8 @@ getFIMfunc(funct) {
 
    Static fList0 := "|CreateTag|DeInitialise|GetCopyrightMessage|GetFIFCount|GetVersion|IsLittleEndian|"
         , fList4 := "|Clone|CloneTag|CloseMemory|ConvertTo16Bits555|ConvertTo16Bits565|ConvertTo24Bits|ConvertTo32Bits|ConvertTo4Bits|ConvertTo8Bits|ConvertToFloat|ConvertToGreyscale|ConvertToRGB16|ConvertToRGBA16|ConvertToRGBAF|ConvertToRGBF|ConvertToUINT16|DeleteTag|DestroyICCProfile|FIFSupportsICCProfiles|FIFSupportsNoPixels|FIFSupportsReading|FIFSupportsWriting|FindCloseMetadata|FlipHorizontal|FlipVertical|GetBits|GetBlueMask|GetBPP|GetColorsUsed|GetColorType|GetDIBSize|GetDotsPerMeterX|GetDotsPerMeterY|GetFIFDescription|GetFIFExtensionList|GetFIFFromFilename|GetFIFFromFilenameU|GetFIFFromFormat|GetFIFFromMime|GetFIFMimeType|GetFIFRegExpr|GetFormatFromFIF|GetGreenMask|GetHeight|GetICCProfile|GetImageType|GetInfo|GetInfoHeader|GetLine|GetMemorySize|GetPageCount|GetPalette|GetPitch|GetRedMask|GetTagCount|GetTagDescription|GetTagID|GetTagKey|GetTagLength|GetTagType|GetTagValue|GetThumbnail|GetTransparencyCount|GetTransparencyTable|GetTransparentIndex|GetWidth|HasBackgroundColor|HasPixels|HasRGBMasks|Initialise|Invert|IsPluginEnabled|IsTransparent|PreMultiplyWithAlpha|SetOutputMessage|SetOutputMessageStdCall|TellMemory|TellMemory64|Unload|"
-        , fList8 := "|AppendPage|AppendPageEx|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|DeletePageEx|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
-        , fList12 := "|AcquireMemory|AcquireMemory64|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|InsertPageEx|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|OpenMemory64|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
+        , fList8 := "|AppendPage|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
+        , fList12 := "|AcquireMemory|AcquireMemory64|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|OpenMemory64|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
         , fList16 := "|ApplyICCProfile|Composite|ConvertCMYKToRGB|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|ConvertToCMYK|ConvertToICCProfile|GetICCProfileDescription|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SeekMemory64|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
         , fList20 := "|ApplyPaletteIndexMapping|ColorQuantizeEx|Copy|CreateView|Paste|RegisterExternalPlugin|RegisterLocalPlugin|SaveMultiBitmapToHandle|SaveToHandle|TmoDrago03|TmoFattal02|TmoReinhard05|"
         , fList24 := "|Allocate|ApplyColorMapping|ConvertLine1To32MapTransparency|ConvertLine4To32MapTransparency|ConvertLine8To32MapTransparency|JPEGCrop|JPEGCropU|OpenMultiBitmap|OpenMultiBitmapU|SoftProof|ToneMapping|"

@@ -941,7 +941,7 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 }
 
 BOOL DLL_CALLCONV
-FreeImage_AppendPageEx(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
+FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	if (!bitmap || !data) {
 		return FALSE;
 	}
@@ -967,13 +967,8 @@ FreeImage_AppendPageEx(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	return FALSE;
 }
 
-void DLL_CALLCONV
-FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
-	FreeImage_AppendPageEx(bitmap, data);
-}
-
 BOOL DLL_CALLCONV
-FreeImage_InsertPageEx(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
+FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 	if (!bitmap || !data) {
 		return FALSE;
 	}
@@ -1020,13 +1015,8 @@ FreeImage_InsertPageEx(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 	return FALSE;
 }
 
-void DLL_CALLCONV
-FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
-	FreeImage_InsertPageEx(bitmap, page, data);
-}
-
 BOOL DLL_CALLCONV
-FreeImage_DeletePageEx(FIMULTIBITMAP *bitmap, int page) {
+FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
 	if (!bitmap) {
 		return FALSE;
 	}
@@ -1080,11 +1070,6 @@ FreeImage_DeletePageEx(FIMULTIBITMAP *bitmap, int page) {
 	FreeImage_OutputMessageProc(header->fif, "FreeImage_DeletePage: page %d could not be located", page);
 	header->failed = TRUE;
 	return FALSE;
-}
-
-void DLL_CALLCONV
-FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
-	FreeImage_DeletePageEx(bitmap, page);
 }
 
 FIBITMAP * DLL_CALLCONV
