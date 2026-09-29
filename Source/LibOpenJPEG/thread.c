@@ -529,6 +529,10 @@ static void opj_tls_destroy(opj_tls_t* tls)
 void* opj_tls_get(opj_tls_t* tls, int key)
 {
     int i;
+    /* FreeImage: a worker whose TLS could not be allocated has none */
+    if (!tls) {
+        return NULL;
+    }
     for (i = 0; i < tls->key_val_count; i++) {
         if (tls->key_val[i].key == key) {
             return tls->key_val[i].value;
@@ -543,6 +547,10 @@ OPJ_BOOL opj_tls_set(opj_tls_t* tls, int key, void* value,
     opj_tls_key_val_t* new_key_val;
     int i;
 
+    /* FreeImage: a worker whose TLS could not be allocated has none */
+    if (!tls) {
+        return OPJ_FALSE;
+    }
     if (tls->key_val_count == INT_MAX) {
         return OPJ_FALSE;
     }

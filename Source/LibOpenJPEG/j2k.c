@@ -12415,6 +12415,11 @@ OPJ_BOOL opj_j2k_decode(opj_j2k_t * p_j2k,
         }
     }
     opj_copy_image_header(p_image, p_j2k->m_output_image);
+    /* FreeImage: out of memory, the copy has no components */
+    if (p_j2k->m_output_image->numcomps != p_image->numcomps) {
+        opj_event_msg(p_manager, EVT_ERROR, "Failed to allocate image header.");
+        return OPJ_FALSE;
+    }
 
     /* customization of the decoding */
     if (!opj_j2k_setup_decoding(p_j2k, p_manager)) {
@@ -12781,6 +12786,11 @@ OPJ_BOOL opj_j2k_start_compress(opj_j2k_t *p_j2k,
         return OPJ_FALSE;
     }
     opj_copy_image_header(p_image, p_j2k->m_private_image);
+    /* FreeImage: out of memory, the copy has no components */
+    if (p_j2k->m_private_image->numcomps != p_image->numcomps) {
+        opj_event_msg(p_manager, EVT_ERROR, "Failed to allocate image header.");
+        return OPJ_FALSE;
+    }
 
     /* TODO_MSD: Find a better way */
     if (p_image->comps) {

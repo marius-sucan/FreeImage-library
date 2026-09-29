@@ -2231,7 +2231,18 @@ static void opj_t1_cblk_encode_processor(void* user_data, opj_tls_t* tls)
     t1 = (opj_t1_t*) opj_tls_get(tls, OPJ_TLS_KEY_T1);
     if (t1 == NULL) {
         t1 = opj_t1_create(OPJ_TRUE); /* OPJ_TRUE == T1 for encoding */
-        opj_tls_set(tls, OPJ_TLS_KEY_T1, t1, opj_t1_destroy_wrapper);
+        /* FreeImage: checked as the decoding job does */
+        if (t1 == NULL) {
+            *(job->pret) = OPJ_FALSE;
+            opj_free(job);
+            return;
+        }
+        if (!opj_tls_set(tls, OPJ_TLS_KEY_T1, t1, opj_t1_destroy_wrapper)) {
+            opj_t1_destroy(t1);
+            *(job->pret) = OPJ_FALSE;
+            opj_free(job);
+            return;
+        }
     }
 
     if (band->bandno & 1) {

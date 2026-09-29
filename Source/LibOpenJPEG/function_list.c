@@ -83,6 +83,8 @@ OPJ_BOOL opj_procedure_list_add_procedure(opj_procedure_list_t *
                              p_validation_list->m_nb_max_procedures * sizeof(opj_procedure));
         if (! new_procedures) {
             opj_free(p_validation_list->m_procedures);
+            /* FreeImage: or opj_procedure_list_destroy frees it again */
+            p_validation_list->m_procedures = NULL;
             p_validation_list->m_nb_max_procedures = 0;
             p_validation_list->m_nb_procedures = 0;
             opj_event_msg(p_manager, EVT_ERROR,
