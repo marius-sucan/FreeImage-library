@@ -68,7 +68,7 @@ Changes:
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbour resampling, the fastest filter;
 - a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
-- FreeImage_AppendPage(), FreeImage_InsertPage(), FreeImage_DeletePage(), now return TRUE or FALSE;
+- FreeImage_AppendPage(), FreeImage_InsertPage() and FreeImage_DeletePage() now return TRUE or FALSE;
 - FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
