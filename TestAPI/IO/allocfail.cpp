@@ -177,6 +177,72 @@ static int webp_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- saves and loads of other formats */
+
+static FIBITMAP *pattern(FREE_IMAGE_TYPE type, int width, int height, int bpp) {
+    FIBITMAP *dib = FreeImage_AllocateT(type, width, height, bpp, 0, 0, 0);
+    int x, y;
+    if (!dib) return NULL;
+    for (y = 0; y < height; y++) {
+        BYTE *p = FreeImage_GetScanLine(dib, y);
+        for (x = 0; x < (int)FreeImage_GetLine(dib); x++) p[x] = (BYTE)(x * 7 + y * 13 + ((x * y) >> 3));
+        if (type == FIT_RGBF) {
+            float *f = (float *)p;
+            for (x = 0; x < width * 3; x++) f[x] = (float)((x * 7 + y * 13) % 97) / 50.0f;
+        }
+    }
+    return dib;
+}
+
+/* a save that says TRUE loads back at its size */
+static int save_case(FREE_IMAGE_FORMAT fif, FREE_IMAGE_TYPE type, int width, int height, int bpp) {
+    FIBITMAP *dib = pattern(type, width, height, bpp), *back;
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BOOL saved;
+    int whole = 1;
+    if (!dib || !mem) return CASE_BROKEN;
+
+    armed = 1;
+    saved = FreeImage_SaveToMemory(fif, dib, mem, 0);
+    armed = 0;
+
+    if (saved) {
+        FreeImage_SeekMemory(mem, 0, SEEK_SET);
+        back = FreeImage_LoadFromMemory(fif, mem, 0);
+        whole = back && ((int)FreeImage_GetWidth(back) == width) && ((int)FreeImage_GetHeight(back) == height);
+        FreeImage_Unload(back);
+    }
+    FreeImage_CloseMemory(mem);
+    FreeImage_Unload(dib);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* a load from a file returns the image at its size, or NULL */
+static int load_case(FREE_IMAGE_FORMAT fif, FREE_IMAGE_TYPE type, int width, int height, int bpp) {
+    FIBITMAP *dib = pattern(type, width, height, bpp), *back;
+    const char *dir = getenv("IO_TEST_TMP");
+    char path[512];
+    int whole;
+    /* a file per child, in $IO_TEST_TMP or the current directory */
+    snprintf(path, sizeof(path), "%s/fi_io_allocfail_%d", (dir && *dir) ? dir : ".", (int)getpid());
+    if (!dib || !FreeImage_Save(fif, dib, path, 0)) return CASE_BROKEN;
+
+    armed = 1;
+    back = FreeImage_Load(fif, path, 0);
+    armed = 0;
+
+    whole = !back || (((int)FreeImage_GetWidth(back) == width) && ((int)FreeImage_GetHeight(back) == height));
+    FreeImage_Unload(back);
+    FreeImage_Unload(dib);
+    remove(path);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+static int gif_save(void) { return save_case(FIF_GIF, FIT_BITMAP, 40, 24, 8); }
+static int gif_load(void) { return load_case(FIF_GIF, FIT_BITMAP, 40, 24, 8); }
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -187,6 +253,8 @@ int main(void) {
 #else
     sweep("tags and metadata: no crash, no tag without its value", tags_case);
     sweep("WebP save: TRUE only for a file that loads", webp_case);
+    sweep("GIF save: TRUE only for a file that loads", gif_save);
+    sweep("GIF load: no crash", gif_load);
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;

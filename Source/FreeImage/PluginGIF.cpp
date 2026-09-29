@@ -125,7 +125,7 @@ public:
 	~StringTable();
 	void Initialize(int minCodeSize);
 	BYTE *FillInputBuffer(int len);
-	void CompressStart(int bpp, int width);
+	bool CompressStart(int bpp, int width);
 	int CompressEnd(BYTE *buf); //0-4 bytes
 	bool Compress(BYTE *buf, int *len);
 	bool Decompress(BYTE *buf, int *len);
@@ -281,14 +281,19 @@ BYTE *StringTable::FillInputBuffer(int len)
 	return m_buffer;
 }
 
-void StringTable::CompressStart(int bpp, int width)
+bool StringTable::CompressStart(int bpp, int width)
 {
+	// the compressor's map could not be allocated
+	if( m_strmap == NULL ) {
+		return false;
+	}
 	m_bpp = bpp;
 	m_slack = (8 - ((width * bpp) % 8)) % 8;
 
 	m_partial |= m_clearCode << m_partialSize;
 	m_partialSize += m_codeSize;
 	ClearCompressorTable();
+	return true;
 }
 
 int StringTable::CompressEnd(BYTE *buf)
@@ -1228,7 +1233,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				ended = true;
 			}
 			while( b ) {
-				const unsigned got = io->read_proc(stringtable->FillInputBuffer(b), 1, b, handle);
+				BYTE *input = stringtable->FillInputBuffer(b);
+				if( input == NULL ) {
+					delete stringtable;
+					throw FI_MSG_ERROR_MEMORY;
+				}
+				const unsigned got = io->read_proc(input, 1, b, handle);
 				data_bytes += got;
 				if( got < b ) {
 					// decode only the bytes read; a smaller size keeps the buffer
@@ -1676,8 +1686,14 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		b = (BYTE)(bpp == 1 ? 2 : bpp);
 		io->write_proc(&b, 1, 1, handle);
 		StringTable *stringtable = new(std::nothrow) StringTable;
+		if( stringtable == NULL ) {
+			throw FI_MSG_ERROR_MEMORY;
+		}
 		stringtable->Initialize(b);
-		stringtable->CompressStart(bpp, width);
+		if( !stringtable->CompressStart(bpp, width) ) {
+			delete stringtable;
+			throw FI_MSG_ERROR_MEMORY;
+		}
 
 		//Image Data Sub-blocks
 		int y = 0, interlacepass = 0, line = FreeImage_GetLine(dib);
@@ -1685,7 +1701,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		int size = sizeof(buf);
 		b = sizeof(buf);
 		while( y < output_height ) {
-			memcpy(stringtable->FillInputBuffer(line), FreeImage_GetScanLine(dib, output_height - y - 1), line);
+			BYTE *input = stringtable->FillInputBuffer(line);
+			if( input == NULL ) {
+				delete stringtable;
+				throw FI_MSG_ERROR_MEMORY;
+			}
+			memcpy(input, FreeImage_GetScanLine(dib, output_height - y - 1), line);
 			while( stringtable->Compress(bufptr, &size) ) {
 				bufptr += size;
 				if( bufptr - buf == sizeof(buf) ) {
