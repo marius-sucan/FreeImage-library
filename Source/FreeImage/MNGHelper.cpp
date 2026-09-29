@@ -1267,10 +1267,15 @@ mng_WriteJNG(int format_id, FreeImageIO *io, FIBITMAP *dib, fi_handle handle, in
 	jng_height = (DWORD)FreeImage_GetHeight(dib);
 
 	try {
+		// the streams below may pass 4 GB, where FreeImage_AcquireMemory() refuses: a write that fails ends the save
+		static const char *JNG_WRITE_FAILED = "Error while writing JNG: out of memory, or the output is full";
+
 		hJngMemory = FreeImage_OpenMemory();
 
 		// --- write JNG file signature ---
-		FreeImage_WriteMemory(g_jng_signature, 1, 8, hJngMemory);
+		if(FreeImage_WriteMemory(g_jng_signature, 1, 8, hJngMemory) != 8) {
+			throw JNG_WRITE_FAILED;
+		}
 
 		// --- write a JHDR chunk ---
 		SwapLong(&jng_width);
@@ -1287,8 +1292,6 @@ mng_WriteJNG(int format_id, FreeImageIO *io, FIBITMAP *dib, fi_handle handle, in
 		buffer[13] = jng_alpha_compression_method;
 		buffer[14] = jng_alpha_filter_method;
 		buffer[15] = jng_alpha_interlace_method;
-		// the streams below may pass 4 GB, where FreeImage_AcquireMemory() refuses: a write that fails ends the save
-		static const char *JNG_WRITE_FAILED = "Error while writing JNG: out of memory, or the output is full";
 
 		if(!mng_WriteChunk(mng_JHDR, &buffer[0], 16, hJngMemory)) {
 			throw JNG_WRITE_FAILED;
