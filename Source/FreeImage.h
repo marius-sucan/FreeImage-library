@@ -634,6 +634,7 @@ typedef const char *(DLL_CALLCONV *FI_ExtensionListProc)(void);
 typedef const char *(DLL_CALLCONV *FI_RegExprProc)(void);
 typedef void *(DLL_CALLCONV *FI_OpenProc)(FreeImageIO *io, fi_handle handle, BOOL read);
 typedef void (DLL_CALLCONV *FI_CloseProc)(FreeImageIO *io, fi_handle handle, void *data);
+typedef BOOL (DLL_CALLCONV *FI_CloseExProc)(FreeImageIO *io, fi_handle handle, void *data);
 typedef int (DLL_CALLCONV *FI_PageCountProc)(FreeImageIO *io, fi_handle handle, void *data);
 typedef int (DLL_CALLCONV *FI_PageCapabilityProc)(FreeImageIO *io, fi_handle handle, void *data);
 typedef FIBITMAP *(DLL_CALLCONV *FI_LoadProc)(FreeImageIO *io, fi_handle handle, int page, int flags, void *data);
@@ -662,6 +663,8 @@ FI_STRUCT (Plugin) {
 	FI_SupportsExportTypeProc supports_export_type_proc;
 	FI_SupportsICCProfilesProc supports_icc_profiles_proc;
 	FI_SupportsNoPixelsProc supports_no_pixels_proc;
+	// called instead of close_proc; FALSE fails the save; stays last for older plugins
+	FI_CloseExProc close_ex_proc;
 };
 
 typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);

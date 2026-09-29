@@ -44,6 +44,7 @@ FIBITMAP* createZonePlateImage(unsigned width, unsigned height, int scale);
 // Test plugins capabilities
 // ==========================================================
 void showPlugins();
+void testPluginCloseResult();
 
 // Image types test suite
 // ==========================================================

@@ -711,7 +711,10 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 
 	FreeImage_Close(header->node, &header->io, header->handle, data_read);
 
-	FreeImage_Close(node, io, handle, data);
+	// some plugins write the file when they close
+	if (!FreeImage_Close(node, io, handle, data)) {
+		success = FALSE;
+	}
 
 	return success;
 }

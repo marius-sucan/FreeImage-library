@@ -161,6 +161,79 @@ static void round_trip(const char *label, FIBITMAP *src, int flags, int bitexact
     remove(path);
 }
 
+static void set_anim_short(FIBITMAP *dib, const char *key, WORD value) {
+    FITAG *tag = FreeImage_CreateTag();
+    if (!tag) return;
+    FreeImage_SetTagKey(tag, key);
+    FreeImage_SetTagType(tag, FIDT_SHORT);
+    FreeImage_SetTagCount(tag, 1);
+    FreeImage_SetTagLength(tag, 2);
+    FreeImage_SetTagValue(tag, &value);
+    FreeImage_SetMetadata(FIMD_ANIMATION, dib, key, tag);
+    FreeImage_DeleteTag(tag);
+}
+
+static unsigned char *read_file(const char *path, long *size) {
+    FILE *f = fopen(path, "rb");
+    unsigned char *buf = NULL;
+    *size = -1;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) == 0 && (*size = ftell(f)) >= 0 && fseek(f, 0, SEEK_SET) == 0) {
+        buf = (unsigned char *)malloc(*size > 0 ? *size : 1);
+        if (buf && fread(buf, 1, (size_t)*size, f) != (size_t)*size) { free(buf); buf = NULL; }
+    }
+    fclose(f);
+    return buf;
+}
+
+/* the canvas is known when Close() writes the animation: its failure fails the save, the file stays */
+static void unfinished_animation(FIBITMAP *rgba) {
+    const char *path = scratch("fi_webp_rt_anim.webp");
+    FIMULTIBITMAP *mb;
+    FIMEMORY *mem;
+    FIBITMAP *far_frame;
+    unsigned char *before, *after;
+    long n_before, n_after;
+
+    printf("animation the writer cannot finish\n");
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, TRUE, FALSE, TRUE, 0);
+    if (!mb) { fail("unfinished animation: cannot create the animation"); return; }
+    FreeImage_AppendPage(mb, rgba);
+    FreeImage_AppendPage(mb, rgba);
+    if (!FreeImage_CloseMultiBitmap(mb, 0)) { fail("unfinished animation: the 2-frame animation was not written"); return; }
+    before = read_file(path, &n_before);
+    if (!before) { fail("unfinished animation: cannot read the animation"); remove(path); return; }
+
+    /* this far out, the frames need a canvas of 2^32 pixels, more than WebP holds */
+    far_frame = FreeImage_Copy(rgba, 0, 0, 16, 16);
+    set_anim_short(far_frame, "FrameLeft", 65534);
+    set_anim_short(far_frame, "FrameTop", 65534);
+
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, FALSE, FALSE, TRUE, 0);
+    if (!mb) fail("unfinished animation: cannot reopen the animation");
+    else {
+        if (!FreeImage_AppendPage(mb, far_frame)) fail("unfinished animation: the frame was refused on append");
+        mem = FreeImage_OpenMemory(NULL, 0);
+        if (FreeImage_SaveMultiBitmapToMemory(FIF_WEBP, mb, mem, 0))
+            fail("unfinished animation: SaveMultiBitmapToMemory reported success");
+        FreeImage_CloseMemory(mem);
+        if (FreeImage_CloseMultiBitmap(mb, 0))
+            fail("unfinished animation: CloseMultiBitmap reported success");
+        else
+            printf("  ok %-34s both saves fail\n", "canvas of 2^32 pixels");
+    }
+    after = read_file(path, &n_after);
+    if (!after || n_after != n_before || memcmp(after, before, (size_t)n_before) != 0)
+        fail("unfinished animation: the failed save changed the file (%ld -> %ld bytes)", n_before, n_after);
+    else
+        printf("  ok %-34s the file is as it was\n", "failed close");
+    free(before);
+    free(after);
+    FreeImage_Unload(far_frame);
+    remove(path);
+}
+
 int main(void) {
     FIBITMAP *png, *rgb, *rgba, *holes, *meta, *grey, *tiny, *reloaded;
     BYTE icc[128];
@@ -257,6 +330,8 @@ int main(void) {
         FreeImage_Unload(reloaded);
         remove(path);
     }
+
+    unfinished_animation(rgba);
 
     FreeImage_Unload(rgb); FreeImage_Unload(rgba); FreeImage_Unload(holes);
     FreeImage_Unload(grey); FreeImage_Unload(tiny); FreeImage_Unload(meta);

@@ -114,6 +114,9 @@ int main(int argc, char *argv[]) {
 	// test floating point conversions and tone mapping robustness
 	testToneMapping();
 
+	// test plugins whose close reports whether the file is complete
+	testPluginCloseResult();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif

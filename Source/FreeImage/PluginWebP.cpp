@@ -360,16 +360,18 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	return state;
 }
 
-static void DLL_CALLCONV
+static BOOL DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	WebPPluginData *state = (WebPPluginData*)data;
 	if(state == NULL) {
-		return;
+		return TRUE;
 	}
+
+	BOOL bResult = TRUE;
 
 	// write a collected animation; a still image was written by Save()
 	if(state->write && !state->written && (state->out_pages > 0) && (io != NULL) && (handle != NULL)) {
-		WebP_FinishAnimation(state, io, handle);
+		bResult = WebP_FinishAnimation(state, io, handle);
 	}
 	WebPDataClear(&state->pending);
 
@@ -385,6 +387,8 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		free((void*)state->bitstream.bytes);
 	}
 	free(state);
+
+	return bResult;
 }
 
 // ----------------------------------------------------------
@@ -1122,7 +1126,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
-	// refuse here: Close() cannot report a failure
+	// refuse the page here, not the whole file in Close()
 
 	if(!FreeImage_HasPixels(dib)) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
@@ -1231,7 +1235,7 @@ InitWEBP(Plugin *plugin, int format_id) {
 	plugin->extension_proc = Extension;
 	plugin->regexpr_proc = RegExpr;
 	plugin->open_proc = Open;
-	plugin->close_proc = Close;
+	plugin->close_proc = NULL;
 	plugin->pagecount_proc = PageCount;
 	plugin->pagecapability_proc = NULL;
 	plugin->load_proc = Load;
@@ -1242,5 +1246,6 @@ InitWEBP(Plugin *plugin, int format_id) {
 	plugin->supports_export_type_proc = SupportsExportType;
 	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
 	plugin->supports_no_pixels_proc = SupportsNoPixels;
+	plugin->close_ex_proc = Close;
 }
 

@@ -371,11 +371,15 @@ FreeImage_Open(PluginNode *node, FreeImageIO *io, fi_handle handle, BOOL open_fo
 	return NULL;
 }
 
-void DLL_CALLCONV
+BOOL DLL_CALLCONV
 FreeImage_Close(PluginNode *node, FreeImageIO *io, fi_handle handle, void *data) {
+	if (node->m_plugin->close_ex_proc != NULL) {
+		return node->m_plugin->close_ex_proc(io, handle, data);
+	}
 	if (node->m_plugin->close_proc != NULL) {
 		node->m_plugin->close_proc(io, handle, data);
 	}
+	return TRUE;
 }
 
 // =====================================================================
@@ -464,7 +468,10 @@ FreeImage_SaveToHandle(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, FreeImageIO *io, fi
 
 				BOOL result = node->m_plugin->save_proc(&check.io, dib, (fi_handle)&check, -1, flags, data);
 
-				FreeImage_Close(node, &check.io, (fi_handle)&check, data);
+				// some plugins write the file when they close
+				if (!FreeImage_Close(node, &check.io, (fi_handle)&check, data)) {
+					result = FALSE;
+				}
 
 				return (result && !check.failed) ? TRUE : FALSE;
 			}

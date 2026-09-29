@@ -622,7 +622,7 @@ out:
 	remove(one);
 }
 
-/* Close() cannot fail, so Save() must refuse what it cannot write */
+/* Save() refuses what it cannot write, before Close() writes anything */
 static void test_refusals(void) {
 	const char *path = scratch("apng_refuse.png");
 	const char *seed = scratch("apng_refuse_seed.png");

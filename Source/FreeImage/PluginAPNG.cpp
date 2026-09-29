@@ -1295,12 +1295,14 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	return info;
 }
 
-static void DLL_CALLCONV
+static BOOL DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	APNGinfo *info = (APNGinfo*)data;
 	if(info == NULL) {
-		return;
+		return TRUE;
 	}
+
+	BOOL bResult = TRUE;
 
 	// written here: acTL needs the final frame count
 	if(!info->read) {
@@ -1311,10 +1313,12 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 					// a lone untagged page is written as a plain PNG
 					if(!FreeImage_SaveToHandle(FIF_PNG, info->pending, io, handle, info->pending_flags)) {
 						FreeImage_OutputMessageProc(s_format_id, "Failed to write the output file");
+						bResult = FALSE;
 					}
 				} else if(!AddFrame(info, info->pending, info->pending_flags, TRUE)) {
 					// a tagged page is a 1-frame animation, keeping its tags
 					FreeImage_OutputMessageProc(s_format_id, "Failed to write the output file");
+					bResult = FALSE;
 				}
 				FreeImage_Unload(info->pending);
 				info->pending = NULL;
@@ -1322,14 +1326,18 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 			if(!info->out_frames.empty()) {
 				if(!WriteAnimation(io, handle, info, info->pending_flags)) {
 					FreeImage_OutputMessageProc(s_format_id, "Failed to write the output file");
+					bResult = FALSE;
 				}
 			}
 		} catch(std::bad_alloc&) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+			bResult = FALSE;
 		}
 	}
 
 	delete info;
+
+	return bResult;
 }
 
 // ----------------------------------------------------------
@@ -1394,7 +1402,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
-	// refuse here: Close() cannot report failure
+	// refuse the page here, not the whole file in Close()
 	{
 		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
 		if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) ||
@@ -1449,7 +1457,7 @@ InitAPNG(Plugin *plugin, int format_id) {
 	plugin->extension_proc = Extension;
 	plugin->regexpr_proc = RegExpr;
 	plugin->open_proc = Open;
-	plugin->close_proc = Close;
+	plugin->close_proc = NULL;
 	plugin->pagecount_proc = PageCount;
 	plugin->pagecapability_proc = NULL;
 	plugin->load_proc = Load;
@@ -1460,4 +1468,5 @@ InitAPNG(Plugin *plugin, int format_id) {
 	plugin->supports_export_type_proc = SupportsExportType;
 	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
 	plugin->supports_no_pixels_proc = SupportsNoPixels;
+	plugin->close_ex_proc = Close;
 }

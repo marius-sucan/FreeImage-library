@@ -1845,25 +1845,31 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 	return info;
 }
 
-static void DLL_CALLCONV
+static BOOL DLL_CALLCONV
 Close(FreeImageIO *io, fi_handle handle, void *data) {
 	MNGinfo *info = (MNGinfo*)data;
 	if(!info) {
-		return;
+		return TRUE;
 	}
+
+	BOOL bResult = TRUE;
 
 	// MHDR needs the final canvas, so the file is written here
 	if(!info->read && !info->out_frames.empty()) {
 		try {
 			if(!WriteMNG(io, handle, info)) {
 				FreeImage_OutputMessageProc(s_format_id, "Failed to write the output file");
+				bResult = FALSE;
 			}
 		} catch(std::bad_alloc&) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+			bResult = FALSE;
 		}
 	}
 
 	delete info;
+
+	return bResult;
 }
 
 static int DLL_CALLCONV
@@ -1911,7 +1917,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		return FALSE;
 	}
 
-	// refuse here: Close() returns void
+	// refuse the page here, not the whole file in Close()
 	{
 		const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
 		if(!FreeImage_HasPixels(dib) || !SupportsExportType(image_type) ||
@@ -2010,7 +2016,7 @@ InitMNG(Plugin *plugin, int format_id) {
 	plugin->extension_proc = Extension;
 	plugin->regexpr_proc = RegExpr;
 	plugin->open_proc = Open;
-	plugin->close_proc = Close;
+	plugin->close_proc = NULL;
 	plugin->pagecount_proc = PageCount;
 	plugin->pagecapability_proc = NULL;
 	plugin->load_proc = Load;
@@ -2021,4 +2027,5 @@ InitMNG(Plugin *plugin, int format_id) {
 	plugin->supports_export_type_proc = SupportsExportType;
 	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
 	plugin->supports_no_pixels_proc = SupportsNoPixels;
+	plugin->close_ex_proc = Close;
 }
