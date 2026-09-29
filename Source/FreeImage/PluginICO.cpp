@@ -765,6 +765,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		// add the page
 		icon_dib = FreeImage_Clone(dib);
+		if(!icon_dib) {
+			throw FI_MSG_ERROR_DIB_MEMORY;
+		}
 		vPages.push_back(icon_dib);
 		icon_header->idCount++;
 
@@ -836,7 +839,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			else {
 				// standard icon support
 				// see http://msdn.microsoft.com/en-us/library/ms997538.aspx
-				SaveStandardIcon(io, icon_dib, handle);
+				if(!SaveStandardIcon(io, icon_dib, handle)) {
+					free(icon_list);
+					throw "Unable to write an icon";
+				}
 			}
 
 			// update ICONDIRENTRY members, whose offsets are 32-bit

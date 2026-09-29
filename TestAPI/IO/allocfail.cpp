@@ -242,6 +242,7 @@ static int load_case(FREE_IMAGE_FORMAT fif, FREE_IMAGE_TYPE type, int width, int
 
 static int gif_save(void) { return save_case(FIF_GIF, FIT_BITMAP, 40, 24, 8); }
 static int gif_load(void) { return load_case(FIF_GIF, FIT_BITMAP, 40, 24, 8); }
+static int ico_save(void) { return save_case(FIF_ICO, FIT_BITMAP, 32, 32, 24); }
 
 #endif /* !_WIN32 */
 
@@ -255,6 +256,7 @@ int main(void) {
     sweep("WebP save: TRUE only for a file that loads", webp_case);
     sweep("GIF save: TRUE only for a file that loads", gif_save);
     sweep("GIF load: no crash", gif_load);
+    sweep("ICO save: TRUE only for a file that loads", ico_save);
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;
