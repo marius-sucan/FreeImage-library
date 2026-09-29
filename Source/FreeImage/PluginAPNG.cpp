@@ -60,6 +60,10 @@ static int s_format_id;
 #define GIF_DISPOSAL_PREVIOUS		3
 
 #define APNG_MAX_CHUNK_LENGTH		0x7FFFFFFFUL
+// image data is split into chunks of at most this many bytes
+#ifndef APNG_MAX_DATA_CHUNK
+#define APNG_MAX_DATA_CHUNK			APNG_MAX_CHUNK_LENGTH
+#endif
 
 // ==========================================================
 // Chunk model
@@ -201,6 +205,26 @@ WriteChunk(FreeImageIO *io, fi_handle handle, const char *type, const BYTE *pref
 	BYTE trailer[4];
 	PutDWORD(trailer, (DWORD)crc);
 	return (io->write_proc(trailer, 1, 4, handle) == 4) ? TRUE : FALSE;
+}
+
+// image data in as many chunks as it needs; each fdAT takes the next sequence number
+static BOOL
+WriteDataChunks(FreeImageIO *io, fi_handle handle, const char *type, DWORD *sequence, const BYTE *data, size_t length) {
+	const size_t prefix_length = sequence ? 4 : 0;
+	const size_t most = APNG_MAX_DATA_CHUNK - prefix_length;
+	size_t done = 0;
+	do {
+		const size_t piece = MIN(most, length - done);
+		BYTE prefix[4];
+		if(sequence) {
+			PutDWORD(prefix, (*sequence)++);
+		}
+		if(!WriteChunk(io, handle, type, sequence ? prefix : NULL, prefix_length, data + done, piece)) {
+			return FALSE;
+		}
+		done += piece;
+	} while(done < length);
+	return TRUE;
 }
 
 // append in bounded steps; a short read leaves the buffer untouched, or keeps what it read
@@ -491,15 +515,20 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 static FIBITMAP *
 DecodeFrame(APNGinfo *info, int page, int flags) {
 	const APNGFrame& frame = info->frames[page];
-	if(frame.data.empty() || (frame.data.size() > APNG_MAX_CHUNK_LENGTH)) {
-		// one IDAT chunk: 31-bit length limit
+	if(frame.data.empty()) {
 		return NULL;
 	}
 
 	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 
+	const size_t idat_count = (frame.data.size() + APNG_MAX_DATA_CHUNK - 1) / APNG_MAX_DATA_CHUNK;
+
 	std::vector<BYTE> png;
-	png.reserve(8 + 25 + info->ancillary.size() + frame.data.size() + 12 + 12);
+	try {
+		png.reserve(8 + 25 + info->ancillary.size() + frame.data.size() + 12 * idat_count + 12);
+	} catch(std::exception&) {
+		return NULL;
+	}
 	png.insert(png.end(), signature, signature + 8);
 
 	BYTE ihdr[13];
@@ -510,14 +539,15 @@ DecodeFrame(APNGinfo *info, int page, int flags) {
 
 	png.insert(png.end(), info->ancillary.begin(), info->ancillary.end());
 
-	AppendChunk(png, "IDAT", &frame.data[0], frame.data.size());
+	// a PNG chunk holds 2^31 - 1 bytes
+	for(size_t done = 0; done < frame.data.size(); ) {
+		const size_t piece = MIN((size_t)APNG_MAX_DATA_CHUNK, frame.data.size() - done);
+		AppendChunk(png, "IDAT", &frame.data[done], piece);
+		done += piece;
+	}
 	AppendChunk(png, "IEND", NULL, 0);
 
-	if(png.size() > 0xFFFFFFFFUL) {
-		return NULL;
-	}
-
-	FIMEMORY *hmem = FreeImage_OpenMemory(&png[0], (DWORD)png.size());
+	FIMEMORY *hmem = FreeImage_OpenMemory64(&png[0], (UINT64)png.size());
 	if(hmem == NULL) {
 		return NULL;
 	}
@@ -1136,7 +1166,7 @@ WriteAnimation(FreeImageIO *io, fi_handle handle, APNGinfo *info, int flags) {
 		if(!CompressBackdrop(info->out_width, info->out_height, flags, backdrop)) {
 			return FALSE;
 		}
-		if(!WriteChunk(io, handle, "IDAT", NULL, 0, &backdrop[0], backdrop.size())) {
+		if(!WriteDataChunks(io, handle, "IDAT", NULL, &backdrop[0], backdrop.size())) {
 			return FALSE;
 		}
 	}
@@ -1160,13 +1190,11 @@ WriteAnimation(FreeImageIO *io, fi_handle handle, APNGinfo *info, int flags) {
 		}
 
 		if((i == 0) && first_is_default) {
-			if(!WriteChunk(io, handle, "IDAT", NULL, 0, &frame.data[0], frame.data.size())) {
+			if(!WriteDataChunks(io, handle, "IDAT", NULL, &frame.data[0], frame.data.size())) {
 				return FALSE;
 			}
 		} else {
-			BYTE prefix[4];
-			PutDWORD(prefix, sequence++);
-			if(!WriteChunk(io, handle, "fdAT", prefix, 4, &frame.data[0], frame.data.size())) {
+			if(!WriteDataChunks(io, handle, "fdAT", &sequence, &frame.data[0], frame.data.size())) {
 				return FALSE;
 			}
 		}

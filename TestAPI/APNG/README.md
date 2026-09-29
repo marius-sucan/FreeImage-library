@@ -1,6 +1,6 @@
 # APNG regression tests
 
-Two standalone programs covering the APNG plugin
+Three standalone programs covering the APNG plugin
 (`Source/FreeImage/PluginAPNG.cpp`). Each prints a report and exits non-zero on
 failure. Neither needs any data files: everything they read, they write first,
 either through the plugin or - in `robust` - chunk by chunk by hand.
@@ -8,13 +8,14 @@ either through the plugin or - in `robust` - chunk by chunk by hand.
 | test | what it covers |
 |---|---|
 | `regress` | Round-trips animations through `FreeImage_OpenMultiBitmap` + `AppendPage`, to a file and to a memory stream, and requires every composited frame to come back identical to what went in - including read in reverse, which is what exercises the playback cache's rewind. Asserts that the writer stores a frame as exactly the rectangle that changed and collapses a repeated frame to 1x1; that a single page is written as a plain PNG with its palette and bit depth intact; that the animation metadata (delay, placement, disposal, blending, loop count, canvas) survives; that `InsertPage`/`DeletePage` produce the order asked for; that 32-, 24- and 8-bit frames all become one animation; that alpha survives, a wholly transparent frame included; and that `FIF_LOAD_NOPIXELS` gives geometry without pixels. |
+| `chunks` | Image data longer than a PNG chunk holds, 2^31 - 1 bytes, is split into several chunks: linked against `PluginAPNG` rebuilt to split at 1000 bytes, three frames of noise must take several `IDAT` and `fdAT` chunks, none longer, with `fcTL` and `fdAT` sequence numbers that run without a gap, and come back exactly. |
 | `robust` | Eighteen files built wrong on purpose, one per rule the format states - a gap in the sequence numbers, a repeated `acTL`, an `acTL` after `IDAT`, a frame outside the canvas, a zero-width frame, an `fdAT` that claims more than the file holds, a critical chunk nobody knows - each with a documented outcome: the animation is abandoned and the default image is still served, or the file is refused. Then a valid animation damaged every way a file gets damaged: truncated at every length, single bytes flipped to four values, 64-byte regions wiped, and every chunk length field rewritten to nonsense - 3165 damaged inputs. They may load or be refused; they may not crash. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run            # both
+    make run            # all three
     make asan-run       # rebuild PluginAPNG.cpp, PluginPNG.cpp and the whole of
                         # Source/LibPNG with AddressSanitizer, and run both with
                         # those objects linked ahead of the library

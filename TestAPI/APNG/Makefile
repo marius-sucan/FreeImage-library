@@ -1,5 +1,5 @@
 # APNG regression tests; build the library first: make -f Makefile.gnu dist
-# targets: all, run, asan, asan-run; scratch files go to $APNG_TEST_TMP
+# targets: all, run, chunks, asan, asan-run; scratch files go to $APNG_TEST_TMP
 
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
@@ -16,8 +16,14 @@ all: $(TESTS)
 $(TESTS): %: %.c ../../Dist/libfreeimage.a
 	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
 
-run: all
-	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
+run: all chunks
+	@for t in $(TESTS) chunks; do echo "=== $$t ==="; ./$$t || exit 1; done
+
+# PluginAPNG rebuilt to split image data at 1000 bytes, linked ahead of the library
+chunks: chunks.c ../../Dist/libfreeimage.a ../../Source/FreeImage/PluginAPNG.cpp
+	rm -rf chunks-obj && mkdir -p chunks-obj
+	g++ -c $(LIBCXXFLAGS) $(LIBINC) -DAPNG_MAX_DATA_CHUNK=1000UL ../../Source/FreeImage/PluginAPNG.cpp -o chunks-obj/PluginAPNG.o
+	gcc $(CFLAGS) $(INC) $< chunks-obj/PluginAPNG.o -o $@ $(LIB)
 
 # --- AddressSanitizer -------------------------------------------------------
 asan: CFLAGS += -fsanitize=address
@@ -56,9 +62,9 @@ asan-run: asan-obj/.built
 	  ASAN_OPTIONS=allocator_may_return_null=1 ./$$t-asan || exit 1; done
 
 clean-bin:
-	rm -f $(TESTS) $(addsuffix -asan,$(TESTS))
+	rm -f $(TESTS) $(addsuffix -asan,$(TESTS)) chunks
 
 clean: clean-bin
-	rm -rf asan-obj libfreeimage-asan.a apng_*.png
+	rm -rf asan-obj chunks-obj libfreeimage-asan.a apng_*.png
 
 .PHONY: default all run asan asan-lib asan-run clean clean-bin

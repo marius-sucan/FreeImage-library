@@ -77,6 +77,7 @@ Fixes:
 - fixed J2K and JP2 saves failing once an image's code could pass the 4 GB OpenJPEG holds in a tile, and writing out of bounds from 2^31 pixels: such an image is encoded in tiles, so a J2K file can pass 4 GB, and a JP2 file that would pass 4 GB, which its 32-bit box length cannot describe, is refused;
 - fixed BMP saves over 4 GB writing a wrapped file size and returning TRUE: bfSize is 32-bit and holds the raw size, RLE or not, so such a save is refused;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
+- fixed APNG frames with more than 2 GiB of image data being refused on load and on save: the data is split into as many IDAT or fdAT chunks as it needs;
 - and many other fixes
 
 Changes:

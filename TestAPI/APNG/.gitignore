@@ -1,0 +1,10 @@
+regress
+robust
+chunks
+*-asan
+asan-obj/
+chunks-obj/
+libfreeimage-asan.a
+# scratch images written by the tests
+apng_*.png
+fi_apng_*.png
