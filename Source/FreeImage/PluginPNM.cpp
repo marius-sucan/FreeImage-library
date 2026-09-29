@@ -101,16 +101,6 @@ GetInt(FreeImageIO *io, fi_handle handle) {
 // a raw image that ends early
 static const char *PNM_EOF = "End of file in the image data";
 
-// read one byte of a raw image
-static inline BYTE
-ReadByte(FreeImageIO *io, fi_handle handle) {
-	BYTE value = 0;
-	if(io->read_proc(&value, 1, 1, handle) != 1) {
-		throw PNM_EOF;
-	}
-	return value;
-}
-
 // read one ASCII sample, clamped to maxval
 static int
 GetSample(FreeImageIO *io, fi_handle handle, int maxval) {
@@ -125,31 +115,54 @@ GetSample(FreeImageIO *io, fi_handle handle, int maxval) {
 	return level;
 }
 
-/**
-Read a WORD value taking into account the endianess issue
-*/
-static inline WORD 
-ReadWord(FreeImageIO *io, fi_handle handle) {
-	WORD level = 0;
-	if(io->read_proc(&level, 2, 1, handle) != 1) {
-		throw PNM_EOF;
+// a buffer for one row of raw samples
+static BYTE *
+RowBuffer(std::vector<BYTE>& row, size_t size) {
+	try {
+		row.resize(size);
+	} catch(std::exception&) {
+		throw FI_MSG_ERROR_MEMORY;
 	}
-#ifndef FREEIMAGE_BIGENDIAN
-	SwapShort(&level);	// PNM uses the big endian convention
-#endif
-	return level;
+	return &row[0];
 }
 
-/**
-Write a WORD value taking into account the endianess issue
-*/
-static inline void 
-WriteWord(FreeImageIO *io, fi_handle handle, const WORD value) {
-	WORD level = value;
-#ifndef FREEIMAGE_BIGENDIAN
-	SwapShort(&level);	// PNM uses the big endian convention
-#endif
-	io->write_proc(&level, 2, 1, handle);
+// the big endian sample at p
+static inline WORD
+GetWord(const BYTE *p) {
+	return (WORD)((p[0] << 8) | p[1]);
+}
+
+// the same, for Save: NULL rather than a throw
+static BYTE *
+RowBufferOrNull(std::vector<BYTE>& row, size_t size) {
+	try {
+		row.resize(size);
+	} catch(std::exception&) {
+		return NULL;
+	}
+	return &row[0];
+}
+
+// the 16-bit rows of 'dib', 'samples' to a pixel, big endian, a row per write
+static BOOL
+WriteWordRows(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, unsigned samples, std::vector<BYTE>& row) {
+	const unsigned height = FreeImage_GetHeight(dib);
+	const size_t count = (size_t)FreeImage_GetWidth(dib) * samples;
+	BYTE *dst = RowBufferOrNull(row, count * 2);
+	if (!dst) {
+		return FALSE;
+	}
+	for (unsigned y = 0; y < height; y++) {
+		const WORD *src = (const WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
+		for (size_t k = 0; k < count; k++) {
+			dst[2 * k] = (BYTE)(src[k] >> 8);
+			dst[2 * k + 1] = (BYTE)src[k];
+		}
+		if (FreeImage_WriteBytes(io, handle, dst, count * 2) != count * 2) {
+			return FALSE;
+		}
+	}
+	return TRUE;
 }
 
 
@@ -254,6 +267,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	// a cut or damaged image keeps the rows read before it
 	BOOL reading_pixels = FALSE;
 	INT64 pixels_start = 0;
+	// raw samples, a row per read
+	std::vector<BYTE> row;
 	RGBQUAD *pal;	// pointer to dib palette
 	int i;
 
@@ -387,13 +402,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						}
 					}
 				}  else {		// Raw bitmap
-					int line = CalculateLine(width, 1);
+					const size_t line = CalculateLine(width, 1);
 
-					for (y = 0; y < height; y++) {	
+					for (y = 0; y < height; y++) {
 						BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
-						for (x = 0; x < line; x++) {
-							bits[x] = ~ReadByte(io, handle);
+						const size_t got = FreeImage_ReadBytes(io, handle, bits, line);
+						for (x = 0; x < (int)got; x++) {
+							bits[x] = ~bits[x];
+						}
+						if (got < line) {
+							throw PNM_EOF;
 						}
 					}
 				}
@@ -417,14 +436,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 					} else {		// Raw greymap
-						BYTE level = 0;
+						BYTE *src = RowBuffer(row, (size_t)width);
 
-						for (y = 0; y < height; y++) {		
+						for (y = 0; y < height; y++) {
 							BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
-							for (x = 0; x < width; x++) {
-								level = ReadByte(io, handle);
-								bits[x] = (BYTE)((255 * (int)level) / maxval);
+							const size_t got = FreeImage_ReadBytes(io, handle, src, (size_t)width);
+							for (x = 0; x < (int)got; x++) {
+								bits[x] = (BYTE)((255 * (int)src[x]) / maxval);
+							}
+							if (got < (size_t)width) {
+								throw PNM_EOF;
 							}
 						}
 					}
@@ -444,14 +466,18 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 					} else {		// Raw greymap
-						WORD level = 0;
+						BYTE *src = RowBuffer(row, (size_t)width * 2);
 
-						for (y = 0; y < height; y++) {		
+						for (y = 0; y < height; y++) {
 							WORD *bits = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
 
-							for (x = 0; x < width; x++) {
-								level = ReadWord(io, handle);
-								bits[x] = (WORD)((65535 * (double)level) / maxval);
+							// a sample cut in half is not one
+							const size_t got = FreeImage_ReadBytes(io, handle, src, (size_t)width * 2) / 2;
+							for (x = 0; x < (int)got; x++) {
+								bits[x] = (WORD)((65535 * (double)GetWord(&src[2 * x])) / maxval);
+							}
+							if (got < (size_t)width) {
+								throw PNM_EOF;
 							}
 						}
 					}
@@ -482,22 +508,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 					}  else {			// Raw pixmap
-						BYTE level = 0;
+						BYTE *src = RowBuffer(row, (size_t)width * 3);
+						static const int channel[3] = { FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE };
 
-						for (y = 0; y < height; y++) {	
+						for (y = 0; y < height; y++) {
 							BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
-							for (x = 0; x < width; x++) {
-								level = ReadByte(io, handle);
-								bits[FI_RGBA_RED] = (BYTE)((255 * (int)level) / maxval);	// R
-
-								level = ReadByte(io, handle);
-								bits[FI_RGBA_GREEN] = (BYTE)((255 * (int)level) / maxval);	// G
-
-								level = ReadByte(io, handle);
-								bits[FI_RGBA_BLUE] = (BYTE)((255 * (int)level) / maxval);	// B
-
-								bits += 3;
+							// a pixel cut short keeps the samples it has, R first
+							const size_t got = FreeImage_ReadBytes(io, handle, src, (size_t)width * 3);
+							for (size_t k = 0; k < got; k++) {
+								bits[(k / 3) * 3 + channel[k % 3]] = (BYTE)((255 * (int)src[k]) / maxval);
+							}
+							if (got < (size_t)width * 3) {
+								x = (int)(got / 3);
+								throw PNM_EOF;
 							}
 						}
 					}
@@ -521,18 +545,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							}
 						}
 					}  else {			// Raw pixmap
-						WORD level = 0;
+						BYTE *src = RowBuffer(row, (size_t)width * 6);
 
-						for (y = 0; y < height; y++) {	
-							FIRGB16 *bits = (FIRGB16*)FreeImage_GetScanLine(dib, height - 1 - y);
+						for (y = 0; y < height; y++) {
+							WORD *bits = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
 
-							for (x = 0; x < width; x++) {
-								level = ReadWord(io, handle);
-								bits[x].red = (WORD)((65535 * (double)level) / maxval);		// R
-								level = ReadWord(io, handle);
-								bits[x].green = (WORD)((65535 * (double)level) / maxval);	// G
-								level = ReadWord(io, handle);
-								bits[x].blue = (WORD)((65535 * (double)level) / maxval);	// B
+							// FIRGB16 is red, green, blue in memory; a sample cut in half is not one
+							const size_t got = FreeImage_ReadBytes(io, handle, src, (size_t)width * 6) / 2;
+							for (size_t k = 0; k < got; k++) {
+								bits[k] = (WORD)((65535 * (double)GetWord(&src[2 * k])) / maxval);
+							}
+							if (got < (size_t)width * 3) {
+								x = (int)(got / 3);
+								throw PNM_EOF;
 							}
 						}
 					}
@@ -613,6 +638,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	char buffer[256];	// temporary buffer whose size should be enough for what we need
 
+	// raw samples, a row per write
+	std::vector<BYTE> row;
+
 	if(!dib || !handle) return FALSE;
 	
 	FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
@@ -681,16 +709,23 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			case 24 :            // 24-bit RGB, 3 bytes per pixel
 			{
 				if (flags == PNM_SAVE_RAW)  {
+					const size_t size = (size_t)width * 3;
+					BYTE *dst = RowBufferOrNull(row, size);
+					if (!dst) {
+						return FALSE;
+					}
 					for (y = 0; y < height; y++) {
 						// write the scanline to disc
-						BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
+						const BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
 
 						for (x = 0; x < width; x++) {
-							io->write_proc(&bits[FI_RGBA_RED], 1, 1, handle);	// R
-							io->write_proc(&bits[FI_RGBA_GREEN], 1, 1, handle);	// G
-							io->write_proc(&bits[FI_RGBA_BLUE], 1, 1, handle);	// B
-
+							dst[3 * x + 0] = bits[FI_RGBA_RED];
+							dst[3 * x + 1] = bits[FI_RGBA_GREEN];
+							dst[3 * x + 2] = bits[FI_RGBA_BLUE];
 							bits += 3;
+						}
+						if (FreeImage_WriteBytes(io, handle, dst, size) != size) {
+							return FALSE;
 						}
 					}
 				} else {
@@ -727,10 +762,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				if (flags == PNM_SAVE_RAW)  {
 					for (y = 0; y < height; y++) {
 						// write the scanline to disc
-						BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
-
-						for (x = 0; x < width; x++) {
-							io->write_proc(&bits[x], 1, 1, handle);
+						if (FreeImage_WriteBytes(io, handle, FreeImage_GetScanLine(dib, height - 1 - y), (size_t)width) != (size_t)width) {
+							return FALSE;
 						}
 					}
 				} else {
@@ -764,12 +797,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				int color;
 
 				if (flags == PNM_SAVE_RAW)  {
+					const size_t line = FreeImage_GetLine(dib);
 					for(y = 0; y < height; y++) {
 						// write the scanline to disc
-						BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
-
-						for(x = 0; x < (int)FreeImage_GetLine(dib); x++)
-							io->write_proc(&bits[x], 1, 1, handle);
+						if (FreeImage_WriteBytes(io, handle, FreeImage_GetScanLine(dib, height - 1 - y), line) != line) {
+							return FALSE;
+						}
 					}
 				} else  {
 					int length = 0;
@@ -804,13 +837,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	else if(image_type == FIT_UINT16) {		// 16-bit greyscale
 		if (flags == PNM_SAVE_RAW)  {
-			for (y = 0; y < height; y++) {
-				// write the scanline to disc
-				WORD *bits = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
-
-				for (x = 0; x < width; x++) {
-					WriteWord(io, handle, bits[x]);
-				}
+			if (!WriteWordRows(io, handle, dib, 1, row)) {
+				return FALSE;
 			}
 		} else {
 			int length = 0;
@@ -839,15 +867,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	else if(image_type == FIT_RGB16) {		// 48-bit RGB
 		if (flags == PNM_SAVE_RAW)  {
-			for (y = 0; y < height; y++) {
-				// write the scanline to disc
-				FIRGB16 *bits = (FIRGB16*)FreeImage_GetScanLine(dib, height - 1 - y);
-
-				for (x = 0; x < width; x++) {
-					WriteWord(io, handle, bits[x].red);		// R
-					WriteWord(io, handle, bits[x].green);	// G
-					WriteWord(io, handle, bits[x].blue);	// B
-				}
+			// FIRGB16 is red, green, blue in memory
+			if (!WriteWordRows(io, handle, dib, 3, row)) {
+				return FALSE;
 			}
 		} else {
 			int length = 0;

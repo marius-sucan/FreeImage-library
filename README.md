@@ -78,6 +78,7 @@ Fixes:
 - fixed BMP saves over 4 GB writing a wrapped file size and returning TRUE: bfSize is 32-bit and holds the raw size, RLE or not, so such a save is refused;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - fixed APNG frames with more than 2 GiB of image data being refused on load and on save: the data is split into as many IDAT or fdAT chunks as it needs;
+- fixed raw PBM, PGM and PPM files being read and written one sample per callback, which took 80 s each way for a 4.3 GB PGM: a row goes in one call;
 - and many other fixes
 
 Changes:
