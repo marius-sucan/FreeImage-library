@@ -1117,7 +1117,8 @@ static int ApplyPredictFilter(VP8LEncoder* const enc, int width, int height,
                          near_lossless_strength, enc->config->exact,
                          used_subtract_green, enc->pic, percent_range / 2,
                          percent, best_bits)) {
-    return 0;
+    // FreeImage: VP8LResidualImage sets no error when out of memory
+    return WebPEncodingSetError(enc->pic, VP8_ENC_ERROR_OUT_OF_MEMORY);
   }
   VP8LPutBits(bw, TRANSFORM_PRESENT, 1);
   VP8LPutBits(bw, PREDICTOR_TRANSFORM, 2);

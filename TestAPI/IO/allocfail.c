@@ -136,6 +136,40 @@ static int tags_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- WebP */
+
+/* lossy with graded alpha: the alpha plane goes through the lossless encoder */
+static int webp_case(void) {
+    FIBITMAP *dib = FreeImage_Allocate(48, 40, 32, 0, 0, 0), *back;
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BOOL saved;
+    int x, y, whole = 1;
+    if (!dib || !mem) return CASE_BROKEN;
+    for (y = 0; y < 40; y++) {
+        BYTE *p = FreeImage_GetScanLine(dib, y);
+        for (x = 0; x < 48; x++, p += 4) {
+            p[FI_RGBA_RED] = (BYTE)(x * 5); p[FI_RGBA_GREEN] = (BYTE)(y * 6);
+            p[FI_RGBA_BLUE] = (BYTE)(x ^ y); p[FI_RGBA_ALPHA] = (BYTE)(x * y);
+        }
+    }
+
+    armed = 1;
+    saved = FreeImage_SaveToMemory(FIF_WEBP, dib, mem, 0);
+    armed = 0;
+
+    /* a save that says TRUE loads back */
+    if (saved) {
+        FreeImage_SeekMemory(mem, 0, SEEK_SET);
+        back = FreeImage_LoadFromMemory(FIF_WEBP, mem, 0);
+        whole = back && (FreeImage_GetWidth(back) == 48) && (FreeImage_GetHeight(back) == 40);
+        FreeImage_Unload(back);
+    }
+    FreeImage_CloseMemory(mem);
+    FreeImage_Unload(dib);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -145,6 +179,7 @@ int main(void) {
     printf("  %-60s %s\n", "needs fork() and a linker with --wrap", "skipped");
 #else
     sweep("tags and metadata: no crash, no tag without its value", tags_case);
+    sweep("WebP save: TRUE only for a file that loads", webp_case);
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;
