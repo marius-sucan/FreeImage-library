@@ -10,13 +10,14 @@ at the next upgrade.
 |---|---|
 | `regress` | Round-trips 6 pixel formats x 14 sizes (1x1 to 257x129) x 4 rates x both containers through memory streams, 684 in all, plus a file round-trip per format. Prints size + checksum per output and asserts that every save and reload works and that rate 1 (lossless) reloads pixel-exact. Encoded checksums change legitimately when the encoder changes; the FAIL lines and the tally are the assertions. |
 | `robust` | Truncated prefixes, junk appended, single-bit corruptions, wiped header regions, empty buffers: may load or be refused, must never crash. Also header-only loads (`FIF_LOAD_NOPIXELS`) and loads/saves through a `FreeImageIO` handle that does not start at offset 0. Run under ASan. |
+| `tiles` | An image whose code could pass the 4 GB OpenJPEG holds in a tile is encoded in tiles, and a JP2 file stops at 4 GB, its box length being 32-bit. Linked against `J2KHelper` and `PluginJP2` rebuilt with small limits: every image is tiled, in tiles of 256, and a JP2 may not pass 1 MB. 6 pixel formats at 600 x 300 must be saved in tiles and reload exactly (rate 1) or at their size (16:1); 1.5 MB of noise saves as J2K, and as JP2 returns FALSE and leaves no file. |
 | `corpus` | Decodes any JPEG 2000 files you give it, one line each (geometry, type, checksum of the pixel rows, decode time, messages) and can dump the pixels for the reference comparison below. Diff its output before and after a change. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run            # regress and robust
+    make run            # regress, robust and tiles
     make asan run       # the same, with AddressSanitizer - worth it for robust
     make corpus         # then: ./corpus [-h] [-m] [-o N] [-d DIR] files...
 
@@ -29,6 +30,7 @@ Scratch files are written to `$J2K_TEST_TMP`, or the current directory.
 - `robust` - `0 failures`; truncated prefixes are all refused (OpenJPEG's strict
   mode: a partial codestream is an error, not a partial image) while the junk-
   appended copies decode exactly, and both offset tests say `ok`.
+- `tiles` - `0 failure(s)`.
 - `corpus` on the openjpeg-data conformance suite (below) - `0 failed`, and
   every file `identical` in the reference comparison except `zoo2.jp2`, where 2
   of 7.6M samples differ by 1 (9/7 wavelet rounding between builds).

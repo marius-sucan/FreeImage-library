@@ -30,6 +30,11 @@
 
 static int s_format_id;
 
+// the most a JP2 file holds: OpenJPEG writes its codestream box length in 32 bits
+#ifndef FI_JP2_MAX_BYTES
+#define FI_JP2_MAX_BYTES 0xFFFFFFFFu
+#endif
+
 // ==========================================================
 // Internal functions
 // ==========================================================
@@ -271,6 +276,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			// decide if MCT should be used
 			parameters.tcp_mct = (image->numcomps == 3) ? 1 : 0;
 
+			J2KSetTiling(&parameters, image);
+
 			// encode the destination image
 
 			// get a JP2 compressor handle
@@ -299,6 +306,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 			if (!bSuccess) {
 				throw "Failed to encode image";
+			}
+			// OpenJPEG writes the codestream box's length in 32 bits, and no XLBox
+			if (io->tell_proc(handle) - fio->start > (INT64)FI_JP2_MAX_BYTES) {
+				throw "A JP2 file cannot pass 4 GB: save it as J2K";
 			}
 
 			// free remaining compression structures

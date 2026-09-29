@@ -39,5 +39,9 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 Conversion FIBITMAP => opj_image_t
 */
 opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t *parameters);
+/**
+Tiles for an image whose code could come near the 4 GB OpenJPEG holds in a tile
+*/
+void J2KSetTiling(opj_cparameters_t *parameters, const opj_image_t *image);
 
 #endif // FREEIMAGE_J2K_HELPER_H

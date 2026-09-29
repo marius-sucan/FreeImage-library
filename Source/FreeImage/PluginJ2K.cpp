@@ -271,6 +271,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			// decide if MCT should be used
 			parameters.tcp_mct = (image->numcomps == 3) ? 1 : 0;
 
+			J2KSetTiling(&parameters, image);
+
 			// encode the destination image
 
 			// get a J2K compressor handle

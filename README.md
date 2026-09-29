@@ -74,6 +74,7 @@ Fixes:
 - fixed MNG files holding an embedded image of 4 GB or more resuming their parsing inside that image, where a crafted file could plant a frame, and MNG frames of 4 GB or more failing to save: the lengths are 64-bit;
 - fixed JNG saves of 4 GB or more writing no image data, or nothing at all, and returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load: the in-memory streams are taken in 64 bits and every write is checked;
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded: the page cache holds 64-bit sizes; a cache block the cache file could not take stays in memory, and a page that cannot be cached again keeps its old copy;
+- fixed J2K and JP2 saves failing once an image's code could pass the 4 GB OpenJPEG holds in a tile, and writing out of bounds from 2^31 pixels: such an image is encoded in tiles, so a J2K file can pass 4 GB, and a JP2 file that would pass 4 GB, which its 32-bit box length cannot describe, is refused;
 - and many other fixes
 
 Changes:

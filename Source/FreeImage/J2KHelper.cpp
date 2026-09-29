@@ -265,20 +265,16 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					BYTE *bits = FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int index = image->comps[0].data[pixel_pos];
 						index += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
 
 						bits[x] = (BYTE)index;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -289,13 +285,11 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 				
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					BYTE *bits = FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int r = image->comps[0].data[pixel_pos];
 						r += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
@@ -310,8 +304,6 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						bits[FI_RGBA_GREEN] = (BYTE)g;
 						bits[FI_RGBA_BLUE]  = (BYTE)b;
 						bits += 3;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -322,13 +314,11 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 				
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					BYTE *bits = FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int r = image->comps[0].data[pixel_pos];
 						r += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
@@ -347,8 +337,6 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						bits[FI_RGBA_BLUE]  = (BYTE)b;
 						bits[FI_RGBA_ALPHA] = (BYTE)a;
 						bits += 4;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -360,20 +348,16 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					WORD *bits = (WORD*)FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int index = image->comps[0].data[pixel_pos];
 						index += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
 
 						bits[x] = (WORD)index;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -384,13 +368,11 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 				
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					FIRGB16 *bits = (FIRGB16*)FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int r = image->comps[0].data[pixel_pos];
 						r += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
@@ -404,8 +386,6 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						bits[x].red   = (WORD)r;
 						bits[x].green = (WORD)g;
 						bits[x].blue  = (WORD)b;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -416,13 +396,11 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 				
 				// load pixel data
 
-				unsigned pixel_count = 0;
-
 				for(int y = 0; y < hrr; y++) {		
 					FIRGBA16 *bits = (FIRGBA16*)FreeImage_GetScanLine(dib, hrr - 1 - y);
 
 					for(int x = 0; x < wrr; x++) {
-						const unsigned pixel_pos = pixel_count / wrr * wr + pixel_count % wrr;
+						const size_t pixel_pos = (size_t)y * wr + x;
 
 						int r = image->comps[0].data[pixel_pos];
 						r += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
@@ -440,8 +418,6 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						bits[x].green = (WORD)g;
 						bits[x].blue  = (WORD)b;
 						bits[x].alpha = (WORD)a;
-
-						pixel_count++;
 					}
 				}
 			}
@@ -465,7 +441,8 @@ Convert a FIBITMAP to a OpenJPEG image
 @return Returns the converted image if successful, returns NULL otherwise
 */
 opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t *parameters) {
-	int prec, numcomps, x, y, index;
+	int prec, numcomps, x, y;
+	size_t index;
 	OPJ_COLOR_SPACE color_space;
 	opj_image_cmptparm_t cmptparm[4];	// maximum of 4 components 
 	opj_image_t *image = NULL;			// image to encode
@@ -652,4 +629,46 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t 
 		FreeImage_OutputMessageProc(format_id, text);
 		return NULL;
 	}
+}
+
+// --------------------------------------------------------------------------
+
+// OpenJPEG writes a tile's length in 32 bits: tiling starts where one tile's code could come near 4 GB
+#ifndef FI_J2K_TILING_FROM
+#define FI_J2K_TILING_FROM ((UINT64)3584 << 20)
+#endif
+// the samples of one tile, which OpenJPEG's code buffer for it outgrows by 40%
+#ifndef FI_J2K_TILE_BYTES
+#define FI_J2K_TILE_BYTES ((UINT64)1 << 30)
+#endif
+
+void
+J2KSetTiling(opj_cparameters_t *parameters, const opj_image_t *image) {
+	const UINT64 width = image->x1 - image->x0;
+	const UINT64 height = image->y1 - image->y0;
+	UINT64 bits = 0;
+	for(OPJ_UINT32 c = 0; c < image->numcomps; c++) {
+		bits += (UINT64)image->comps[c].w * image->comps[c].h * image->comps[c].prec;
+	}
+	if(!width || !height || !bits) {
+		return;
+	}
+	// a quarter more than the rate promises, for data that does not compress
+	const double rate = (parameters->tcp_rates[0] > 1) ? parameters->tcp_rates[0] : 1;
+	if((double)bits / 8 / rate * 1.25 <= (double)FI_J2K_TILING_FROM) {
+		return;
+	}
+	// square tiles of a power of two, 256 at least
+	const double bytes_per_pixel = (double)bits / 8 / ((double)width * (double)height);
+	UINT64 side = (UINT64)1 << 15;
+	while((side > 256) && ((double)(side * side) * bytes_per_pixel > (double)FI_J2K_TILE_BYTES)) {
+		side >>= 1;
+	}
+	// the standard allows 65535 tiles
+	while((side < ((UINT64)1 << 30)) && (((width + side - 1) / side) * ((height + side - 1) / side) > 65535)) {
+		side <<= 1;
+	}
+	parameters->tile_size_on = OPJ_TRUE;
+	parameters->cp_tdx = (int)side;
+	parameters->cp_tdy = (int)side;
 }

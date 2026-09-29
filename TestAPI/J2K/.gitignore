@@ -1,6 +1,8 @@
 regress
 robust
 corpus
+tiles
+tiles-obj/
 *.o
 # scratch images written by the tests
 fi_j2k_*.j2k
