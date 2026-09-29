@@ -1,5 +1,6 @@
 /* FreeImage 3 - I/O test: every allocation libfreeimage.a makes, failed in turn, crashes nothing */
-/* malloc, calloc and realloc are wrapped at link time; each case runs in a child per failed allocation */
+/* malloc, calloc and realloc are wrapped at link time, new(std::nothrow) replaced; each case runs in a child per failed allocation */
+#include <new>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,12 +46,18 @@ static int should_fail(void) {
     return armed && (++seen == fail_at);
 }
 
+extern "C" {
 void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t s);
 void *__real_realloc(void *p, size_t n);
 void *__wrap_malloc(size_t n) { return should_fail() ? NULL : __real_malloc(n); }
 void *__wrap_calloc(size_t n, size_t s) { return should_fail() ? NULL : __real_calloc(n, s); }
 void *__wrap_realloc(void *p, size_t n) { return should_fail() ? NULL : __real_realloc(p, n); }
+}
+
+/* new(std::nothrow) too: the code that uses it checks for NULL */
+void *operator new(size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
+void *operator new[](size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
 
 enum { CASE_OK = 0, CASE_BROKEN = 1, NOT_REACHED = 2 };
 

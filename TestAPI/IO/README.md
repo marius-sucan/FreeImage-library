@@ -14,7 +14,7 @@ Each prints a report and exits non-zero on failure.
 | `bigsave` | Saves a 47000 x 47000 8-bit image as an uncompressed TIFF, 2.2 GB, and reloads its header: libtiff writes the IFD past 2 GB, and the file stays classic TIFF. `--4g` saves 65536 x 65600, 4.3 GB, which must come out as BigTIFF. `--full` reloads the pixels too. Needs 2.2 GB of RAM and of disk, 4.3 GB with `--4g`, and as much RAM again with `--full`. |
 | `streams` | Images behind 777 bytes of other data: an ICO saved there (one page, and two through `FreeImage_SaveMultiBitmapToHandle`, which reads page 0 back while it writes page 1) and reloaded, a GIF whose logical screen must come from its own header (with and without `GIF_PLAYBACK`), a multi-page TIFF in a memory stream. A TGA thumbnail claiming more pixels than the file holds is dropped; a TGA written through a `FreeImageIO` whose positions read 5 GB more past the header leaves its thumbnail out, since the footer's offsets are 32-bit, instead of writing it over the pixels. `make asan-run` rebuilds the sources it exercises with AddressSanitizer. |
 | `writefail` | Saves through a `FreeImageIO` whose writes stop after 100 bytes, then half way through the file, as on a full disk, in every writable format and through `FreeImage_SaveMultiBitmapToHandle`: each save must return FALSE, and return at all (a watchdog fails the test after 120 s). On Linux, not as root, `FreeImage_Save` to `/dev/full` must return FALSE too: its last bytes fail in `fclose()`. |
-| `allocfail` | A model whose only tag was deleted must enumerate as empty. Then the 1st, 2nd, ... `malloc`, `calloc` or `realloc` of `libfreeimage.a` fails, one per forked child, until a run gets through with none failing (the three are wrapped at link time): creating, setting and cloning tags, `FreeImage_SetMetadata`, `FreeImage_Clone` and `FreeImage_CloneMetadata` must not crash, and no stored tag may lack its value; a lossy WebP save of an image with graded alpha, whose alpha plane goes through the lossless encoder, must return FALSE or a file that loads. The sweeps need `fork()` and GNU ld's `--wrap`: on Windows they are skipped. |
+| `allocfail` | A model whose only tag was deleted must enumerate as empty. Then the 1st, 2nd, ... `malloc`, `calloc`, `realloc` or `new(std::nothrow)` of `libfreeimage.a` fails, one per forked child, until a run gets through with none failing (the first three are wrapped at link time, the last replaced): creating, setting and cloning tags, `FreeImage_SetMetadata`, `FreeImage_Clone` and `FreeImage_CloneMetadata` must not crash, and no stored tag may lack its value; a lossy WebP save of an image with graded alpha, whose alpha plane goes through the lossless encoder, must return FALSE or a file that loads. The sweeps need `fork()` and GNU ld's `--wrap`: on Windows they are skipped. |
 
 ## Running
 
@@ -32,6 +32,6 @@ Scratch files are written to `$IO_TEST_TMP`, or the current directory.
 ## What "expected" looks like
 
 Every line `ok` and `--- 0 failure(s) ---`. On Windows the same programs build
-with `zig cc -target x86_64-windows-gnu` (or MSVC) against the static library;
+with `zig cc -target x86_64-windows-gnu` (`zig c++` for allocfail) or MSVC against the static library;
 `bigfile` compiled with `-DFI_TEST_OFF_T=long` against the header of FreeImage
 3.18 or 3.19 shows the 2 GB wall those versions had there.

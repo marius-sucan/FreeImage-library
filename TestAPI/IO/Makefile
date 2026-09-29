@@ -26,9 +26,9 @@ $(TESTS): %: %.c ../../Dist/libfreeimage.a
 run: all
 	@for t in bigfile memstream streams writefail allocfail; do echo "=== $$t ==="; ./$$t || exit 1; done
 
-# malloc, calloc and realloc wrapped, so each allocation of libfreeimage.a can fail in turn
-allocfail: allocfail.c ../../Dist/libfreeimage.a
-	gcc $(CFLAGS) $(INC) $< -o $@ -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc $(LIB)
+# malloc, calloc and realloc wrapped, new(std::nothrow) replaced, so each allocation of libfreeimage.a can fail in turn
+allocfail: allocfail.cpp ../../Dist/libfreeimage.a
+	g++ $(CFLAGS) $(INC) $< -o $@ -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc $(LIB)
 
 # streams with those sources rebuilt with AddressSanitizer, linked ahead of the library
 asan-run: streams.c ../../Dist/libfreeimage.a
