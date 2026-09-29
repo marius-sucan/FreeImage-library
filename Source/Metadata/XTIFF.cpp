@@ -344,6 +344,10 @@ tiff_read_exif_tag(TIFF *tif, uint32_t tag_id, FIBITMAP *dib, TagLib::MDMODEL md
 			}
 
 			raw_data = _TIFFmalloc(value_size * value_count);
+			// _TIFFmalloc(0) is NULL too: an empty tag is skipped below
+			if(!raw_data && (value_size * value_count != 0)) {
+				return FALSE;
+			}
 			mem_alloc = 1;
 			int ok = FALSE;
 			
@@ -446,6 +450,13 @@ tiff_read_exif_tag(TIFF *tif, uint32_t tag_id, FIBITMAP *dib, TagLib::MDMODEL md
 		case TIFF_RATIONAL: {
 			// LibTIFF converts rational to floats : reconvert floats to rationals
 			DWORD *rvalue = (DWORD*)malloc(2 * value_count * sizeof(DWORD));
+			if(!rvalue) {
+				FreeImage_DeleteTag(fitag);
+				if(mem_alloc) {
+					_TIFFfree(raw_data);
+				}
+				return FALSE;
+			}
 			for(uint32_t i = 0; i < value_count; i++) {
 				float *fv = (float*)raw_data;
 				FIRational rational(fv[i]);
@@ -463,6 +474,13 @@ tiff_read_exif_tag(TIFF *tif, uint32_t tag_id, FIBITMAP *dib, TagLib::MDMODEL md
 		case TIFF_SRATIONAL: {
 			// LibTIFF converts rational to floats : reconvert floats to rationals
 			LONG *rvalue = (LONG*)malloc(2 * value_count * sizeof(LONG));
+			if(!rvalue) {
+				FreeImage_DeleteTag(fitag);
+				if(mem_alloc) {
+					_TIFFfree(raw_data);
+				}
+				return FALSE;
+			}
 			for(uint32_t i = 0; i < value_count; i++) {
 				float *fv = (float*)raw_data;
 				FIRational rational(fv[i]);

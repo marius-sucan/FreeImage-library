@@ -247,6 +247,7 @@ static int j2k_save(void) { return save_case(FIF_J2K, FIT_BITMAP, 16, 16, 24); }
 static int j2k_load(void) { return load_case(FIF_J2K, FIT_BITMAP, 16, 16, 24); }
 static int exr_save(void) { return save_case(FIF_EXR, FIT_RGBF, 40, 24, 96); }
 static int jng_save(void) { return save_case(FIF_JNG, FIT_BITMAP, 40, 24, 24); }
+static int tiff_load(void) { return load_case(FIF_TIFF, FIT_BITMAP, 40, 24, 24); }
 
 #endif /* !_WIN32 */
 
@@ -265,6 +266,7 @@ int main(void) {
     sweep("JPEG 2000 load: no crash", j2k_load);
     sweep("EXR save: TRUE only for a file that loads", exr_save);
     sweep("JNG save: TRUE only for a file that loads", jng_save);
+    sweep("TIFF load: no crash", tiff_load);
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;
