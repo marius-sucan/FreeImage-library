@@ -181,8 +181,11 @@ CacheFile::cleanupMemCache() {
 			// flush the least used block to file
 
 			Block *old_block = m_page_cache_mem.back();
-			FreeImage_fseek64(m_file, (INT64)old_block->nr * BLOCK_SIZE, SEEK_SET);
-			fwrite(old_block->data, BLOCK_SIZE, 1, m_file);
+			// a block the file did not take stays in memory
+			if ((FreeImage_fseek64(m_file, (INT64)old_block->nr * BLOCK_SIZE, SEEK_SET) != 0)
+				|| (fwrite(old_block->data, BLOCK_SIZE, 1, m_file) != 1) || (fflush(m_file) != 0)) {
+				return;
+			}
 
 			// remove the data
 
@@ -234,8 +237,8 @@ CacheFile::lockBlock(int nr) {
 				m_current_block->data = new BYTE[BLOCK_SIZE];
 
 				// (INT64) first: a 32-bit product wraps past 4 GB
-				FreeImage_fseek64(m_file, (INT64)m_current_block->nr * BLOCK_SIZE, SEEK_SET);
-				if (fread(m_current_block->data, BLOCK_SIZE, 1, m_file) == 1) {
+				if ((FreeImage_fseek64(m_file, (INT64)m_current_block->nr * BLOCK_SIZE, SEEK_SET) == 0)
+					&& (fread(m_current_block->data, BLOCK_SIZE, 1, m_file) == 1)) {
 					m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_disk, it->second);
 					m_page_map[nr] = m_page_cache_mem.begin();
 				}
@@ -303,12 +306,12 @@ CacheFile::deleteBlock(int nr) {
 }
 
 BOOL
-CacheFile::readFile(BYTE *data, int nr, int size) {
+CacheFile::readFile(BYTE *data, int nr, INT64 size) {
 	if ((data == NULL) || (size <= 0) || (nr == 0)) {
 		return FALSE;
 	}
 
-	int s = 0;
+	INT64 s = 0;
 	int block_nr = nr;
 
 	do {
@@ -322,7 +325,7 @@ CacheFile::readFile(BYTE *data, int nr, int size) {
 
 		block_nr = block->next;
 
-		const int copy_size = (size - s < BLOCK_SIZE) ? (size - s) : BLOCK_SIZE;
+		const int copy_size = (size - s < BLOCK_SIZE) ? (int)(size - s) : BLOCK_SIZE;
 
 		memcpy(data + s, block->data, copy_size);
 
@@ -335,11 +338,11 @@ CacheFile::readFile(BYTE *data, int nr, int size) {
 }
 
 int
-CacheFile::writeFile(BYTE *data, int size) {
+CacheFile::writeFile(BYTE *data, INT64 size) {
 	if ((data) && (size > 0)) {
-		int nr_blocks_required = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-		int count = 0;
-		int s = 0;
+		const INT64 nr_blocks_required = (size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+		INT64 count = 0;
+		INT64 s = 0;
 		int stored_alloc;
 		int alloc;
 		
@@ -350,9 +353,15 @@ CacheFile::writeFile(BYTE *data, int size) {
 
 			Block *block = lockBlock(copy_alloc);
 
+			if (block == NULL) {
+				// the blocks written so far go back to the free list
+				deleteFile(stored_alloc);
+				return 0;
+			}
+
 			block->next = 0;
 
-			memcpy(block->data, data + s, (s + BLOCK_SIZE > size) ? size - s : BLOCK_SIZE);
+			memcpy(block->data, data + s, (s + BLOCK_SIZE > size) ? (size_t)(size - s) : BLOCK_SIZE);
 
 			if (count + 1 < nr_blocks_required)
 				alloc = block->next = allocateBlock();

@@ -73,6 +73,7 @@ Fixes:
 - fixed saving a float image of 2^31 samples or more as half-float OpenEXR, the default, aborting the process or overrunning the heap: the half buffer was sized and indexed in int, and a failed allocation left the plugin as an exception;
 - fixed MNG files holding an embedded image of 4 GB or more resuming their parsing inside that image, where a crafted file could plant a frame, and MNG frames of 4 GB or more failing to save: the lengths are 64-bit;
 - fixed JNG saves of 4 GB or more writing no image data, or nothing at all, and returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load: the in-memory streams are taken in 64 bits and every write is checked;
+- fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded: the page cache holds 64-bit sizes; a cache block the cache file could not take stays in memory, and a page that cannot be cached again keeps its old copy;
 - and many other fixes
 
 Changes:

@@ -62,19 +62,19 @@ class PageBlock {
     };
     struct {
       int  m_reference;
-      int  m_size;
+      INT64  m_size;
     };
   };
 
 public:
   BlockType m_type;
 
-  PageBlock(BlockType type = BLOCK_CONTINUEUS, int val1 = -1, int val2 = -1) : m_type(type)
+  PageBlock(BlockType type = BLOCK_CONTINUEUS, int val1 = -1, INT64 val2 = -1) : m_type(type)
   {
     if(m_type == BLOCK_CONTINUEUS)
     {
       m_start = val1;
-      m_end = val2;
+      m_end = (int)val2;
     }
     else
     {
@@ -93,7 +93,7 @@ public:
   int getPageCount() const { assert(isValid()); return m_type == BLOCK_CONTINUEUS ? (m_end - m_start + 1) : 1;}
 
   int getReference() const { assert(isValid() && m_type == BLOCK_REFERENCE); return m_reference; }
-  int getSize() const { assert(isValid() && m_type == BLOCK_REFERENCE); return m_size;  }
+  INT64 getSize() const { assert(isValid() && m_type == BLOCK_REFERENCE); return m_size;  }
 };
 
 // ----------------------------------------------------------
@@ -335,13 +335,13 @@ FreeImage_RestorePageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib)
 
 static FIBITMAP *
 FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
-	const int size = block.getSize();
+	const INT64 size = block.getSize();
 
-	if (size <= 0) {
+	if ((size <= 0) || ((UINT64)size > (UINT64)(std::numeric_limits<size_t>::max)())) {
 		return NULL;
 	}
 
-	BYTE *compressed_data = (BYTE*)malloc(size * sizeof(BYTE));
+	BYTE *compressed_data = (BYTE*)malloc((size_t)size);
 
 	if (compressed_data == NULL) {
 		return NULL;
@@ -350,7 +350,7 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	FIBITMAP *dib = NULL;
 
 	if (header->m_cachefile.readFile(compressed_data, block.getReference(), size)) {
-		FIMEMORY *hmem = FreeImage_OpenMemory(compressed_data, size);
+		FIMEMORY *hmem = FreeImage_OpenMemory64(compressed_data, (UINT64)size);
 
 		if (hmem != NULL) {
 			dib = FreeImage_LoadFromMemory(header->cache_fif, hmem, 0);
@@ -902,7 +902,7 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 		return res;
 	}
 
-	DWORD compressed_size = 0;
+	UINT64 compressed_size = 0;
 	BYTE *compressed_data = NULL;
 
 	// compress the bitmap data
@@ -918,22 +918,13 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 		return res;
 	}
 	// get the buffer from the memory stream
-	if(!FreeImage_AcquireMemory(hmem, &compressed_data, &compressed_size)) {
-		FreeImage_CloseMemory(hmem);
-		return res;
-	}
-	
-	// cache offsets and sizes are int: 2 GiB max
-	if (compressed_size > (DWORD)0x7FFFFFFF) {
-		FreeImage_OutputMessageProc(header->fif,
-			"This page is %u bytes once encoded; the page cache cannot hold more than 2 GiB",
-			compressed_size);
+	if(!FreeImage_AcquireMemory64(hmem, &compressed_data, &compressed_size)) {
 		FreeImage_CloseMemory(hmem);
 		return res;
 	}
 
 	// write the compressed data to the cache
-	int ref = header->m_cachefile.writeFile(compressed_data, compressed_size);
+	int ref = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
 	// get rid of the compressed data
 	FreeImage_CloseMemory(hmem);
 
@@ -944,7 +935,7 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 
 	FreeImage_RememberPageMetadata(header, ref, data);
 
-	res = PageBlock(BLOCK_REFERENCE, ref, compressed_size);
+	res = PageBlock(BLOCK_REFERENCE, ref, (INT64)compressed_size);
 
 	return res;
 }
@@ -1183,16 +1174,15 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 
 				// compress the data
 
-				DWORD compressed_size = 0;
+				UINT64 compressed_size = 0;
 				BYTE *compressed_data = NULL;
 
 				FIMEMORY *hmem = FreeImage_OpenMemory();
 
 				if ((hmem == NULL)
 					|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, FreeImage_GetCacheFlags(header->cache_fif))
-					|| !FreeImage_AcquireMemory(hmem, &compressed_data, &compressed_size)
-					|| (compressed_data == NULL) || (compressed_size == 0)
-					|| (compressed_size > (DWORD)0x7FFFFFFF)) {   /* 2 GiB cache limit */
+					|| !FreeImage_AcquireMemory64(hmem, &compressed_data, &compressed_size)
+					|| (compressed_data == NULL) || (compressed_size == 0)) {
 					FreeImage_OutputMessageProc(header->fif,
 						"FreeImage_UnlockPage: %s cannot store this page, the changes are lost",
 						FreeImage_GetFormatFromFIF(header->cache_fif));
@@ -1205,14 +1195,9 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					return;
 				}
 
-				// write the data to the cache
+				// write the data to the cache, then drop the old copy
 
-				if (i->m_type == BLOCK_REFERENCE) {
-					FreeImage_ForgetPageMetadata(header, i->getReference());
-					header->m_cachefile.deleteFile(i->getReference());
-				}
-
-				int iPage = header->m_cachefile.writeFile(compressed_data, compressed_size);
+				int iPage = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
 
 				if (iPage == 0) {
 					// nothing stored: leave the block as it was
@@ -1225,9 +1210,14 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					return;
 				}
 
+				if (i->m_type == BLOCK_REFERENCE) {
+					FreeImage_ForgetPageMetadata(header, i->getReference());
+					header->m_cachefile.deleteFile(i->getReference());
+				}
+
 				FreeImage_RememberPageMetadata(header, iPage, page);
 
-				*i = PageBlock(BLOCK_REFERENCE, iPage, compressed_size);
+				*i = PageBlock(BLOCK_REFERENCE, iPage, (INT64)compressed_size);
 
 				// get rid of the compressed data
 

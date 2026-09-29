@@ -100,8 +100,8 @@ public :
 	BOOL open(const FIFileName& filename = FIFileName(), BOOL keep_in_memory = TRUE);
 	void close();
 
-	BOOL readFile(BYTE *data, int nr, int size);
-	int writeFile(BYTE *data, int size);
+	BOOL readFile(BYTE *data, int nr, INT64 size);
+	int writeFile(BYTE *data, INT64 size);
 	void deleteFile(int nr);
 
 private :
