@@ -153,7 +153,7 @@ struct MNGGlobals {
 
 struct MNGFrame {
 	INT64 offset;			//! first chunk: IHDR, JHDR or BASI
-	DWORD length;			//! through the CRC of IEND
+	UINT64 length;			//! through the CRC of IEND
 	BOOL is_jng;
 	BOOL is_basi;
 	DWORD width, height;
@@ -279,7 +279,7 @@ ReadChunkHeader(FreeImageIO *io, fi_handle handle, DWORD *length, DWORD *type) {
 
 // *cut: the file ends inside the stream after some of its image data; the stream runs to the end of the file
 static BOOL
-ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, INT64 start, INT64 file_length, DWORD *out_length, BOOL *cut) {
+ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, INT64 start, INT64 file_length, INT64 *out_length, BOOL *cut) {
 	io->seek_proc(handle, start, SEEK_SET);
 	*cut = FALSE;
 	BOOL has_data = FALSE;
@@ -291,7 +291,7 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, INT64 start, INT64 file_le
 		const BOOL data = header && ((type == CHUNK_IDAT) || (type == CHUNK_JDAT)) && (pos + 8 < file_length);
 		if(!header || ((INT64)length > file_length) || (pos + 8 + (INT64)length + 4 > file_length)) {
 			if(has_data || data) {
-				*out_length = (DWORD)(file_length - start);
+				*out_length = file_length - start;
 				*cut = TRUE;
 				return TRUE;
 			}
@@ -305,24 +305,25 @@ ScanEmbeddedStream(FreeImageIO *io, fi_handle handle, INT64 start, INT64 file_le
 			if(end <= start) {
 				return FALSE;
 			}
-			*out_length = (DWORD)(end - start);
+			// 64-bit: parsing goes on after the image, however long it is
+			*out_length = end - start;
 			return TRUE;
 		}
 	}
 }
 
 static BOOL
-ReadBytesAt(FreeImageIO *io, fi_handle handle, INT64 offset, DWORD length, std::vector<BYTE>& out) {
-	if(length == 0) {
+ReadBytesAt(FreeImageIO *io, fi_handle handle, INT64 offset, UINT64 length, std::vector<BYTE>& out) {
+	if((length == 0) || (length > (UINT64)(std::numeric_limits<size_t>::max)())) {
 		return FALSE;
 	}
 	try {
-		out.resize(length);
-	} catch(std::bad_alloc&) {
+		out.resize((size_t)length);
+	} catch(std::exception&) {
 		return FALSE;
 	}
 	io->seek_proc(handle, offset, SEEK_SET);
-	return (io->read_proc(&out[0], 1, length, handle) == length);
+	return (FreeImage_ReadBytes(io, handle, &out[0], (size_t)length) == (size_t)length);
 }
 
 // ==========================================================
@@ -644,7 +645,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 
 		// skip embedded streams whole, so their PLTE is not taken as global
 		if((type == CHUNK_IHDR) || (type == CHUNK_JHDR) || (type == CHUNK_BASI) || (type == CHUNK_DHDR)) {
-			DWORD stream_length = 0;
+			INT64 stream_length = 0;
 			BOOL stream_cut = FALSE;
 			if(!ScanEmbeddedStream(io, handle, chunk_start, file_length, &stream_length, &stream_cut)) {
 				FreeImage_OutputMessageProc(s_format_id,
@@ -662,7 +663,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			} else {
 				MNGFrame frame;
 				frame.offset = chunk_start;
-				frame.length = stream_length;
+				frame.length = (UINT64)stream_length;
 				frame.is_jng = (type == CHUNK_JHDR) ? TRUE : FALSE;
 				frame.is_basi = (type == CHUNK_BASI) ? TRUE : FALSE;
 
@@ -1565,10 +1566,10 @@ EncodeFrame(FIBITMAP *dib, int flags, std::vector<BYTE>& out) {
 	BOOL bResult = FreeImage_SaveToMemory(FIF_PNG, dib, hmem, flags);
 	if(bResult) {
 		BYTE *data = NULL;
-		DWORD size = 0;
-		if(FreeImage_AcquireMemory(hmem, &data, &size) && data && (size > 8)) {
+		UINT64 size = 0;
+		if(FreeImage_AcquireMemory64(hmem, &data, &size) && data && (size > 8) && (size <= (UINT64)(std::numeric_limits<size_t>::max)())) {
 			try {
-				out.assign(data + 8, data + size);
+				out.assign(data + 8, data + (size_t)size);
 			} catch(std::bad_alloc&) {
 				bResult = FALSE;
 			}
@@ -1732,8 +1733,8 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 			placed_y = frame.y;
 		}
 
-		const DWORD size = (DWORD)frame.png.size();
-		if(io->write_proc((void*)&frame.png[0], 1, size, handle) != size) {
+		const size_t size = frame.png.size();
+		if(FreeImage_WriteBytes(io, handle, &frame.png[0], size) != size) {
 			return FALSE;
 		}
 	}
