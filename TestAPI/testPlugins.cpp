@@ -152,10 +152,12 @@ TestLoad(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	return FreeImage_Allocate(8, 8, 24);
 }
 
-// the second page of a document throws, as a plugin out of memory does
+// the page that throws, as a plugin out of memory does; -1 is a single-image save
+static int s_throw_page = 1;
+
 static BOOL DLL_CALLCONV
 TestSaveThrows(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
-	if (page == 1) {
+	if (page == s_throw_page) {
 		throw std::bad_alloc();
 	}
 	return TestSave(io, dib, handle, page, flags, data);
@@ -190,7 +192,7 @@ static BOOL fileMatches(const char *pattern) {
 #endif
 }
 
-// nothing escapes a multi-page save whose plugin throws; the files close and no spool is left
+// nothing escapes a save whose plugin throws; the files close and nothing is left behind
 void testPluginOutOfMemory() {
 	printf("testPluginOutOfMemory ...\n");
 
@@ -227,6 +229,18 @@ void testPluginOutOfMemory() {
 	assert(!bResult);
 	assert(!fileMatches("out-of-memory.throws"));
 	assert(!fileMatches("out-of-memory.throws.*.fispool"));
+
+	// a single-image save
+	s_throw_page = -1;
+	hmem = FreeImage_OpenMemory();
+	assert(hmem != NULL);
+	bResult = FreeImage_SaveToMemory(fif, dib, hmem, 0);
+	assert(!bResult);
+	FreeImage_CloseMemory(hmem);
+	bResult = FreeImage_Save(fif, dib, "out-of-memory.throws", 0);
+	assert(!bResult);
+	assert(!fileMatches("out-of-memory.throws"));
+	s_throw_page = 1;
 
 	// every open was closed
 	assert(s_opens == s_closes);

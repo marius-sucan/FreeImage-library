@@ -464,12 +464,22 @@ FreeImage_SaveToHandle(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, FreeImageIO *io, fi
 				WriteCheckIO check;
 				SetWriteCheckIO(&check, io, handle);
 
-				void *data = FreeImage_Open(node, &check.io, (fi_handle)&check, FALSE);
+				void *data = NULL;
+				BOOL opened = FALSE;
+				BOOL result = FALSE;
 
-				BOOL result = node->m_plugin->save_proc(&check.io, dib, (fi_handle)&check, -1, flags, data);
+				// a plugin out of memory throws: the save fails, the plugin still closes
+				try {
+					data = FreeImage_Open(node, &check.io, (fi_handle)&check, FALSE);
+					opened = TRUE;
+
+					result = node->m_plugin->save_proc(&check.io, dib, (fi_handle)&check, -1, flags, data);
+				} catch (std::bad_alloc &) {
+					FreeImage_OutputMessageProc((int)fif, FI_MSG_ERROR_MEMORY);
+				}
 
 				// some plugins write the file when they close
-				if (!FreeImage_Close(node, &check.io, (fi_handle)&check, data)) {
+				if (opened && !FreeImage_Close(node, &check.io, (fi_handle)&check, data)) {
 					result = FALSE;
 				}
 
