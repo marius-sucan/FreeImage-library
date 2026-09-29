@@ -73,7 +73,7 @@ int main(void) {
     remove(path);
     mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
     ok = (mb != NULL);
-    for (i = 0; ok && i < FRAMES; i++) ok = FreeImage_AppendPageEx(mb, frames[i]);
+    for (i = 0; ok && i < FRAMES; i++) ok = FreeImage_AppendPage(mb, frames[i]);
     ok = FreeImage_CloseMultiBitmap(mb, 0) && ok;
     report("saved", ok);
 

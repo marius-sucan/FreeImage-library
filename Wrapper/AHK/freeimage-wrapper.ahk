@@ -1315,6 +1315,7 @@ FreeImage_OpenMultiBitmapFromHandle(FIF, pIO, hHandle, flags:=0) {
 FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 ; If the multi-page image was opened with read_only=0, any modifications
 ; to the image will be saved to disk; do not use FreeImage_Save() to save a multi-page image.
+; Returns FALSE when the changes could not be written; the file is then left as it was.
 ; flags - 0, or these combined with |; GIF and ICO take none:
 ; PNG_Z_BEST_SPEED = 0x0001; APNG, MNG: zlib level 1, the fastest; any level 1 to 9 may be given
 ; PNG_Z_DEFAULT_COMPRESSION = 0x0006; APNG, MNG: zlib level 6, the default
@@ -1352,8 +1353,7 @@ FreeImage_GetPageCount(hFIMULTIBITMAP) {
 }
 
 FreeImage_AppendPage(hFIMULTIBITMAP, hImage) {
-   ; Returns TRUE when the page was added. It is refused when the format cannot encode the
-   ; bitmap, and FreeImage_CloseMultiBitmap() then returns FALSE, although it saves the other pages.
+   ; Returns TRUE when the page was added. It is refused when the format cannot encode the bitmap.
    Return DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int")
 }
 
@@ -1387,8 +1387,9 @@ FreeImage_UnlockPage(hFIMULTIBITMAP, hImage, changed) {
    ; Unlocks a previously locked page and gives it back to the multi-page engine. When the last
    ; parameter is 1, the page is marked changed and the new page data is applied in the
    ; multi-page bitmap.
+   ; Returns FALSE when hImage is not a locked page, or when its changes could not be kept.
 
-   Return DllCall(getFIMfunc("UnlockPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int", changed)
+   Return DllCall(getFIMfunc("UnlockPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int", changed, "Int")
 }
 
 FreeImage_GetLockedPageNumbers(hFIMULTIBITMAP) {

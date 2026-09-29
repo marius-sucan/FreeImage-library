@@ -392,6 +392,10 @@ static void check_readwrite_close(const char *file) {
             if (FreeImage_GetBPP(pg) != 32) fail(file, "a writable session ignored AVIF_PLAYBACK");
             FreeImage_UnlockPage(mb, pg, FALSE);
         }
+        /* AVIF cannot store the page: the change is refused and the session stays untouched */
+        pg = FreeImage_LockPage(mb, 1);
+        if (pg && FreeImage_UnlockPage(mb, pg, TRUE))
+            fail(file, "UnlockPage kept a change AVIF cannot store");
         if (!FreeImage_CloseMultiBitmap(mb, 0))
             fail(file, "CloseMultiBitmap returned FALSE for an untouched session");
     }
@@ -399,7 +403,7 @@ static void check_readwrite_close(const char *file) {
     mb = FreeImage_OpenMultiBitmap(FIF_AVIF, copy, FALSE, FALSE, TRUE, 0);
     if (!mb) fail(file, "OpenMultiBitmap with read_only FALSE returned NULL for the edit");
     else {
-        if (!FreeImage_DeletePageEx(mb, 0)) fail(file, "DeletePage failed in a writable session");
+        if (!FreeImage_DeletePage(mb, 0)) fail(file, "DeletePage failed in a writable session");
         if (FreeImage_CloseMultiBitmap(mb, 0))
             fail(file, "CloseMultiBitmap returned TRUE for an edit AVIF cannot save");
     }

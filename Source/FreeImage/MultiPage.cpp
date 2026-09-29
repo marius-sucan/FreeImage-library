@@ -114,7 +114,6 @@ struct MULTIBITMAPHEADER {
 		, read_only(TRUE)
 		, cache_fif(fif)
 		, load_flags(0)
-		, failed(FALSE)
 		, read_data(NULL)
 		, start(0)
 	{
@@ -145,8 +144,6 @@ struct MULTIBITMAPHEADER {
 	BOOL read_only;
 	FREE_IMAGE_FORMAT cache_fif;
 	int load_flags;
-	// a page operation was dropped; reported at close
-	BOOL failed;
 	// FIMD_ANIMATION per cache block; the cache format may drop it
 	std::map<int, FIBITMAP *> page_metadata;
 	// plugin decoder state, from the first LockPage until close
@@ -412,7 +409,6 @@ FreeImage_CanHoldAnotherPage(FIMULTIBITMAP *bitmap) {
 		FreeImage_OutputMessageProc(header->fif,
 			"%s is not a multi-page format: it cannot hold more than one page",
 			FreeImage_GetFormatFromFIF(header->fif));
-		header->failed = TRUE;
 		return FALSE;
 	}
 
@@ -858,10 +854,6 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 				header->locked_pages.erase(header->locked_pages.begin()->first);
 			}
 
-			if (header->failed) {
-				success = FALSE;
-			}
-
 			// delete the FIMULTIBITMAPHEADER
 
 			delete header;
@@ -963,7 +955,6 @@ FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	FreeImage_OutputMessageProc(header->fif,
 		"FreeImage_AppendPage: the page could not be stored (the bitmap is read-only or has locked pages, or %s cannot encode this image)",
 		FreeImage_GetFormatFromFIF(header->cache_fif));
-	header->failed = TRUE;
 	return FALSE;
 }
 
@@ -980,7 +971,6 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 		FreeImage_OutputMessageProc(header->fif,
 			"FreeImage_InsertPage: cannot insert at %d (the bitmap has %d page(s); use FreeImage_AppendPage to add at the end)",
 			page, page_count);
-		header->failed = TRUE;
 		return FALSE;
 	}
 
@@ -995,7 +985,6 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 
 			if (block_source == header->m_blocks.end()) {
 				FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
-				header->failed = TRUE;
 				return FALSE;
 			}
 			header->m_blocks.insert(block_source, block);
@@ -1011,7 +1000,6 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 	FreeImage_OutputMessageProc(header->fif,
 		"FreeImage_InsertPage: the page could not be stored (the bitmap is read-only or has locked pages, or %s cannot encode this image)",
 		FreeImage_GetFormatFromFIF(header->cache_fif));
-	header->failed = TRUE;
 	return FALSE;
 }
 
@@ -1026,7 +1014,6 @@ FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
 	if (header->read_only || !header->locked_pages.empty()) {
 		FreeImage_OutputMessageProc(header->fif, "FreeImage_DeletePage: the bitmap is %s",
 			header->read_only ? "read-only" : "holding locked pages");
-		header->failed = TRUE;
 		return FALSE;
 	}
 
@@ -1036,14 +1023,12 @@ FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
 		FreeImage_OutputMessageProc(header->fif,
 			"FreeImage_DeletePage: page %d does not exist (the bitmap has %d page(s))",
 			page, page_count);
-		header->failed = TRUE;
 		return FALSE;
 	}
 
 	if (page_count <= 1) {
 		FreeImage_OutputMessageProc(header->fif,
 			"FreeImage_DeletePage: a multi-page bitmap must keep at least one page");
-		header->failed = TRUE;
 		return FALSE;
 	}
 
@@ -1068,7 +1053,6 @@ FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
 	}
 
 	FreeImage_OutputMessageProc(header->fif, "FreeImage_DeletePage: page %d could not be located", page);
-	header->failed = TRUE;
 	return FALSE;
 }
 
@@ -1129,7 +1113,7 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 	return dib;
 }
 
-void DLL_CALLCONV
+BOOL DLL_CALLCONV
 FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 	if ((bitmap) && (page)) {
 		MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
@@ -1137,11 +1121,14 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 		// find out if the page we try to unlock is actually locked...
 
 		if (header->locked_pages.find(page) != header->locked_pages.end()) {
+			BOOL kept = TRUE;
+
 			// store the bitmap compressed in the cache for later writing
 			
-			if (changed && !header->read_only) {
-				header->changed = TRUE;
-
+			if (changed && header->read_only) {
+				FreeImage_OutputMessageProc(header->fif, "FreeImage_UnlockPage: the bitmap is read-only, the changes are lost");
+				kept = FALSE;
+			} else if (changed) {
 				// cut loose the block from the rest
 
 				BlockListIterator i = FreeImage_FindBlock(bitmap, header->locked_pages[page]);
@@ -1151,10 +1138,9 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					FreeImage_OutputMessageProc(header->fif,
 						"FreeImage_UnlockPage: page %d is no longer in the bitmap, the changes are lost",
 						header->locked_pages[page]);
-					header->failed = TRUE;
 					FreeImage_Unload(page);
 					header->locked_pages.erase(page);
-					return;
+					return FALSE;
 				}
 
 				// compress the data
@@ -1171,13 +1157,12 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					FreeImage_OutputMessageProc(header->fif,
 						"FreeImage_UnlockPage: %s cannot store this page, the changes are lost",
 						FreeImage_GetFormatFromFIF(header->cache_fif));
-					header->failed = TRUE;
 					if (hmem != NULL) {
 						FreeImage_CloseMemory(hmem);
 					}
 					FreeImage_Unload(page);
 					header->locked_pages.erase(page);
-					return;
+					return FALSE;
 				}
 
 				// write the data to the cache, then drop the old copy
@@ -1188,11 +1173,10 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 					// nothing stored: leave the block as it was
 					FreeImage_OutputMessageProc(header->fif,
 						"FreeImage_UnlockPage: the cache could not store this page, the changes are lost");
-					header->failed = TRUE;
 					FreeImage_CloseMemory(hmem);
 					FreeImage_Unload(page);
 					header->locked_pages.erase(page);
-					return;
+					return FALSE;
 				}
 
 				if (i->m_type == BLOCK_REFERENCE) {
@@ -1204,6 +1188,8 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 
 				*i = PageBlock(BLOCK_REFERENCE, iPage, (INT64)compressed_size);
 
+				header->changed = TRUE;
+
 				// get rid of the compressed data
 
 				FreeImage_CloseMemory(hmem);
@@ -1214,8 +1200,14 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 			FreeImage_Unload(page);
 
 			header->locked_pages.erase(page);
+
+			return kept;
 		}
+
+		FreeImage_OutputMessageProc(header->fif, "FreeImage_UnlockPage: the image is not a page locked in this bitmap");
 	}
+
+	return FALSE;
 }
 
 BOOL DLL_CALLCONV

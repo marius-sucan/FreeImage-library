@@ -196,7 +196,7 @@ static void testMultiPageU(const char *lpszPathName) {
 	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmapU(FIF_TIFF, filename, TRUE, FALSE, FALSE);
 	assert(mpage != NULL);
 	for(int i = 0; i < 3; i++) {
-		BOOL bAdded = FreeImage_AppendPageEx(mpage, page);
+		BOOL bAdded = FreeImage_AppendPage(mpage, page);
 		assert(bAdded);
 	}
 	BOOL bResult = FreeImage_CloseMultiBitmap(mpage, 0);
@@ -215,7 +215,7 @@ static void testMultiPageU(const char *lpszPathName) {
 	assert(dib != NULL);
 	FreeImage_Invert(dib);
 	FreeImage_UnlockPage(mpage, dib, TRUE);
-	bResult = FreeImage_DeletePageEx(mpage, 0);
+	bResult = FreeImage_DeletePage(mpage, 0);
 	assert(bResult);
 	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
 	assert(bResult);
@@ -259,6 +259,103 @@ static void testMultiPageU(const char *lpszPathName) {
 
 // --------------------------------------------------------------------------
 
+static int countPages(const char *filename) {
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, FALSE, TRUE, TRUE);
+	if(!mpage) {
+		return -1;
+	}
+	const int count = FreeImage_GetPageCount(mpage);
+	FreeImage_CloseMultiBitmap(mpage, 0);
+	return count;
+}
+
+// each page function reports its own failure; CloseMultiBitmap fails only when the file is not written
+static void testPageResults(const char *lpszPathName) {
+	printf("testPageResults ...\n");
+
+	const char *filename = "page-results.tif";
+
+	FIBITMAP *src = FreeImage_Load(FreeImage_GetFileType(lpszPathName), lpszPathName, 0);
+	assert(src != NULL);
+	FIBITMAP *page = FreeImage_ConvertTo24Bits(src);
+	assert(page != NULL);
+	FreeImage_Unload(src);
+
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	BOOL bResult = FreeImage_AppendPage(mpage, page);
+	assert(bResult);
+	bResult = FreeImage_AppendPage(mpage, page);
+	assert(bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+
+	// refused calls fail themselves, not the close that saves the accepted page
+	mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, FALSE, FALSE, TRUE);
+	assert(mpage != NULL);
+	bResult = FreeImage_AppendPage(mpage, page);
+	assert(bResult);
+	bResult = FreeImage_InsertPage(mpage, 99, page);
+	assert(!bResult);
+	bResult = FreeImage_DeletePage(mpage, 99);
+	assert(!bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	assert(countPages(filename) == 3);
+
+	// read-only: every edit is refused and there is nothing to write
+	mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, FALSE, TRUE, TRUE);
+	assert(mpage != NULL);
+	bResult = FreeImage_AppendPage(mpage, page);
+	assert(!bResult);
+	bResult = FreeImage_DeletePage(mpage, 0);
+	assert(!bResult);
+	FIBITMAP *dib = FreeImage_LockPage(mpage, 0);
+	assert(dib != NULL);
+	// a bitmap that is not a locked page
+	bResult = FreeImage_UnlockPage(mpage, page, FALSE);
+	assert(!bResult);
+	// a change a read-only bitmap cannot keep
+	bResult = FreeImage_UnlockPage(mpage, dib, TRUE);
+	assert(!bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	assert(countPages(filename) == 3);
+
+	// kept changes
+	mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, FALSE, FALSE, TRUE);
+	assert(mpage != NULL);
+	dib = FreeImage_LockPage(mpage, 1);
+	assert(dib != NULL);
+	bResult = FreeImage_UnlockPage(mpage, dib, FALSE);
+	assert(bResult);
+	dib = FreeImage_LockPage(mpage, 1);
+	assert(dib != NULL);
+	FreeImage_Invert(dib);
+	bResult = FreeImage_UnlockPage(mpage, dib, TRUE);
+	assert(bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+
+	mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, filename, FALSE, TRUE, TRUE);
+	assert(mpage != NULL);
+	dib = FreeImage_LockPage(mpage, 1);
+	assert(dib != NULL);
+	RGBQUAD original, inverted;
+	FreeImage_GetPixelColor(page, 0, 0, &original);
+	FreeImage_GetPixelColor(dib, 0, 0, &inverted);
+	assert(inverted.rgbRed == 255 - original.rgbRed);
+	assert(inverted.rgbGreen == 255 - original.rgbGreen);
+	assert(inverted.rgbBlue == 255 - original.rgbBlue);
+	FreeImage_UnlockPage(mpage, dib, FALSE);
+	FreeImage_CloseMultiBitmap(mpage, 0);
+
+	FreeImage_Unload(page);
+	remove(filename);
+}
+
+// --------------------------------------------------------------------------
+
 void testMultiPage(const char *lpszPathName) {
 	printf("testMultiPage ...\n");
 
@@ -278,4 +375,7 @@ void testMultiPage(const char *lpszPathName) {
 
 	// test multipage functions with a wide-character filename
 	testMultiPageU(lpszPathName);
+
+	// test what the page functions and the close report
+	testPageResults(lpszPathName);
 }

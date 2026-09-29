@@ -195,7 +195,7 @@ static void test_bigtiff_flag(void) {
     remove(path);
 
     mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
-    ok = mb && FreeImage_AppendPageEx(mb, pages[0]) && FreeImage_AppendPageEx(mb, pages[1]);
+    ok = mb && FreeImage_AppendPage(mb, pages[0]) && FreeImage_AppendPage(mb, pages[1]);
     ok = FreeImage_CloseMultiBitmap(mb, TIFF_BIGTIFF_FORMAT | TIFF_LZW) && ok;
     report("CloseMultiBitmap, TIFF_BIGTIFF_FORMAT: BigTIFF", ok && tiff_version(path) == 43);
     mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, 0);
