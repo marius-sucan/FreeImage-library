@@ -70,6 +70,7 @@ Fixes:
 - fixed some uncompressed PSB files over 4 GB, such as an 8-bit 65536 x 65536 one, being refused as invalid: a buffer check computed the image size in 32 bits;
 - fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it: classic TIFF offsets are 32-bit and libtiff's refusals went unchecked; such a file is written as BigTIFF, and a failed write fails the save;
 - fixed SGI RLE files whose rows start 2 GB or more into the file loading other data in those rows: the row offsets are unsigned, and a row whose start cannot be reached is left blank;
+- fixed saving a float image of 2^31 samples or more as half-float OpenEXR, the default, aborting the process or overrunning the heap: the half buffer was sized and indexed in int, and a failed allocation left the plugin as an exception;
 - and many other fixes
 
 Changes:

@@ -479,7 +479,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				// dw.max.y is inclusive; the last chunk is short
 				const int rows = MIN(chunk_size, dw.max.y - dw.min.y + 1);
 				// read a chunk
-				rgbaFile.setFrameBuffer (&chunk[0][0] - dw.min.x - dw.min.y * width, 1, width);
+				rgbaFile.setFrameBuffer (&chunk[0][0] - dw.min.x - (ptrdiff_t)dw.min.y * width, 1, width);
 				try {
 					rgbaFile.readPixels (dw.min.y, dw.min.y + rows - 1);
 				}
@@ -577,7 +577,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		FreeImage_FlipVertical(dib);
 
 	}
-	catch(Iex::BaseExc & e) {
+	catch(std::exception & e) {
+		// Iex::BaseExc and std::bad_alloc alike: none may leave the plugin
 		if(dib != NULL) {
 			FreeImage_Unload(dib);
 		}
@@ -649,15 +650,16 @@ SaveAsEXR_LC(C_OStream& ostream, FIBITMAP *dib, Imf::Header& header, int width, 
 
 		FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
 
-		// convert from float to half
-		Imf::Array2D<Imf::Rgba> pixels(height, width);
+		// convert from float to half; Array2D indexes in long, 32-bit on Windows
+		std::vector<Imf::Rgba> pixels((size_t)width * height);
 		switch(image_type) {
 			case FIT_RGBF:
 				rgbaChannels = Imf::WRITE_YC;
 				for(y = 0; y < height; y++) {
 					FIRGBF *src_bits = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
+					Imf::Rgba *dst_row = &pixels[(size_t)y * width];
 					for(x = 0; x < width; x++) {
-						Imf::Rgba &dst_bits = pixels[y][x];
+						Imf::Rgba &dst_bits = dst_row[x];
 						dst_bits.r = src_bits[x].red;
 						dst_bits.g = src_bits[x].green;
 						dst_bits.b = src_bits[x].blue;
@@ -668,8 +670,9 @@ SaveAsEXR_LC(C_OStream& ostream, FIBITMAP *dib, Imf::Header& header, int width, 
 				rgbaChannels = Imf::WRITE_YCA;
 				for(y = 0; y < height; y++) {
 					FIRGBAF *src_bits = (FIRGBAF*)FreeImage_GetScanLine(dib, height - 1 - y);
+					Imf::Rgba *dst_row = &pixels[(size_t)y * width];
 					for(x = 0; x < width; x++) {
-						Imf::Rgba &dst_bits = pixels[y][x];
+						Imf::Rgba &dst_bits = dst_row[x];
 						dst_bits.r = src_bits[x].red;
 						dst_bits.g = src_bits[x].green;
 						dst_bits.b = src_bits[x].blue;
@@ -684,12 +687,13 @@ SaveAsEXR_LC(C_OStream& ostream, FIBITMAP *dib, Imf::Header& header, int width, 
 
 		// write the data
 		Imf::RgbaOutputFile file(ostream, header, rgbaChannels);
-		file.setFrameBuffer (&pixels[0][0], 1, width);
+		file.setFrameBuffer (&pixels[0], 1, width);
 		file.writePixels (height);
 
 		return TRUE;
 
-	} catch(Iex::BaseExc & e) {
+	} catch(std::exception & e) {
+		// Iex::BaseExc and std::bad_alloc alike: none may leave the plugin
 		FreeImage_OutputMessageProc(s_format_id, e.what());
 
 		return FALSE;
@@ -808,15 +812,19 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 
 		if(pixelType == Imf::HALF) {
-			// convert from float to half
-			halfData = new(std::nothrow) half[width * height * components];
+			// convert from float to half; in int, the count wraps from 2^31 samples
+			const UINT64 samples = (UINT64)width * height * components;
+			if(samples > (UINT64)(std::numeric_limits<size_t>::max)() / sizeof(half)) {
+				THROW (Iex::NullExc, FI_MSG_ERROR_MEMORY);
+			}
+			halfData = new(std::nothrow) half[(size_t)samples];
 			if(!halfData) {
 				THROW (Iex::NullExc, FI_MSG_ERROR_MEMORY);
 			}
 
 			for(int y = 0; y < height; y++) {
 				float *src_bits = (float*)FreeImage_GetScanLine(dib, height - 1 - y);
-				half *dst_bits = halfData + y * width * components;
+				half *dst_bits = halfData + (size_t)y * width * components;
 				for(int x = 0; x < width; x++) {
 					for(int c = 0; c < components; c++) {
 						dst_bits[c] = src_bits[c];
@@ -871,7 +879,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		return TRUE;
 
-	} catch(Iex::BaseExc & e) {
+	} catch(std::exception & e) {
+		// Iex::BaseExc and std::bad_alloc alike: none may leave the plugin
 		if(halfData != NULL) {
 			delete[] halfData;
 		}
