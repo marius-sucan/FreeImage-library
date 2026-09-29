@@ -245,6 +245,7 @@ static int gif_load(void) { return load_case(FIF_GIF, FIT_BITMAP, 40, 24, 8); }
 static int ico_save(void) { return save_case(FIF_ICO, FIT_BITMAP, 32, 32, 24); }
 static int j2k_save(void) { return save_case(FIF_J2K, FIT_BITMAP, 16, 16, 24); }
 static int j2k_load(void) { return load_case(FIF_J2K, FIT_BITMAP, 16, 16, 24); }
+static int exr_save(void) { return save_case(FIF_EXR, FIT_RGBF, 40, 24, 96); }
 
 #endif /* !_WIN32 */
 
@@ -261,6 +262,7 @@ int main(void) {
     sweep("ICO save: TRUE only for a file that loads", ico_save);
     sweep("JPEG 2000 save: TRUE only for a file that loads", j2k_save);
     sweep("JPEG 2000 load: no crash", j2k_load);
+    sweep("EXR save: TRUE only for a file that loads", exr_save);
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;

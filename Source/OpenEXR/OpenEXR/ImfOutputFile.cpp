@@ -1105,6 +1105,10 @@ OutputFile::writePixels (int numScanLines)
 
                 _data->missingScanLines -= numLines;
 
+                // FreeImage: a compression task that failed leaves its buffer partially full
+                if (writeBuffer->hasException)
+                    throw IEX_NAMESPACE::IoExc (writeBuffer->exception);
+
                 //
                 // If the line buffer is only partially full, then it is
                 // not complete and we cannot write it to disk yet.
