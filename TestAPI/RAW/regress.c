@@ -338,6 +338,65 @@ static void test_header(void) {
 	}
 }
 
+/* --- a bitmap preview turns like the image -------------------------------- */
+static int same_pixel(FIBITMAP *a, unsigned ax, unsigned ay, FIBITMAP *b, unsigned bx, unsigned by) {
+	/* top-down coordinates */
+	ay = FreeImage_GetHeight(a) - 1 - ay;
+	by = FreeImage_GetHeight(b) - 1 - by;
+	if (FreeImage_GetBPP(a) == 8) {
+		BYTE ia = 0, ib = 0;
+		FreeImage_GetPixelIndex(a, ax, ay, &ia);
+		FreeImage_GetPixelIndex(b, bx, by, &ib);
+		return ia == ib;
+	} else {
+		RGBQUAD ca, cb;
+		FreeImage_GetPixelColor(a, ax, ay, &ca);
+		FreeImage_GetPixelColor(b, bx, by, &cb);
+		return ca.rgbRed == cb.rgbRed && ca.rgbGreen == cb.rgbGreen && ca.rgbBlue == cb.rgbBlue;
+	}
+}
+
+static void test_preview_turn(void) {
+	static const struct { const char *file, *twin; int flip; } T[] = {
+		{ "data/fi_raw_rot90.dng",       "data/fi_raw_rggb.dng", 6 },
+		{ "data/fi_raw_mono_rot270.dng", "data/fi_raw_mono.dng", 5 },
+	};
+	int i;
+	printf("-- a bitmap preview turns like the image\n");
+	for (i = 0; i < (int)(sizeof(T) / sizeof(T[0])); i++) {
+		FIBITMAP *turned = FreeImage_Load(FIF_RAW, T[i].file, RAW_PREVIEW);
+		FIBITMAP *twin = FreeImage_Load(FIF_RAW, T[i].twin, RAW_PREVIEW);
+		if (!turned || !twin) {
+			fail(T[i].file, "preview", "load failed");
+		} else if (FreeImage_GetWidth(turned) != FreeImage_GetHeight(twin) ||
+		           FreeImage_GetHeight(turned) != FreeImage_GetWidth(twin) ||
+		           FreeImage_GetBPP(turned) != FreeImage_GetBPP(twin)) {
+			fail(T[i].file, "preview", "%ux%u, the unturned preview %ux%u",
+			     FreeImage_GetWidth(turned), FreeImage_GetHeight(turned),
+			     FreeImage_GetWidth(twin), FreeImage_GetHeight(twin));
+		} else {
+			/* pixel (x, y) is the source pixel LibRaw's flip_index(y, x) gives */
+			const unsigned w = FreeImage_GetWidth(turned), h = FreeImage_GetHeight(turned);
+			const unsigned sw = FreeImage_GetWidth(twin), sh = FreeImage_GetHeight(twin);
+			unsigned x, y, bad = 0;
+			for (y = 0; y < h; y++) {
+				for (x = 0; x < w; x++) {
+					unsigned row = (T[i].flip & 4) ? x : y, col = (T[i].flip & 4) ? y : x;
+					if (T[i].flip & 2) row = sh - 1 - row;
+					if (T[i].flip & 1) col = sw - 1 - col;
+					if (!same_pixel(turned, x, y, twin, col, row)) bad++;
+				}
+			}
+			if (bad)
+				fail(T[i].file, "preview", "%u pixels are not where flip %d puts them", bad, T[i].flip);
+			else
+				printf("  ok   %-30s %ux%u preview turned like the image\n", T[i].file, w, h);
+		}
+		if (turned) FreeImage_Unload(turned);
+		if (twin) FreeImage_Unload(twin);
+	}
+}
+
 /* --- the Orientation tag -------------------------------------------------- */
 static void test_orientation(void) {
 	static const struct { const char *file; int turned; } ROT[] = {
@@ -516,6 +575,7 @@ int main(void) {
 	test_paths();
 	test_header();
 	test_orientation();
+	test_preview_turn();
 	test_crop();
 	test_icc();
 	test_bayer();

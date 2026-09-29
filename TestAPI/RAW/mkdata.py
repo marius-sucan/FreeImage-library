@@ -257,6 +257,82 @@ def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
     return header + body
 
 
+def mono_field(width, height):
+    """A monochrome sensor's field: a gradient with a fine checker."""
+    buf = bytearray()
+    for y in range(height):
+        for x in range(width):
+            v = (x * 397 + y * 211) % 4096 * 8
+            v += 4000 if ((x >> 3) + (y >> 3)) & 1 else 0
+            buf += struct.pack("<H", v)
+    return bytes(buf)
+
+
+def preview_grey(width, height):
+    """An uncompressed 8-bit greyscale preview whose four corners differ."""
+    buf = bytearray()
+    for y in range(height):
+        for x in range(width):
+            buf.append((x * 191) // max(width - 1, 1) + (y * 64) // max(height - 1, 1))
+    return bytes(buf)
+
+
+def make_mono_dng(raw_w, raw_h, model, prev_w, prev_h, orientation=0):
+    """Assemble a DNG from a monochrome camera: a LinearRaw field of one
+    sample, which LibRaw decodes to one color, and a greyscale preview."""
+    ifd0 = Ifd()
+    ifd0.set(254, LONG, [1])                    # NewSubfileType: reduced res
+    ifd0.set(256, LONG, [prev_w])               # ImageWidth
+    ifd0.set(257, LONG, [prev_h])               # ImageLength
+    ifd0.set(258, SHORT, [8])                   # BitsPerSample
+    ifd0.set(259, SHORT, [1])                   # Compression: none
+    ifd0.set(262, SHORT, [1])                   # Photometric: BlackIsZero
+    ifd0.set(271, ASCII, "FreeImage")           # Make
+    ifd0.set(272, ASCII, model)                 # Model
+    ifd0.set(273, LONG, [0])                    # StripOffsets (patched)
+    if orientation:
+        ifd0.set(274, SHORT, [orientation])     # Orientation
+    ifd0.set(277, SHORT, [1])                   # SamplesPerPixel
+    ifd0.set(278, LONG, [prev_h])               # RowsPerStrip
+    ifd0.set(279, LONG, [prev_w * prev_h])      # StripByteCounts
+    ifd0.set(284, SHORT, [1])                   # PlanarConfiguration
+    ifd0.set(330, LONG, [0])                    # SubIFDs (patched)
+    ifd0.set(50706, BYTE, [1, 4, 0, 0])         # DNGVersion 1.4
+    ifd0.set(50707, BYTE, [1, 1, 0, 0])         # DNGBackwardVersion 1.1
+    ifd0.set(50708, ASCII, "FreeImage " + model)  # UniqueCameraModel
+
+    field = mono_field(raw_w, raw_h)
+    sub = Ifd()
+    sub.set(254, LONG, [0])                     # NewSubfileType: full res
+    sub.set(256, LONG, [raw_w])
+    sub.set(257, LONG, [raw_h])
+    sub.set(258, SHORT, [16])                   # BitsPerSample
+    sub.set(259, SHORT, [1])                    # Compression: none
+    sub.set(262, SHORT, [34892])                # Photometric: LinearRaw
+    sub.set(273, LONG, [0])                     # StripOffsets (patched)
+    sub.set(277, SHORT, [1])                    # SamplesPerPixel
+    sub.set(278, LONG, [raw_h])                 # RowsPerStrip
+    sub.set(279, LONG, [len(field)])            # StripByteCounts
+    sub.set(284, SHORT, [1])                    # PlanarConfiguration
+    sub.set(50714, LONG, [0])                   # BlackLevel
+    sub.set(50717, LONG, [65535])               # WhiteLevel
+
+    header = struct.pack("<2sHI", b"II", 42, 8)
+    ifd0_off = 8
+    sub_off = ifd0_off + ifd0.size()
+    prev_off = sub_off + sub.size()
+    prev = preview_grey(prev_w, prev_h)
+    raw_off = prev_off + len(prev) + (len(prev) & 1)
+
+    body = ifd0.emit(ifd0_off, {273: prev_off, 330: sub_off})
+    body += sub.emit(sub_off, {273: raw_off})
+    body += prev
+    if len(prev) & 1:
+        body += b"\0"
+    body += field
+    return header + body
+
+
 RGGB = [0, 1, 1, 2]
 BGGR = [2, 1, 1, 0]
 
@@ -298,6 +374,12 @@ def main():
     files.append(("fi_raw_rot180.dng",
                   make_dng(w2, h2, RGGB, bayer(w2, h2, RGGB), "Synth Rot180",
                            orientation=3)))
+
+    # a monochrome camera, and the same shot turned 270 degrees
+    files.append(("fi_raw_mono.dng",
+                  make_mono_dng(w, h, "Synth Mono", 48, 32)))
+    files.append(("fi_raw_mono_rot270.dng",
+                  make_mono_dng(w, h, "Synth Mono", 48, 32, orientation=8)))
 
     for name, data in files:
         path = os.path.join(out, name)

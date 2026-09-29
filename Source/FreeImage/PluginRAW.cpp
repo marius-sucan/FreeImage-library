@@ -234,56 +234,80 @@ libraw_ConvertProcessedRawToDib(LibRaw *RawProcessor) {
 /**
 Convert a processed raw image to a FIBITMAP
 @param image Processed raw image
+@param flip LibRaw flip to apply: bit 2 transposes, bit 1 turns upside down, bit 0 mirrors
 @param header_only TRUE to allocate the header only
 @return Returns the converted dib if successfull, returns NULL otherwise
 @see libraw_LoadEmbeddedPreview
 */
 static FIBITMAP * 
-libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image, BOOL header_only) {
+libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image, int flip, BOOL header_only) {
 	FIBITMAP *dib = NULL;
 
 	try {
-		unsigned width = image->width;
-		unsigned height = image->height;
-		unsigned bpp = image->bits;
+		const unsigned src_width = image->width;
+		const unsigned src_height = image->height;
+		const unsigned bpp = image->bits;
+		const size_t pixels = (size_t)src_width * src_height;
+		if(((bpp != 8) && (bpp != 16)) || !pixels) {
+			return NULL;
+		}
+		const size_t bytes = bpp / 8;
+		// LibRaw can count 3 colors in a thumbnail of one
+		unsigned colors = image->colors;
+		if(image->data_size < pixels * colors * bytes) {
+			colors = (image->data_size == pixels * bytes) ? 1 : 0;
+		}
+		if((colors != 1) && (colors != 3)) {
+			return NULL;
+		}
+
+		// the thumbnail turns like the image
+		const unsigned width = (flip & 4) ? src_height : src_width;
+		const unsigned height = (flip & 4) ? src_width : src_height;
+
+		// allocate output dib
 		if(bpp == 16) {
-			// allocate output dib
-			dib = FreeImage_AllocateHeaderT(header_only, FIT_RGB16, width, height);
-			if(!dib) {
-				throw FI_MSG_ERROR_DIB_MEMORY;
-			}
-			if(header_only) {
-				return dib;
-			}
-			// write data
-			WORD *raw_data = (WORD*)image->data;
-			for(unsigned y = 0; y < height; y++) {
-				FIRGB16 *output = (FIRGB16*)FreeImage_GetScanLine(dib, height - 1 - y);
-				for(unsigned x = 0; x < width; x++) {
-					output[x].red   = raw_data[0];
-					output[x].green = raw_data[1];
-					output[x].blue  = raw_data[2];
-					raw_data += 3;
+			dib = FreeImage_AllocateHeaderT(header_only, (colors == 3) ? FIT_RGB16 : FIT_UINT16, width, height);
+		} else {
+			dib = FreeImage_AllocateHeaderT(header_only, FIT_BITMAP, width, height, 8 * colors);
+		}
+		if(!dib) {
+			throw FI_MSG_ERROR_DIB_MEMORY;
+		}
+		if(header_only) {
+			return dib;
+		}
+
+		// write data: pixel (x, y) is the source pixel LibRaw's flip_index(y, x) gives
+		for(unsigned y = 0; y < height; y++) {
+			BYTE *output = FreeImage_GetScanLine(dib, height - 1 - y);
+			for(unsigned x = 0; x < width; x++) {
+				unsigned row = (flip & 4) ? x : y;
+				unsigned col = (flip & 4) ? y : x;
+				if(flip & 2) {
+					row = src_height - 1 - row;
 				}
-			}
-		} else if(bpp == 8) {
-			// allocate output dib
-			dib = FreeImage_AllocateHeaderT(header_only, FIT_BITMAP, width, height, 24);
-			if(!dib) {
-				throw FI_MSG_ERROR_DIB_MEMORY;
-			}
-			if(header_only) {
-				return dib;
-			}
-			// write data
-			BYTE *raw_data = (BYTE*)image->data;
-			for(unsigned y = 0; y < height; y++) {
-				RGBTRIPLE *output = (RGBTRIPLE*)FreeImage_GetScanLine(dib, height - 1 - y);
-				for(unsigned x = 0; x < width; x++) {
-					output[x].rgbtRed   = raw_data[0];
-					output[x].rgbtGreen = raw_data[1];
-					output[x].rgbtBlue  = raw_data[2];
-					raw_data += 3;
+				if(flip & 1) {
+					col = src_width - 1 - col;
+				}
+				const BYTE *input = image->data + ((size_t)row * src_width + col) * colors * bytes;
+				if(bpp == 16) {
+					const WORD *sample = (const WORD*)input;
+					if(colors == 3) {
+						FIRGB16 *pixel = (FIRGB16*)output + x;
+						pixel->red   = sample[0];
+						pixel->green = sample[1];
+						pixel->blue  = sample[2];
+					} else {
+						((WORD*)output)[x] = sample[0];
+					}
+				} else if(colors == 3) {
+					RGBTRIPLE *pixel = (RGBTRIPLE*)output + x;
+					pixel->rgbtRed   = input[0];
+					pixel->rgbtGreen = input[1];
+					pixel->rgbtBlue  = input[2];
+				} else {
+					output[x] = input[0];
 				}
 			}
 		}
@@ -334,7 +358,7 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 				FreeImage_CloseMemory(hmem);
 			} else {
 				// convert processed data to output dib
-				dib = libraw_ConvertProcessedImageToDib(thumb_image, (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS);
+				dib = libraw_ConvertProcessedImageToDib(thumb_image, RawProcessor->imgdata.sizes.flip, (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS);
 			}
 		} else {
 			throw "LibRaw : failed to run dcraw_make_mem_thumb";

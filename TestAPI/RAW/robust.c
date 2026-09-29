@@ -11,6 +11,7 @@ static const char *FILES[] = {
 	"data/fi_raw_nopreview.dng",  /* no preview: a different thumbnail path */
 	"data/fi_raw_odd.dng",        /* odd dimensions                        */
 	"data/fi_raw_rot90.dng",      /* Orientation 6: the turned sizes       */
+	"data/fi_raw_mono_rot270.dng", /* one color, a turned greyscale preview */
 };
 #define NFILES ((int)(sizeof(FILES) / sizeof(FILES[0])))
 

@@ -49,7 +49,7 @@ static const Expect TABLE[] = {
 
 	{ "data/fi_raw_rot90.dng",       "default16",   0,                FIT_RGB16,    54, 88, 48, 0xa64efb35796b87c1ULL,    0 },
 	{ "data/fi_raw_rot90.dng",       "display8",    RAW_DISPLAY,      FIT_BITMAP,   54, 88, 24, 0xcf09dcc62007567fULL,    0 },
-	{ "data/fi_raw_rot90.dng",       "preview",     RAW_PREVIEW,      FIT_BITMAP,   48, 32, 24, 0x41789f0360a65acfULL,    0 },
+	{ "data/fi_raw_rot90.dng",       "preview",     RAW_PREVIEW,      FIT_BITMAP,   32, 48, 24, 0x5fdfe323076d341fULL,    0 },
 	{ "data/fi_raw_rot90.dng",       "unprocessed", RAW_UNPROCESSED,  FIT_UINT16,   96, 64, 16, 0x6c67ac91471603bbULL,    0 },
 	{ "data/fi_raw_rot90.dng",       "halfsize",    RAW_HALFSIZE,     FIT_RGB16,    27, 44, 48, 0x26c625c9cac061d1ULL,    0 },
 	{ "data/fi_raw_rot90.dng",       "header",      HDR,              FIT_RGB16,    54, 88, 48, 0x0000000000000000ULL,    0 },

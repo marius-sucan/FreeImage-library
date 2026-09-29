@@ -9,8 +9,8 @@ run again at the next one.
 | test | what it covers |
 |---|---|
 | `decode` | Loads the six files of `data/` through all six of the plugin's paths - the default 16-bit load, `RAW_DISPLAY`, `RAW_PREVIEW`, `RAW_UNPROCESSED`, `RAW_HALFSIZE` and `FIF_LOAD_NOPIXELS` - and checks geometry, depth, decoded pixels, the ICC profile and the `Raw.*` metadata against a recorded table. Plus format detection for each. |
-| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the same again from a stream that starts at a non-zero offset, which is the bug described below; the relations between paths (half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); a header-only load of every path matching that path's full load in size, type, depth, profile and `Raw.*` keys, and carrying no pixels; a turned camera turning the processed image but not the CFA field; `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the embedded colour profile; the Bayer pattern; and that RAW is read-only. |
-| `robust` | Truncated prefixes, junk appended, single-byte corruptions, 32-bit words set to `0xFFFFFFFF`, 64-byte regions wiped, and a dense sweep over the first kilobyte where the TIFF header and both IFDs live, loaded in full and header-only on every path - 36556 damaged inputs across five of the files, plus degenerate buffers. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
+| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the same again from a stream that starts at a non-zero offset, which is the bug described below; the relations between paths (half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); a header-only load of every path matching that path's full load in size, type, depth, profile and `Raw.*` keys, and carrying no pixels; a turned camera turning the processed image, not the CFA field; a bitmap preview turning like the image, pixel for pixel against the same file unturned; `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the embedded colour profile; the Bayer pattern; and that RAW is read-only. |
+| `robust` | Truncated prefixes, junk appended, single-byte corruptions, 32-bit words set to `0xFFFFFFFF`, 64-byte regions wiped, and a dense sweep over the first kilobyte where the TIFF header and both IFDs live, loaded in full and header-only on every path - 43850 damaged inputs across six of the files, plus degenerate buffers. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
 
 ## Running
 
@@ -35,8 +35,8 @@ the oracle. Its values were recorded from LibRaw 0.21.1 and 0.22.2 reproduces
 every one of them; the rows of the two turned files were recorded with 0.22.2.
 `./decode --record` reprints it when a change is deliberate.
 
-The six files are small uncompressed DNGs - a preview image in IFD0 and an
-uncompressed CFA field in a SubIFD, which is the layout LibRaw takes apart with
+The eight files are small uncompressed DNGs - a preview image in IFD0 and an
+uncompressed CFA field in a SubIFD (a monochrome field for the last two), which is the layout LibRaw takes apart with
 its TIFF parser. A DNG carries TIFF magic and no RAW-specific signature, so
 `Validate()` cannot shortcut and has to open the file through
 `LibRaw_freeimage_datastream`, which is the FreeImage code worth exercising.
@@ -52,10 +52,15 @@ Between them they cover:
 - `fi_raw_odd.dng` - odd dimensions (70x46) and no margin, for off-by-one in
   the row loops;
 - `fi_raw_rot90.dng` - Orientation 6, a camera turned 90 degrees: LibRaw turns
-  the processed image (54x88, half size 27x44), not the CFA field or the
-  preview, which is what a header-only load of each path has to say;
+  the processed image (54x88, half size 27x44) and the plugin its bitmap preview
+  (32x48), not the CFA field, which is what a header-only load of each path has
+  to say;
 - `fi_raw_rot180.dng` - Orientation 3: turned, but the same size, so a
-  header-only load that swaps on any Orientation shows.
+  header-only load that swaps on any Orientation shows;
+- `fi_raw_mono.dng` - a monochrome camera: a LinearRaw field of one sample,
+  which LibRaw decodes to one color, and a greyscale preview, which LibRaw hands
+  over as one byte per pixel;
+- `fi_raw_mono_rot270.dng` - the same shot, Orientation 8.
 
 They are deliberately tiny. The decoders that 0.22 adds - Panasonic encoding 8,
 Sony YCC, OM System 14-bit - need real files from those cameras, which are tens
