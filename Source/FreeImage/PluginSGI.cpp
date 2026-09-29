@@ -217,7 +217,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	SGIHeader sgiHeader;
 	RLEStatus my_rle_status;
 	FIBITMAP *dib = NULL;
-	LONG *pRowIndex = NULL;
+	// unsigned: a row may start up to 4 GB into the image
+	DWORD *pRowIndex = NULL;
 
 	// the RLE offset table counts from the start of the image, which is not always the start of the stream
 	const INT64 start_pos = io->tell_proc(handle);
@@ -269,23 +270,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(bIsRLE) {
 			// read the Offset Tables 
 			int index_len = height * zsize;
-			pRowIndex = (LONG*)malloc(index_len * sizeof(LONG));
+			pRowIndex = (DWORD*)malloc(index_len * sizeof(DWORD));
 			if(!pRowIndex) {
 				throw FI_MSG_ERROR_MEMORY;
 			}
-			
-			if ((unsigned)index_len != io->read_proc(pRowIndex, sizeof(LONG), index_len, handle)) {
+
+			if ((unsigned)index_len != io->read_proc(pRowIndex, sizeof(DWORD), index_len, handle)) {
 				throw SGI_EOF_IN_RLE_INDEX;
 			}
-			
-#ifndef FREEIMAGE_BIGENDIAN		
+
+#ifndef FREEIMAGE_BIGENDIAN
 			// Fix byte order in index
 			for (i = 0; i < index_len; i++) {
-				SwapLong((DWORD*)&pRowIndex[i]);
+				SwapLong(&pRowIndex[i]);
 			}
 #endif
 			// Discard row size index
-			for (i = 0; i < (int)(index_len * sizeof(LONG)); i++) {
+			for (i = 0; i < (int)(index_len * sizeof(DWORD)); i++) {
 				BYTE packed = 0;
 				if( io->read_proc(&packed, sizeof(BYTE), 1, handle) < 1 ) {
 					throw SGI_EOF_IN_RLE_INDEX;
@@ -354,17 +355,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		BOOL cut = FALSE;
 		std::vector<BYTE> alpha_done((zsize == 2 || zsize == 4) ? height : 0, 0);
 
-		LONG *pri = pRowIndex;
+		DWORD *pri = pRowIndex;
 		for (i = 0; i < zsize && !(cut && !bIsRLE); i++) {
 			BYTE *pRow = pStartRow + offset_table[i];
 			for (int j = 0; j < height; j++, pRow += ns, pri++) {
 				BYTE *p = pRow;
+				// a row whose start cannot be reached is missing, not read from wherever the stream is
+				BOOL reached = TRUE;
 				if (bIsRLE) {
 					my_rle_status.cnt = 0;
-					io->seek_proc(handle, start_pos + *pri, SEEK_SET);
+					reached = (io->seek_proc(handle, start_pos + (INT64)*pri, SEEK_SET) == 0) ? TRUE : FALSE;
 				}
 				int k = 0;
-				for (; k < width; k++, p += numChannels) {
+				for (; reached && (k < width); k++, p += numChannels) {
 					if (bIsRLE) {
 						const int ch = get_rlechar(io, handle, &my_rle_status);
 						if (ch == EOF) {

@@ -196,6 +196,54 @@ static void test_tga_rle(void) {
     remove(path);
 }
 
+/* --- an SGI RLE row 3 GB into the file ---------------------------------------- */
+
+static void put32be(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v; }
+
+/* 16 x 2 grey; after row 0, 1 MB of other runs for a failed seek to land in (glibc keeps its buffer, msvcrt drops it) */
+static void test_sgi_rle(void) {
+    const char *path = tmppath("fi_io_big.sgi");
+    const INT64 row1_at = (INT64)3 << 30;
+    BYTE header[512], table[16], row0[18], row1[3] = { 16, 0xAB, 0 }, decoy[2] = { 16, 0xCD };
+    FIBITMAP *dib;
+    FILE *f;
+    int ok, x, i;
+
+    printf("fi_io_big.sgi: a 16 x 2 RLE SGI whose second row is 3 GB into the file\n");
+    memset(header, 0, sizeof(header));
+    header[0] = 0x01; header[1] = 0xDA;		/* magic 474 */
+    header[2] = 1;							/* RLE */
+    header[3] = 1;							/* 1 byte per sample */
+    header[5] = 2;							/* one channel */
+    header[7] = 16;							/* width */
+    header[9] = 2;							/* height */
+    header[11] = 1;
+    put32be(header + 16, 255);
+    put32be(table, 512 + 16);
+    put32be(table + 4, (unsigned)row1_at);
+    put32be(table + 8, sizeof(row0));
+    put32be(table + 12, sizeof(row1));
+    row0[0] = 0x80 | 16;
+    for (x = 0; x < 16; x++) row0[1 + x] = (BYTE)(x * 16 + 1);
+    row0[17] = 0;
+    f = fopen(path, "wb");
+    ok = f && fwrite(header, 1, sizeof(header), f) == sizeof(header) && fwrite(table, 1, sizeof(table), f) == sizeof(table)
+        && fwrite(row0, 1, sizeof(row0), f) == sizeof(row0);
+    for (i = 0; ok && i < (1 << 19); i++) ok = fwrite(decoy, 1, sizeof(decoy), f) == sizeof(decoy);
+    ok = ok && fi_fseek64(f, row1_at, SEEK_SET) == 0 && fwrite(row1, 1, sizeof(row1), f) == sizeof(row1);
+    if (f && fclose(f) != 0) ok = 0;
+    if (!ok) { report("write the sparse SGI", 0); remove(path); return; }
+
+    dib = FreeImage_Load(FIF_SGI, path, 0);
+    ok = dib && FreeImage_GetWidth(dib) == 16 && FreeImage_GetHeight(dib) == 2;
+    for (x = 0; ok && x < 16; x++) {
+        ok = FreeImage_GetScanLine(dib, 0)[x] == (BYTE)(x * 16 + 1) && FreeImage_GetScanLine(dib, 1)[x] == 0xAB;
+    }
+    report("FreeImage_Load, both rows", ok);
+    if (dib) FreeImage_Unload(dib);
+    remove(path);
+}
+
 /* stdio reads that note the largest request and refuse, writing nothing, one over 1 MB */
 static size_t largest_read = 0;
 static unsigned DLL_CALLCONV rd_bounded(void *b, unsigned s, unsigned c, fi_handle h) {
@@ -247,6 +295,7 @@ int main(int argc, char **argv) {
     test_file("fi_io_big2g.tif", (INT64)0xA0000000);      /* 2.5 GB */
     test_file("fi_io_big4g.tif", (INT64)0x120000000);     /* 4.5 GB */
     test_tga_rle();
+    test_sgi_rle();
     test_webp_4g();
     FreeImage_DeInitialise();
     printf("--- %d failure(s) ---\n", failures);

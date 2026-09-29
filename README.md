@@ -67,6 +67,7 @@ Fixes:
 - fixed a J2K or JP2 save never returning when a write failed, as on a full disk: OpenJPEG retried the short write forever;
 - fixed saves returning TRUE when a write failed, as on a full disk: FreeImage_SaveToHandle() and FreeImage_SaveMultiBitmapToHandle() return FALSE when a write falls short, whether or not the plugin noticed (the PNG, TIFF, TGA, GIF, ICO, PFM, PNM, WBMP, JNG, MNG, APNG and JPEG XR writers did not), and FreeImage_Save() and FreeImage_SaveU() check the last bytes fclose() writes;
 - fixed a PNG save compressing the rest of the image after a write failed, and leaking its palette and row buffer when libpng stopped with an error;
+- fixed SGI RLE files whose rows start 2 GB or more into the file loading other data in those rows: the row offsets are unsigned, and a row whose start cannot be reached is left blank;
 - and many other fixes
 
 Changes:
