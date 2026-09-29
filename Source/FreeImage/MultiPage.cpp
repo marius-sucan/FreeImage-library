@@ -637,30 +637,64 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 	BOOL success = TRUE;
 
 	// dst data
-	void *data = FreeImage_Open(node, io, handle, FALSE);
+	void *data = NULL;
 	// src data
 	void *data_read = NULL;
+	// the page on its way through
+	FIBITMAP *dib = NULL;
+	// 1: dst open, 2: src open too
+	int opened = 0;
 
-	if(header->handle) {
-		// open src
-		header->io.seek_proc(header->handle, header->start, SEEK_SET);
-		data_read = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
-	}
+	// a plugin out of memory throws: the pages stop, both plugins still close
+	try {
+		data = FreeImage_Open(node, io, handle, FALSE);
+		opened = 1;
 
-	// write all the pages to the file using handle and io
-	
-	int count = 0;
-	
-	for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); i++) {
-		if (success) {
-			switch(i->m_type) {
-				case BLOCK_CONTINUEUS:
-				{
-					for (int j = i->getStart(); j <= i->getEnd(); j++) {
+		if(header->handle) {
+			// open src
+			header->io.seek_proc(header->handle, header->start, SEEK_SET);
+			data_read = FreeImage_Open(header->node, &header->io, header->handle, TRUE);
+			opened = 2;
+		}
 
-						// load the original source data, with pixels even if the bitmap was opened header-only
-						FIBITMAP *dib = (header->node->m_plugin->load_proc != NULL) ?
-							header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
+		// write all the pages to the file using handle and io
+		
+		int count = 0;
+		
+		for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); i++) {
+			if (success) {
+				switch(i->m_type) {
+					case BLOCK_CONTINUEUS:
+					{
+						for (int j = i->getStart(); j <= i->getEnd(); j++) {
+
+							// load the original source data, with pixels even if the bitmap was opened header-only
+							dib = (header->node->m_plugin->load_proc != NULL) ?
+								header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
+
+							if (dib == NULL) {
+								success = FALSE;
+								break;
+							}
+
+							// save the data
+							success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
+							count++;
+
+							FreeImage_Unload(dib);
+							dib = NULL;
+
+							if (!success) {
+								break;
+							}
+						}
+
+						break;
+					}
+					
+					case BLOCK_REFERENCE:
+					{
+						dib = FreeImage_LoadPageFromCache(header, *i);
 
 						if (dib == NULL) {
 							success = FALSE;
@@ -668,51 +702,38 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 						}
 
 						// save the data
+
 						success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
 						count++;
 
+						// unload the dib
+
 						FreeImage_Unload(dib);
+						dib = NULL;
 
-						if (!success) {
-							break;
-						}
-					}
-
-					break;
-				}
-				
-				case BLOCK_REFERENCE:
-				{
-					FIBITMAP *dib = FreeImage_LoadPageFromCache(header, *i);
-
-					if (dib == NULL) {
-						success = FALSE;
 						break;
 					}
-
-					// save the data
-
-					success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
-					count++;
-
-					// unload the dib
-
-					FreeImage_Unload(dib);
-
-					break;
 				}
+			} else {
+				break;
 			}
-		} else {
-			break;
 		}
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(node->m_id, FI_MSG_ERROR_MEMORY);
+		if (dib) {
+			FreeImage_Unload(dib);
+		}
+		success = FALSE;
 	}
 
 	// close the files
 
-	FreeImage_Close(header->node, &header->io, header->handle, data_read);
+	if (opened > 1) {
+		FreeImage_Close(header->node, &header->io, header->handle, data_read);
+	}
 
 	// some plugins write the file when they close
-	if (!FreeImage_Close(node, io, handle, data)) {
+	if ((opened > 0) && !FreeImage_Close(node, io, handle, data)) {
 		success = FALSE;
 	}
 
@@ -789,16 +810,17 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 
 			// saves changes only of images loaded directly from a file
 			if (header->changed && !header->m_filename.empty()) {
+				// open a temp file
+
+				FIFileName spool_name;
+				FILE *f = NULL;
+
 				try {
-					// open a temp file
-
-					FIFileName spool_name;
-
 					MakeCompanionName(spool_name, header->m_filename, header, "fispool");
 
 					// open the spool file and the source file
         
-					FILE *f = spool_name.openFile("w+b");
+					f = spool_name.openFile("w+b");
 				
 					// saves changes
 					if (f == NULL) {
@@ -813,9 +835,11 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 							success = FALSE;
 							FreeImage_OutputMessageProc(header->fif, "Failed to close %s, %s", spool_name.display(), strerror(errno));
 						}
+						f = NULL;
 					}
 					if (header->handle) {
 						fclose((FILE *)header->handle);
+						header->handle = NULL;
 					}
 				
 					// applies changes to the destination file
@@ -840,6 +864,15 @@ FreeImage_CloseMultiBitmap(FIMULTIBITMAP *bitmap, int flags) {
 						spool_name.removeFile();
 					}
 				} catch (std::bad_alloc &) {
+					// close what is still open; the original is untouched
+					if (f) {
+						fclose(f);
+						spool_name.removeFile();
+					}
+					if (header->handle) {
+						fclose((FILE *)header->handle);
+						header->handle = NULL;
+					}
 					success = FALSE;
 				}
 

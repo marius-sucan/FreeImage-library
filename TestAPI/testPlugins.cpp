@@ -22,6 +22,13 @@
 
 #include "TestSuite.h"
 
+#include <new>
+#ifdef _WIN32
+#include <io.h>		// _findfirst
+#else
+#include <glob.h>
+#endif
+
 // Show plugins
 // ----------------------------------------------------------
 void showPlugins() {
@@ -136,4 +143,96 @@ void testPluginCloseResult() {
 	// they stay registered: keep them away from other tests
 	FreeImage_SetPluginEnabled(fif_ex, FALSE);
 	FreeImage_SetPluginEnabled(fif_void, FALSE);
+}
+
+// A plugin out of memory fails the save
+// ----------------------------------------------------------
+static FIBITMAP * DLL_CALLCONV
+TestLoad(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
+	return FreeImage_Allocate(8, 8, 24);
+}
+
+// the second page of a document throws, as a plugin out of memory does
+static BOOL DLL_CALLCONV
+TestSaveThrows(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
+	if (page == 1) {
+		throw std::bad_alloc();
+	}
+	return TestSave(io, dib, handle, page, flags, data);
+}
+
+static void DLL_CALLCONV
+InitThrows(Plugin *plugin, int format_id) {
+	plugin->open_proc = TestOpen;
+	plugin->close_proc = TestClose;
+	plugin->pagecount_proc = TestPageCount;
+	plugin->load_proc = TestLoad;
+	plugin->save_proc = TestSaveThrows;
+}
+
+// a file matching the pattern exists
+static BOOL fileMatches(const char *pattern) {
+#ifdef _WIN32
+	struct _finddata_t found;
+	const intptr_t hFind = _findfirst(pattern, &found);
+	if (hFind == -1) {
+		return FALSE;
+	}
+	_findclose(hFind);
+	return TRUE;
+#else
+	glob_t found;
+	if (glob(pattern, 0, NULL, &found) != 0) {
+		return FALSE;
+	}
+	globfree(&found);
+	return TRUE;
+#endif
+}
+
+// nothing escapes a multi-page save whose plugin throws; the files close and no spool is left
+void testPluginOutOfMemory() {
+	printf("testPluginOutOfMemory ...\n");
+
+	const FREE_IMAGE_FORMAT fif = FreeImage_RegisterLocalPlugin(InitThrows, "THROWS", "out of memory test", "throws", NULL);
+	assert(fif != FIF_UNKNOWN);
+
+	FIBITMAP *dib = FreeImage_Allocate(8, 8, 24);
+	assert(dib != NULL);
+
+	// pages from a TIFF, written by the test plugin
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_TIFF, "out-of-memory.tif", TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	BOOL bResult = FreeImage_AppendPage(mpage, dib);
+	assert(bResult);
+	bResult = FreeImage_AppendPage(mpage, dib);
+	assert(bResult);
+	FIMEMORY *hmem = FreeImage_OpenMemory();
+	assert(hmem != NULL);
+	bResult = FreeImage_SaveMultiBitmapToMemory(fif, mpage, hmem, 0);
+	assert(!bResult);
+	FreeImage_CloseMemory(hmem);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	remove("out-of-memory.tif");
+
+	// a document of the test plugin
+	mpage = FreeImage_OpenMultiBitmap(fif, "out-of-memory.throws", TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	bResult = FreeImage_AppendPage(mpage, dib);
+	assert(bResult);
+	bResult = FreeImage_AppendPage(mpage, dib);
+	assert(bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(!bResult);
+	assert(!fileMatches("out-of-memory.throws"));
+	assert(!fileMatches("out-of-memory.throws.*.fispool"));
+
+	// every open was closed
+	assert(s_opens == s_closes);
+
+	FreeImage_Unload(dib);
+
+	// it stays registered: keep it away from other tests
+	FreeImage_SetPluginEnabled(fif, FALSE);
 }

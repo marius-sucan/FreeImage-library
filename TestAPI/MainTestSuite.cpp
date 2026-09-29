@@ -117,6 +117,9 @@ int main(int argc, char *argv[]) {
 	// test plugins whose close reports whether the file is complete
 	testPluginCloseResult();
 
+	// test a plugin that runs out of memory in a multi-page save
+	testPluginOutOfMemory();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif
