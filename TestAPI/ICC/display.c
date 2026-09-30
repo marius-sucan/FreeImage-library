@@ -269,6 +269,7 @@ static void make_fixtures(void) {
     save_fixture("palette PNG with tRNS", FIF_PNG, pal, PNG_DEFAULT, 0, "dsp_pal.png");
     save_fixture("grey 1.8 PNG", FIF_PNG, g18, PNG_DEFAULT, 0, "dsp_grey.png");
     save_fixture("RGB16 PNG", FIF_PNG, rgb16, PNG_DEFAULT, 0, "dsp_rgb16.png");
+    save_fixture("RGBA PNG", FIF_PNG, rgba, PNG_DEFAULT, 0, "dsp_rgba.png");
     save_fixture("1-bit PNG", FIF_PNG, bw, PNG_DEFAULT, 0, "dsp_bw.png");
     save_fixture("555 BMP", FIF_BMP, c555, BMP_DEFAULT, 0, "dsp_555.bmp");
     save_fixture("565 BMP", FIF_BMP, c565, BMP_DEFAULT, 0, "dsp_565.bmp");

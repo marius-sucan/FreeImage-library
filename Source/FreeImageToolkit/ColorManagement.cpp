@@ -630,6 +630,90 @@ AttachProfile(FIBITMAP *dib, const void *data, DWORD size) {
 	FreeImage_CreateICCProfile(dib, (void*)data, (long)size);
 }
 
+// the most transforms a display keeps
+#define ICC_CACHED_TRANSFORMS 8
+
+// the transforms of one display's loads, which repeat a few profile pairs; shared by threads
+class TransformCache {
+public:
+	TransformCache() : m_context(cmsCreateContext(NULL, NULL)), m_uses(0) {
+	}
+	~TransformCache() {
+		m_entries.clear();
+		if (m_context) {
+			cmsDeleteContext(m_context);
+		}
+	}
+
+	// empty when the profiles cannot be linked; out's bytes have to live as long as the cache
+	std::shared_ptr<void> Get(const Profile &in, const Profile &out, cmsUInt32Number in_format, cmsUInt32Number out_format, cmsUInt32Number intent, cmsUInt32Number flags) {
+		std::shared_ptr<void> transform;
+		if (!m_context || !in.bytes || !out.bytes) {
+			return transform;
+		}
+		{
+			std::lock_guard<std::mutex> guard(m_lock);
+			for (size_t i = 0; i < m_entries.size(); i++) {
+				Entry &entry = m_entries[i];
+				if ((entry.out == out.bytes) && (entry.out_size == out.size) && (entry.in_format == in_format) && (entry.out_format == out_format) &&
+					(entry.intent == intent) && (entry.flags == flags) && (entry.in.size() == in.size) && !memcmp(&entry.in[0], in.bytes, in.size)) {
+					entry.used = ++m_uses;
+					return entry.transform;
+				}
+			}
+		}
+		// made outside the lock: a device link takes tens of milliseconds
+		cmsHTRANSFORM created = cmsCreateTransformTHR(m_context, in.handle, in_format, out.handle, out_format, intent, flags);
+		if (!created) {
+			return transform;
+		}
+		transform.reset(created, cmsDeleteTransform);
+		Entry entry;
+		entry.in.assign((const BYTE*)in.bytes, (const BYTE*)in.bytes + in.size);
+		entry.out = out.bytes;
+		entry.out_size = out.size;
+		entry.in_format = in_format;
+		entry.out_format = out_format;
+		entry.intent = intent;
+		entry.flags = flags;
+		entry.transform = transform;
+		std::lock_guard<std::mutex> guard(m_lock);
+		if (m_entries.size() >= ICC_CACHED_TRANSFORMS) {
+			size_t oldest = 0;
+			for (size_t i = 1; i < m_entries.size(); i++) {
+				if (m_entries[i].used < m_entries[oldest].used) {
+					oldest = i;
+				}
+			}
+			m_entries.erase(m_entries.begin() + oldest);
+		}
+		entry.used = ++m_uses;
+		m_entries.push_back(entry);
+		return transform;
+	}
+
+private:
+	struct Entry {
+		std::vector<BYTE> in;
+		const void *out;
+		DWORD out_size;
+		cmsUInt32Number in_format;
+		cmsUInt32Number out_format;
+		cmsUInt32Number intent;
+		cmsUInt32Number flags;
+		std::shared_ptr<void> transform;
+		unsigned long long used;
+	};
+
+	std::mutex m_lock;
+	cmsContext m_context;
+	std::vector<Entry> m_entries;
+	unsigned long long m_uses;
+
+	TransformCache(const TransformCache &);
+	TransformCache &operator=(const TransformCache &);
+};
+
 struct RowBuffers {
 	BYTE *a;
 	BYTE *b;
@@ -662,11 +746,11 @@ class ColorConverter {
 public:
 	explicit ColorConverter(int flags) : m_flags(flags), m_dib(NULL), m_width(0), m_height(0),
 		m_transform(NULL), m_device_in(false), m_device_out(false), m_step(0), m_grey(false),
-		m_in_format(0), m_out_format(0), m_ignore_embedded(false), m_embedded(false) {
+		m_in_format(0), m_out_format(0), m_ignore_embedded(false), m_embedded(false), m_cache(NULL) {
 		memset(&m_px, 0, sizeof(m_px));
 	}
 	~ColorConverter() {
-		if (m_transform) {
+		if (m_transform && !m_cached_transform) {
 			cmsDeleteTransform(m_transform);
 		}
 	}
@@ -686,6 +770,10 @@ public:
 	}
 	bool EmbeddedSource() const {
 		return m_embedded;
+	}
+	// the transform comes from the cache, which outlives the converter
+	void UseCache(TransformCache *cache) {
+		m_cache = cache;
 	}
 	// FreeImage's default space: grey for grey images, else RGB
 	Model DefaultModel() const {
@@ -712,6 +800,8 @@ private:
 	cmsUInt32Number m_out_format;
 	bool m_ignore_embedded;
 	bool m_embedded;		// the source is the embedded profile
+	TransformCache *m_cache;
+	std::shared_ptr<void> m_cached_transform;
 
 	bool OpenBuiltIn(Profile &profile, Model model, unsigned depth);
 	bool OpenGiven(Profile &profile, const void *data, DWORD size, const char *what);
@@ -893,6 +983,9 @@ CreateTransform(bool same_buffer) {
 			FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: the proofing profile cannot be used for a gamut check");
 			return false;
 		}
+	} else if (m_cache) {
+		m_cached_transform = m_cache->Get(in, out, m_in_format, m_out_format, intent, flags);
+		m_transform = m_cached_transform.get();
 	} else {
 		m_transform = cmsCreateTransformTHR(m_context.id, in.handle, m_in_format, out.handle, m_out_format, intent, flags);
 	}
@@ -1253,6 +1346,7 @@ struct DisplayState {
 	std::vector<BYTE> grey;		// the display's greys, for grey images
 	int flags;					// rendering intent | FICMS_BLACKPOINT_COMPENSATION
 	bool srgb;					// rgb and grey are FreeImage's sRGB and grey
+	mutable TransformCache transforms;
 
 	DisplayState() : flags(0), srgb(true) {
 	}
@@ -1853,6 +1947,7 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
 	// an embedded profile that cannot be linked is left out the second time
 	for (int attempt = 0; attempt < 2; attempt++) {
 		ColorConverter converter(display.flags);
+		converter.UseCache(&display.transforms);
 		if (attempt) {
 			converter.IgnoreEmbedded();
 		}
