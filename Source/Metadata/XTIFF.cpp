@@ -323,6 +323,10 @@ tiff_read_exif_tag(TIFF *tif, uint32_t tag_id, FIBITMAP *dib, TagLib::MDMODEL md
 					 // stop, ignore error
 					 return TRUE;
 				 }
+				 // libtiff can report success with a NULL value: skip, not strlen(NULL)
+				 if(raw_data == NULL) {
+					 return TRUE;
+				 }
 		} else {
 			int value_size = 0;
 
