@@ -346,6 +346,21 @@ FreeImage_RestorePageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib)
 	}
 }
 
+// a CMYK page goes into the cache as CMYK: it has to come back so
+static int
+FreeImage_GetCacheLoadFlags(FREE_IMAGE_FORMAT fif) {
+	switch (fif) {
+		case FIF_JPEG:
+			return JPEG_CMYK;
+		case FIF_TIFF:
+			return TIFF_CMYK;
+		case FIF_PSD:
+			return PSD_CMYK;
+		default:
+			return 0;
+	}
+}
+
 static FIBITMAP *
 FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	const INT64 size = block.getSize();
@@ -366,7 +381,7 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 		FIMEMORY *hmem = FreeImage_OpenMemory64(compressed_data, (UINT64)size);
 
 		if (hmem != NULL) {
-			dib = FreeImage_LoadFromMemory(header->cache_fif, hmem, 0);
+			dib = FreeImage_LoadFromMemory(header->cache_fif, hmem, FreeImage_GetCacheLoadFlags(header->cache_fif));
 			FreeImage_CloseMemory(hmem);
 		}
 	}

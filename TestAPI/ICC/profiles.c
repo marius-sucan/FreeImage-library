@@ -631,6 +631,79 @@ static void header_only_psd(const Bytes *press) {
     for (i = 0; i < 8; i++) free(files[i].data);
 }
 
+/* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */
+static unsigned long long page_digest(FIMULTIBITMAP *mb, int page) {
+    FIBITMAP *p = FreeImage_LockPage(mb, page);
+    unsigned long long h = p ? digest(p) : 0;
+    if (p) FreeImage_UnlockPage(mb, p, FALSE);
+    return h;
+}
+
+static void cmyk_pages_cached(const Bytes *press) {
+    const char *path = scratch("icc_pages.tif");
+    FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb16, *cmyk, *cmyk16, *device, *pages[4], *p, *changed = NULL;
+    const char *names[4] = { "16-bit CMYK", "CMYK", "RGB", "CMYK without a profile" };
+    FIMULTIBITMAP *mb;
+    FIMEMORY *mem;
+    unsigned x, y;
+    int i;
+    for (y = 0; y < 23; y++) { BYTE *q = FreeImage_GetScanLine(rgb, y); for (x = 0; x < 37 * 3; x++) q[x] = rnd() & 255; }
+    cmyk = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
+    rgb16 = FreeImage_ConvertToRGB16(rgb);
+    cmyk16 = FreeImage_ConvertToCMYK(rgb16, press->data, press->size, 0);
+    device = FreeImage_Clone(cmyk);
+    FreeImage_DestroyICCProfile(device);
+    pages[0] = cmyk16; pages[1] = cmyk; pages[2] = rgb; pages[3] = device;
+
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
+    FreeImage_AppendPage(mb, cmyk);
+    FreeImage_AppendPage(mb, rgb);
+    FreeImage_InsertPage(mb, 0, cmyk16);
+    FreeImage_AppendPage(mb, device);
+    for (i = 0; i < 4; i++) CHECK(page_digest(mb, i) == digest(pages[i]), "cached %s page %d came back changed", names[i], i);
+    CHECK(FreeImage_CloseMultiBitmap(mb, 0), "CMYK pages: not saved");
+
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, FALSE, TRUE, TIFF_CMYK);
+    CHECK(mb && FreeImage_GetPageCount(mb) == 4, "CMYK pages: not 4 pages");
+    for (i = 0; mb && i < 4; i++) CHECK(page_digest(mb, i) == digest(pages[i]), "saved %s page %d came back changed", names[i], i);
+    /* a changed CMYK page */
+    p = mb ? FreeImage_LockPage(mb, 1) : NULL;
+    if (p) {
+        FreeImage_Invert(p);
+        changed = FreeImage_Clone(p);
+        FreeImage_UnlockPage(mb, p, TRUE);
+        CHECK(page_digest(mb, 1) == digest(changed), "a changed CMYK page came back changed again");
+    }
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, TIFF_CMYK);
+    CHECK(mb && changed && page_digest(mb, 1) == digest(changed) && page_digest(mb, 0) == digest(cmyk16), "a changed CMYK page was not saved as CMYK");
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+
+    /* the same through memory */
+    mem = FreeImage_OpenMemory(NULL, 0);
+    {
+        Bytes file = read_file(path);
+        FIMEMORY *in = FreeImage_OpenMemory(file.data, file.size);
+        FIMULTIBITMAP *doc = FreeImage_LoadMultiBitmapFromMemory(FIF_TIFF, in, TIFF_CMYK);
+        if (doc) {
+            FreeImage_AppendPage(doc, cmyk);
+            CHECK(FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, doc, mem, 0), "CMYK pages: not saved to memory");
+            FreeImage_CloseMultiBitmap(doc, 0);
+        }
+        FreeImage_CloseMemory(in);
+        free(file.data);
+        FreeImage_SeekMemory(mem, 0, SEEK_SET);
+        doc = FreeImage_LoadMultiBitmapFromMemory(FIF_TIFF, mem, TIFF_CMYK);
+        CHECK(doc && FreeImage_GetPageCount(doc) == 5 && page_digest(doc, 4) == digest(cmyk), "a CMYK page appended in memory came back changed");
+        if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    }
+    FreeImage_CloseMemory(mem);
+    remove(path);
+    for (i = 0; i < 4; i++) FreeImage_Unload(pages[i]);
+    FreeImage_Unload(rgb16);
+    if (changed) FreeImage_Unload(changed);
+}
+
 int main(int argc, char **argv) {
     Bytes press;
     int record = (argc > 1 && !strcmp(argv[1], "--record"));
@@ -648,6 +721,7 @@ int main(int argc, char **argv) {
     tiled_layouts_refused(&press);
     grey_alpha_float_strips();
     header_only_psd(&press);
+    cmyk_pages_cached(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -37,6 +37,7 @@ Fixes:
 - fixed the G3 plugin hanging on a damaged fax file;
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
+- fixed CMYK pages added to or changed in multi-page files being stored as RGB;
 - fixed Makefile.mingw not building with MinGW-w64 on Windows;
 - fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins and in multi-page documents opened from a handle or memory; TIFF, EXR, JXR, TGA and ICO also save correctly there;
 - fixed PCX, TGA and PSD files that are damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;

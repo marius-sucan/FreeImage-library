@@ -166,7 +166,7 @@ static toff_t t_size(thandle_t h) { long p = ftell((FILE *)h), s; fseek((FILE *)
 static int t_map(thandle_t h, void **b, toff_t *s) { (void)h; (void)b; (void)s; return 0; }
 static void t_unmap(thandle_t h, void *b, toff_t s) { (void)h; (void)b; (void)s; }
 
-/* CMYK with the press profile, then RGB with Adobe RGB; FreeImage's page cache would store the CMYK page as RGB */
+/* CMYK with the press profile, then RGB with Adobe RGB, written by libtiff rather than FreeImage */
 static int write_two_page_tiff(const char *path, const Bytes *cmyk_icc, const Bytes *rgb_icc) {
     static BYTE row[W * 4];
     FILE *f = fopen(path, "w+b");
