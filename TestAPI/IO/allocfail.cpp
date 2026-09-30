@@ -59,6 +59,11 @@ void *__wrap_realloc(void *p, size_t n) { return should_fail() ? NULL : __real_r
 void *operator new(size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
 void *operator new[](size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
 
+/* the throwing operator new, failed only for the cases that set fail_new (STL nodes, plugin state) */
+static int fail_new = 0;
+void *operator new(size_t n) { if (fail_new && should_fail()) throw std::bad_alloc(); void *p = __real_malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return p; }
+void *operator new[](size_t n) { return operator new(n); }
+
 enum { CASE_OK = 0, CASE_BROKEN = 1, NOT_REACHED = 2 };
 
 /* runs 'run' with the 1st, 2nd, ... allocation failing until none fails; names the failures */
@@ -249,6 +254,126 @@ static int exr_save(void) { return save_case(FIF_EXR, FIT_RGBF, 40, 24, 96); }
 static int jng_save(void) { return save_case(FIF_JNG, FIT_BITMAP, 40, 24, 24); }
 static int tiff_load(void) { return load_case(FIF_TIFF, FIT_BITMAP, 40, 24, 24); }
 
+/* --------------------------------------------------------------- multi-page and metadata under a failing throwing new */
+
+static const char *mpage_path(char *buf, size_t size) {
+    const char *dir = getenv("IO_TEST_TMP");
+    snprintf(buf, size, "%s/fi_io_mpage_%d.tif", (dir && *dir) ? dir : ".", (int)getpid());
+    return buf;
+}
+
+static FIBITMAP *mpage_frame(int i) {
+    FIBITMAP *dib = FreeImage_Allocate(16, 12, 24, 0, 0, 0);
+    int x, y;
+    if (!dib) return NULL;
+    for (y = 0; y < 12; y++) {
+        BYTE *p = FreeImage_GetScanLine(dib, y);
+        for (x = 0; x < 48; x++) p[x] = (BYTE)(x * 5 + y * 11 + i * 40);
+    }
+    return dib;
+}
+
+/* every page it reports must lock */
+static int mpage_consistent(FIMULTIBITMAP *mb) {
+    int n = FreeImage_GetPageCount(mb), p;
+    if (n < 1) return 0;
+    for (p = 0; p < n; p++) {
+        FIBITMAP *pg = FreeImage_LockPage(mb, p);
+        if (!pg) return 0;
+        FreeImage_UnlockPage(mb, pg, FALSE);
+    }
+    return 1;
+}
+
+/* append, insert, move, delete and a changed unlock on a spanned file: no crash, stays consistent */
+static int mpage_case(void) {
+    char path[512];
+    FIMULTIBITMAP *mb;
+    FIBITMAP *a, *b, *pg;
+    int i, whole = 1;
+    mpage_path(path, sizeof(path));
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
+    if (!mb) return CASE_BROKEN;
+    for (i = 0; i < 4; i++) {
+        FIBITMAP *f = mpage_frame(i);
+        int ok = f && FreeImage_AppendPage(mb, f);
+        FreeImage_Unload(f);
+        if (!ok) { FreeImage_CloseMultiBitmap(mb, 0); remove(path); return CASE_BROKEN; }
+    }
+    FreeImage_CloseMultiBitmap(mb, 0);
+
+    /* open for edit: one BLOCK_CONTINUEUS span, so FindBlock splits */
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, FALSE, TRUE, 0);
+    if (!mb) { remove(path); return CASE_BROKEN; }
+
+    armed = 1; fail_new = 1;
+    a = mpage_frame(7);
+    if (a) { FreeImage_AppendPage(mb, a); FreeImage_Unload(a); }
+    b = mpage_frame(8);
+    if (b) { FreeImage_InsertPage(mb, 2, b); FreeImage_Unload(b); }
+    FreeImage_MovePage(mb, 0, 3);
+    FreeImage_DeletePage(mb, 1);
+    pg = FreeImage_LockPage(mb, 1);
+    if (pg) { FreeImage_Invert(pg); FreeImage_UnlockPage(mb, pg, TRUE); }
+    armed = 0; fail_new = 0;
+
+    if (seen >= fail_at) whole = mpage_consistent(mb);
+    FreeImage_CloseMultiBitmap(mb, 0);
+    if (whole && seen >= fail_at) {
+        FIMULTIBITMAP *rb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, 0);
+        if (rb) { whole = mpage_consistent(rb); FreeImage_CloseMultiBitmap(rb, 0); }
+    }
+    remove(path);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* FreeImage_LoadMultiBitmapFromMemory of a 2-page MNG: a plugin that throws while counting must not escape */
+static int loadmem_case(void) {
+    char path[512];
+    FIMULTIBITMAP *mb;
+    FILE *f;
+    BYTE *buf = NULL;
+    long size = 0;
+    int i, whole = 1, ok = 1;
+    mpage_path(path, sizeof(path));
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, TRUE, FALSE, TRUE, 0);
+    if (!mb) return CASE_BROKEN;
+    for (i = 0; i < 2; i++) {
+        FIBITMAP *fr = mpage_frame(i);
+        ok = ok && fr && FreeImage_AppendPage(mb, fr);
+        FreeImage_Unload(fr);
+    }
+    FreeImage_CloseMultiBitmap(mb, 0);
+    if (ok) {
+        f = fopen(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET);
+            buf = (BYTE *)malloc(size);
+            if (!buf || fread(buf, 1, size, f) != (size_t)size) { free(buf); buf = NULL; }
+            fclose(f);
+        }
+    }
+    remove(path);
+    if (!buf) return CASE_BROKEN;
+
+    FIMEMORY *mem = FreeImage_OpenMemory(buf, (DWORD)size);
+    if (!mem) { free(buf); return CASE_BROKEN; }
+
+    armed = 1; fail_new = 1;
+    FIMULTIBITMAP *load = FreeImage_LoadMultiBitmapFromMemory(FIF_MNG, mem, 0);
+    armed = 0; fail_new = 0;
+
+    if (seen >= fail_at && load) whole = mpage_consistent(load);
+    if (load) FreeImage_CloseMultiBitmap(load, 0);
+    FreeImage_CloseMemory(mem);
+    free(buf);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -259,6 +384,8 @@ int main(void) {
 #else
     sweep("tags and metadata: no crash, no tag without its value", tags_case);
     sweep("WebP save: TRUE only for a file that loads", webp_case);
+    sweep("multi-page mutators: no crash, stays consistent", mpage_case);
+    sweep("LoadMultiBitmapFromMemory: a throwing page count does not escape", loadmem_case);
     sweep("GIF save: TRUE only for a file that loads", gif_save);
     sweep("GIF load: no crash", gif_load);
     sweep("ICO save: TRUE only for a file that loads", ico_save);

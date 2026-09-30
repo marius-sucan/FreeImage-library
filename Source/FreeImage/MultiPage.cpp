@@ -216,29 +216,39 @@ FreeImage_FindBlock(FIMULTIBITMAP *bitmap, int position) {
 		}
 		
 		const int item = i->getStart() + (position - prev_count);
-		
+
+		// build the replacement blocks in a local list first: if an allocation throws,
+		// the local list is destroyed and header->m_blocks is left untouched
+
+		BlockList split;
+
 		// left part
-		
+
 		if (item != i->getStart()) {
-			header->m_blocks.insert(i, PageBlock(BLOCK_CONTINUEUS, i->getStart(), item - 1));
+			split.push_back(PageBlock(BLOCK_CONTINUEUS, i->getStart(), item - 1));
 		}
-		
+
 		// middle part
-		
-		BlockListIterator block_target = header->m_blocks.insert(i, PageBlock(BLOCK_CONTINUEUS, item, item));
-		
+
+		split.push_back(PageBlock(BLOCK_CONTINUEUS, item, item));
+		BlockListIterator block_target = --split.end();
+
 		// right part
-		
+
 		if (item != i->getEnd()) {
-			header->m_blocks.insert(i, PageBlock(BLOCK_CONTINUEUS, item + 1, i->getEnd()));
+			split.push_back(PageBlock(BLOCK_CONTINUEUS, item + 1, i->getEnd()));
 		}
-		
+
+		// splice relinks the nodes with no allocation, so from here nothing can throw
+
+		header->m_blocks.splice(i, split);
+
 		// remove the old block that was just splitted
-		
+
 		header->m_blocks.erase(i);
-		
-		// return the splitted block
-		
+
+		// return the splitted block, now owned by m_blocks
+
 		return block_target;
 	}
 	
@@ -315,7 +325,13 @@ FreeImage_RememberPageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib
 		return;
 	}
 	if (FreeImage_CopyAnimationTags(carrier, dib) > 0) {
-		header->page_metadata[ref] = carrier;
+		try {
+			header->page_metadata[ref] = carrier;
+		} catch (std::bad_alloc &) {
+			// do not leak the carrier; the caller handles the failure
+			FreeImage_Unload(carrier);
+			throw;
+		}
 	} else {
 		FreeImage_Unload(carrier);
 	}
@@ -980,12 +996,18 @@ FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 		return FALSE;
 	}
 
-	if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
-		// add the block
-		header->m_blocks.push_back(block);
-		header->changed = TRUE;
-		header->page_count = -1;
-		return TRUE;
+	// storing the page allocates: a plugin or the cache out of memory throws
+	try {
+		if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
+			// add the block
+			header->m_blocks.push_back(block);
+			header->changed = TRUE;
+			header->page_count = -1;
+			return TRUE;
+		}
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
+		return FALSE;
 	}
 
 	FreeImage_OutputMessageProc(header->fif,
@@ -1014,23 +1036,29 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 		return FALSE;
 	}
 
-	if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
-		// add a block
-		if (page > 0) {
-			BlockListIterator block_source = FreeImage_FindBlock(bitmap, page);
+	// storing the page and splitting the block list allocate: out of memory throws
+	try {
+		if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
+			// add a block
+			if (page > 0) {
+				BlockListIterator block_source = FreeImage_FindBlock(bitmap, page);
 
-			if (block_source == header->m_blocks.end()) {
-				FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
-				return FALSE;
+				if (block_source == header->m_blocks.end()) {
+					FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
+					return FALSE;
+				}
+				header->m_blocks.insert(block_source, block);
+			} else {
+				header->m_blocks.push_front(block);
 			}
-			header->m_blocks.insert(block_source, block);
-		} else {
-			header->m_blocks.push_front(block);
-		}
 
-		header->changed = TRUE;
-		header->page_count = -1;
-		return TRUE;
+			header->changed = TRUE;
+			header->page_count = -1;
+			return TRUE;
+		}
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
+		return FALSE;
 	}
 
 	FreeImage_OutputMessageProc(header->fif,
@@ -1068,24 +1096,33 @@ FreeImage_DeletePage(FIMULTIBITMAP *bitmap, int page) {
 		return FALSE;
 	}
 
-	BlockListIterator i = FreeImage_FindBlock(bitmap, page);
+	// splitting the block list allocates; the page leaves the list before its cache is freed
+	try {
+		BlockListIterator i = FreeImage_FindBlock(bitmap, page);
 
-	if (i != header->m_blocks.end()) {
-		switch(i->m_type) {
-			case BLOCK_CONTINUEUS :
-				header->m_blocks.erase(i);
-				break;
+		if (i != header->m_blocks.end()) {
+			const BOOL cached = (i->m_type == BLOCK_REFERENCE);
+			const int ref = cached ? i->getReference() : 0;
 
-			case BLOCK_REFERENCE :
-				FreeImage_ForgetPageMetadata(header, i->getReference());
-				header->m_cachefile.deleteFile(i->getReference());
-				header->m_blocks.erase(i);
-				break;
+			if (cached) {
+				FreeImage_ForgetPageMetadata(header, ref);
+			}
+			header->m_blocks.erase(i);
+			header->changed = TRUE;
+			header->page_count = -1;
+
+			// the page is already gone; freeing its cache blocks is best-effort
+			if (cached) {
+				try {
+					header->m_cachefile.deleteFile(ref);
+				} catch (std::bad_alloc &) {
+				}
+			}
+			return TRUE;
 		}
-
-		header->changed = TRUE;
-		header->page_count = -1;
-		return TRUE;
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
+		return FALSE;
 	}
 
 	FreeImage_OutputMessageProc(header->fif, "FreeImage_DeletePage: page %d could not be located", page);
@@ -1172,70 +1209,92 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 				FreeImage_OutputMessageProc(header->fif, "FreeImage_UnlockPage: the bitmap is read-only, the changes are lost");
 				kept = FALSE;
 			} else if (changed) {
-				// cut loose the block from the rest
+				// storing the page allocates: out of memory throws, the change is then lost
+				FIMEMORY *hmem = NULL;
 
-				BlockListIterator i = FreeImage_FindBlock(bitmap, header->locked_pages[page]);
+				try {
+					// cut loose the block from the rest
 
-				if (i == header->m_blocks.end()) {
-					// cannot happen while locked; never write to end()
-					FreeImage_OutputMessageProc(header->fif,
-						"FreeImage_UnlockPage: page %d is no longer in the bitmap, the changes are lost",
-						header->locked_pages[page]);
-					FreeImage_Unload(page);
-					header->locked_pages.erase(page);
-					return FALSE;
-				}
+					BlockListIterator i = FreeImage_FindBlock(bitmap, header->locked_pages[page]);
 
-				// compress the data
+					if (i == header->m_blocks.end()) {
+						// cannot happen while locked; never write to end()
+						FreeImage_OutputMessageProc(header->fif,
+							"FreeImage_UnlockPage: page %d is no longer in the bitmap, the changes are lost",
+							header->locked_pages[page]);
+						FreeImage_Unload(page);
+						header->locked_pages.erase(page);
+						return FALSE;
+					}
 
-				UINT64 compressed_size = 0;
-				BYTE *compressed_data = NULL;
+					// compress the data
 
-				FIMEMORY *hmem = FreeImage_OpenMemory();
+					UINT64 compressed_size = 0;
+					BYTE *compressed_data = NULL;
 
-				if ((hmem == NULL)
-					|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, FreeImage_GetCacheFlags(header->cache_fif))
-					|| !FreeImage_AcquireMemory64(hmem, &compressed_data, &compressed_size)
-					|| (compressed_data == NULL) || (compressed_size == 0)) {
-					FreeImage_OutputMessageProc(header->fif,
-						"FreeImage_UnlockPage: %s cannot store this page, the changes are lost",
-						FreeImage_GetFormatFromFIF(header->cache_fif));
+					hmem = FreeImage_OpenMemory();
+
+					if ((hmem == NULL)
+						|| !FreeImage_SaveToMemory(header->cache_fif, page, hmem, FreeImage_GetCacheFlags(header->cache_fif))
+						|| !FreeImage_AcquireMemory64(hmem, &compressed_data, &compressed_size)
+						|| (compressed_data == NULL) || (compressed_size == 0)) {
+						FreeImage_OutputMessageProc(header->fif,
+							"FreeImage_UnlockPage: %s cannot store this page, the changes are lost",
+							FreeImage_GetFormatFromFIF(header->cache_fif));
+						if (hmem != NULL) {
+							FreeImage_CloseMemory(hmem);
+						}
+						FreeImage_Unload(page);
+						header->locked_pages.erase(page);
+						return FALSE;
+					}
+
+					// write the new copy to the cache
+
+					int iPage = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
+
+					if (iPage == 0) {
+						// nothing stored: leave the block as it was
+						FreeImage_OutputMessageProc(header->fif,
+							"FreeImage_UnlockPage: the cache could not store this page, the changes are lost");
+						FreeImage_CloseMemory(hmem);
+						FreeImage_Unload(page);
+						header->locked_pages.erase(page);
+						return FALSE;
+					}
+
+					// remember the new page's animation metadata (may allocate)
+
+					FreeImage_RememberPageMetadata(header, iPage, page);
+
+					// commit: drop the old copy last, so a failure above never leaves the block
+					// pointing at freed data
+
+					if (i->m_type == BLOCK_REFERENCE) {
+						FreeImage_ForgetPageMetadata(header, i->getReference());
+						try {
+							header->m_cachefile.deleteFile(i->getReference());
+						} catch (std::bad_alloc &) {
+						}
+					}
+
+					*i = PageBlock(BLOCK_REFERENCE, iPage, (INT64)compressed_size);
+
+					header->changed = TRUE;
+
+					// get rid of the compressed data
+
+					FreeImage_CloseMemory(hmem);
+				} catch (std::bad_alloc &) {
+					FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
 					if (hmem != NULL) {
 						FreeImage_CloseMemory(hmem);
 					}
+					// the change is lost, but the page is released and the old block is intact
 					FreeImage_Unload(page);
 					header->locked_pages.erase(page);
 					return FALSE;
 				}
-
-				// write the data to the cache, then drop the old copy
-
-				int iPage = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
-
-				if (iPage == 0) {
-					// nothing stored: leave the block as it was
-					FreeImage_OutputMessageProc(header->fif,
-						"FreeImage_UnlockPage: the cache could not store this page, the changes are lost");
-					FreeImage_CloseMemory(hmem);
-					FreeImage_Unload(page);
-					header->locked_pages.erase(page);
-					return FALSE;
-				}
-
-				if (i->m_type == BLOCK_REFERENCE) {
-					FreeImage_ForgetPageMetadata(header, i->getReference());
-					header->m_cachefile.deleteFile(i->getReference());
-				}
-
-				FreeImage_RememberPageMetadata(header, iPage, page);
-
-				*i = PageBlock(BLOCK_REFERENCE, iPage, (INT64)compressed_size);
-
-				header->changed = TRUE;
-
-				// get rid of the compressed data
-
-				FreeImage_CloseMemory(hmem);
 			}
 
 			// reset the locked page so that another page can be locked
@@ -1273,40 +1332,41 @@ FreeImage_MovePage(FIMULTIBITMAP *bitmap, int target, int source) {
 		return FALSE;
 	}
 
-	// source: where the page is; target: where it goes
+	// source: where the page is; target: where it goes; FindBlock may split a span and allocate
+	try {
+		BlockListIterator block_source = FreeImage_FindBlock(bitmap, source);
 
-	BlockListIterator block_source = FreeImage_FindBlock(bitmap, source);
-
-	if (block_source == header->m_blocks.end()) {
-		return FALSE;
-	}
-
-	// remove the page first, so target counts positions without it
-
-	const PageBlock moved = *block_source;
-
-	header->m_blocks.erase(block_source);
-	// invalidate the cached count for the test below
-	header->page_count = -1;
-
-	if (target >= FreeImage_GetPageCount(bitmap)) {
-		header->m_blocks.push_back(moved);
-	} else {
-		BlockListIterator block_target = FreeImage_FindBlock(bitmap, target);
-
-		if (block_target == header->m_blocks.end()) {
-			// put the page back rather than drop it
-			header->m_blocks.push_back(moved);
-			header->page_count = -1;
+		if (block_source == header->m_blocks.end()) {
 			return FALSE;
 		}
-		header->m_blocks.insert(block_target, moved);
+
+		// where it goes: a block at reduced index r sits at index (r < source ? r : r + 1) while
+		// block_source is still in the list; the last position is the end of the list
+
+		BlockListIterator block_target;
+
+		if (target >= page_count - 1) {
+			block_target = header->m_blocks.end();
+		} else {
+			block_target = FreeImage_FindBlock(bitmap, (target < source) ? target : target + 1);
+
+			if (block_target == header->m_blocks.end()) {
+				return FALSE;
+			}
+		}
+
+		// splice relinks the node with no allocation, so nothing throws and no page is lost
+
+		header->m_blocks.splice(block_target, header->m_blocks, block_source);
+
+		header->changed = TRUE;
+		header->page_count = -1;
+
+		return TRUE;
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(header->fif, FI_MSG_ERROR_MEMORY);
+		return FALSE;
 	}
-
-	header->changed = TRUE;
-	header->page_count = -1;
-
-	return TRUE;
 }
 
 BOOL DLL_CALLCONV
@@ -1375,21 +1435,23 @@ FreeImage_LoadMultiBitmapFromMemory(FREE_IMAGE_FORMAT fif, FIMEMORY *stream, int
 
 						bitmap->data = header;
 
-						// cache the page count
-
-						header->page_count = FreeImage_InternalGetPageCount(bitmap);
-
-						if (header->page_count <= 0) {
-							FreeImage_OutputMessageProc(fif, "%s: the memory stream holds no page this plugin can read",
-								FreeImage_GetFormatFromFIF(fif));
-							delete header;
-							delete bitmap;
-							return NULL;
-						}
-
-						// allocate a continueus block to describe the bitmap
+						// counting pages runs the plugin, which may throw, as may the block below
 
 						try {
+							// cache the page count
+
+							header->page_count = FreeImage_InternalGetPageCount(bitmap);
+
+							if (header->page_count <= 0) {
+								FreeImage_OutputMessageProc(fif, "%s: the memory stream holds no page this plugin can read",
+									FreeImage_GetFormatFromFIF(fif));
+								delete header;
+								delete bitmap;
+								return NULL;
+							}
+
+							// allocate a continueus block to describe the bitmap
+
 							header->m_blocks.push_back(PageBlock(BLOCK_CONTINUEUS, 0, header->page_count - 1));
 						} catch (std::bad_alloc &) {
 							delete header;
