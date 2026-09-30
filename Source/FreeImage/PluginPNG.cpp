@@ -194,6 +194,41 @@ ReadMetadata(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 	return TRUE;
 }
 
+static DWORD
+ReadBE32(const BYTE *p) {
+	return ((DWORD)p[0] << 24) | ((DWORD)p[1] << 16) | ((DWORD)p[2] << 8) | (DWORD)p[3];
+}
+
+// the checks libpng applies to an iCCP profile on read; png_set_iCCP does not apply them
+static BOOL
+IsEmbeddableProfile(const BYTE *profile, DWORD size, int color_type) {
+	if (!profile || (size < 132) || (ReadBE32(profile) != size) || ((profile[8] > 3) && (size & 3))) {
+		return FALSE;
+	}
+	const DWORD tag_count = ReadBE32(profile + 128);
+	if ((tag_count > (size - 132) / 12) || (ReadBE32(profile + 64) >= 0xFFFF) || (memcmp(profile + 36, "acsp", 4) != 0)) {
+		return FALSE;
+	}
+	if (memcmp(profile + 16, (color_type & PNG_COLOR_MASK_COLOR) ? "RGB " : "GRAY", 4) != 0) {
+		return FALSE;
+	}
+	if ((memcmp(profile + 12, "abst", 4) == 0) || (memcmp(profile + 12, "link", 4) == 0)) {
+		return FALSE;
+	}
+	if ((memcmp(profile + 20, "XYZ ", 4) != 0) && (memcmp(profile + 20, "Lab ", 4) != 0)) {
+		return FALSE;
+	}
+	for (DWORD i = 0; i < tag_count; i++) {
+		const BYTE *tag = profile + 132 + 12 * i;
+		const DWORD start = ReadBE32(tag + 4);
+		const DWORD length = ReadBE32(tag + 8);
+		if ((start > size) || (length > size - start)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 static BOOL 
 WriteMetadata(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 	// XMP keyword
@@ -524,13 +559,14 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 	// this file may have come from--so if it doesn't have a file gamma, don't
 	// do any correction ("do no harm")
 
-	// an ICC profile overrides gAMA: the pixels stay as the profile describes them
-	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP)) {
-		double gamma = 0;
-		double screen_gamma = 2.2;
+	// an ICC profile or an sRGB chunk overrides gAMA: the pixels stay as they describe them
+	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_sRGB)) {
+		png_fixed_point gamma = 0;
+		const png_fixed_point screen_gamma = 220000;	// 2.2
 
-		if (png_get_gAMA(png_ptr, info_ptr, &gamma) && ( flags & PNG_IGNOREGAMMA ) != PNG_IGNOREGAMMA) {
-			png_set_gamma(png_ptr, screen_gamma, gamma);
+		// png_set_gamma would read a gAMA of 128 or more as fixed point; one of 0 fails the load
+		if (png_get_gAMA_fixed(png_ptr, info_ptr, &gamma) && (gamma > 0) && ( flags & PNG_IGNOREGAMMA ) != PNG_IGNOREGAMMA) {
+			png_set_gamma_fixed(png_ptr, screen_gamma, gamma);
 		}
 	}
 
@@ -1193,9 +1229,13 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 			FIICCPROFILE *iccProfile = FreeImage_GetICCProfile(dib);
 			if (iccProfile->size && iccProfile->data) {
-				// skip ICC profile check
-				png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
-				png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
+				if (IsEmbeddableProfile((const BYTE *)iccProfile->data, iccProfile->size, png_get_color_type(png_ptr, info_ptr))) {
+					// skip ICC profile check
+					png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
+					png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
+				} else {
+					FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile is invalid for this PNG and was left out");
+				}
 			}
 
 			// write metadata

@@ -51,6 +51,7 @@ Fixes:
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
 - fixed a PNG save compressing the rest of the image after a write failed, and leaking its palette and row buffer when libpng stopped with an error;
+- fixed PNG saves failing on an ICC profile that the PNG cannot hold, such as a CMYK profile or a grey one on a colour image; the profile is left out;
 - fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it;
 - fixed JNG saves of 4 GB or more writing no image data, or nothing at all, and returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load;
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
@@ -85,7 +86,7 @@ Changes:
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
 |---|---|---|---|
-| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.39 (zlib 1.3.2) | 1.6.39 (zlib 1.2.13) |
+| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 (zlib 1.3.2) | 1.6.39 (zlib 1.2.13) |
 | JPEG | [libjpeg (IJG)](http://ijg.org/) | 10 (January 2026) | 9d |
 | TIFF | [libtiff](http://www.libtiff.org/) | 4.7.2 | 4.6.0 |
 | JPEG 2000 (J2K/JP2) | [OpenJPEG](https://github.com/uclouvain/openjpeg) | 2.5.4 | 2.0.0 |
