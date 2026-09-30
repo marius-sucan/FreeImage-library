@@ -2393,23 +2393,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
 		}
 		
+		// copy ICC profile data (must be done after FreeImage_Allocate, and before ReadMetadata frees iccBuf)
+
+		FreeImage_CreateICCProfile(dib, iccBuf, iccSize);
+		if ((photometric == PHOTOMETRIC_SEPARATED) && asCMYK) {
+			// set the ICC profile as CMYK
+			FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
+		}
+
 		// copy TIFF metadata (must be done after FreeImage_Allocate)
 
 		ReadMetadata(io, handle, tif, dib);
 
-		// copy ICC profile data (must be done after FreeImage_Allocate)
-		
-		FreeImage_CreateICCProfile(dib, iccBuf, iccSize);
-		if (photometric == PHOTOMETRIC_SEPARATED) {
-			if (asCMYK) {
-				// set the ICC profile as CMYK
-				FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
-			}
-			else {
-				// if original image is CMYK but is converted to RGB, remove ICC profile from Exif-TIFF metadata
-				FreeImage_SetMetadata(FIMD_EXIF_MAIN, dib, "InterColorProfile", NULL);
-			}
-		}
+		// the ICC profile is not duplicated in the Exif-TIFF metadata
+		FreeImage_SetMetadata(FIMD_EXIF_MAIN, dib, "InterColorProfile", NULL);
 
 		// copy TIFF thumbnail (must be done after FreeImage_Allocate)
 

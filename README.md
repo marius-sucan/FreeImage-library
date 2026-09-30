@@ -44,6 +44,7 @@ Fixes:
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed bugs related to CMYK support in TIFF and JPG files;
 - fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
+- fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
