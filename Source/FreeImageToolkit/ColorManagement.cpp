@@ -1729,21 +1729,27 @@ BuiltInBytes(int which, std::vector<BYTE> &to) {
 	}
 }
 
-// sRGB through the profile comes back within two 8-bit steps (colord's sRGB.icc: one)
+// FreeImage's sRGB or grey through the profile comes back within two 8-bit steps (colord's sRGB.icc: one)
 static bool
-EquivalentToSRGB(const Context &context, cmsHPROFILE srgb, cmsHPROFILE profile) {
-	cmsHTRANSFORM transform = cmsCreateTransformTHR(context.id, srgb, TYPE_RGB_16, profile, TYPE_RGB_16, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE);
+Equivalent(const Context &context, cmsHPROFILE builtin, cmsHPROFILE profile, bool grey) {
+	const cmsUInt32Number format = grey ? TYPE_GRAY_16 : TYPE_RGB_16;
+	cmsHTRANSFORM transform = cmsCreateTransformTHR(context.id, builtin, format, profile, format, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE);
 	if (!transform) {
 		return false;
 	}
 	const unsigned N = 17;
-	std::vector<WORD> in(N * N * N * 3), out(N * N * N * 3);
-	for (unsigned i = 0; i < N * N * N; i++) {
-		in[3 * i] = (WORD)((i / (N * N)) * 65535 / (N - 1));
-		in[3 * i + 1] = (WORD)(((i / N) % N) * 65535 / (N - 1));
-		in[3 * i + 2] = (WORD)((i % N) * 65535 / (N - 1));
+	const unsigned count = grey ? 1024 : N * N * N;
+	std::vector<WORD> in(grey ? count : count * 3), out(in.size());
+	for (unsigned i = 0; i < count; i++) {
+		if (grey) {
+			in[i] = (WORD)(i * 65535 / (count - 1));
+		} else {
+			in[3 * i] = (WORD)((i / (N * N)) * 65535 / (N - 1));
+			in[3 * i + 1] = (WORD)(((i / N) % N) * 65535 / (N - 1));
+			in[3 * i + 2] = (WORD)((i % N) * 65535 / (N - 1));
+		}
 	}
-	cmsDoTransform(transform, &in[0], &out[0], N * N * N);
+	cmsDoTransform(transform, &in[0], &out[0], count);
 	cmsDeleteTransform(transform);
 	for (size_t i = 0; i < in.size(); i++) {
 		if (abs((int)in[i] - (int)out[i]) > 2 * 257) {
@@ -1751,6 +1757,75 @@ EquivalentToSRGB(const Context &context, cmsHPROFILE srgb, cmsHPROFILE profile) 
 		}
 	}
 	return true;
+}
+
+// the largest profile checked for being sRGB or grey in all but name
+#define ICC_TWIN_MAX_SIZE (1024 * 1024)
+// the most profiles whose answer is kept
+#define ICC_TWIN_ENTRIES 16
+
+// embedded profiles that FreeImage's sRGB or grey stand for; each is checked once
+class TwinCache {
+public:
+	bool IsTwin(const void *bytes, DWORD size) {
+		if (!bytes || (size < 128) || (size > ICC_TWIN_MAX_SIZE)) {
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> guard(m_lock);
+			for (size_t i = 0; i < m_entries.size(); i++) {
+				if ((m_entries[i].bytes.size() == size) && !memcmp(&m_entries[i].bytes[0], bytes, size)) {
+					return m_entries[i].twin;
+				}
+			}
+		}
+		Entry entry;
+		entry.twin = Check(bytes, size);
+		entry.bytes.assign((const BYTE*)bytes, (const BYTE*)bytes + size);
+		std::lock_guard<std::mutex> guard(m_lock);
+		if (m_entries.size() >= ICC_TWIN_ENTRIES) {
+			m_entries.erase(m_entries.begin());
+		}
+		m_entries.push_back(entry);
+		return entry.twin;
+	}
+
+private:
+	struct Entry {
+		std::vector<BYTE> bytes;
+		bool twin;
+	};
+
+	std::mutex m_lock;
+	std::vector<Entry> m_entries;
+
+	static bool Check(const void *bytes, DWORD size) {
+		Context context;
+		context.mute = true;
+		cmsHPROFILE profile = context.Open(bytes, size);
+		const Model model = profile ? ModelOf(profile) : MODEL_NONE;
+		bool twin = false;
+		if ((model == MODEL_RGB) || (model == MODEL_GRAY)) {
+			DWORD builtin_size = 0;
+			const void *builtin_data = FreeImage_GetBuiltInICCProfile((model == MODEL_GRAY) ? FICMS_PROFILE_GRAY : FICMS_PROFILE_SRGB, &builtin_size);
+			cmsHPROFILE builtin = context.Open(builtin_data, builtin_size);
+			twin = builtin && Equivalent(context, builtin, profile, (model == MODEL_GRAY));
+			if (builtin) {
+				cmsCloseProfile(builtin);
+			}
+		}
+		if (profile) {
+			cmsCloseProfile(profile);
+		}
+		return twin;
+	}
+};
+
+static TwinCache &
+GetTwinCache() {
+	// never destroyed: a load may still run while the process ends
+	static TwinCache *cache = new TwinCache;
+	return *cache;
 }
 
 // a grey profile whose tone curve is the luminance the display shows for (v, v, v)
@@ -1825,7 +1900,7 @@ BuildDisplayState(const std::vector<BYTE> &bytes, int flags, bool *usable) {
 			if (transform) {
 				cmsDeleteTransform(transform);
 				linked = true;
-				if (!EquivalentToSRGB(context, srgb, profile)) {
+				if (!Equivalent(context, srgb, profile, false)) {
 					state->rgb = bytes;
 					state->srgb = false;
 					if (!DisplayGrey(context, profile, state->grey)) {
@@ -1943,12 +2018,15 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
 	if (target.empty()) {
 		return !convert;
 	}
+	// a profile sRGB or grey in all but name converts as FreeImage's: on an sRGB display, not at all
+	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	const bool twin = icc->data && (px.model != MODEL_CMYK) && GetTwinCache().IsTwin(icc->data, (DWORD)icc->size);
 
 	// an embedded profile that cannot be linked is left out the second time
 	for (int attempt = 0; attempt < 2; attempt++) {
 		ColorConverter converter(display.flags);
 		converter.UseCache(&display.transforms);
-		if (attempt) {
+		if (attempt || twin) {
 			converter.IgnoreEmbedded();
 		}
 		if (converter.SetSource(dib) && converter.SetDestination(&target[0], (DWORD)target.size(), grey ? MODEL_GRAY : MODEL_RGB, MODEL_NONE)) {

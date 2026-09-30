@@ -193,6 +193,25 @@ static int write_two_page_tiff(const char *path, const Bytes *cmyk_icc, const By
     return 1;
 }
 
+/* grey with the sRGB tone curve as a 256-entry table: FreeImage's grey within a fraction of a step */
+static Bytes make_srgb_grey_profile(void) {
+    cmsUInt16Number table[256];
+    cmsToneCurve *curve;
+    cmsHPROFILE h;
+    int i;
+    for (i = 0; i < 256; i++) {
+        double v = i / 255.0;
+        v = (v <= 0.04045) ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+        table[i] = (cmsUInt16Number)floor(v * 65535.0 + 0.5);
+    }
+    curve = cmsBuildTabulatedToneCurve16(NULL, 256, table);
+    h = cmsCreateGrayProfile(cmsD50_xyY(), curve);
+    Bytes b = save_profile(h);
+    cmsFreeToneCurve(curve);
+    cmsCloseProfile(h);
+    return b;
+}
+
 static int save_pages(FREE_IMAGE_FORMAT fif, const char *path, FIBITMAP **pages, int count) {
     FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(fif, path, TRUE, FALSE, TRUE, 0);
     int i;
@@ -209,12 +228,14 @@ typedef struct {
     const char *path;
 } Fixture;
 
-#define MAX_FIXTURES 40
+#define MAX_FIXTURES 64
 static Fixture fixtures[MAX_FIXTURES];
 static int fixture_count = 0;
 
 static void add(const char *name, FREE_IMAGE_FORMAT fif, int flags, int pages, const char *file) {
-    Fixture *f = &fixtures[fixture_count++];
+    Fixture *f;
+    if (fixture_count == MAX_FIXTURES) { fail("%s: MAX_FIXTURES is too small", name); return; }
+    f = &fixtures[fixture_count++];
     f->name = name; f->fif = fif; f->flags = flags; f->pages = pages; f->path = strdup(file);
 }
 
@@ -270,6 +291,23 @@ static void make_fixtures(void) {
     save_fixture("grey 1.8 PNG", FIF_PNG, g18, PNG_DEFAULT, 0, "dsp_grey.png");
     save_fixture("RGB16 PNG", FIF_PNG, rgb16, PNG_DEFAULT, 0, "dsp_rgb16.png");
     save_fixture("RGBA PNG", FIF_PNG, rgba, PNG_DEFAULT, 0, "dsp_rgba.png");
+    /* profiles sRGB or grey in all but name */
+    {
+        Bytes t5 = read_file("data/test5.icc"), sgrey = make_srgb_grey_profile();
+        FIBITMAP *twin24 = FreeImage_Clone(rgb), *twin16 = FreeImage_Clone(rgb16), *twin_grey = FreeImage_Clone(grey), *twin_u16 = FreeImage_Clone(u16);
+        if (t5.size) {
+            FreeImage_CreateICCProfile(twin24, t5.data, t5.size);
+            FreeImage_CreateICCProfile(twin16, t5.data, t5.size);
+            save_fixture("sRGB twin JPEG", FIF_JPEG, twin24, JPEG_QUALITYSUPERB, 0, "dsp_twin.jpg");
+            save_fixture("sRGB twin RGB16 PNG", FIF_PNG, twin16, PNG_DEFAULT, 0, "dsp_twin16.png");
+        }
+        FreeImage_CreateICCProfile(twin_grey, sgrey.data, sgrey.size);
+        FreeImage_CreateICCProfile(twin_u16, sgrey.data, sgrey.size);
+        save_fixture("grey twin PNG", FIF_PNG, twin_grey, PNG_DEFAULT, 0, "dsp_twin_grey.png");
+        save_fixture("grey twin UINT16 PNG", FIF_PNG, twin_u16, PNG_DEFAULT, 0, "dsp_twin_u16.png");
+        FreeImage_Unload(twin24); FreeImage_Unload(twin16); FreeImage_Unload(twin_grey); FreeImage_Unload(twin_u16);
+        free(t5.data); free(sgrey.data);
+    }
     save_fixture("1-bit PNG", FIF_PNG, bw, PNG_DEFAULT, 0, "dsp_bw.png");
     save_fixture("555 BMP", FIF_BMP, c555, BMP_DEFAULT, 0, "dsp_555.bmp");
     save_fixture("565 BMP", FIF_BMP, c565, BMP_DEFAULT, 0, "dsp_565.bmp");
@@ -437,16 +475,54 @@ static int is_grey(FIBITMAP *dib) {
     return 1;
 }
 
-/* the public API's version of one image; an embedded profile that cannot be linked is left out the second time */
+/* an RGB device profile within two 8-bit steps of FreeImage's sRGB, a grey one of its grey */
+static int is_twin_profile(const FIICCPROFILE *icc) {
+    cmsHPROFILE p, b = NULL;
+    cmsProfileClassSignature c;
+    cmsHTRANSFORM t = NULL;
+    Bytes builtin_profile;
+    int grey, twin = 0;
+    unsigned i, n;
+    static WORD in[17 * 17 * 17 * 3], out[17 * 17 * 17 * 3];
+    if (!icc->data || icc->size < 128 || icc->size > 1024 * 1024) return 0;
+    p = cmsOpenProfileFromMem(icc->data, icc->size);
+    if (!p) return 0;
+    c = cmsGetDeviceClass(p);
+    grey = cmsGetColorSpace(p) == cmsSigGrayData;
+    if ((c == cmsSigInputClass || c == cmsSigDisplayClass || c == cmsSigOutputClass || c == cmsSigColorSpaceClass) &&
+        (grey || cmsGetColorSpace(p) == cmsSigRgbData)) {
+        builtin_profile = builtin(grey ? FICMS_PROFILE_GRAY : FICMS_PROFILE_SRGB);
+        b = cmsOpenProfileFromMem(builtin_profile.data, builtin_profile.size);
+        t = b ? cmsCreateTransform(b, grey ? TYPE_GRAY_16 : TYPE_RGB_16, p, grey ? TYPE_GRAY_16 : TYPE_RGB_16, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE) : NULL;
+    }
+    if (t) {
+        n = grey ? 1024 : 17 * 17 * 17;
+        for (i = 0; i < n; i++) {
+            if (grey) in[i] = (WORD)(i * 65535 / 1023);
+            else { in[3 * i] = (WORD)((i / 289) * 65535 / 16); in[3 * i + 1] = (WORD)(((i / 17) % 17) * 65535 / 16); in[3 * i + 2] = (WORD)((i % 17) * 65535 / 16); }
+        }
+        cmsDoTransform(t, in, out, n);
+        twin = 1;
+        for (i = 0; i < (grey ? n : 3 * n); i++) if (abs((int)in[i] - (int)out[i]) > 2 * 257) twin = 0;
+        cmsDeleteTransform(t);
+    }
+    if (b) cmsCloseProfile(b);
+    cmsCloseProfile(p);
+    return twin;
+}
+
+/* the public API's version of one image; an embedded profile that cannot be linked is left out the second time,
+   one sRGB or grey in all but name the first time */
 static FIBITMAP *expect_one(FIBITMAP *src, const Display *d) {
     const Bytes *to;
-    int widen, attempt;
+    int widen, attempt, twin;
     if (!is_managed(src)) return FreeImage_Clone(src);
     to = is_grey(src) ? &d->grey : &d->rgb;
     widen = is_cmyk(src) || (FreeImage_GetImageType(src) == FIT_BITMAP && FreeImage_GetBPP(src) == 16);
+    twin = !is_cmyk(src) && is_twin_profile(FreeImage_GetICCProfile(src));
     for (attempt = 0; attempt < 2; attempt++) {
         FIBITMAP *img = FreeImage_Clone(src);
-        if (attempt) FreeImage_DestroyICCProfile(img);
+        if (attempt || twin) FreeImage_DestroyICCProfile(img);
         if (widen) {
             FIBITMAP *out = FreeImage_ConvertToICCProfile(img, to->data, to->size, d->flags);
             FreeImage_Unload(img);
@@ -498,6 +574,29 @@ static void check_display(const Display *d) {
         }
     }
     printf("%-22s %d loads compared\n", d->name, compared);
+}
+
+/* on an sRGB display, images tagged sRGB or grey in all but name keep their pixels; they carry FreeImage's profile */
+static void twins_untouched(const Display *d) {
+    const char *names[4] = { "sRGB twin JPEG", "sRGB twin RGB16 PNG", "grey twin PNG", "grey twin UINT16 PNG" };
+    int i;
+    for (i = 0; i < 4; i++) {
+        const Fixture *f = NULL;
+        FIBITMAP *plain, *flag;
+        int k;
+        for (k = 0; k < fixture_count; k++) if (!strcmp(fixtures[k].name, names[i])) f = &fixtures[k];
+        if (!f) continue;
+        plain = FreeImage_Load(f->fif, f->path, 0);
+        flag = FreeImage_Load(f->fif, f->path, FIF_LOAD_DISPLAY_ICC);
+        CHECK(plain && flag && pixel_digest(plain) == pixel_digest(flag), "%s, %s: converted on an sRGB display", d->name, f->name);
+        if (flag) {
+            Bytes want = builtin(i >= 2 ? FICMS_PROFILE_GRAY : FICMS_PROFILE_SRGB);
+            FIICCPROFILE *icc = FreeImage_GetICCProfile(flag);
+            CHECK(icc->size == want.size && !memcmp(icc->data, want.data, want.size), "%s, %s: not tagged with FreeImage's profile", d->name, f->name);
+        }
+        if (plain) FreeImage_Unload(plain);
+        if (flag) FreeImage_Unload(flag);
+    }
 }
 
 /* the display's greys (v, v, v) have the luminance the grey profile gives v */
@@ -829,12 +928,12 @@ static void *worker(void *arg) {
 /* loads on 8 threads while the display changes */
 static void threads(void) {
     Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB), p3 = builtin(FICMS_PROFILE_DISPLAY_P3);
-    const char *names[4] = { "CMYK TIFF", "palette PNG with tRNS", "grey 1.8 UINT16 TIFF", "RGB JPEG + thumbnail" };
+    const char *names[5] = { "CMYK TIFF", "palette PNG with tRNS", "grey 1.8 UINT16 TIFF", "RGB JPEG + thumbnail", "sRGB twin RGB16 PNG" };
     Job jobs[8];
     pthread_t t[8];
     int i, k, loads = 0, bad = 0;
     for (i = 0; i < 8; i++) {
-        const Fixture *f = find(names[i % 4]);
+        const Fixture *f = find(names[i % 5]);
         jobs[i].f = f; jobs[i].loads = 0; jobs[i].bad = 0;
         for (k = 0; k < 2; k++) {
             FIBITMAP *dib;
@@ -991,6 +1090,7 @@ int main(int argc, char **argv) {
             if (i == 0) {
                 Bytes g = builtin(FICMS_PROFILE_GRAY);
                 CHECK(same_bytes(&d.grey, g.data, g.size), "sRGB: the grey profile is not FreeImage's grey");
+                twins_untouched(&d);
             }
             check_grey_companion(&d);
             check_display(&d);
@@ -1004,6 +1104,7 @@ int main(int argc, char **argv) {
         Display auto_d;
         if (use_display(&auto_d, "sRGB, detected", NULL, 0, FLAGS_0x101)) {
             CHECK(same_bytes(&auto_d.rgb, srgb.data, srgb.size), "detected: not sRGB");
+            twins_untouched(&auto_d);
             check_display(&auto_d);
             free_display(&auto_d);
         }
