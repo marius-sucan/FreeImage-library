@@ -134,8 +134,7 @@ ShownBitmap(hImage, managed) {
       hCopy := FreeImage_Clone(hImage)
       FreeImage_DestroyICCProfile(hCopy)
       pSRGB := FreeImage_GetBuiltInICCProfile(0, size)   ; FICMS_PROFILE_SRGB
-      hRGB := FreeImage_ApplyICCProfile(hCopy, pSRGB, size)
-      FreeImage_UnLoad(hCopy)
+      FreeImage_ApplyICCProfile(hCopy, pSRGB, size)
    }
    h32 := FreeImage_ConvertTo32Bits(hRGB)   ; 8- and 16-bit images
    FreeImage_UnLoad(hRGB)
