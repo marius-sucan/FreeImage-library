@@ -16,6 +16,9 @@
 ; - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64():
 ;   memory streams of 4 GB and more, and positions past 2 GB
 ;
+; - added the FIF_LOAD_DISPLAY_ICC load flag, FreeImage_SetDisplayICCProfile() and FreeImage_GetDisplayICCProfile():
+;   images loaded in the display's colors
+;
 ; 22 September 2026 - v2.00
 ; - implemented all the remaining functions, except the ANSI variants
 ; - FreeImage_OpenMultiBitmap() takes Unicode paths; added FreeImage_GetFrameDelays() and the *PageEx() functions
@@ -280,6 +283,7 @@ FreeImage_AllocateHeaderForBits(pBits, pitch, imageType, width, height, bpp, red
 FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; flag - 0, or the flags of the file's format below, combined with |:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
+; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
 ; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
@@ -1212,6 +1216,23 @@ FreeImage_GetICCProfileColorSpace(pProfile, profileSize) {
    Return DllCall(getFIMfunc("GetICCProfileColorSpace"), "UPtr", pProfile, "UInt", profileSize, "UInt")
 }
 
+FreeImage_SetDisplayICCProfile(pProfile:=0, profileSize:=0, flags:=0x101) {
+; the profile the FIF_LOAD_DISPLAY_ICC load flag converts images to; images carry it afterwards
+; pProfile - an RGB profile, e.g. of the monitor showing the images; 0 - detect it: on Windows the primary monitor's profile,
+;   on Linux the X11 screen's; sRGB when there is none, or when Windows' HDR or Auto Color Management is on
+; CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as RGB; grey images stay grey; float images are not changed
+; flags - a rendering intent, with FICMS_BLACKPOINT_COMPENSATION or not; see FreeImage_ConvertToICCProfile()
+; Return value: 1 -- success; 0 -- not an RGB profile Little CMS can convert to, the last one stays
+   Return DllCall(getFIMfunc("SetDisplayICCProfile"), "UPtr", pProfile, "UInt", profileSize, "Int", flags)
+}
+
+FreeImage_GetDisplayICCProfile(ByRef buf) {
+; copies the profile FIF_LOAD_DISPLAY_ICC converts to into buf; returns its byte count
+   size := DllCall(getFIMfunc("GetDisplayICCProfile"), "UPtr", 0, "UInt", 0, "UInt")
+   VarSetCapacity(buf, size, 0)
+   Return size ? DllCall(getFIMfunc("GetDisplayICCProfile"), "UPtr", &buf, "UInt", size, "UInt") : 0
+}
+
 ; === Plugin functions ===
 
 FreeImage_GetFIFCount() {
@@ -1279,6 +1300,7 @@ FreeImage_OpenMultiBitmap(ImgPath, imgFormat, create_new:=0, read_only:=1, keep_
 ;
 ; flags - 0, or these combined with |; a single-page format takes its FreeImage_Load() flags:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the properties: each page's size, type, metadata and frame time; no pixels
+; FIF_LOAD_DISPLAY_ICC = 0x4000; every page in the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
 ; APNG_PLAYBACK = 2; APNG: every frame as a viewer shows it, composited on the canvas, as 32-bit
 ; AVIF_PLAYBACK = 2; AVIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
 ; GIF_LOAD256 = 1; GIF: frames with a palette of 16 colours or fewer load as 8-bit, not as 1-bit or 4-bit
@@ -2066,8 +2088,8 @@ getFIMfunc(funct) {
 
    Static fList0 := "|CreateTag|DeInitialise|GetCopyrightMessage|GetFIFCount|GetVersion|IsLittleEndian|"
         , fList4 := "|Clone|CloneTag|CloseMemory|ConvertTo16Bits555|ConvertTo16Bits565|ConvertTo24Bits|ConvertTo32Bits|ConvertTo4Bits|ConvertTo8Bits|ConvertToFloat|ConvertToGreyscale|ConvertToRGB16|ConvertToRGBA16|ConvertToRGBAF|ConvertToRGBF|ConvertToUINT16|DeleteTag|DestroyICCProfile|FIFSupportsICCProfiles|FIFSupportsNoPixels|FIFSupportsReading|FIFSupportsWriting|FindCloseMetadata|FlipHorizontal|FlipVertical|GetBits|GetBlueMask|GetBPP|GetColorsUsed|GetColorType|GetDIBSize|GetDotsPerMeterX|GetDotsPerMeterY|GetFIFDescription|GetFIFExtensionList|GetFIFFromFilename|GetFIFFromFilenameU|GetFIFFromFormat|GetFIFFromMime|GetFIFMimeType|GetFIFRegExpr|GetFormatFromFIF|GetGreenMask|GetHeight|GetICCProfile|GetImageType|GetInfo|GetInfoHeader|GetLine|GetMemorySize|GetPageCount|GetPalette|GetPitch|GetRedMask|GetTagCount|GetTagDescription|GetTagID|GetTagKey|GetTagLength|GetTagType|GetTagValue|GetThumbnail|GetTransparencyCount|GetTransparencyTable|GetTransparentIndex|GetWidth|HasBackgroundColor|HasPixels|HasRGBMasks|Initialise|Invert|IsPluginEnabled|IsTransparent|PreMultiplyWithAlpha|SetOutputMessage|SetOutputMessageStdCall|TellMemory|TellMemory64|Unload|"
-        , fList8 := "|AppendPage|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
-        , fList12 := "|AcquireMemory|AcquireMemory64|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|OpenMemory64|SeekMemory|SetChannel|SetComplexChannel|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
+        , fList8 := "|AppendPage|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetDisplayICCProfile|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
+        , fList12 := "|AcquireMemory|AcquireMemory64|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|OpenMemory64|SeekMemory|SetChannel|SetComplexChannel|SetDisplayICCProfile|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
         , fList16 := "|ApplyICCProfile|Composite|ConvertCMYKToRGB|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|ConvertToCMYK|ConvertToICCProfile|GetICCProfileDescription|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SeekMemory64|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
         , fList20 := "|ApplyPaletteIndexMapping|ColorQuantizeEx|Copy|CreateView|Paste|RegisterExternalPlugin|RegisterLocalPlugin|SaveMultiBitmapToHandle|SaveToHandle|TmoDrago03|TmoFattal02|TmoReinhard05|"
         , fList24 := "|Allocate|ApplyColorMapping|ConvertLine1To32MapTransparency|ConvertLine4To32MapTransparency|ConvertLine8To32MapTransparency|JPEGCrop|JPEGCropU|OpenMultiBitmap|OpenMultiBitmapU|SoftProof|ToneMapping|"
