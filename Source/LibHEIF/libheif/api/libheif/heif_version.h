@@ -18,16 +18,16 @@
  * along with libheif.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* FreeImage: heif_version.h.in filled in for 1.23.4 */
+/* FreeImage: heif_version.h.in filled in for 1.23.5 */
 
 #ifndef LIBHEIF_HEIF_VERSION_H
 #define LIBHEIF_HEIF_VERSION_H
 
 /* Numeric representation of the version */
-#define LIBHEIF_NUMERIC_VERSION ((1<<24) | (23<<16) | (4<<8) | 0)
+#define LIBHEIF_NUMERIC_VERSION ((1<<24) | (23<<16) | (5<<8) | 0)
 
 /* Version string */
-#define LIBHEIF_VERSION "1.23.4"
+#define LIBHEIF_VERSION "1.23.5"
 
 #define LIBHEIF_PLUGIN_DIRECTORY ""
 
