@@ -329,6 +329,42 @@ static int mpage_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* SetMetadata, Clone and CloneMetadata: no crash, no tag without its value, the old tag survives */
+static int meta_case(void) {
+    FIBITMAP *dib = FreeImage_Allocate(4, 4, 24, 0, 0, 0), *clone = NULL, *other = NULL;
+    FITAG *tag, *check = NULL;
+    WORD value = 7;
+    int whole;
+    if (!dib) return CASE_BROKEN;
+    FreeImage_SetMetadataKeyValue(FIMD_COMMENTS, dib, "Existing", "keep me");
+
+    armed = 1; fail_new = 1;
+    tag = FreeImage_CreateTag();
+    if (tag) {
+        FreeImage_SetTagKey(tag, "FrameTime");
+        FreeImage_SetTagType(tag, FIDT_SHORT);
+        FreeImage_SetTagCount(tag, 1);
+        FreeImage_SetTagLength(tag, 2);
+        FreeImage_SetTagValue(tag, &value);
+        FreeImage_SetMetadata(FIMD_ANIMATION, dib, "FrameTime", tag);
+        FreeImage_DeleteTag(tag);
+    }
+    FreeImage_SetMetadataKeyValue(FIMD_COMMENTS, dib, "Second", "another value");
+    clone = FreeImage_Clone(dib);
+    other = FreeImage_Allocate(4, 4, 24, 0, 0, 0);
+    if (other) FreeImage_CloneMetadata(other, dib);
+    armed = 0; fail_new = 0;
+
+    whole = tags_whole(dib) && (!clone || tags_whole(clone)) && (!other || tags_whole(other));
+    if (!FreeImage_GetMetadata(FIMD_COMMENTS, dib, "Existing", &check) || !check) whole = 0;
+
+    FreeImage_Unload(clone);
+    FreeImage_Unload(other);
+    FreeImage_Unload(dib);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 /* FreeImage_LoadMultiBitmapFromMemory of a 2-page MNG: a plugin that throws while counting must not escape */
 static int loadmem_case(void) {
     char path[512];
@@ -385,6 +421,7 @@ int main(void) {
     sweep("tags and metadata: no crash, no tag without its value", tags_case);
     sweep("WebP save: TRUE only for a file that loads", webp_case);
     sweep("multi-page mutators: no crash, stays consistent", mpage_case);
+    sweep("SetMetadata/Clone/CloneMetadata: no crash, tags kept", meta_case);
     sweep("LoadMultiBitmapFromMemory: a throwing page count does not escape", loadmem_case);
     sweep("GIF save: TRUE only for a file that loads", gif_save);
     sweep("GIF load: no crash", gif_load);

@@ -546,6 +546,37 @@ FreeImage_Unload(FIBITMAP *dib) {
 
 // ----------------------------------------------------------
 
+// copy one metadata model into dst_metadata under 'model'; FALSE on out of memory, dst_metadata unchanged
+static BOOL
+FreeImage_CopyMetadataModel(METADATAMAP *dst_metadata, int model, TAGMAP *src_tagmap) {
+	TAGMAP *dst_tagmap = new(std::nothrow) TAGMAP();
+	if(!dst_tagmap) {
+		return FALSE;
+	}
+	// cloned but not yet inserted; freed if the map node cannot be allocated
+	FITAG *pending = NULL;
+	try {
+		for(TAGMAP::iterator j = src_tagmap->begin(); j != src_tagmap->end(); j++) {
+			pending = FreeImage_CloneTag((*j).second);
+			if(pending) {
+				(*dst_tagmap)[(*j).first] = pending;
+				pending = NULL;
+			}
+		}
+		(*dst_metadata)[model] = dst_tagmap;
+	} catch(std::bad_alloc &) {
+		FreeImage_DeleteTag(pending);
+		for(TAGMAP::iterator k = dst_tagmap->begin(); k != dst_tagmap->end(); k++) {
+			FreeImage_DeleteTag((*k).second);
+		}
+		delete dst_tagmap;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+// ----------------------------------------------------------
+
 FIBITMAP * DLL_CALLCONV
 FreeImage_Clone(FIBITMAP *dib) {
 	if(!dib) {
@@ -614,24 +645,8 @@ FreeImage_Clone(FIBITMAP *dib) {
 			TAGMAP *src_tagmap = (*i).second;
 
 			if(src_tagmap) {
-				// create a metadata model
-				TAGMAP *dst_tagmap = new(std::nothrow) TAGMAP();
-
-				if(dst_tagmap) {
-					// fill the model
-					for(TAGMAP::iterator j = src_tagmap->begin(); j != src_tagmap->end(); j++) {
-						std::string dst_key = (*j).first;
-						FITAG *dst_tag = FreeImage_CloneTag( (*j).second );
-
-						// assign key and tag value
-						if(dst_tag) {
-							(*dst_tagmap)[dst_key] = dst_tag;
-						}
-					}
-
-					// assign model and tagmap
-					(*dst_metadata)[model] = dst_tagmap;
-				}
+				// a model that runs out of memory is skipped; the clone is still returned
+				FreeImage_CopyMetadataModel(dst_metadata, model, src_tagmap);
 			}
 		}
 
@@ -1322,28 +1337,12 @@ FreeImage_CloneMetadata(FIBITMAP *dst, FIBITMAP *src) {
 				FreeImage_SetMetadata((FREE_IMAGE_MDMODEL)model, dst, NULL, NULL);
 			}
 
-			// create a metadata model
-			TAGMAP *dst_tagmap = new(std::nothrow) TAGMAP();
-
-			if(dst_tagmap) {
-				// fill the model
-				for(TAGMAP::iterator j = src_tagmap->begin(); j != src_tagmap->end(); j++) {
-					std::string dst_key = (*j).first;
-					FITAG *dst_tag = FreeImage_CloneTag( (*j).second );
-
-					// assign key and tag value
-					if(dst_tag) {
-						(*dst_tagmap)[dst_key] = dst_tag;
-					}
-				}
-
-				// assign model and tagmap
-				(*dst_metadata)[model] = dst_tagmap;
-			}
+			// a model that runs out of memory is skipped
+			FreeImage_CopyMetadataModel(dst_metadata, model, src_tagmap);
 		}
 	}
 
-	// clone resolution 
+	// clone resolution
 	FreeImage_SetDotsPerMeterX(dst, FreeImage_GetDotsPerMeterX(src)); 
 	FreeImage_SetDotsPerMeterY(dst, FreeImage_GetDotsPerMeterY(src)); 
 
@@ -1375,12 +1374,17 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 		}
 
 		if(!tagmap) {
-			// this model, doesn't exist: create it 
+			// this model, doesn't exist: create it
 			tagmap = new(std::nothrow) TAGMAP();
 			if(!tagmap) {
 				return FALSE;
 			}
-			(*metadata)[model] = tagmap;
+			try {
+				(*metadata)[model] = tagmap;
+			} catch(std::bad_alloc &) {
+				delete tagmap;
+				return FALSE;
+			}
 		}
 		
 		if(tag) {
@@ -1425,14 +1429,17 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 				return FALSE;
 			}
 
-			// delete existing tag
-			FITAG *old_tag = (*tagmap)[key];
-			if(old_tag) {
-				FreeImage_DeleteTag(old_tag);
+			// insert or replace, keeping the old tag if the slot cannot be allocated
+			try {
+				FITAG *& slot = (*tagmap)[key];
+				if(slot) {
+					FreeImage_DeleteTag(slot);
+				}
+				slot = new_tag;
+			} catch(std::bad_alloc &) {
+				FreeImage_DeleteTag(new_tag);
+				return FALSE;
 			}
-
-			// create a new tag
-			(*tagmap)[key] = new_tag;
 		}
 		else {
 			// delete existing tag
