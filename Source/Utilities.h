@@ -462,6 +462,18 @@ Rotate a dib according to Exif info
 */
 void RotateExif(FIBITMAP **dib);
 
+/**
+FIF_LOAD_DISPLAY_ICC: the flags the plugin gets
+@see See definition in ColorManagement.cpp
+*/
+int DisplayICCLoadFlags(FREE_IMAGE_FORMAT fif, int flags);
+
+/**
+FIF_LOAD_DISPLAY_ICC: the loaded image in the display's colors; NULL, the image unloaded, when that fails
+@see See definition in ColorManagement.cpp
+*/
+FIBITMAP* ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

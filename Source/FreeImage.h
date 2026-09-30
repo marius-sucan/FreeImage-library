@@ -675,6 +675,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 // Load / Save flag constants -----------------------------------------------
 
 #define FIF_LOAD_NOPIXELS 0x8000	//! loading: load the image header only (not supported by all plugins, default to full loading)
+#define FIF_LOAD_DISPLAY_ICC 0x4000	//! loading: convert to the display's ICC profile (sRGB when unknown), CMYK JPEG, TIFF and PSD read as CMYK first; ignored with FIF_LOAD_NOPIXELS
 
 #define APNG_DEFAULT		0
 #define APNG_PLAYBACK		2		//! 'Play' the APNG: each frame composited, as 32bpp
@@ -1213,6 +1214,8 @@ DLL_API FIBITMAP *DLL_CALLCONV FreeImage_SoftProof(FIBITMAP *dib, const void *pr
 DLL_API const void *DLL_CALLCONV FreeImage_GetBuiltInICCProfile(int profile, DWORD *size);
 DLL_API unsigned DLL_CALLCONV FreeImage_GetICCProfileDescription(const void *profile, DWORD size, char *buffer, unsigned buffer_size);
 DLL_API DWORD DLL_CALLCONV FreeImage_GetICCProfileColorSpace(const void *profile, DWORD size);
+DLL_API BOOL DLL_CALLCONV FreeImage_SetDisplayICCProfile(const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION));
+DLL_API DWORD DLL_CALLCONV FreeImage_GetDisplayICCProfile(void *buffer FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0));
 
 // miscellaneous algorithms
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle FI_DEFAULT(3));

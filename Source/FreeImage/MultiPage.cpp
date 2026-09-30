@@ -684,9 +684,9 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 					{
 						for (int j = i->getStart(); j <= i->getEnd(); j++) {
 
-							// load the original source data, with pixels even if the bitmap was opened header-only
+							// load the original source data, with pixels even if the bitmap was opened header-only, never in the display's colors
 							dib = (header->node->m_plugin->load_proc != NULL) ?
-								header->node->m_plugin->load_proc(&header->io, header->handle, j, header->load_flags & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
+								header->node->m_plugin->load_proc(&header->io, header->handle, j, DisplayICCLoadFlags(header->fif, header->load_flags) & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
 
 							if (dib == NULL) {
 								success = FALSE;
@@ -1176,7 +1176,10 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 			// NULL read_data is valid: many plugins have no open_proc
 
 			if (header->node->m_plugin->load_proc != NULL) {
-				dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, header->load_flags, header->read_data);
+				dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, DisplayICCLoadFlags(header->fif, header->load_flags), header->read_data);
+				if (dib && ((header->load_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
+					dib = ConvertToDisplayICC(header->fif, header->load_flags, dib);
+				}
 			}
 		}
 

@@ -4,10 +4,10 @@
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
-TESTS   = convert profiles robust
+TESTS   = convert profiles robust display
 CFLAGS ?= -O2 -g -w
 INC     = -I../../Dist
-LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
+LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS)
 
 default: all
 all: $(TESTS)
@@ -29,13 +29,22 @@ threads: convert
 pillow:
 	python3 pillow.py
 
+# FIF_LOAD_DISPLAY_ICC's X11 detection, against a stand-in libxcb.so.1
+x11: display xcbstub/libxcb.so.1
+	DISPLAY=:0 LD_LIBRARY_PATH=xcbstub ./display -x11
+
+xcbstub/libxcb.so.1: xcbstub.c
+	mkdir -p xcbstub
+	gcc -shared -fPIC -O1 -o $@ $<
+
 clean-bin:
 	rm -f $(TESTS) $(addsuffix -asan,$(TESTS)) digest-1.txt digest-8.txt
+	rm -rf xcbstub
 
 clean: clean-bin
 	rm -rf asan-obj
 
-.PHONY: default all run threads pillow clean clean-bin asan-run
+.PHONY: default all run threads pillow x11 clean clean-bin asan-run
 
 # --- AddressSanitizer and UndefinedBehaviorSanitizer -----------------------
 # the toolkit file and Little CMS are instrumented, linked ahead of the library
@@ -60,5 +69,5 @@ asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libf
 
 asan-run: asan-obj/.built
 	for t in $(TESTS); do \
-	  gcc $(CFLAGS) $(SAN) $(INC) $$t.c -o $$t-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS) || exit 1; done
-	ASAN_OPTIONS=detect_leaks=1 ./convert-asan -quick && ./profiles-asan && ./robust-asan 30
+	  gcc $(CFLAGS) $(SAN) $(INC) $$t.c -o $$t-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS) || exit 1; done
+	ASAN_OPTIONS=detect_leaks=1 ./convert-asan -quick && ./profiles-asan && ./robust-asan 30 && ./display-asan

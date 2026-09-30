@@ -402,13 +402,17 @@ FreeImage_LoadFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_handle handl
 					data = FreeImage_Open(node, io, handle, TRUE);
 					opened = TRUE;
 
-					bitmap = node->m_plugin->load_proc(io, handle, -1, flags, data);
+					bitmap = node->m_plugin->load_proc(io, handle, -1, DisplayICCLoadFlags(fif, flags), data);
 				} catch (std::bad_alloc &) {
 					FreeImage_OutputMessageProc((int)fif, FI_MSG_ERROR_MEMORY);
 				}
 
 				if (opened) {
 					FreeImage_Close(node, io, handle, data);
+				}
+
+				if (bitmap && ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
+					bitmap = ConvertToDisplayICC(fif, flags, bitmap);
 				}
 
 				return bitmap;

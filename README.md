@@ -83,6 +83,7 @@ Changes:
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
+- added FIF_LOAD_DISPLAY_ICC: images load in the screen's colors, CMYK JPEG, TIFF and PSD files included;
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
@@ -108,7 +109,9 @@ Color management:
 - the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type; a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders. FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
 - flags: FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION; FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
 - results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey. FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
-- to display an image: load CMYK JPEG, TIFF and PSD files with JPEG_CMYK, TIFF_CMYK or PSD_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
+- to display an image: load it with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF and PSD files with JPEG_CMYK, TIFF_CMYK or PSD_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
+- FIF_LOAD_DISPLAY_ICC converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as 24- or 48-bit RGB; grey images stay grey; float images are not changed. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
+- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent FIF_LOAD_DISPLAY_ICC converts to, for example the profile of the monitor showing the image, or with NULL detects the screen's again; FreeImage_GetDisplayICCProfile() returns it;
 
 Bugs or limitations identified:
 - AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB;
