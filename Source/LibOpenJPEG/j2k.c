@@ -6460,9 +6460,12 @@ static OPJ_BOOL opj_j2k_read_mco(opj_j2k_t *p_j2k,
 
     l_tccp = l_tcp->tccps;
 
-    for (i = 0; i < l_image->numcomps; ++i) {
-        l_tccp->m_dc_level_shift = 0;
-        ++l_tccp;
+    /* FreeImage: with no stages the DC level shift stays */
+    if (l_nb_stages > 0) {
+        for (i = 0; i < l_image->numcomps; ++i) {
+            l_tccp->m_dc_level_shift = 0;
+            ++l_tccp;
+        }
     }
 
     if (l_tcp->m_mct_decoding_matrix) {
