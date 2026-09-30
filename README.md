@@ -76,18 +76,26 @@ Changes:
 - added FreeImage_RescaleRawBits();
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
-- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.5 and libde265 1.1.3; 
+- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.4 and libde265 1.1.3; 
 - added animated HEIC/HEIF reading (HEIF image sequences);
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
-- updated LibRaw library to version 0.22.2, from 0.21.1;
-- updated LibJPEG library to version 10, from the 9d of January 2020;
-- updated LibTIFF library to version 4.7.2, from 4.6.0 release of September 2023;
-- updated ZLib library to version 1.3.2, from the 1.2.13 of October 2022;
-- updated OpenEXR library to version 3.3.14, from version 2.2.0. OpenEXR no longer uses ZLib for EXR data since 3.2. ZIP and DWA compression modes use libdeflate;
-- updated OpenJPEG library to version 2.5.4, from a March 2014 trunk snapshot labelled 2.0.0;
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
+
+| Formats | Library | Bundled version | Upgraded from (r1910) |
+|---|---|---|---|
+| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 (zlib 1.3.2) | ?? |
+| JPEG | [libjpeg (IJG)](http://ijg.org/) | 10 (January 2026) | 9d |
+| TIFF | [libtiff](http://www.libtiff.org/) | 4.7.1 | 4.6.0 |
+| JPEG 2000 (J2K/JP2) | [OpenJPEG](https://github.com/uclouvain/openjpeg) | 2.5.4 | 2.0.0 |
+| OpenEXR (HDR) | [OpenEXR](https://openexr.com/) + [libdeflate](https://github.com/ebiggers/libdeflate) (v1.26) | 3.3.14 | 2.2.0 |
+| WebP | [libwebp](https://developers.google.com/speed/webp) | 1.6.0 | ?? |
+| Camera RAW | [LibRaw](https://www.libraw.org/) | 0.22.2 | 0.21.1 |
+| JPEG-XR | [jxrlib](https://github.com/4creators/jxrlib) | ?? | ?? |
+| AVIF | [libavif](https://github.com/AOMediaCodec/libavif) + libdav1d (v1.5.4) | 1.4.2 | not included |
+| HEIF | [libheif](https://github.com/strukturag/libheif) + libde265 (v1.1.1) | 1.23.5 | not included |
+| ICC profiles | [LittleCMS](https://github.com/mm2/Little-CMS) | 2.29.1 | not included |
 
 Color management:
 - FreeImage_ConvertToICCProfile() converts an image from its embedded ICC profile, or from sRGB when it has none, to any RGB, grey or CMYK profile; FreeImage_ApplyICCProfile() does it in place, for showing images;
