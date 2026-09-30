@@ -284,6 +284,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; flag - 0, or the flags of the file's format below, combined with |:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
 ; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
+;
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
 ; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
@@ -1122,9 +1123,18 @@ FreeImage_TmoFattal02(hImage, colorSaturation:=0.5, attenuation:=0.85) {
 
 ; === ICC profile functions ===
 
-FreeImage_GetICCProfile(hImage) {
+FreeImage_GetICCProfile(hImage, ByRef size) {
 ; FIICCPROFILE: flags UShort at 0, size UInt at 4, data pointer at 8
-   Return DllCall(getFIMfunc("GetICCProfile"), "UPtr", hImage, "UPtr") ; returns a pointer to it
+   pICC := DllCall(getFIMfunc("GetICCProfile"), "UPtr", hImage, "UPtr")
+   size := pICC ? NumGet(pICC+0, 4, "UInt") : 0
+   Return pICC
+}
+
+FreeImage_GetICCProfileData(hImage, ByRef size) {
+; returns a pointer to the image's own ICC profile data
+; returns 0 if it has none; size receives its byte count
+   pICC := FreeImage_GetICCProfile(hImage, size)
+   Return (pICC && size) ? NumGet(pICC + 0, 8, "UPtr") : 0
 }
 
 FreeImage_CreateICCProfile(hImage, pData, size) {
@@ -1134,14 +1144,6 @@ FreeImage_CreateICCProfile(hImage, pData, size) {
 
 FreeImage_DestroyICCProfile(hImage) {
    Return DllCall(getFIMfunc("DestroyICCProfile"), "UPtr", hImage)
-}
-
-
-FreeImage_GetICCProfileData(hImage, ByRef size) {
-; returns a pointer to the image's own ICC profile, 0 if it has none; size receives its byte count
-   pICC := FreeImage_GetICCProfile(hImage)
-   size := pICC ? NumGet(pICC + 0, 4, "UInt") : 0
-   Return (pICC && size) ? NumGet(pICC + 0, 8, "UPtr") : 0
 }
 
 ; === Color management (ICC profiles, Little CMS) ===
@@ -1162,7 +1164,8 @@ FreeImage_ConvertToICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 
 FreeImage_ApplyICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 ; FreeImage_ConvertToICCProfile() in place, for showing an image: a palette changes its colors,
-; a CMYK image becomes RGBA with opaque alpha
+; a CMYK image becomes RGBA with opaque alpha.
+; NOTE: ApplyICCProfile can't convert images where the pixel format would have to change, such as 16-bit or float greyscale to an RGB display profile.
 ; Return value: 1 -- succes; 0 -- fail, or the pixel format would change
 ; flags: see FreeImage_ConvertToICCProfile()
    Return DllCall(getFIMfunc("ApplyICCProfile"), "UPtr", hImage, "UPtr", pProfile, "UInt", profileSize, "Int", flags)
@@ -1307,7 +1310,8 @@ FreeImage_OpenMultiBitmap(ImgPath, imgFormat, create_new:=0, read_only:=1, keep_
 ;
 ; flags - 0, or these combined with |; a single-page format takes its FreeImage_Load() flags:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the properties: each page's size, type, metadata and frame time; no pixels
-; FIF_LOAD_DISPLAY_ICC = 0x4000; every page in the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
+; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
+;
 ; APNG_PLAYBACK = 2; APNG: every frame as a viewer shows it, composited on the canvas, as 32-bit
 ; AVIF_PLAYBACK = 2; AVIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
 ; GIF_LOAD256 = 1; GIF: frames with a palette of 16 colours or fewer load as 8-bit, not as 1-bit or 4-bit
@@ -1344,7 +1348,6 @@ FreeImage_OpenMultiBitmapFromHandle(FIF, pIO, hHandle, flags:=0) {
 FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 ; If the multi-page image was opened with read_only=0, any modifications
 ; to the image will be saved to disk; do not use FreeImage_Save() to save a multi-page image.
-; Returns FALSE when the changes could not be written; the file is then left as it was.
 ; flags - 0, or these combined with |; GIF and ICO take none:
 ; PNG_Z_BEST_SPEED = 0x0001; APNG, MNG: zlib level 1, the fastest; any level 1 to 9 may be given
 ; PNG_Z_DEFAULT_COMPRESSION = 0x0006; APNG, MNG: zlib level 6, the default
@@ -1365,6 +1368,9 @@ FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 ; TIFF_BIGTIFF_FORMAT = 0x20000; BigTIFF, with 64-bit offsets; used anyway for a file that would pass 4 GB
 ; WEBP_DEFAULT = 0; lossy, quality 75; or pass the quality itself, 1 to 100
 ; WEBP_LOSSLESS = 0x100; lossless
+;
+; Returns FALSE when the changes could not be written; the file is then left as it was.
+
    If (hFIMULTIBITMAP="")
       Return
 
@@ -1382,8 +1388,8 @@ FreeImage_GetPageCount(hFIMULTIBITMAP) {
 }
 
 FreeImage_AppendPage(hFIMULTIBITMAP, hImage) {
-   ; Returns TRUE when the page was added. It is refused when the format cannot encode the bitmap.
-   Return DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int")
+  ; Returns TRUE when the page was added. It is refused when the format cannot encode the bitmap.
+  Return DllCall(getFIMfunc("AppendPage"), "UPtr", hFIMULTIBITMAP, "UPtr", hImage, "Int")
 }
 
 FreeImage_InsertPage(hFIMULTIBITMAP, PageNumber, hImage) {
@@ -1406,7 +1412,7 @@ FreeImage_LockPage(hFIMULTIBITMAP, PageNumber) {
    ; into another multi-page bitmap. When you are done with the bitmap you have to call
    ; FreeImage_UnlockPage to give the page back to the bitmap and/or apply any changes made
    ; in the page. It is forbidden to use FreeImage_Unload on a locked page: you must use
-   ; FreeImage_UnlockPage() instead
+   ; FreeImage_UnlockPage() instead.
 
    ; On succes, the function returns a common FIBITMAP.
    Return DllCall(getFIMfunc("LockPage"), "UPtr", hFIMULTIBITMAP, "Int", PageNumber, "UPtr")
