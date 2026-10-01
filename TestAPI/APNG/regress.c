@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <math.h>
 #include "FreeImage.h"
 
 static int failures = 0;
@@ -652,16 +653,17 @@ static void add_chunk(Bytes *b, const char *type, const void *data, DWORD length
 	bytes_add(b, tail, 4);
 }
 
-/* a frame of 1/10 s, disposed of to nothing, its pixels replacing the canvas's */
-static void add_fctl(Bytes *b, DWORD seq, DWORD w, DWORD h, DWORD x, DWORD y) {
+/* a frame of 1/10 s, disposed of to nothing, its pixels replacing the canvas's (blend 0) or composited over it (1) */
+static void add_fctl(Bytes *b, DWORD seq, DWORD w, DWORD h, DWORD x, DWORD y, BYTE blend) {
 	BYTE f[26];
 	put32(f, seq); put32(f + 4, w); put32(f + 8, h); put32(f + 12, x); put32(f + 16, y);
 	f[20] = 0; f[21] = 1; f[22] = 0; f[23] = 10;
-	f[24] = 0; f[25] = 0;
+	f[24] = 0; f[25] = blend;
 	add_chunk(b, "fcTL", f, 26);
 }
 
-/* zlib data of w x h pixels of one value, unfiltered: bytes 1 an 8-bit index, 2 16-bit grey, 3 RGB (low, high byte, 0) */
+/* zlib data of w x h pixels of one value, unfiltered: bytes 1 an 8-bit index, 2 16-bit grey, 3 RGB (low, high byte, 0),
+   4 RGBA (the low byte as grey, the high byte as alpha) */
 static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, unsigned bytes, WORD value) {
 	const DWORD raw_size = h * (1 + bytes * w);
 	BYTE *raw = (BYTE *)malloc(raw_size);
@@ -671,7 +673,9 @@ static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, unsig
 		BYTE *row = raw + y * (1 + bytes * w);
 		row[0] = 0;
 		for (x = 0; x < w; x++) {
-			if (bytes == 3) {
+			if (bytes == 4) {
+				row[1 + 4 * x] = row[2 + 4 * x] = row[3 + 4 * x] = (BYTE)value; row[4 + 4 * x] = (BYTE)(value >> 8);
+			} else if (bytes == 3) {
 				row[1 + 3 * x] = (BYTE)value; row[2 + 3 * x] = (BYTE)(value >> 8); row[3 + 3 * x] = 0;
 			} else if (bytes == 2) {
 				row[1 + 2 * x] = (BYTE)(value >> 8); row[2 + 2 * x] = (BYTE)value;
@@ -705,10 +709,10 @@ static int grey16_animation(const char *path, WORD value0, WORD value1) {
 	add_chunk(&b, "IHDR", ihdr, 13);
 	put32(actl, 2); put32(actl + 4, 0);
 	add_chunk(&b, "acTL", actl, 8);
-	add_fctl(&b, 0, 16, 16, 0, 0);
+	add_fctl(&b, 0, 16, 16, 0, 0, 0);
 	n = image_data(zdata, sizeof(zdata), 16, 16, 2, value0);
 	add_chunk(&b, "IDAT", zdata, n);
-	add_fctl(&b, 1, 8, 8, 4, 4);
+	add_fctl(&b, 1, 8, 8, 4, 4, 0);
 	put32(zdata, 2);
 	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 2, value1);
 	add_chunk(&b, "fdAT", zdata, n + 4);
@@ -769,12 +773,12 @@ static int trailing_animation(const char *path, int iccp_after) {
 	if (!iccp_after) add_chunk(&b, "iCCP", iccp, iccp_size);
 	put32(actl, 2); put32(actl + 4, 0);
 	add_chunk(&b, "acTL", actl, 8);
-	add_fctl(&b, 0, 16, 16, 0, 0);
+	add_fctl(&b, 0, 16, 16, 0, 0, 0);
 	n = image_data(zdata, sizeof(zdata), 16, 16, 3, 0x40C0);
 	add_chunk(&b, "IDAT", zdata, n);
 	if (iccp_after) add_chunk(&b, "iCCP", iccp, iccp_size);
 	add_chunk(&b, "tEXt", text, sizeof(text) - 1);
-	add_fctl(&b, 1, 8, 8, 4, 4);
+	add_fctl(&b, 1, 8, 8, 4, 4, 0);
 	put32(zdata, 2);
 	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 3, 0x8020);
 	add_chunk(&b, "fdAT", zdata, n + 4);
@@ -839,11 +843,11 @@ static void test_trailing_chunks(void) {
 		add_chunk(&b, "IHDR", ihdr, 13);
 		put32(actl, 2); put32(actl + 4, 0);
 		add_chunk(&b, "acTL", actl, 8);
-		add_fctl(&b, 0, 16, 16, 0, 0);
+		add_fctl(&b, 0, 16, 16, 0, 0, 0);
 		n = image_data(zdata, sizeof(zdata), 16, 16, 1, 1);
 		add_chunk(&b, "IDAT", zdata, n);
 		add_chunk(&b, "PLTE", palette, 6);
-		add_fctl(&b, 1, 8, 8, 4, 4);
+		add_fctl(&b, 1, 8, 8, 4, 4, 0);
 		put32(zdata, 2);
 		n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 1, 1);
 		add_chunk(&b, "fdAT", zdata, n + 4);
@@ -991,6 +995,162 @@ static void test_srgb_chunk(void) {
 		for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
 	}
 	if (!bad) ok("sRGB, gAMA and cHRM before acTL without a profile, frames unchanged; none beside an iCCP or for PQ");
+	remove(path);
+}
+
+/* an RGBA animation: frame 0 16x16 of grey g0 and alpha a0, frame 1 8x8 at (4,4) of g1 and a1 composited over it;
+   an iCCP chunk when profile is given, a cICP one when cicp is */
+static int blend_animation(const char *path, BYTE g0, BYTE a0, BYTE g1, BYTE a1, const void *profile, DWORD size, const BYTE *cicp) {
+	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+	BYTE ihdr[13], actl[8], zdata[8192], iccp[4096];
+	Bytes b = { NULL, 0 };
+	DWORD n;
+	int done;
+	bytes_add(&b, signature, 8);
+	put32(ihdr, 16); put32(ihdr + 4, 16);
+	ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+	add_chunk(&b, "IHDR", ihdr, 13);
+	if (profile) {
+		memcpy(iccp, "p\0\0", 3);
+		n = FreeImage_ZLibCompress(iccp + 3, sizeof(iccp) - 3, (BYTE *)profile, size);
+		add_chunk(&b, "iCCP", iccp, n + 3);
+	}
+	if (cicp) add_chunk(&b, "cICP", cicp, 4);
+	put32(actl, 2); put32(actl + 4, 0);
+	add_chunk(&b, "acTL", actl, 8);
+	add_fctl(&b, 0, 16, 16, 0, 0, 0);
+	n = image_data(zdata, sizeof(zdata), 16, 16, 4, (WORD)(g0 | (a0 << 8)));
+	add_chunk(&b, "IDAT", zdata, n);
+	add_fctl(&b, 1, 8, 8, 4, 4, 1);
+	put32(zdata, 2);
+	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 4, (WORD)(g1 | (a1 << 8)));
+	add_chunk(&b, "fdAT", zdata, n + 4);
+	add_chunk(&b, "IEND", NULL, 0);
+	done = write_bytes(path, &b);
+	free(b.data);
+	return done;
+}
+
+/* the light of a sample of 0 to 1 */
+typedef double (*Light)(double v);
+static double light_srgb(double v) { return (v <= 0.04045) ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+static double light_adobe(double v) { return pow(v, 563.0 / 256.0); }
+static double light_linear(double v) { return v; }
+static double light_pq(double v) {
+	const double m1 = 0.1593017578125, m2 = 78.84375, c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+	const double e = pow(v, 1.0 / m2);
+	return pow((e > c1 ? e - c1 : 0.0) / (c2 - c3 * e), 1.0 / m1);
+}
+
+/* OVER of g1/a1 onto g0/a0 on light, by the alpha weights of the integer blend; the 8-bit value of light nearest */
+static int blend_on_light(Light light, int g0, int a0, int g1, int a1, int *alpha) {
+	const unsigned weight = (unsigned)(a0 * (255 - a1)), total = (unsigned)(a1 * 255) + weight;
+	const double mix = light(g1 / 255.0) * (a1 * 255.0 / total) + light(g0 / 255.0) * ((double)weight / total);
+	double best = 1e30;
+	int k, value = 0;
+	*alpha = (int)((total + 127) / 255);
+	for (k = 0; k < 256; k++) {
+		const double d = fabs(light(k / 255.0) - mix);
+		if (d < best) { best = d; value = k; }
+	}
+	return value;
+}
+
+/* with APNG_LINEAR_BLEND, a translucent frame is composited on light, by the curve of the file's colours */
+static void test_linear_blend(void) {
+	const char *path = scratch("apng_linear.png");
+	DWORD adobe_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	static const BYTE cicp_linear[4] = { 1, 8, 0, 1 }, cicp_pq[4] = { 9, 16, 0, 1 };
+	static const struct { const char *what; int colours; BYTE g0, a0, g1, a1; } cases[5] = {
+		{ "untagged, half black over white", 0, 255, 255, 0, 128 },
+		{ "Adobe RGB, half black over white", 1, 255, 255, 0, 128 },
+		{ "CICP linear, half black over white", 2, 255, 255, 0, 128 },
+		{ "untagged, half black over half white", 0, 255, 128, 0, 128 },
+		{ "CICP PQ, half black over white", 3, 255, 255, 0, 128 }
+	};
+	const Light lights[4] = { light_srgb, light_adobe, light_linear, light_pq };
+	int k, bad = 0;
+
+	printf("\n=== APNG_LINEAR_BLEND: translucent frames composited on light\n");
+
+	{
+		/* premise: FreeImage's Adobe RGB has a 563/256 power curve */
+		FIBITMAP *one = FreeImage_Allocate(1, 1, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *lin;
+		RGBQUAD grey = { 128, 128, 128, 0 };
+		FreeImage_SetPixelColor(one, 0, 0, &grey);
+		FreeImage_CreateICCProfile(one, (void *)adobe, (long)adobe_size);
+		lin = FreeImage_ConvertToLinear(one, 0);
+		if (!lin || fabs(((FIRGBF *)FreeImage_GetScanLine(lin, 0))->red - light_adobe(128 / 255.0)) > 1e-4) {
+			fail("premise: FreeImage's Adobe RGB is not a 563/256 power curve");
+			bad++;
+		}
+		if (lin) FreeImage_Unload(lin);
+		FreeImage_Unload(one);
+	}
+
+	for (k = 0; k < 5 && !bad; k++) {
+		const int colours = cases[k].colours;
+		int want_alpha, want = blend_on_light(lights[colours], cases[k].g0, cases[k].a0, cases[k].g1, cases[k].a1, &want_alpha);
+		int linear;
+		RGBQUAD blended[2], outside[2];
+		if (!blend_animation(path, cases[k].g0, cases[k].a0, cases[k].g1, cases[k].a1, (colours == 1) ? adobe : NULL, adobe_size,
+							 (colours == 2) ? cicp_linear : (colours == 3) ? cicp_pq : NULL)) {
+			fail("%s: not written", cases[k].what);
+			bad++;
+			break;
+		}
+		for (linear = 0; linear < 2; linear++) {
+			FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK | (linear ? APNG_LINEAR_BLEND : 0));
+			FIBITMAP *canvas = mb ? FreeImage_LockPage(mb, 1) : NULL;
+			if (!canvas) {
+				fail("%s: canvas 1 did not load", cases[k].what);
+				bad++;
+			} else {
+				/* (6,6) and (1,1), counted from the top */
+				FreeImage_GetPixelColor(canvas, 6, 9, &blended[linear]);
+				FreeImage_GetPixelColor(canvas, 1, 14, &outside[linear]);
+				FreeImage_UnlockPage(mb, canvas, FALSE);
+			}
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		}
+		if (bad) break;
+		if (blended[1].rgbRed != want || blended[1].rgbGreen != want || blended[1].rgbBlue != want || blended[1].rgbReserved != want_alpha) {
+			fail("%s: (%u,%u,%u,%u) with the flag, want (%d,%d,%d,%d)", cases[k].what, blended[1].rgbRed, blended[1].rgbGreen,
+				 blended[1].rgbBlue, blended[1].rgbReserved, want, want, want, want_alpha);
+			bad++;
+		}
+		if (blended[0].rgbReserved != blended[1].rgbReserved) {
+			fail("%s: the flag changed alpha, %u to %u", cases[k].what, blended[0].rgbReserved, blended[1].rgbReserved);
+			bad++;
+		}
+		if (memcmp(&outside[0], &outside[1], sizeof(RGBQUAD))) {
+			fail("%s: the flag changed a pixel no translucent frame covers", cases[k].what);
+			bad++;
+		}
+		if (colours == 0 && k == 0 && blended[0].rgbRed != 127) {
+			fail("%s: (%u) without the flag, want 127 on the stored values", cases[k].what, blended[0].rgbRed);
+			bad++;
+		}
+	}
+	if (!bad) {
+		/* without APNG_PLAYBACK the flag changes nothing */
+		FIMULTIBITMAP *plain = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
+		FIMULTIBITMAP *flagged = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_LINEAR_BLEND);
+		int page;
+		for (page = 0; page < 2; page++) {
+			FIBITMAP *a = plain ? FreeImage_LockPage(plain, page) : NULL, *b = flagged ? FreeImage_LockPage(flagged, page) : NULL;
+			if (!a || !b || pixel_diff(a, b) != 0) {
+				fail("without APNG_PLAYBACK, frame %d differs with the flag", page);
+				bad++;
+			}
+			if (a) FreeImage_UnlockPage(plain, a, FALSE);
+			if (b) FreeImage_UnlockPage(flagged, b, FALSE);
+		}
+		if (plain) FreeImage_CloseMultiBitmap(plain, 0);
+		if (flagged) FreeImage_CloseMultiBitmap(flagged, 0);
+	}
+	if (!bad) ok("sRGB, Adobe RGB, linear and PQ curves, over opaque and translucent pixels; alpha and the rest unchanged");
 	remove(path);
 }
 
@@ -1461,6 +1621,7 @@ int main(void) {
 	test_grey16_playback();
 	test_trailing_chunks();
 	test_srgb_chunk();
+	test_linear_blend();
 	test_profile_written();
 	test_mixed_profiles();
 	test_refusals();

@@ -679,6 +679,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 
 #define APNG_DEFAULT		0
 #define APNG_PLAYBACK		2		//! 'Play' the APNG: each frame composited, as 32bpp
+#define APNG_LINEAR_BLEND	4		//! with APNG_PLAYBACK: translucent frames blended in linear light (PNG 3, 13.16), not on the stored values
 #define BMP_DEFAULT         0
 #define BMP_SAVE_RLE        1
 #define CUT_DEFAULT         0

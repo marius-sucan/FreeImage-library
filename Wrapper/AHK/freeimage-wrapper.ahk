@@ -8,6 +8,9 @@
 ; Change log:
 ; =============================
 ;
+; 1 October 2026 - v2.03
+; - the APNG_LINEAR_BLEND flag of FreeImage_OpenMultiBitmap(): animated PNG frames blended in linear light
+;
 ; 30 September 2026 - v2.02
 ; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
 ; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
@@ -1338,6 +1341,7 @@ FreeImage_OpenMultiBitmap(ImgPath, imgFormat, create_new:=0, read_only:=1, keep_
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the properties: each page's size, type, metadata and frame time; no pixels
 ; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to the display's colors, see FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
 ;
+; APNG_LINEAR_BLEND = 4; APNG, with APNG_PLAYBACK: translucent frames blended in linear light, not on the stored values
 ; APNG_PLAYBACK = 2; APNG: every frame as a viewer shows it, composited on the canvas, as 32-bit
 ; AVIF_PLAYBACK = 2; AVIF image sequence: every frame as 32-bit RGBA, 8 bits per channel, whatever its own format
 ; GIF_LOAD256 = 1; GIF: frames with a palette of 16 colours or fewer load as 8-bit, not as 1-bit or 4-bit

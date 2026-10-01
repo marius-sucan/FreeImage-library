@@ -102,6 +102,8 @@ struct APNGinfo {
 	int canvas_page;				//! the frame `canvas` shows, -1 when there is none
 	FIBITMAP *description;			//! frame 0's header: the profile and CICP tag every frame has
 	BOOL described;					//! description was looked for
+	std::vector<float> linear;		//! APNG_LINEAR_BLEND: red, green and blue 0 to 255 in linear light
+	BOOL linear_tried;				//! linear was built, or could not be
 
 	// ---------- writing ----------
 
@@ -118,7 +120,7 @@ struct APNGinfo {
 
 	APNGinfo() : read(FALSE), canvas_width(0), canvas_height(0), num_plays(0), animated(FALSE),
 		canvas(NULL), previous_canvas(NULL), canvas_page(-1), description(NULL), described(FALSE),
-		pending(NULL), pending_flags(0), out_pages(0), out_srgb(FALSE), out_width(0), out_height(0), out_plays(0),
+		linear_tried(FALSE), pending(NULL), pending_flags(0), out_pages(0), out_srgb(FALSE), out_width(0), out_height(0), out_plays(0),
 		out_previous(NULL) {
 		memset(ihdr, 0, sizeof(ihdr));
 	}
@@ -574,9 +576,72 @@ ClearRegion(FIBITMAP *canvas, DWORD x, DWORD y, DWORD width, DWORD height) {
 	}
 }
 
-// (x, y) counts from the top; both bitmaps are bottom-up
+// frame 0's header, which describes every frame
+static FIBITMAP *
+Description(APNGinfo *info, int flags) {
+	if(!info->described) {
+		info->described = TRUE;
+		info->description = DecodeFrame(info, 0, (flags & ~(APNG_PLAYBACK | APNG_LINEAR_BLEND)) | FIF_LOAD_NOPIXELS);
+	}
+	return info->description;
+}
+
+// each 8-bit value of red, green and blue in linear light, by the curve FreeImage_ConvertToLinear() undoes for these frames
+static const float *
+LinearTables(APNGinfo *info, int flags) {
+	if(!info->linear_tried) {
+		info->linear_tried = TRUE;
+		FIBITMAP *ramp = FreeImage_Allocate(256, 1, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+		if(ramp) {
+			BYTE *bits = FreeImage_GetScanLine(ramp, 0);
+			for(unsigned k = 0; k < 256; k++) {
+				bits[3 * k + FI_RGBA_RED] = bits[3 * k + FI_RGBA_GREEN] = bits[3 * k + FI_RGBA_BLUE] = (BYTE)k;
+			}
+			// an RGB profile and the CICP tag; with a grey profile, the sRGB curve
+			CopyColorDescription(ramp, Description(info, flags));
+			FIBITMAP *light = FreeImage_ConvertToLinear(ramp, 0);
+			FreeImage_Unload(ramp);
+			if(light && (FreeImage_GetImageType(light) == FIT_RGBF) && (FreeImage_GetWidth(light) == 256)) {
+				const FIRGBF *values = (const FIRGBF*)FreeImage_GetScanLine(light, 0);
+				info->linear.resize(3 * 256);
+				for(unsigned k = 0; k < 256; k++) {
+					info->linear[k] = values[k].red;
+					info->linear[256 + k] = values[k].green;
+					info->linear[512 + k] = values[k].blue;
+				}
+			}
+			if(light) {
+				FreeImage_Unload(light);
+			}
+		}
+	}
+	return info->linear.empty() ? NULL : &info->linear[0];
+}
+
+// the 8-bit value whose light in this rising table is nearest
+static BYTE
+ByteOfLight(const float *table, float light) {
+	if(light <= table[0]) {
+		return 0;
+	}
+	if(light >= table[255]) {
+		return 255;
+	}
+	unsigned low = 0, high = 255;
+	while(high - low > 1) {
+		const unsigned middle = (low + high) / 2;
+		if(table[middle] < light) {
+			low = middle;
+		} else {
+			high = middle;
+		}
+	}
+	return (BYTE)((light - table[low] <= table[high] - light) ? low : high);
+}
+
+// (x, y) counts from the top; both bitmaps are bottom-up; linear: blend in linear light with these tables
 static void
-CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, DWORD x, DWORD y, BYTE blend_op) {
+CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, DWORD x, DWORD y, BYTE blend_op, const float *linear) {
 	const DWORD canvas_height = FreeImage_GetHeight(canvas);
 	const DWORD width = FreeImage_GetWidth(frame);
 	const DWORD height = FreeImage_GetHeight(frame);
@@ -601,6 +666,14 @@ CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, DWORD x, DWORD y, BYTE blend_o
 				const unsigned alpha = sa * 255 + weight;			// the result's alpha, x255
 				if(alpha == 0) {
 					dst[FI_RGBA_RED] = dst[FI_RGBA_GREEN] = dst[FI_RGBA_BLUE] = dst[FI_RGBA_ALPHA] = 0;
+				} else if(linear) {
+					// the same weights, on light (PNG 3, 13.16)
+					const float to_src = (float)(sa * 255) / (float)alpha;
+					const float to_dst = (float)weight / (float)alpha;
+					dst[FI_RGBA_RED]   = ByteOfLight(linear, linear[src[FI_RGBA_RED]] * to_src + linear[dst[FI_RGBA_RED]] * to_dst);
+					dst[FI_RGBA_GREEN] = ByteOfLight(linear + 256, linear[256 + src[FI_RGBA_GREEN]] * to_src + linear[256 + dst[FI_RGBA_GREEN]] * to_dst);
+					dst[FI_RGBA_BLUE]  = ByteOfLight(linear + 512, linear[512 + src[FI_RGBA_BLUE]] * to_src + linear[512 + dst[FI_RGBA_BLUE]] * to_dst);
+					dst[FI_RGBA_ALPHA] = (BYTE)((alpha + 127) / 255);
 				} else {
 					// rounded, not truncated: truncation drifts over long animations
 					const unsigned half = alpha / 2;
@@ -641,6 +714,7 @@ DisposeFrame(APNGinfo *info, int page) {
 // composited canvas at a frame; going backwards restarts from frame 0
 static FIBITMAP *
 RenderFrame(APNGinfo *info, int page, int flags) {
+	const float *linear = ((flags & APNG_LINEAR_BLEND) == APNG_LINEAR_BLEND) ? LinearTables(info, flags) : NULL;
 	if((info->canvas != NULL) && (info->canvas_page == page)) {
 		return FreeImage_Clone(info->canvas);
 	}
@@ -670,7 +744,7 @@ RenderFrame(APNGinfo *info, int page, int flags) {
 			DisposeFrame(info, i - 1);
 		}
 
-		FIBITMAP *raw = DecodeFrame(info, i, flags & ~(APNG_PLAYBACK | FIF_LOAD_NOPIXELS));
+		FIBITMAP *raw = DecodeFrame(info, i, flags & ~(APNG_PLAYBACK | APNG_LINEAR_BLEND | FIF_LOAD_NOPIXELS));
 		if(raw == NULL) {
 			info->canvas_page = -1;		// do not hand out a half drawn canvas later
 			return NULL;
@@ -707,7 +781,7 @@ RenderFrame(APNGinfo *info, int page, int flags) {
 			info->previous_canvas = FreeImage_Clone(info->canvas);
 		}
 
-		CompositeFrame(info->canvas, frame32, frame.x_offset, frame.y_offset, (i == 0) ? APNG_BLEND_OP_SOURCE : frame.blend_op);
+		CompositeFrame(info->canvas, frame32, frame.x_offset, frame.y_offset, (i == 0) ? APNG_BLEND_OP_SOURCE : frame.blend_op, linear);
 		FreeImage_Unload(frame32);
 
 		info->canvas_page = i;
@@ -719,11 +793,7 @@ RenderFrame(APNGinfo *info, int page, int flags) {
 // every frame is decoded with the same ancillary chunks, so frame 0 describes the canvas
 static void
 DescribeCanvas(APNGinfo *info, FIBITMAP *canvas, int flags) {
-	if(!info->described) {
-		info->described = TRUE;
-		info->description = DecodeFrame(info, 0, (flags & ~APNG_PLAYBACK) | FIF_LOAD_NOPIXELS);
-	}
-	CopyColorDescription(canvas, info->description);
+	CopyColorDescription(canvas, Description(info, flags));
 }
 
 static BOOL
@@ -1456,7 +1526,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				DescribeCanvas(info, dib, flags);
 			}
 		} else {
-			dib = DecodeFrame(info, page, flags & ~APNG_PLAYBACK);
+			dib = DecodeFrame(info, page, flags & ~(APNG_PLAYBACK | APNG_LINEAR_BLEND));
 		}
 		if(dib == NULL) {
 			return NULL;
