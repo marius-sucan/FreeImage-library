@@ -37,7 +37,7 @@ LIBSRCS := $(addprefix ../../,$(shell grep -oE 'Source/[A-Za-z0-9_./+-]+\.(c|cc|
 MNG_C   = $(filter $(LIBSRCS),$(wildcard ../../Source/LibPNG/*.c))
 MNG_CXX = ../../Source/FreeImage/PluginMNG.cpp ../../Source/FreeImage/MNGHelper.cpp \
           ../../Source/FreeImage/PluginJNG.cpp ../../Source/FreeImage/PluginPNG.cpp \
-          ../../Source/FreeImage/MultiPage.cpp
+          ../../Source/FreeImage/MultiPage.cpp ../../Source/FreeImageToolkit/ColorManagement.cpp
 
 asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libfreeimage.a $(MNG_C) $(MNG_CXX)
 	rm -rf asan-obj && mkdir -p asan-obj

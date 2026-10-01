@@ -32,6 +32,9 @@
 #include <new>
 #include <vector>
 
+// see MNGHelper.cpp
+BOOL mng_ReadICCP(const BYTE *chunk, DWORD length, std::vector<BYTE>& profile);
+
 // ==========================================================
 // Plugin Interface
 // ==========================================================
@@ -203,6 +206,8 @@ struct MNGinfo {
 	LONG loop_count;			//! 1 = once, 0 = forever
 	BOOL has_background;
 	RGBQUAD background;
+	std::vector<BYTE> background_iccp;	//! the global iCCP payload the background colour is given in
+	BOOL background_srgb;		//! or the global sRGB chunk
 
 	std::vector<MNGGlobals> globals;
 	std::vector<MNGFrame> frames;
@@ -213,6 +218,12 @@ struct MNGinfo {
 	// MNG_PLAYBACK cache: the last composed canvas
 	FIBITMAP *canvas;
 	int canvas_page;			//! -1 when none
+
+	// MNG_PLAYBACK: every canvas is in page 0's colours
+	BOOL prepared;
+	FIBITMAP *description;		//! header only: page 0's RGB profile and CICP tag
+	RGBQUAD canvas_background;	//! the background colour in those colours
+	BOOL colour_warned;
 
 	// ---------- writing ----------
 
@@ -227,11 +238,13 @@ struct MNGinfo {
 	MNGinfo() : read(FALSE), has_mhdr(FALSE), canvas_width(0), canvas_height(0),
 		ticks_per_second(0), nominal_layer_count(0), nominal_frame_count(0),
 		nominal_play_time(0), simplicity(0), loop_count(1), has_background(FALSE),
-		complex_features(FALSE), warned(FALSE), canvas(NULL), canvas_page(-1),
+		background_srgb(FALSE), complex_features(FALSE), warned(FALSE), canvas(NULL), canvas_page(-1),
+		prepared(FALSE), description(NULL), colour_warned(FALSE),
 		out_flags(0), out_canvas_width(0), out_canvas_height(0), out_loop(1),
 		out_has_background(FALSE) {
 		background.rgbRed = background.rgbGreen = background.rgbBlue = 0;
 		background.rgbReserved = 255;
+		canvas_background = background;
 		out_background.rgbRed = out_background.rgbGreen = out_background.rgbBlue = 0;
 		out_background.rgbReserved = 255;
 	}
@@ -239,6 +252,9 @@ struct MNGinfo {
 	~MNGinfo() {
 		if(canvas) {
 			FreeImage_Unload(canvas);
+		}
+		if(description) {
+			FreeImage_Unload(description);
 		}
 	}
 };
@@ -475,9 +491,9 @@ ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
 	}
 }
 
-// BACK (MNG 1.0, 4.3.1); the background image id is ignored
+// BACK (MNG 1.0, 4.3.1), in the top-level colour space it follows; the background image id is ignored
 static void
-ParseBACK(const BYTE *payload, DWORD length, MNGinfo *info) {
+ParseBACK(const BYTE *payload, DWORD length, const MNGGlobals& globals, MNGinfo *info) {
 	if(length < 6) {
 		return;
 	}
@@ -486,6 +502,8 @@ ParseBACK(const BYTE *payload, DWORD length, MNGinfo *info) {
 	info->background.rgbBlue = (BYTE)(GetWORD(&payload[4]) >> 8);
 	info->background.rgbReserved = 255;
 	info->has_background = TRUE;
+	info->background_iccp = globals.iccp;
+	info->background_srgb = !globals.srgb.empty();
 }
 
 // skip a zero-count LOOP up to its matching ENDL
@@ -919,7 +937,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 				}
 			}
 		} else if(type == CHUNK_BACK) {
-			ParseBACK(data, length, info);
+			ParseBACK(data, length, globals, info);
 		} else if(type == CHUNK_TERM) {
 			// TERM 3 repeats; anything else plays once
 			if((length >= 10) && (data[0] == 3)) {
@@ -996,12 +1014,8 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_bKGD) {
 			// a global bKGD stands in for BACK when there is no BACK
-			if(!info->has_background && (length >= 6)) {
-				info->background.rgbRed = (BYTE)(GetWORD(&data[0]) >> 8);
-				info->background.rgbGreen = (BYTE)(GetWORD(&data[2]) >> 8);
-				info->background.rgbBlue = (BYTE)(GetWORD(&data[4]) >> 8);
-				info->background.rgbReserved = 255;
-				info->has_background = TRUE;
+			if(!info->has_background) {
+				ParseBACK(data, length, globals, info);
 			}
 		}
 
@@ -1259,7 +1273,7 @@ HasImageData(const std::vector<BYTE>& raw) {
 
 // BASI without IDAT: fill with its 16-bit RGBA
 static FIBITMAP *
-CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
+CreateBASIFill(const MNGinfo *info, const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	std::vector<MNGChunkRef> chunks;
 	if(!SplitChunks(raw, chunks) || (chunks[0].length < 13)) {
 		return NULL;
@@ -1305,6 +1319,30 @@ CreateBASIFill(const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 			}
 		}
 	}
+
+	// its colour space: its own first iCCP, or the global one when it has no colour space chunk (4.2.5)
+	const BYTE *iccp = NULL;
+	DWORD iccp_length = 0;
+	BOOL own = FALSE;
+	for(size_t i = 1; i < chunks.size(); i++) {
+		if(IsColourSpaceChunk(chunks[i].type)) {
+			if(!own && (chunks[i].type == CHUNK_iCCP)) {
+				iccp = chunks[i].payload;
+				iccp_length = chunks[i].length;
+			}
+			own = TRUE;
+		}
+	}
+	const MNGGlobals& globals = info->globals[frame.globals];
+	if(!own && !globals.iccp.empty()) {
+		iccp = &globals.iccp[0];
+		iccp_length = (DWORD)globals.iccp.size();
+	}
+	std::vector<BYTE> profile;
+	if(iccp && mng_ReadICCP(iccp, iccp_length, profile) && !profile.empty() &&
+	   PNG_IsEmbeddableProfile(&profile[0], (DWORD)profile.size(), TRUE)) {
+		FreeImage_CreateICCProfile(dib, &profile[0], (long)profile.size());
+	}
 	return dib;
 }
 
@@ -1328,7 +1366,7 @@ DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		}
 	} else {
 		if(frame.is_basi && !HasImageData(raw)) {
-			return CreateBASIFill(raw, frame, flags);
+			return CreateBASIFill(info, raw, frame, flags);
 		}
 		if(!BuildPNGStream(info, frame, raw, stream)) {
 			FreeImage_OutputMessageProc(s_format_id, "MNG: frame %d is not a readable image", page);
@@ -1350,13 +1388,99 @@ DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 // MNG_PLAYBACK: the canvas a viewer would show
 // ==========================================================
 
-// BACK colour, or transparent when there is none
+static void
+WarnColour(MNGinfo *info) {
+	if(info->colour_warned) {
+		return;
+	}
+	info->colour_warned = TRUE;
+	FreeImage_OutputMessageProc(s_format_id, "Warning: a layer's colors could not be converted to the canvas's ICC profile");
+}
+
+// the canvas's ICC profile, NULL for sRGB
+static const FIICCPROFILE *
+CanvasProfile(const MNGinfo *info) {
+	if(info->description) {
+		const FIICCPROFILE *icc = FreeImage_GetICCProfile(info->description);
+		if(icc->data && icc->size) {
+			return icc;
+		}
+	}
+	return NULL;
+}
+
+// the background colour in the canvas's colours; with no top-level colour space it is taken as theirs
+static RGBQUAD
+ConvertBackground(MNGinfo *info) {
+	RGBQUAD colour = info->background;
+	std::vector<BYTE> source;
+	if(!info->background_iccp.empty() &&
+	   (!mng_ReadICCP(&info->background_iccp[0], (DWORD)info->background_iccp.size(), source) || source.empty() ||
+		!PNG_IsEmbeddableProfile(&source[0], (DWORD)source.size(), TRUE))) {
+		source.clear();
+	}
+	if(source.empty() && !info->background_srgb) {
+		return colour;
+	}
+	FIBITMAP *dib = FreeImage_Allocate(1, 1, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	if(!dib) {
+		return colour;
+	}
+	FreeImage_SetPixelColor(dib, 0, 0, &colour);
+	if(!source.empty()) {
+		FreeImage_CreateICCProfile(dib, &source[0], (long)source.size());
+	}
+	const FIICCPROFILE *icc = CanvasProfile(info);
+	FIBITMAP *converted = NULL;
+	if(!ConvertToFileProfile(dib, icc ? icc->data : NULL, icc ? (DWORD)icc->size : 0, &converted)) {
+		WarnColour(info);
+	} else if(converted) {
+		RGBQUAD pixel;
+		if(FreeImage_GetPixelColor(converted, 0, 0, &pixel)) {
+			colour.rgbRed = pixel.rgbRed;
+			colour.rgbGreen = pixel.rgbGreen;
+			colour.rgbBlue = pixel.rgbBlue;
+		}
+	}
+	if(converted) {
+		FreeImage_Unload(converted);
+	}
+	FreeImage_Unload(dib);
+	return colour;
+}
+
+// once per file: every canvas takes page 0's colours, layers in others are converted to them
+static void
+PrepareCanvas(FreeImageIO *io, fi_handle handle, MNGinfo *info, int flags) {
+	if(info->prepared) {
+		return;
+	}
+	info->prepared = TRUE;
+	info->canvas_background = info->background;
+	try {
+		FIBITMAP *page = DecodeFrame(io, handle, info, 0, flags | FIF_LOAD_NOPIXELS);
+		if(page) {
+			info->description = FreeImage_AllocateHeader(TRUE, 1, 1, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+			if(info->description) {
+				CopyColorDescription(info->description, page);
+			}
+			FreeImage_Unload(page);
+		}
+		if(info->has_background) {
+			info->canvas_background = ConvertBackground(info);
+		}
+	} catch(std::bad_alloc&) {
+		// sRGB then
+	}
+}
+
+// the background colour, or transparent when there is none
 static void
 FillBackground(FIBITMAP *canvas, const MNGinfo *info) {
 	RGBQUAD colour;
-	colour.rgbRed = info->has_background ? info->background.rgbRed : 0;
-	colour.rgbGreen = info->has_background ? info->background.rgbGreen : 0;
-	colour.rgbBlue = info->has_background ? info->background.rgbBlue : 0;
+	colour.rgbRed = info->has_background ? info->canvas_background.rgbRed : 0;
+	colour.rgbGreen = info->has_background ? info->canvas_background.rgbGreen : 0;
+	colour.rgbBlue = info->has_background ? info->canvas_background.rgbBlue : 0;
 	colour.rgbReserved = info->has_background ? 255 : 0;
 
 	const unsigned width = FreeImage_GetWidth(canvas);
@@ -1480,6 +1604,9 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		FillBackground(info->canvas, info);
 	}
 
+	// a layer in other colours than the canvas's is converted to them
+	const FIICCPROFILE *profile = CanvasProfile(info);
+
 	for(int i = start; i <= page; i++) {
 		const MNGFrame& frame = info->frames[i];
 
@@ -1490,13 +1617,21 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		if(!frame.do_not_show) {
 			FIBITMAP *dib = DecodeFrame(io, handle, info, i, flags & ~FIF_LOAD_NOPIXELS);
 			if(dib) {
-				FIBITMAP *frame32 = (FreeImage_GetBPP(dib) == 32 &&
-					FreeImage_GetImageType(dib) == FIT_BITMAP) ? dib : FreeImage_ConvertTo32Bits(dib);
+				FIBITMAP *converted = NULL;
+				if(!ConvertToFileProfile(dib, profile ? profile->data : NULL, profile ? (DWORD)profile->size : 0, &converted)) {
+					WarnColour(info);
+				}
+				FIBITMAP *layer = converted ? converted : dib;
+				FIBITMAP *frame32 = (FreeImage_GetBPP(layer) == 32 &&
+					FreeImage_GetImageType(layer) == FIT_BITMAP) ? layer : FreeImage_ConvertTo32Bits(layer);
 				if(frame32) {
 					CompositeFrame(info->canvas, frame32, frame);
-					if(frame32 != dib) {
+					if(frame32 != layer) {
 						FreeImage_Unload(frame32);
 					}
+				}
+				if(converted) {
+					FreeImage_Unload(converted);
 				}
 				FreeImage_Unload(dib);
 			}
@@ -1505,20 +1640,6 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 	}
 
 	return FreeImage_Clone(info->canvas);
-}
-
-// the canvas takes the profile and CICP tag of the page's own image; images may differ
-static void
-DescribeCanvas(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flags, FIBITMAP *canvas) {
-	try {
-		FIBITMAP *description = DecodeFrame(io, handle, info, page, flags | FIF_LOAD_NOPIXELS);
-		if(description) {
-			CopyColorDescription(canvas, description);
-			FreeImage_Unload(description);
-		}
-	} catch(std::bad_alloc&) {
-		// no description then
-	}
 }
 
 // ==========================================================
@@ -1942,6 +2063,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	const BOOL playback = (flags & MNG_PLAYBACK) == MNG_PLAYBACK;
+	if(playback) {
+		PrepareCanvas(io, handle, info, flags);
+	}
 
 	FIBITMAP *dib = playback ? RenderFrame(io, handle, info, page, flags)
 							 : DecodeFrame(io, handle, info, page, flags);
@@ -1949,13 +2073,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		return NULL;
 	}
 	if(playback) {
-		DescribeCanvas(io, handle, info, page, flags, dib);
+		CopyColorDescription(dib, info->description);
 	}
 
 	SetFrameMetadata(dib, info, page);
 
 	if(info->has_background) {
-		FreeImage_SetBackgroundColor(dib, &info->background);
+		FreeImage_SetBackgroundColor(dib, playback ? &info->canvas_background : &info->background);
 	}
 
 	return dib;

@@ -586,6 +586,48 @@ static void test_jng_iccp(void) {
 			remove(path);
 		}
 		buf_free(&mng);
+
+		/* as an MNG's global iCCP ahead of BACK and a BASI fill, then as the fill's own */
+		for (f = 0; f < 2; f++) {
+			char what_basi[128];
+			Buf basi;
+			buf_init(&mng);
+			buf_init(&basi);
+			mng_signature(&mng);
+			mng_mhdr(&mng, W, H, 10, 2, 2, 0, 0x07);
+			if (!f) {
+				chunk(&mng, "iCCP", payload.data, (DWORD)payload.size);
+			}
+			mng_back(&mng, 0xC8C8, 0x3232, 0x3232, 1);
+			buf_u32(&basi, W);
+			buf_u32(&basi, H);
+			buf_byte(&basi, 16);
+			buf_byte(&basi, 2);
+			buf_byte(&basi, 0);
+			buf_byte(&basi, 0);
+			buf_byte(&basi, 0);
+			buf_u16(&basi, 0xC8C8);
+			buf_u16(&basi, 0x3232);
+			buf_u16(&basi, 0x3232);
+			buf_u16(&basi, 0xFFFF);
+			buf_byte(&basi, 1);
+			chunk_buf(&mng, "BASI", &basi);
+			if (f) {
+				chunk(&mng, "iCCP", payload.data, (DWORD)payload.size);
+			}
+			chunk(&mng, "IEND", NULL, 0);
+			mng_image(&mng, 8, 8, 50, 200, 50, 24);
+			mng_mend(&mng);
+			snprintf(name, sizeof(name), "mng_basi_iccp_%d_%d.mng", k, f);
+			snprintf(what_basi, sizeof(what_basi), "%s, as %s", what[k], f ? "a BASI fill's own" : "the global iCCP over BACK and a BASI fill");
+			{
+				const char *path = write_file(name, &mng);
+				survive(path, what_basi);
+				remove(path);
+			}
+			buf_free(&mng);
+		}
+
 		buf_free(&file);
 		buf_free(&payload);
 	}

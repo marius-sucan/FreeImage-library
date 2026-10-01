@@ -70,9 +70,19 @@ from the plugin:
 - **A canvas the file cannot justify.** MHDR may ask for 65535x65535 next to a
   single 16x16 image; composing that is seventeen gigabytes, so it is refused,
   and the images stay readable without `MNG_PLAYBACK`.
-- **The canvas's colors.** A composed page carries the ICC profile and CICP
-  tag of its own image: the global iCCP, or the image's own, never a grey one
-  on the RGBA canvas; read forwards and backwards, with pixels and without.
+- **The canvas's colors.** Every composed page carries page 0's ICC profile
+  and CICP tag, whichever page it shows, and none when page 0's profile is
+  grey, which cannot describe the RGBA canvas; read forwards and backwards,
+  with pixels and without.
+- **One colour space per file.** Layers in P3, untagged, half transparent and
+  palette ones are converted to page 0's Adobe RGB, each pixel the value the
+  public conversion gives, the alpha kept; a canvas drawn forwards from the
+  last one equals one drawn from scratch. A BASI fill is in its datastream's
+  colours: the global iCCP, unless it has a colour chunk of its own. BACK is in
+  the top-level colour space before it - an iCCP or an sRGB chunk - and is
+  converted to the canvas's; without one it is taken as the canvas's, and raw
+  pages keep its values. A page 0 profile no conversion can reach leaves the
+  layers as they are, with one warning per file.
 - **Inherited colour spaces.** The top-level cHRM, gAMA, iCCP and sRGB reach an
   image only when it has none of them, nor a cICP chunk: "If any one of these
   chunks ... appears in the PNG datastream, none of them is inherited." Each
@@ -109,6 +119,9 @@ single image, and `FreeImage_OpenMultiBitmap` with `create_new` plus
 - **Editing.** Delete, insert and move, then reopen and check the order - and
   that a page which moved took its own delay with it. `FreeImage_UnlockPage`
   with `changed = TRUE` reaches the file and leaves its neighbours alone.
+- **Pages in different colours**, Adobe RGB then P3 and the other way round:
+  each page keeps its profile, and the played canvas is page 0's, the other
+  page converted to it.
 - **The whole page API over a memory stream**, and the PNG writer's save flags.
 - **What is refused** is refused in `Save()`, where there is still a FALSE to
   return: a type MNG cannot hold, and a bitmap with no pixels.
@@ -138,11 +151,13 @@ garbage behind a valid signature; and twelve damaged iCCP chunks in a JNG
 with alpha - empty, a 99-byte name, no NUL or no method, method 1, data that
 is not zlib, a cut stream, a lying size field, 9 MB of zeros, a grey profile
 in a colour JNG, bytes that are no profile, a bad one before a good one -
-loaded standalone and as an MNG frame, without a profile.
+loaded standalone and as an MNG frame, without a profile; and each of them as
+an MNG's global iCCP ahead of BACK and a BASI fill, and as the fill's own.
 
 `make asan-run` is the one that matters here. The plugin parses the container by
 hand - chunk headers, lengths, the extent of each embedded datastream, the
 variable-length bodies of FRAM and DEFI - and a sanitized run over deliberately
 damaged input is what catches a mistake in that. It rebuilds `PluginMNG.cpp`,
-`MNGHelper.cpp`, `PluginJNG.cpp`, `PluginPNG.cpp`, `MultiPage.cpp` and the
-bundled libpng with AddressSanitizer and links them ahead of the library.
+`MNGHelper.cpp`, `PluginJNG.cpp`, `PluginPNG.cpp`, `MultiPage.cpp`,
+`ColorManagement.cpp` and the bundled libpng with AddressSanitizer and links
+them ahead of the library.

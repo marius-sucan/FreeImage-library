@@ -875,81 +875,88 @@ static int same_cicp(FIBITMAP *dib, const BYTE *cicp) {
 	return cicp && FreeImage_GetTagCount(tag) == 4 && !memcmp(FreeImage_GetTagValue(tag), cicp, 4);
 }
 
-/* the canvas carries the profile and CICP tag of the page's own image: global, local, grey left out */
+/* every canvas carries page 0's RGB profile and CICP tag, whatever the page shows; none for a grey page 0 */
 static void test_color_description(void) {
 	const BYTE cicp[4] = { 9, 16, 0, 1 };	/* BT.2020, PQ */
 	DWORD adobe_size = 0, p3_size = 0, grey_size = 0;
 	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
 	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
 	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
-	const void *want_profile[4];
-	DWORD want_size[4];
-	const BYTE *want_cicp[4] = { NULL, NULL, cicp, NULL };
 	FIBITMAP *rgb = FreeImage_Allocate(W, H, 24, 0, 0, 0), *mono = FreeImage_Allocate(W, H, 8, 0, 0, 0);
 	Buf mng, iccp;
 	const char *path;
-	int i, mode, ok_all = 1;
+	int file, i, mode, ok_all = 1;
 
 	printf("the color description of the playback canvas\n");
 
-	want_profile[0] = adobe; want_size[0] = adobe_size;	/* the global iCCP */
-	want_profile[1] = p3; want_size[1] = p3_size;		/* its own iCCP */
-	want_profile[2] = NULL; want_size[2] = 0;			/* its own cICP: the global iCCP is not inherited */
-	want_profile[3] = NULL; want_size[3] = 0;			/* a grey profile cannot describe the RGBA canvas */
 	for (i = 0; i < 256; i++) {
 		FreeImage_GetPalette(mono)[i].rgbRed = FreeImage_GetPalette(mono)[i].rgbGreen = FreeImage_GetPalette(mono)[i].rgbBlue = (BYTE)i;
 	}
 
-	buf_init(&mng);
-	buf_init(&iccp);
-	mng_signature(&mng);
-	mng_mhdr(&mng, W, H, 10, 4, 4, 0, 1);
-	if (!iccp_payload(&iccp, adobe, adobe_size)) {
-		fail("no iCCP chunk to copy");
-		goto out;
-	}
-	chunk_buf(&mng, "iCCP", &iccp);
-	mng_png(&mng, rgb, NULL);
-	FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
-	mng_png(&mng, rgb, NULL);
-	FreeImage_DestroyICCProfile(rgb);
-	mng_png(&mng, rgb, cicp);
-	FreeImage_CreateICCProfile(mono, (void *)grey, (long)grey_size);
-	mng_png(&mng, mono, NULL);
-	mng_mend(&mng);
-	path = write_file("mng_color.mng", &mng);
-
-	for (mode = 0; mode < 2; mode++) {
-		const int flags = MNG_PLAYBACK | (mode ? FIF_LOAD_NOPIXELS : 0);
-		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, flags);
-		if (!mb || FreeImage_GetPageCount(mb) != 4) {
-			fail("%s: %d pages, expected 4", mode ? "header only" : "pixels", mb ? FreeImage_GetPageCount(mb) : -1);
+	/* file 0: Adobe RGB with a cICP, P3, the global Adobe RGB, grey; file 1: grey, then P3 */
+	for (file = 0; file < 2; file++) {
+		const int pages = file ? 2 : 4;
+		buf_init(&mng);
+		buf_init(&iccp);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, pages, pages, 0, 1);
+		if (!iccp_payload(&iccp, adobe, adobe_size)) {
+			fail("no iCCP chunk to copy");
 			ok_all = 0;
-			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
-			continue;
+			buf_free(&mng);
+			break;
 		}
-		/* backwards too: each page is described by its own image, not the last one drawn */
-		for (i = 3; i >= -3; i--) {
-			const int page = (i < 0) ? -i : i;
-			FIBITMAP *dib = FreeImage_LockPage(mb, page);
-			if (!dib) { fail("page %d could not be locked", page); ok_all = 0; continue; }
-			if (!same_profile(dib, want_profile[page], want_size[page])) {
-				fail("%s canvas %d: a %u-byte profile", mode ? "header-only" : "the", page, (unsigned)FreeImage_GetICCProfile(dib)->size);
-				ok_all = 0;
-			}
-			if (!same_cicp(dib, want_cicp[page])) {
-				fail("%s canvas %d: the CICP tag", mode ? "header-only" : "the", page);
-				ok_all = 0;
-			}
-			FreeImage_UnlockPage(mb, dib, FALSE);
+		chunk_buf(&mng, "iCCP", &iccp);
+		if (!file) {
+			FreeImage_CreateICCProfile(rgb, (void *)adobe, (long)adobe_size);
+			mng_png(&mng, rgb, cicp);
+			FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
+			mng_png(&mng, rgb, NULL);
+			FreeImage_DestroyICCProfile(rgb);
+			mng_png(&mng, rgb, NULL);
 		}
-		FreeImage_CloseMultiBitmap(mb, 0);
+		FreeImage_CreateICCProfile(mono, (void *)grey, (long)grey_size);
+		mng_png(&mng, mono, NULL);
+		if (file) {
+			FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
+			mng_png(&mng, rgb, NULL);
+		}
+		FreeImage_DestroyICCProfile(rgb);
+		FreeImage_DestroyICCProfile(mono);
+		mng_mend(&mng);
+		path = write_file(file ? "mng_color_grey.mng" : "mng_color.mng", &mng);
+		buf_free(&mng);
+
+		for (mode = 0; mode < 2; mode++) {
+			const int flags = MNG_PLAYBACK | (mode ? FIF_LOAD_NOPIXELS : 0);
+			FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, flags);
+			if (!mb || FreeImage_GetPageCount(mb) != pages) {
+				fail("%s: %d pages, expected %d", mode ? "header only" : "pixels", mb ? FreeImage_GetPageCount(mb) : -1, pages);
+				ok_all = 0;
+				if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+				continue;
+			}
+			/* backwards too: the canvas is described by page 0, not by the page it shows */
+			for (i = pages - 1; i >= -(pages - 1); i--) {
+				const int page = (i < 0) ? -i : i;
+				FIBITMAP *dib = FreeImage_LockPage(mb, page);
+				if (!dib) { fail("page %d could not be locked", page); ok_all = 0; continue; }
+				if (!same_profile(dib, file ? NULL : adobe, file ? 0 : adobe_size)) {
+					fail("file %d, %s canvas %d: a %u-byte profile", file, mode ? "header-only" : "the", page, (unsigned)FreeImage_GetICCProfile(dib)->size);
+					ok_all = 0;
+				}
+				if (!same_cicp(dib, file ? NULL : cicp)) {
+					fail("file %d, %s canvas %d: the CICP tag", file, mode ? "header-only" : "the", page);
+					ok_all = 0;
+				}
+				FreeImage_UnlockPage(mb, dib, FALSE);
+			}
+			FreeImage_CloseMultiBitmap(mb, 0);
+		}
 	}
 	if (ok_all) {
-		ok("each canvas carries its image's RGB profile, global or its own, and its CICP tag, with pixels or without");
+		ok("every canvas carries page 0's RGB profile and CICP tag, none for a grey page 0, with pixels or without");
 	}
-out:
-	buf_free(&mng);
 	FreeImage_Unload(rgb);
 	FreeImage_Unload(mono);
 }
@@ -1163,6 +1170,451 @@ static void test_nullified_colour_chunks(void) {
 	buf_free(&gamma);
 	buf_free(&image);
 	FreeImage_Unload(rgb);
+}
+
+/* this colour in profile to, from profile from (NULL: sRGB), as the public color management gives it */
+static int convert_colour(BYTE r, BYTE g, BYTE b, const void *from, DWORD from_size, const void *to, DWORD to_size, RGBQUAD *out) {
+	FIBITMAP *dib = FreeImage_Allocate(1, 1, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	FIBITMAP *converted;
+	RGBQUAD colour;
+	int done;
+	colour.rgbRed = r;
+	colour.rgbGreen = g;
+	colour.rgbBlue = b;
+	colour.rgbReserved = 0;
+	FreeImage_SetPixelColor(dib, 0, 0, &colour);
+	if (from) {
+		FreeImage_CreateICCProfile(dib, (void *)from, (long)from_size);
+	}
+	converted = FreeImage_ConvertToICCProfile(dib, to, to_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+	done = converted && FreeImage_GetPixelColor(converted, 0, 0, out);
+	if (converted) FreeImage_Unload(converted);
+	FreeImage_Unload(dib);
+	return done;
+}
+
+/* a solid image of 24 or 32 bits, tagged when profile is given, as a PNG minus its signature */
+static int solid_png(Buf *out, int width, int height, int bpp, BYTE r, BYTE g, BYTE b, BYTE a, const void *profile, DWORD size) {
+	FIBITMAP *dib = FreeImage_Allocate(width, height, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	int x, y, made;
+	for (y = 0; y < height; y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, (unsigned)y);
+		for (x = 0; x < width; x++) {
+			line[FI_RGBA_RED] = r;
+			line[FI_RGBA_GREEN] = g;
+			line[FI_RGBA_BLUE] = b;
+			if (bpp == 32) {
+				line[FI_RGBA_ALPHA] = a;
+			}
+			line += bpp / 8;
+		}
+	}
+	if (profile) {
+		FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+	}
+	made = mng_png_with(out, dib, NULL, NULL, 0);
+	FreeImage_Unload(dib);
+	return made;
+}
+
+/* an 8-bit palette image: its left half transparent index 0, its right half index 1 in this colour */
+static int palette_png(Buf *out, int width, int height, BYTE r, BYTE g, BYTE b, const void *profile, DWORD size) {
+	FIBITMAP *dib = FreeImage_Allocate(width, height, 8, 0, 0, 0);
+	RGBQUAD *palette = FreeImage_GetPalette(dib);
+	BYTE table[2] = { 0, 255 };
+	int x, y, made;
+	memset(palette, 0, 256 * sizeof(RGBQUAD));
+	palette[1].rgbRed = r;
+	palette[1].rgbGreen = g;
+	palette[1].rgbBlue = b;
+	for (y = 0; y < height; y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, (unsigned)y);
+		for (x = 0; x < width; x++) {
+			line[x] = (x < width / 2) ? 0 : 1;
+		}
+	}
+	FreeImage_SetTransparencyTable(dib, table, 2);
+	FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+	made = mng_png_with(out, dib, NULL, NULL, 0);
+	FreeImage_Unload(dib);
+	return made;
+}
+
+static int same_rgba(const RGBQUAD *got, const RGBQUAD *want, BYTE alpha) {
+	return got->rgbRed == want->rgbRed && got->rgbGreen == want->rgbGreen && got->rgbBlue == want->rgbBlue && got->rgbReserved == alpha;
+}
+
+static int same_pixels(FIBITMAP *a, FIBITMAP *b) {
+	unsigned y;
+	if (!a || !b || FreeImage_GetWidth(a) != FreeImage_GetWidth(b) || FreeImage_GetHeight(a) != FreeImage_GetHeight(b)
+		|| FreeImage_GetBPP(a) != FreeImage_GetBPP(b)) {
+		return 0;
+	}
+	for (y = 0; y < FreeImage_GetHeight(a); y++) {
+		if (memcmp(FreeImage_GetScanLine(a, y), FreeImage_GetScanLine(b, y), FreeImage_GetLine(a))) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* every canvas is in page 0's colours: a layer in others is converted to them, its alpha kept */
+static void test_canvas_colour_space(void) {
+	enum { PAGES = 5 };
+	DWORD adobe_size = 0, p3_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	FIBITMAP *forward[PAGES] = { NULL }, *backward[PAGES] = { NULL };
+	RGBQUAD a, b, c, d, e, got;
+	Buf mng;
+	const char *path;
+	int i, pass, bad = 0;
+
+	printf("one colour space for every canvas\n");
+
+	a.rgbRed = 200; a.rgbGreen = 50; a.rgbBlue = 50;
+	if (!convert_colour(50, 200, 50, p3, p3_size, adobe, adobe_size, &b) || !convert_colour(50, 50, 200, NULL, 0, adobe, adobe_size, &c)
+		|| !convert_colour(255, 128, 0, p3, p3_size, adobe, adobe_size, &d) || !convert_colour(0, 0, 255, p3, p3_size, adobe, adobe_size, &e)) {
+		fail("the public conversion failed");
+		return;
+	}
+	if (b.rgbRed == 50 && b.rgbGreen == 200 && b.rgbBlue == 50) {
+		fail("premise: P3 and Adobe RGB give the same values");
+		return;
+	}
+
+	/* Adobe RGB 16x16; P3 8x8 over it; untagged 8x8 beside it; P3 half transparent on nothing; a P3 palette, its left half transparent */
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, 2 * W, H, 10, PAGES, PAGES, 0, 0x0B);
+	solid_png(&mng, W, H, 24, 200, 50, 50, 255, adobe, adobe_size);
+	mng_defi(&mng, 0, 0, 0, 4, 4);
+	solid_png(&mng, 8, 8, 24, 50, 200, 50, 255, p3, p3_size);
+	mng_defi(&mng, 0, 0, 0, 16, 0);
+	solid_png(&mng, 8, 8, 24, 50, 50, 200, 255, NULL, 0);
+	mng_defi(&mng, 0, 0, 0, 20, 8);
+	solid_png(&mng, 8, 8, 32, 255, 128, 0, 128, p3, p3_size);
+	mng_defi(&mng, 0, 0, 0, 0, 8);
+	palette_png(&mng, 8, 8, 0, 0, 255, p3, p3_size);
+	mng_mend(&mng);
+	path = write_file("mng_one_space.mng", &mng);
+	buf_free(&mng);
+
+	/* forwards from the cached canvas, then backwards from scratch each time */
+	for (pass = 0; pass < 2; pass++) {
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+		if (!mb || FreeImage_GetPageCount(mb) != PAGES) {
+			fail("%d pages, expected %d", mb ? FreeImage_GetPageCount(mb) : -1, (int)PAGES);
+			bad = 1;
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+			break;
+		}
+		for (i = 0; i < PAGES; i++) {
+			const int page = pass ? PAGES - 1 - i : i;
+			FIBITMAP *dib = FreeImage_LockPage(mb, page);
+			if (!dib) {
+				fail("page %d could not be locked", page);
+				bad = 1;
+				continue;
+			}
+			if (!same_profile(dib, adobe, adobe_size)) {
+				fail("canvas %d: a %u-byte profile, want page 0's Adobe RGB", page, (unsigned)FreeImage_GetICCProfile(dib)->size);
+				bad = 1;
+			}
+			(pass ? backward : forward)[page] = FreeImage_Clone(dib);
+			FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	for (i = 0; i < PAGES && !bad; i++) {
+		if (!same_pixels(forward[i], backward[i])) {
+			fail("canvas %d forwards differs from canvas %d drawn from scratch", i, i);
+			bad = 1;
+		}
+	}
+	if (!bad) {
+		FIBITMAP *last = forward[PAGES - 1];
+		static const struct { int x, y; const char *what; } at[6] = {
+			{ 2, 2, "the Adobe RGB page" }, { 6, 6, "the P3 page over it" }, { 18, 2, "the untagged page" },
+			{ 26, 12, "the half transparent P3 page" }, { 1, 12, "the palette's transparent half" }, { 6, 12, "the palette's P3 half" }
+		};
+		const RGBQUAD *want[6] = { &a, &b, &c, &d, &a, &e };
+		const BYTE alpha[6] = { 255, 255, 255, 128, 255, 255 };
+		for (i = 0; i < 6; i++) {
+			if (!pixel_at(last, at[i].x, at[i].y, &got) || !same_rgba(&got, want[i], alpha[i])) {
+				fail("%s: (%u,%u,%u,%u), want (%u,%u,%u,%u)", at[i].what, got.rgbRed, got.rgbGreen, got.rgbBlue, got.rgbReserved,
+					 want[i]->rgbRed, want[i]->rgbGreen, want[i]->rgbBlue, alpha[i]);
+				bad = 1;
+			}
+		}
+	}
+	if (!bad) {
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
+		FIBITMAP *dib = mb ? FreeImage_LockPage(mb, 1) : NULL;
+		if (!dib || !same_profile(dib, p3, p3_size)) {
+			fail("the raw P3 page lost its own profile");
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) {
+		ok("layers in P3, untagged, half transparent and palette ones converted to page 0's Adobe RGB, forwards as from scratch");
+	}
+	for (i = 0; i < PAGES; i++) {
+		if (forward[i]) FreeImage_Unload(forward[i]);
+		if (backward[i]) FreeImage_Unload(backward[i]);
+	}
+}
+
+/* a BASI fill is in its datastream's colours: the global iCCP when it has no colour space chunk of its own */
+static void test_basi_colour_space(void) {
+	static const BYTE srgb[1] = { 0 };
+	DWORD adobe_size = 0, p3_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	FIMULTIBITMAP *mb;
+	FIBITMAP *dib;
+	RGBQUAD a, b, got;
+	Buf mng, iccp, basi;
+	const char *path;
+	int own, bad = 0;
+
+	printf("the colour space of a BASI fill\n");
+
+	a.rgbRed = 200; a.rgbGreen = 50; a.rgbBlue = 50;
+	if (!convert_colour(50, 200, 50, p3, p3_size, adobe, adobe_size, &b)) {
+		fail("the public conversion failed");
+		return;
+	}
+	/* own: an sRGB chunk of its own, which keeps the global iCCP out */
+	for (own = 0; own < 2; own++) {
+		buf_init(&mng);
+		buf_init(&iccp);
+		buf_init(&basi);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 2, 2, 0, 0x07);
+		if (!iccp_payload(&iccp, adobe, adobe_size)) {
+			fail("no iCCP chunk to copy");
+			buf_free(&mng);
+			return;
+		}
+		chunk_buf(&mng, "iCCP", &iccp);
+		buf_u32(&basi, W);
+		buf_u32(&basi, H);
+		buf_byte(&basi, 16);		/* sample depth */
+		buf_byte(&basi, 2);			/* RGB */
+		buf_byte(&basi, 0);
+		buf_byte(&basi, 0);
+		buf_byte(&basi, 0);
+		buf_u16(&basi, 0xC8C8);
+		buf_u16(&basi, 0x3232);
+		buf_u16(&basi, 0x3232);
+		buf_u16(&basi, 0xFFFF);
+		buf_byte(&basi, 1);			/* viewable */
+		chunk_buf(&mng, "BASI", &basi);
+		if (own) {
+			chunk(&mng, "sRGB", srgb, 1);
+		}
+		chunk(&mng, "IEND", NULL, 0);
+		mng_defi(&mng, 0, 0, 0, 4, 4);
+		solid_png(&mng, 8, 8, 24, 50, 200, 50, 255, p3, p3_size);
+		mng_mend(&mng);
+		path = write_file("mng_basi_space.mng", &mng);
+		buf_free(&mng);
+
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
+		dib = mb ? FreeImage_LockPage(mb, 0) : NULL;
+		if (!dib || !same_profile(dib, own ? NULL : adobe, own ? 0 : adobe_size)) {
+			fail("the BASI page%s: a %u-byte profile", own ? " with an sRGB chunk" : "", dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0);
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		if (own) {
+			continue;
+		}
+
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+		dib = mb ? FreeImage_LockPage(mb, 1) : NULL;
+		if (!dib || !same_profile(dib, adobe, adobe_size)) {
+			fail("the canvas over a BASI page 0: not in Adobe RGB");
+			bad = 1;
+		} else if (!pixel_at(dib, 1, 1, &got) || !same_rgba(&got, &a, 255)) {
+			fail("the BASI fill on the canvas: (%u,%u,%u), want (200,50,50) as it is", got.rgbRed, got.rgbGreen, got.rgbBlue);
+			bad = 1;
+		} else if (!pixel_at(dib, 6, 6, &got) || !same_rgba(&got, &b, 255)) {
+			fail("the P3 page over the fill: (%u,%u,%u), want (%u,%u,%u)", got.rgbRed, got.rgbGreen, got.rgbBlue, b.rgbRed, b.rgbGreen, b.rgbBlue);
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) {
+		ok("a BASI fill takes the global iCCP, page and canvas, drawn in it unconverted; not with an sRGB chunk of its own");
+	}
+}
+
+/* the background colour is in the top-level colour space before BACK, converted to the canvas's; with none it is theirs */
+static void test_background_colour_space(void) {
+	static const BYTE srgb[1] = { 0 };
+	DWORD adobe_size = 0, p3_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	/* the top-level chunk before BACK: 0 none, 1 iCCP, 2 sRGB; page 0's own profile: 0 none, 1 Adobe RGB, 2 P3 */
+	static const struct { const char *what; int top; int page; } cases[4] = {
+		{ "a global Adobe RGB iCCP, a P3 page 0", 1, 2 },
+		{ "a global sRGB chunk, a P3 page 0", 2, 2 },
+		{ "a global Adobe RGB iCCP, a page 0 that inherits it", 1, 0 },
+		{ "no top-level colour space, an Adobe RGB page 0", 0, 1 }
+	};
+	RGBQUAD raw, got;
+	int k, bad = 0;
+
+	printf("the colour space of the background\n");
+
+	raw.rgbRed = 200; raw.rgbGreen = 50; raw.rgbBlue = 50; raw.rgbReserved = 255;
+	for (k = 0; k < 4; k++) {
+		const void *from = (cases[k].top == 1) ? adobe : NULL;
+		const DWORD from_size = (cases[k].top == 1) ? adobe_size : 0;
+		const void *to = (cases[k].page == 2) ? p3 : adobe;
+		const DWORD to_size = (cases[k].page == 2) ? p3_size : adobe_size;
+		FIMULTIBITMAP *mb;
+		FIBITMAP *dib;
+		RGBQUAD want, colour;
+		Buf mng, iccp;
+		const char *path;
+		int mode;
+
+		if (cases[k].top == 0) {
+			want = raw;
+		} else if (!convert_colour(200, 50, 50, from, from_size, to, to_size, &want)) {
+			fail("the public conversion failed");
+			bad = 1;
+			continue;
+		}
+		buf_init(&mng);
+		buf_init(&iccp);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 1, 1, 0, 0x03);
+		if (cases[k].top == 1) {
+			iccp_payload(&iccp, adobe, adobe_size);
+			chunk_buf(&mng, "iCCP", &iccp);
+		} else if (cases[k].top == 2) {
+			chunk(&mng, "sRGB", srgb, 1);
+		}
+		mng_back(&mng, 0xC8C8, 0x3232, 0x3232, 1);
+		solid_png(&mng, 8, 8, 24, 10, 20, 30, 255, (cases[k].page == 2) ? p3 : (cases[k].page == 1) ? adobe : NULL,
+				  (cases[k].page == 2) ? p3_size : (cases[k].page == 1) ? adobe_size : 0);
+		mng_mend(&mng);
+		path = write_file("mng_back_space.mng", &mng);
+		buf_free(&mng);
+
+		for (mode = 0; mode < 2; mode++) {
+			mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, mode ? MNG_PLAYBACK : 0);
+			dib = mb ? FreeImage_LockPage(mb, 0) : NULL;
+			if (!dib) {
+				fail("%s: no page", cases[k].what);
+				bad = 1;
+			} else if (!mode) {
+				/* a raw page keeps the colour the file gives */
+				if (!FreeImage_GetBackgroundColor(dib, &colour) || !same_rgba(&colour, &raw, colour.rgbReserved)) {
+					fail("%s: the raw page's background colour is not BACK's", cases[k].what);
+					bad = 1;
+				}
+			} else if (!pixel_at(dib, 12, 12, &got) || !same_rgba(&got, &want, 255)) {
+				fail("%s: the canvas background (%u,%u,%u), want (%u,%u,%u)", cases[k].what, got.rgbRed, got.rgbGreen, got.rgbBlue,
+					 want.rgbRed, want.rgbGreen, want.rgbBlue);
+				bad = 1;
+			} else if (!FreeImage_GetBackgroundColor(dib, &colour) || !same_rgba(&colour, &want, colour.rgbReserved)) {
+				fail("%s: the canvas's background colour (%u,%u,%u) is not what it is filled with", cases[k].what,
+					 colour.rgbRed, colour.rgbGreen, colour.rgbBlue);
+				bad = 1;
+			}
+			if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		}
+	}
+	if (!bad) {
+		ok("BACK converted from the global iCCP or sRGB to page 0's colours, left as it is without either; raw pages keep it");
+	}
+}
+
+static int conversion_warnings = 0;
+
+static void count_warnings(FREE_IMAGE_FORMAT fif, const char *msg) {
+	(void)fif;
+	if (strstr(msg, "could not be converted")) {
+		conversion_warnings++;
+	}
+}
+
+/* page 0's profile no conversion can reach: layers are drawn as they are, with one warning per file */
+static void test_unconvertible_canvas(void) {
+	DWORD adobe_size = 0, p3_size = 0, i, count;
+	const BYTE *adobe = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	BYTE *broken = (BYTE *)malloc(adobe_size);
+	static const int order[4] = { 1, 0, 1, 1 };
+	FIMULTIBITMAP *mb;
+	RGBQUAD got;
+	Buf mng;
+	const char *path;
+	int k, bad = 0;
+
+	printf("a canvas profile no conversion reaches\n");
+
+	/* Adobe RGB with its colorant and curve tags renamed: libpng keeps it, Little CMS refuses it */
+	memcpy(broken, adobe, adobe_size);
+	count = ((DWORD)broken[128] << 24) | ((DWORD)broken[129] << 16) | ((DWORD)broken[130] << 8) | broken[131];
+	for (i = 0; i < count; i++) {
+		BYTE *sig = broken + 132 + 12 * i;
+		if (!memcmp(sig + 1, "XYZ", 3) || !memcmp(sig + 1, "TRC", 3)) {
+			sig[0] = 'q';
+		}
+	}
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, 2, 2, 0, 0x03);
+	solid_png(&mng, W, H, 24, 200, 50, 50, 255, broken, adobe_size);
+	mng_defi(&mng, 0, 0, 0, 4, 4);
+	solid_png(&mng, 8, 8, 24, 50, 200, 50, 255, p3, p3_size);
+	mng_mend(&mng);
+	path = write_file("mng_broken_space.mng", &mng);
+	buf_free(&mng);
+
+	conversion_warnings = 0;
+	FreeImage_SetOutputMessage(count_warnings);
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	for (k = 0; mb && k < 4; k++) {
+		FIBITMAP *dib = FreeImage_LockPage(mb, order[k]);
+		if (!dib) {
+			fail("page %d could not be locked", order[k]);
+			bad = 1;
+			continue;
+		}
+		if (!same_profile(dib, broken, adobe_size)) {
+			fail("premise: canvas %d does not carry page 0's profile", order[k]);
+			bad = 1;
+		} else if (order[k] == 1 && (!pixel_at(dib, 6, 6, &got) || got.rgbRed != 50 || got.rgbGreen != 200 || got.rgbBlue != 50)) {
+			fail("the P3 page: (%u,%u,%u), want (50,200,50) as it is", got.rgbRed, got.rgbGreen, got.rgbBlue);
+			bad = 1;
+		}
+		FreeImage_UnlockPage(mb, dib, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	FreeImage_SetOutputMessage(quiet);
+	if (!mb) {
+		fail("the file did not open");
+		bad = 1;
+	} else if (conversion_warnings != 1) {
+		fail("%d warnings for 3 drawings of the P3 page, want 1", conversion_warnings);
+		bad = 1;
+	}
+	if (!bad) {
+		ok("a layer that cannot reach the canvas's profile is drawn as it is, with one warning per file");
+	}
+	free(broken);
 }
 
 /* a format's bytes for this image */
@@ -1381,6 +1833,10 @@ int main(void) {
 	test_color_description();
 	test_inherited_colour_space();
 	test_nullified_colour_chunks();
+	test_canvas_colour_space();
+	test_basi_colour_space();
+	test_background_colour_space();
+	test_unconvertible_canvas();
 	test_jng_profiles();
 
 	FreeImage_DeInitialise();

@@ -778,7 +778,7 @@ mng_SetMetadata_tEXt(tEXtMAP &key_value_pair, const BYTE *mChunk, DWORD mLength)
 Read the profile of an iCCP chunk: a name of 1 to 79 bytes, a NUL, compression method 0, a zlib stream
 @return Returns FALSE for a chunk that cannot be read or inflates past libpng's chunk limit
 */
-static BOOL
+BOOL
 mng_ReadICCP(const BYTE *chunk, DWORD length, std::vector<BYTE>& profile) {
 	DWORD name = 0;
 	while((name < length) && (name < 80) && chunk[name]) {

@@ -702,6 +702,100 @@ static void test_background(void) {
 	FreeImage_Unload(back);
 }
 
+/* this colour in profile to, from profile from, as the public color management gives it */
+static int
+convert_colour(BYTE r, BYTE g, BYTE b, const void *from, DWORD from_size, const void *to, DWORD to_size, RGBQUAD *out) {
+	FIBITMAP *dib = solid(1, 1, r, g, b);
+	FIBITMAP *converted;
+	int done;
+	FreeImage_CreateICCProfile(dib, (void *)from, (long)from_size);
+	converted = FreeImage_ConvertToICCProfile(dib, to, to_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+	done = converted && FreeImage_GetPixelColor(converted, 0, 0, out);
+	if (converted) FreeImage_Unload(converted);
+	FreeImage_Unload(dib);
+	return done;
+}
+
+/* pages in different colours keep their profiles; a played canvas is in page 0's, the other page converted to it */
+static void test_mixed_profiles(void) {
+	DWORD adobe_size = 0, p3_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	const char *path = scratch("mng_mixed.mng");
+	int order, bad = 0;
+
+	printf("pages in different colours\n");
+
+	for (order = 0; order < 2; order++) {
+		const void *first = order ? p3 : adobe, *second = order ? adobe : p3;
+		const DWORD first_size = order ? p3_size : adobe_size, second_size = order ? adobe_size : p3_size;
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, TRUE, FALSE, TRUE, 0);
+		FIBITMAP *a = solid(16, 16, 200, 50, 50), *b = solid(8, 8, 50, 200, 50), *dib;
+		RGBQUAD want, got;
+		int page;
+
+		if (!mb || !convert_colour(50, 200, 50, second, second_size, first, first_size, &want)) {
+			fail("no document to write, or no conversion");
+			bad = 1;
+			break;
+		}
+		FreeImage_CreateICCProfile(a, (void *)first, (long)first_size);
+		FreeImage_CreateICCProfile(b, (void *)second, (long)second_size);
+		set_delay(a, 100);
+		set_delay(b, 100);
+		set_place(b, 4, 4);
+		FreeImage_AppendPage(mb, a);
+		FreeImage_AppendPage(mb, b);
+		FreeImage_Unload(a);
+		FreeImage_Unload(b);
+		if (!FreeImage_CloseMultiBitmap(mb, 0)) {
+			fail("the document was not written");
+			bad = 1;
+			break;
+		}
+
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
+		for (page = 0; mb && page < 2; page++) {
+			FIICCPROFILE *icc;
+			dib = FreeImage_LockPage(mb, page);
+			icc = dib ? FreeImage_GetICCProfile(dib) : NULL;
+			if (!icc || icc->size != (page ? second_size : first_size) || memcmp(icc->data, page ? second : first, icc->size)) {
+				fail("%s first: page %d lost its own profile", order ? "P3" : "Adobe RGB", page);
+				bad = 1;
+			}
+			if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+		dib = mb ? FreeImage_LockPage(mb, 1) : NULL;
+		if (!dib) {
+			fail("%s first: no canvas", order ? "P3" : "Adobe RGB");
+			bad = 1;
+		} else {
+			FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+			if (icc->size != first_size || memcmp(icc->data, first, first_size)) {
+				fail("%s first: the canvas is not in page 0's profile", order ? "P3" : "Adobe RGB");
+				bad = 1;
+			}
+			if (!FreeImage_GetPixelColor(dib, 1, 14, &got) || got.rgbRed != 200 || got.rgbGreen != 50 || got.rgbBlue != 50) {
+				fail("%s first: page 0 on the canvas is (%u,%u,%u), want (200,50,50)", order ? "P3" : "Adobe RGB", got.rgbRed, got.rgbGreen, got.rgbBlue);
+				bad = 1;
+			}
+			if (!FreeImage_GetPixelColor(dib, 6, 9, &got) || got.rgbRed != want.rgbRed || got.rgbGreen != want.rgbGreen || got.rgbBlue != want.rgbBlue) {
+				fail("%s first: page 1 on the canvas is (%u,%u,%u), want (%u,%u,%u)", order ? "P3" : "Adobe RGB",
+					 got.rgbRed, got.rgbGreen, got.rgbBlue, want.rgbRed, want.rgbGreen, want.rgbBlue);
+				bad = 1;
+			}
+			FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) {
+		ok("Adobe RGB then P3 and P3 then Adobe RGB: pages keep their profiles, the canvas is page 0's with page 1 converted");
+	}
+}
+
 static void test_memory_stream(void) {
 	FIBITMAP *src, *back;
 	FIMEMORY *hmem;
@@ -1051,6 +1145,7 @@ int main(void) {
 	test_loop_counts();
 	test_canvas_grows();
 	test_background();
+	test_mixed_profiles();
 	test_memory_stream();
 	test_save_flags();
 	test_multibitmap_memory();

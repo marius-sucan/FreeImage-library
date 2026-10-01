@@ -54,7 +54,7 @@ Fixes:
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
 - fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
-- fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag;
+- fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag; MNG images in other colors than the first are converted to its colors;
 - fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
 - fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
 - fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
