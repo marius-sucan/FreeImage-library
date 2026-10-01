@@ -120,7 +120,30 @@ SetCICPMetadata(FIBITMAP *dib, unsigned primaries, unsigned transfer, unsigned m
 	}
 }
 
+// samples of fewer bits than the image type holds, unscaled: J2K_UNSCALED and JP2_UNSCALED loads
 static bool
+IsUnscaled(FIBITMAP *dib) {
+	FITAG *tag = NULL;
+	if (!FreeImage_GetMetadata(FIMD_CUSTOM, dib, "UnscaledBits", &tag) || !tag) {
+		return false;
+	}
+	const BYTE *bits = (const BYTE *)FreeImage_GetTagValue(tag);
+	if ((FreeImage_GetTagType(tag) != FIDT_BYTE) || (FreeImage_GetTagCount(tag) != 1) || !bits) {
+		return false;
+	}
+	switch (FreeImage_GetImageType(dib)) {
+		case FIT_BITMAP:
+			return (*bits > 0) && (*bits < 8);
+		case FIT_UINT16:
+		case FIT_RGB16:
+		case FIT_RGBA16:
+			return (*bits > 0) && (*bits < 16);
+		default:
+			return false;
+	}
+}
+
+bool
 GetCICPMetadata(FIBITMAP *dib, BYTE cicp[4]) {
 	FITAG *tag = NULL;
 	if (!FreeImage_GetMetadata(FIMD_CUSTOM, dib, CICP_KEY, &tag) || !tag) {
@@ -343,7 +366,7 @@ VerdictOf16(FIBITMAP *dib, SourceFormat &source) {
 	}
 	const Transfer transfer = TransferOf(dib);
 	if (transfer == TRANSFER_PQ) {
-		return FITM_REQUIRED;
+		return FITM_PQ;
 	}
 
 	bool widened = false;
@@ -383,6 +406,9 @@ VerdictOf16(FIBITMAP *dib, SourceFormat &source) {
 
 static int
 VerdictOfFloat(FIBITMAP *dib, SourceFormat &source) {
+	if (TransferOf(dib) == TRANSFER_PQ) {
+		return FITM_PQ;
+	}
 	switch (source.Get()) {
 		case FIF_HDR:
 		case FIF_EXR:
@@ -418,6 +444,9 @@ MustTonemap(FIBITMAP *dib, SourceFormat &source) {
 	if (!dib) {
 		return FITM_ERROR;
 	}
+	if (IsUnscaled(dib)) {
+		return FITM_UNSCALED;
+	}
 	switch (FreeImage_GetImageType(dib)) {
 		case FIT_BITMAP:
 			return FITM_NONE;
@@ -430,7 +459,7 @@ MustTonemap(FIBITMAP *dib, SourceFormat &source) {
 		case FIT_RGBF:
 		case FIT_RGBAF:
 			// light, which only the tone mapping operators turn into a standard bitmap
-			return FITM_REQUIRED;
+			return (TransferOf(dib) == TRANSFER_PQ) ? FITM_PQ : FITM_REQUIRED;
 		case FIT_INT16:
 		case FIT_UINT32:
 		case FIT_INT32:
@@ -454,7 +483,7 @@ or the ICC profile's cicp tag and tone curve), the format of the file and, for 1
 images, statistics of a sample of the pixels. A header-only bitmap gets a verdict without statistics.
 @param dib Image to look at
 @param filename The file the image comes from, or NULL; read only for the formats of 16-bit and grey float images
-@return Returns FITM_NONE (0), FITM_OPTIONAL (1) or FITM_REQUIRED (2), and FITM_ERROR (-1) for a NULL or unknown bitmap
+@return Returns FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3) or FITM_UNSCALED (4), and FITM_ERROR (-1) for a NULL or unknown bitmap
 */
 int DLL_CALLCONV
 FreeImage_MustTonemap(FIBITMAP *dib, const char *filename) {

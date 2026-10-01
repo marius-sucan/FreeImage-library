@@ -80,6 +80,9 @@
     <ClCompile Include="..\FreeImage\ConversionFloat.cpp">
       <Filter>Source Files\Conversion</Filter>
     </ClCompile>
+    <ClCompile Include="..\FreeImage\ConversionLinear.cpp">
+      <Filter>Source Files\Conversion</Filter>
+    </ClCompile>
     <ClCompile Include="..\FreeImage\ConversionRGB16.cpp">
       <Filter>Source Files\Conversion</Filter>
     </ClCompile>

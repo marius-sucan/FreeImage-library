@@ -482,6 +482,12 @@ Nothing is attached when the first three are all 2, unspecified.
 */
 void SetCICPMetadata(FIBITMAP *dib, unsigned primaries, unsigned transfer, unsigned matrix, BOOL full_range);
 
+/**
+The CICP tag's 4 code points; FALSE without the tag
+@see See definition in MustTonemap.cpp
+*/
+bool GetCICPMetadata(FIBITMAP *dib, BYTE cicp[4]);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

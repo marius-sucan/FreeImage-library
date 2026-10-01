@@ -362,6 +362,7 @@ copy Source\FreeImage.h Dist\x64
     <ClCompile Include="Source\FreeImage\Conversion4.cpp" />
     <ClCompile Include="Source\FreeImage\Conversion8.cpp" />
     <ClCompile Include="Source\FreeImage\ConversionFloat.cpp" />
+    <ClCompile Include="Source\FreeImage\ConversionLinear.cpp" />
     <ClCompile Include="Source\FreeImage\ConversionRGB16.cpp" />
     <ClCompile Include="Source\FreeImage\ConversionRGBF.cpp" />
     <ClCompile Include="Source\FreeImage\ConversionType.cpp" />
