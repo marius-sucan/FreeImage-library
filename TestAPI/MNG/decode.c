@@ -812,16 +812,16 @@ static void test_absurd_canvas(void) {
 
 /* --------------------------------------------------------------------- */
 
-/* a PNG of dib minus its signature, with a cICP chunk after IHDR when cicp is given */
-static int mng_png(Buf *out, FIBITMAP *dib, const BYTE *cicp) {
+/* a PNG of dib minus its signature, with a chunk of the given type after IHDR when type is given */
+static int mng_png_with(Buf *out, FIBITMAP *dib, const char *type, const void *payload, DWORD length) {
 	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
 	BYTE *png = NULL;
 	DWORD size = 0;
 	int ok = mem && FreeImage_SaveToMemory(FIF_PNG, dib, mem, 0) && FreeImage_AcquireMemory(mem, &png, &size) && size > 33;
 	if (ok) {
 		buf_add(out, png + 8, 25);	/* IHDR */
-		if (cicp) {
-			chunk(out, "cICP", cicp, 4);
+		if (type) {
+			chunk(out, type, payload, length);
 		}
 		buf_add(out, png + 33, size - 33);
 	}
@@ -829,6 +829,11 @@ static int mng_png(Buf *out, FIBITMAP *dib, const BYTE *cicp) {
 		FreeImage_CloseMemory(mem);
 	}
 	return ok;
+}
+
+/* a PNG of dib minus its signature, with a cICP chunk after IHDR when cicp is given */
+static int mng_png(Buf *out, FIBITMAP *dib, const BYTE *cicp) {
+	return mng_png_with(out, dib, cicp ? "cICP" : NULL, cicp, 4);
 }
 
 /* the payload of a PNG's iCCP chunk, as FreeImage writes it for this profile */
@@ -889,7 +894,7 @@ static void test_color_description(void) {
 
 	want_profile[0] = adobe; want_size[0] = adobe_size;	/* the global iCCP */
 	want_profile[1] = p3; want_size[1] = p3_size;		/* its own iCCP */
-	want_profile[2] = adobe; want_size[2] = adobe_size;	/* the global iCCP and its own cICP */
+	want_profile[2] = NULL; want_size[2] = 0;			/* its own cICP: the global iCCP is not inherited */
 	want_profile[3] = NULL; want_size[3] = 0;			/* a grey profile cannot describe the RGBA canvas */
 	for (i = 0; i < 256; i++) {
 		FreeImage_GetPalette(mono)[i].rgbRed = FreeImage_GetPalette(mono)[i].rgbGreen = FreeImage_GetPalette(mono)[i].rgbBlue = (BYTE)i;
@@ -947,6 +952,140 @@ out:
 	buf_free(&mng);
 	FreeImage_Unload(rgb);
 	FreeImage_Unload(mono);
+}
+
+/* the image as a PNG of its own, with a chunk after IHDR when type is given */
+static FIBITMAP *standalone_png(const Buf *image, const char *type, const Buf *payload) {
+	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+	FIMEMORY *mem;
+	FIBITMAP *dib = NULL;
+	Buf png;
+	buf_init(&png);
+	buf_add(&png, signature, 8);
+	buf_add(&png, image->data, 25);
+	if (type) {
+		chunk(&png, type, payload->data, (DWORD)payload->size);
+	}
+	buf_add(&png, image->data + 25, image->size - 25);
+	mem = FreeImage_OpenMemory(png.data, (DWORD)png.size);
+	if (mem) {
+		dib = FreeImage_LoadFromMemory(FIF_PNG, mem, 0);
+		FreeImage_CloseMemory(mem);
+	}
+	buf_free(&png);
+	return dib;
+}
+
+/* the same profile, CICP tag and pixel (0, 0) */
+static int same_description(FIBITMAP *got, FIBITMAP *want) {
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(want);
+	FITAG *tag = NULL;
+	const BYTE *cicp = NULL;
+	RGBQUAD a, b;
+	if (FreeImage_GetMetadata(FIMD_CUSTOM, want, "CICP", &tag) && tag) {
+		cicp = (const BYTE *)FreeImage_GetTagValue(tag);
+	}
+	return same_profile(got, icc->data, icc->size) && same_cicp(got, cicp) && pixel_at(got, 0, 0, &a) && pixel_at(want, 0, 0, &b)
+		&& a.rgbRed == b.rgbRed && a.rgbGreen == b.rgbGreen && a.rgbBlue == b.rgbBlue;
+}
+
+/* the top-level colour chunks reach only an image with none of its own, as if they stood in its PNG (4.2.3) */
+static void test_inherited_colour_space(void) {
+	static const BYTE srgb[1] = { 0 };
+	static const BYTE gama[4] = { 0, 1, 0x86, 0xA0 };	/* 1.0 */
+	static const BYTE chrm[32] = {
+		0, 0, 0x7A, 0x26, 0, 0, 0x80, 0x84, 0, 0, 0xFA, 0x00, 0, 0, 0x80, 0xE8,
+		0, 0, 0x75, 0x30, 0, 0, 0xEA, 0x60, 0, 0, 0x3A, 0x98, 0, 0, 0x17, 0x70
+	};
+	static const BYTE cicp[4] = { 1, 13, 0, 1 };		/* sRGB */
+	static const struct { const char *what; const char *type; const BYTE *payload; DWORD length; int p3; } cases[] = {
+		{ "no colour chunk", NULL, NULL, 0, 0 },
+		{ "its own sRGB chunk", "sRGB", srgb, 1, 0 },
+		{ "its own gAMA chunk", "gAMA", gama, 4, 0 },
+		{ "its own cHRM chunk", "cHRM", chrm, 32, 0 },
+		{ "its own cICP chunk", "cICP", cicp, 4, 0 },
+		{ "its own iCCP chunk", NULL, NULL, 0, 1 }
+	};
+	enum { COUNT = sizeof(cases) / sizeof(cases[0]) };
+	DWORD adobe_size = 0, p3_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	FIBITMAP *rgb = FreeImage_Allocate(W, H, 24, 0, 0, 0);
+	FIMULTIBITMAP *mb = NULL;
+	Buf mng, iccp, images[COUNT];
+	RGBQUAD colour;
+	const char *path;
+	int i, bad = 0;
+
+	printf("colour chunks inherited from the top level\n");
+
+	colour.rgbRed = 128;
+	colour.rgbGreen = 64;
+	colour.rgbBlue = 200;
+	colour.rgbReserved = 0;
+
+	FreeImage_FillBackground(rgb, &colour, 0);
+	buf_init(&mng);
+	buf_init(&iccp);
+	for (i = 0; i < COUNT; i++) {
+		buf_init(&images[i]);
+	}
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, COUNT, COUNT, 0, 1);
+	if (!iccp_payload(&iccp, adobe, adobe_size)) {
+		fail("no iCCP chunk to copy");
+		goto out;
+	}
+	chunk(&mng, "iCCP", iccp.data, (DWORD)iccp.size);
+	for (i = 0; i < COUNT; i++) {
+		if (cases[i].p3) {
+			FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
+		}
+		mng_png_with(&images[i], rgb, cases[i].type, cases[i].payload, cases[i].length);
+		FreeImage_DestroyICCProfile(rgb);
+		buf_add(&mng, images[i].data, images[i].size);
+	}
+	mng_mend(&mng);
+	path = write_file("mng_inherit.mng", &mng);
+
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, 0);
+	if (!mb || FreeImage_GetPageCount(mb) != COUNT) {
+		fail("%d pages, expected %d", mb ? FreeImage_GetPageCount(mb) : -1, (int)COUNT);
+		goto out;
+	}
+	for (i = 0; i < COUNT; i++) {
+		const int inherits = !cases[i].type && !cases[i].p3;
+		FIBITMAP *want = standalone_png(&images[i], inherits ? "iCCP" : NULL, &iccp);
+		FIBITMAP *got = FreeImage_LockPage(mb, i);
+		RGBQUAD pixel;
+		if (!want || !got) {
+			fail("an image with %s could not be decoded", cases[i].what);
+			bad = 1;
+		} else if (inherits != same_profile(want, adobe, adobe_size)) {
+			fail("premise: the PNG of the image with %s %s the Adobe RGB profile", cases[i].what, inherits ? "lacks" : "has");
+			bad = 1;
+		} else if (cases[i].payload == gama && (!pixel_at(want, 0, 0, &pixel) || pixel.rgbRed == 128)) {
+			fail("premise: a gAMA of 1.0 leaves the pixels as they are");
+			bad = 1;
+		} else if (!same_description(got, want)) {
+			fail("an image with %s: a %u-byte profile, or other pixels than its own PNG with%s the global iCCP",
+				 cases[i].what, (unsigned)FreeImage_GetICCProfile(got)->size, inherits ? "" : "out");
+			bad = 1;
+		}
+		if (want) FreeImage_Unload(want);
+		if (got) FreeImage_UnlockPage(mb, got, FALSE);
+	}
+	if (!bad) {
+		ok("the global iCCP reaches an image without colour chunks, not one with an sRGB, gAMA, cHRM, cICP or iCCP chunk");
+	}
+out:
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	for (i = 0; i < COUNT; i++) {
+		buf_free(&images[i]);
+	}
+	buf_free(&iccp);
+	buf_free(&mng);
+	FreeImage_Unload(rgb);
 }
 
 /* a format's bytes for this image */
@@ -1163,6 +1302,7 @@ int main(void) {
 	test_alpha_compositing();
 	test_absurd_canvas();
 	test_color_description();
+	test_inherited_colour_space();
 	test_jng_profiles();
 
 	FreeImage_DeInitialise();

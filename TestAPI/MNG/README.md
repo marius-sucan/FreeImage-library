@@ -73,6 +73,11 @@ from the plugin:
 - **The canvas's colors.** A composed page carries the ICC profile and CICP
   tag of its own image: the global iCCP, or the image's own, never a grey one
   on the RGBA canvas; read forwards and backwards, with pixels and without.
+- **Inherited colour spaces.** The top-level cHRM, gAMA, iCCP and sRGB reach an
+  image only when it has none of them, nor a cICP chunk: "If any one of these
+  chunks ... appears in the PNG datastream, none of them is inherited." Each
+  page is compared with its image decoded as a PNG of its own, the global iCCP
+  added only where the spec gives it.
 - **JNG profiles.** A JNG's iCCP describes its JPEG data and wins over an APP2
   profile inside it, which stands otherwise, through the alpha merge and
   header-only too; a grey iCCP in a colour JNG is left out. A JNG image in an

@@ -85,6 +85,7 @@ static const DWORD CHUNK_gAMA = MNG_CHUNK('g', 'A', 'M', 'A');
 static const DWORD CHUNK_cHRM = MNG_CHUNK('c', 'H', 'R', 'M');
 static const DWORD CHUNK_sRGB = MNG_CHUNK('s', 'R', 'G', 'B');
 static const DWORD CHUNK_iCCP = MNG_CHUNK('i', 'C', 'C', 'P');
+static const DWORD CHUNK_cICP = MNG_CHUNK('c', 'I', 'C', 'P');
 static const DWORD CHUNK_pHYs = MNG_CHUNK('p', 'H', 'Y', 's');
 static const DWORD CHUNK_bKGD = MNG_CHUNK('b', 'K', 'G', 'D');
 static const DWORD CHUNK_PAST = MNG_CHUNK('P', 'A', 'S', 'T');
@@ -1100,6 +1101,13 @@ SplitChunks(const std::vector<BYTE>& stream, std::vector<MNGChunkRef>& out) {
 	return !out.empty();
 }
 
+// a chunk that gives an image a colour space of its own, cICP being PNG 3's
+static BOOL
+IsColourSpaceChunk(DWORD type) {
+	return (type == CHUNK_iCCP) || (type == CHUNK_sRGB) || (type == CHUNK_gAMA) ||
+		   (type == CHUNK_cHRM) || (type == CHUNK_cICP);
+}
+
 // splice in inherited globals; an empty PLTE means the global one
 static BOOL
 BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYTE>& raw,
@@ -1119,32 +1127,30 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 	// BASI starts with a 13-byte IHDR
 	AppendChunk(out, CHUNK_IHDR, chunks[0].payload, 13);
 
-	// these precede PLTE; the image's own copy wins
-	BOOL has_local_gama = FALSE, has_local_chrm = FALSE, has_local_srgb = FALSE;
-	BOOL has_local_iccp = FALSE, has_local_phys = FALSE, has_local_trns = FALSE;
+	BOOL has_local_colour = FALSE, has_local_phys = FALSE, has_local_trns = FALSE;
 	BOOL has_local_plte = FALSE;
 	for(size_t i = 0; i < chunks.size(); i++) {
 		const DWORD type = chunks[i].type;
-		if(type == CHUNK_gAMA) has_local_gama = TRUE;
-		else if(type == CHUNK_cHRM) has_local_chrm = TRUE;
-		else if(type == CHUNK_sRGB) has_local_srgb = TRUE;
-		else if(type == CHUNK_iCCP) has_local_iccp = TRUE;
+		if(IsColourSpaceChunk(type)) has_local_colour = TRUE;
 		else if(type == CHUNK_pHYs) has_local_phys = TRUE;
 		else if(type == CHUNK_tRNS) has_local_trns = TRUE;
 		else if((type == CHUNK_PLTE) && (chunks[i].length > 0)) has_local_plte = TRUE;
 	}
 
-	if(!has_local_iccp && !globals.iccp.empty()) {
-		AppendGlobalChunk(out, CHUNK_iCCP, globals.iccp);
-	}
-	if(!has_local_srgb && !globals.srgb.empty()) {
-		AppendGlobalChunk(out, CHUNK_sRGB, globals.srgb);
-	}
-	if(!has_local_gama && !globals.gama.empty()) {
-		AppendGlobalChunk(out, CHUNK_gAMA, globals.gama);
-	}
-	if(!has_local_chrm && !globals.chrm.empty()) {
-		AppendGlobalChunk(out, CHUNK_cHRM, globals.chrm);
+	// these precede PLTE; an image with a colour space of its own inherits none of them (4.2.3)
+	if(!has_local_colour) {
+		if(!globals.iccp.empty()) {
+			AppendGlobalChunk(out, CHUNK_iCCP, globals.iccp);
+		}
+		if(!globals.srgb.empty()) {
+			AppendGlobalChunk(out, CHUNK_sRGB, globals.srgb);
+		}
+		if(!globals.gama.empty()) {
+			AppendGlobalChunk(out, CHUNK_gAMA, globals.gama);
+		}
+		if(!globals.chrm.empty()) {
+			AppendGlobalChunk(out, CHUNK_cHRM, globals.chrm);
+		}
 	}
 
 	BOOL wrote_plte = FALSE;
@@ -1211,8 +1217,7 @@ BuildJNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 	if(!globals.iccp.empty() && SplitChunks(raw, chunks) && (chunks[0].type == CHUNK_JHDR) && !chunks[0].cut) {
 		BOOL described = FALSE;
 		for(size_t i = 0; i < chunks.size(); i++) {
-			const DWORD type = chunks[i].type;
-			if((type == CHUNK_iCCP) || (type == CHUNK_sRGB) || (type == CHUNK_gAMA) || (type == CHUNK_cHRM)) {
+			if(IsColourSpaceChunk(chunks[i].type)) {
 				described = TRUE;
 			}
 		}
