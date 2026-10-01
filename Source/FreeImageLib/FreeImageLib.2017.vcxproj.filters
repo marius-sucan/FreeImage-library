@@ -110,6 +110,9 @@
     <ClCompile Include="..\FreeImage\ToneMapping.cpp">
       <Filter>Source Files\Conversion</Filter>
     </ClCompile>
+    <ClCompile Include="..\FreeImage\MustTonemap.cpp">
+      <Filter>Source Files\Conversion</Filter>
+    </ClCompile>
     <ClCompile Include="..\FreeImage\J2KHelper.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>

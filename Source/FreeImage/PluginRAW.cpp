@@ -381,6 +381,19 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 
 	return NULL;
 }
+
+/**
+The 16-bit output is linear light (gamm 1/1, set below) in LibRaw's default sRGB primaries: the CICP tag says so
+*/
+static FIBITMAP *
+DescribeOutput(FIBITMAP *dib, int bitspersample) {
+	if(dib && (bitspersample == 16)) {
+		const BOOL color = (FreeImage_GetImageType(dib) == FIT_RGB16) ? TRUE : FALSE;
+		SetCICPMetadata(dib, color ? 1 : 2, 8, 0, TRUE);
+	}
+	return dib;
+}
+
 /**
 Load raw data and convert to FIBITMAP
 @param RawProcessor Libraw handle
@@ -434,7 +447,7 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
 			}
-			return dib;
+			return DescribeOutput(dib, bitspersample);
 		}
 
 		// unpack data
@@ -450,7 +463,7 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 		// retrieve processed image
 		dib = libraw_ConvertProcessedRawToDib(RawProcessor);
 	
-		return dib;
+		return DescribeOutput(dib, bitspersample);
 
 	} catch(const char *text) {
 		FreeImage_OutputMessageProc(s_format_id, text);

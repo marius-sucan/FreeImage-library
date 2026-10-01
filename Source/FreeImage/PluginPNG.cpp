@@ -559,8 +559,12 @@ ConfigureDecoder(png_structp png_ptr, png_infop info_ptr, int flags, FREE_IMAGE_
 	// this file may have come from--so if it doesn't have a file gamma, don't
 	// do any correction ("do no harm")
 
-	// an ICC profile or an sRGB chunk overrides gAMA: the pixels stay as they describe them
-	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP) && !png_get_valid(png_ptr, info_ptr, PNG_INFO_sRGB)) {
+	// a cICP chunk, an ICC profile or an sRGB chunk overrides gAMA: the pixels stay as they describe them
+	BOOL described = png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP) || png_get_valid(png_ptr, info_ptr, PNG_INFO_sRGB);
+#ifdef PNG_INFO_cICP
+	described = described || png_get_valid(png_ptr, info_ptr, PNG_INFO_cICP);
+#endif
+	if (png_get_valid(png_ptr, info_ptr, PNG_INFO_gAMA) && !described) {
 		png_fixed_point gamma = 0;
 		const png_fixed_point screen_gamma = 220000;	// 2.2
 
@@ -921,6 +925,16 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 
 				FreeImage_CreateICCProfile(dib, profile_data, profile_length);
 			}
+
+#ifdef PNG_cICP_SUPPORTED
+			// the PNG 3 color description, which outranks the ICC profile
+			{
+				png_byte primaries = 0, transfer = 0, matrix = 0, full_range = 0;
+				if (png_get_cICP(png_ptr, info_ptr, &primaries, &transfer, &matrix, &full_range)) {
+					SetCICPMetadata(dib, primaries, transfer, matrix, full_range);
+				}
+			}
+#endif
 
 			// --- header only mode => clean-up and return
 

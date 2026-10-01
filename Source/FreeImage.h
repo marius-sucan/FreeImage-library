@@ -829,6 +829,15 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define FICMS_COLORSPACE_CMYK		0x434D594B	//! 'CMYK'
 #define FICMS_COLORSPACE_LAB		0x4C616220	//! 'Lab '
 
+// Tone mapping advice ------------------------------------------------------
+// Values returned by FreeImage_MustTonemap; the tone mapping operators take linear light,
+// so a PQ image needs its transfer curve undone before them
+
+#define FITM_ERROR		-1	//! NULL, or an unknown image type
+#define FITM_NONE		0	//! not needed: FreeImage_ConvertTo24Bits/32Bits, or FreeImage_ConvertToStandardType for the scalar types, show the image as intended
+#define FITM_OPTIONAL	1	//! optional: linear light within the display's range, or of an uncertain encoding; shown as it is, it may look dark or flat
+#define FITM_REQUIRED	2	//! required: HDR, or floating-point RGB, which only FreeImage_ToneMapping turns into a standard bitmap
+
 
 #ifdef __cplusplus
 extern "C" {
@@ -1089,6 +1098,9 @@ DLL_API FIBITMAP *DLL_CALLCONV FreeImage_TmoReinhard05(FIBITMAP *src, double int
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_TmoReinhard05Ex(FIBITMAP *src, double intensity FI_DEFAULT(0), double contrast FI_DEFAULT(0), double adaptation FI_DEFAULT(1), double color_correction FI_DEFAULT(0));
 
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_TmoFattal02(FIBITMAP *src, double color_saturation FI_DEFAULT(0.5), double attenuation FI_DEFAULT(0.85));
+
+DLL_API int DLL_CALLCONV FreeImage_MustTonemap(FIBITMAP *dib, const char *filename FI_DEFAULT(NULL));
+DLL_API int DLL_CALLCONV FreeImage_MustTonemapU(FIBITMAP *dib, const wchar_t *filename FI_DEFAULT(NULL));
 
 // ZLib interface -----------------------------------------------------------
 

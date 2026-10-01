@@ -474,6 +474,14 @@ FIF_LOAD_DISPLAY_ICC: the loaded image in the display's colors; NULL, the image 
 */
 FIBITMAP* ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib);
 
+/**
+Attach the color description of a file, its ITU-T H.273 code points, as the FIMD_CUSTOM tag "CICP":
+4 FIDT_BYTE values, color primaries, transfer characteristics, matrix coefficients and the full range flag.
+Nothing is attached when the first three are all 2, unspecified.
+@see See definition in MustTonemap.cpp
+*/
+void SetCICPMetadata(FIBITMAP *dib, unsigned primaries, unsigned transfer, unsigned matrix, BOOL full_range);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

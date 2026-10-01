@@ -272,6 +272,9 @@ AttachMetadata(FIBITMAP *dib, const avifImage *image) {
 		FreeImage_CreateICCProfile(dib, (void*)image->icc.data, (long)image->icc.size);
 	}
 
+	// color description: the nclx box, else the AV1 sequence header
+	SetCICPMetadata(dib, image->colorPrimaries, image->transferCharacteristics, image->matrixCoefficients, (image->yuvRange == AVIF_RANGE_FULL) ? TRUE : FALSE);
+
 	// Exif
 	if((image->exif.size > 0) && image->exif.data && (image->exif.size <= (size_t)UINT_MAX)) {
 		const BYTE *exif = image->exif.data;

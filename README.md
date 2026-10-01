@@ -45,6 +45,7 @@ Fixes:
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed bugs related to CMYK support in TIFF and JPG files;
 - fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
+- fixed PNG files with both a cICP and a gAMA chunk being gamma-corrected on load; cICP wins over gAMA, as PNG 3 asks;
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
@@ -85,6 +86,8 @@ Changes:
 - added full support for MNG animations (FIF_MNG=6), reader and write;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC: images load in the screen's colors, CMYK JPEG, TIFF and PSD files included;
+- the PNG, APNG, AVIF and HEIF loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
+- added FreeImage_MustTonemap() and FreeImage_MustTonemapU(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), or FITM_ERROR (-1) for a NULL or unknown bitmap. The verdict follows the pixel type, the color type, the CICP tag or the ICC profile (its cicp tag, else its tone curve, measured through Little CMS), the format of the file and, for 16-bit and grey float images, a sample of the pixels: 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), PQ (FITM_REQUIRED) or use no more than 12 of their 16 bits (FITM_OPTIONAL); HLG, made for SDR screens too, needs none; floating-point RGB always needs it; grey float images from EXR, HDR, PFM, JPEG XR and PSD files need it, others when more than 1 sample in 10000 is above white; the scalar types need none, FreeImage_ConvertToStandardType() shows them. A header-only bitmap gets a verdict without the pixel sample. The file name is read only for 16-bit and grey float images;
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
@@ -115,6 +118,8 @@ Color management:
 - FreeImage_SetDisplayICCProfile() sets the profile and rendering intent FIF_LOAD_DISPLAY_ICC converts to, for example the profile of the monitor showing the image, or with NULL detects the screen's again; FreeImage_GetDisplayICCProfile() returns it;
 
 Bugs or limitations identified:
-- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB;
+- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
+- the tone mapping operators take linear light: PQ and HLG images are mapped from their encoded values, so a PQ image, for which FreeImage_MustTonemap() returns FITM_REQUIRED, needs its transfer curve undone first;
+- JPEG 2000 images of 9 to 15 bits load unscaled into 16-bit bitmaps, a 12-bit one up to 4095: shown as they are, they look black;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

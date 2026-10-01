@@ -227,6 +227,9 @@
     <ClCompile Include="Source\FreeImage\ToneMapping.cpp">
       <Filter>Source Files\Conversion</Filter>
     </ClCompile>
+    <ClCompile Include="Source\FreeImage\MustTonemap.cpp">
+      <Filter>Source Files\Conversion</Filter>
+    </ClCompile>
     <ClCompile Include="Source\FreeImage\NNQuantizer.cpp">
       <Filter>Source Files\Quantizers</Filter>
     </ClCompile>

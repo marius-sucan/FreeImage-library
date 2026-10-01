@@ -686,9 +686,20 @@ AttachICCProfile(FIBITMAP *dib, const heif_image_handle *handle) {
 	free(profile);
 }
 
+/** the nclx colr box; libheif does not report the code points of the bitstream */
+static void
+AttachCICP(FIBITMAP *dib, const heif_image_handle *handle) {
+	heif_color_profile_nclx *nclx = NULL;
+	if((heif_image_handle_get_nclx_color_profile(handle, &nclx).code == heif_error_Ok) && nclx) {
+		SetCICPMetadata(dib, nclx->color_primaries, nclx->transfer_characteristics, nclx->matrix_coefficients, nclx->full_range_flag ? TRUE : FALSE);
+	}
+	heif_nclx_color_profile_free(nclx);
+}
+
 static void
 AttachMetadata(FIBITMAP *dib, const heif_image_handle *handle) {
 	AttachICCProfile(dib, handle);
+	AttachCICP(dib, handle);
 	AttachExif(dib, handle);
 	AttachXMP(dib, handle);
 }
