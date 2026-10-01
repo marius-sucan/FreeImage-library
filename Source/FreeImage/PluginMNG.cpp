@@ -969,13 +969,24 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			globals.trns.assign(payload.begin(), payload.end());
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_gAMA) {
+			// sRGB ends the global gAMA and cHRM, either of them ends sRGB (4.6); an empty chunk ends only its own
 			globals.gama.assign(payload.begin(), payload.end());
+			if(!payload.empty()) {
+				globals.srgb.clear();
+			}
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_cHRM) {
 			globals.chrm.assign(payload.begin(), payload.end());
+			if(!payload.empty()) {
+				globals.srgb.clear();
+			}
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_sRGB) {
 			globals.srgb.assign(payload.begin(), payload.end());
+			if(!payload.empty()) {
+				globals.gama.clear();
+				globals.chrm.clear();
+			}
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_iCCP) {
 			globals.iccp.assign(payload.begin(), payload.end());

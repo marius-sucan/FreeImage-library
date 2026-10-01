@@ -78,6 +78,10 @@ from the plugin:
   chunks ... appears in the PNG datastream, none of them is inherited." Each
   page is compared with its image decoded as a PNG of its own, the global iCCP
   added only where the spec gives it.
+- **Top-level chunks that end others.** "The top-level sRGB chunk nullifies the
+  preceding top-level gAMA and cHRM chunks", and either of those nullifies a
+  preceding sRGB; an empty chunk nullifies only its own name. Seen through a
+  gAMA of 1.0, which changes the pixels where it stands.
 - **JNG profiles.** A JNG's iCCP describes its JPEG data and wins over an APP2
   profile inside it, which stands otherwise, through the alpha merge and
   header-only too; a grey iCCP in a colour JNG is left out. A JNG image in an

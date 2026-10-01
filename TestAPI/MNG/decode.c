@@ -1088,6 +1088,83 @@ out:
 	FreeImage_Unload(rgb);
 }
 
+/* a top-level sRGB ends gAMA and cHRM, a gAMA or cHRM ends sRGB (4.6); an empty chunk ends only its own kind */
+static void test_nullified_colour_chunks(void) {
+	static const BYTE srgb[1] = { 0 };
+	static const BYTE gama[4] = { 0, 1, 0x86, 0xA0 };	/* 1.0 */
+	/* g gAMA, s sRGB, e an empty sRGB; gamma: the gAMA is what stands */
+	static const struct { const char *what; const char *chunks; int gamma; } cases[] = {
+		{ "a gAMA", "g", 1 },
+		{ "an sRGB, then a gAMA", "sg", 1 },
+		{ "a gAMA, an sRGB, an empty sRGB", "gse", 0 },
+		{ "a gAMA, then an empty sRGB", "ge", 1 }
+	};
+	FIBITMAP *rgb = FreeImage_Allocate(W, H, 24, 0, 0, 0);
+	Buf image, gamma;
+	RGBQUAD colour;
+	int i, made, bad = 0;
+
+	printf("top-level colour chunks that end others\n");
+
+	colour.rgbRed = 128;
+	colour.rgbGreen = 64;
+	colour.rgbBlue = 200;
+	colour.rgbReserved = 0;
+	FreeImage_FillBackground(rgb, &colour, 0);
+	buf_init(&image);
+	buf_init(&gamma);
+	buf_add(&gamma, gama, 4);
+	made = mng_png(&image, rgb, NULL);
+	if (!made) {
+		fail("no PNG to embed");
+		bad = 1;
+	}
+	for (i = 0; made && i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+		FIBITMAP *want = standalone_png(&image, cases[i].gamma ? "gAMA" : NULL, &gamma);
+		FIBITMAP *got = NULL;
+		FIMULTIBITMAP *mb;
+		RGBQUAD pixel;
+		Buf mng;
+		const char *c;
+
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 1, 1, 0, 1);
+		for (c = cases[i].chunks; *c; c++) {
+			if (*c == 'g') chunk(&mng, "gAMA", gama, 4);
+			else if (*c == 's') chunk(&mng, "sRGB", srgb, 1);
+			else chunk(&mng, "sRGB", NULL, 0);
+		}
+		buf_add(&mng, image.data, image.size);
+		mng_mend(&mng);
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_nullify.mng", &mng), FALSE, TRUE, FALSE, 0);
+		if (mb) {
+			got = FreeImage_LockPage(mb, 0);
+		}
+		if (!want || !got) {
+			fail("%s: the image could not be decoded", cases[i].what);
+			bad = 1;
+		} else if (!pixel_at(want, 0, 0, &pixel) || ((pixel.rgbRed != 128) != cases[i].gamma)) {
+			fail("premise: a gAMA of 1.0 does not change the pixels");
+			bad = 1;
+		} else if (!same_description(got, want)) {
+			pixel_at(got, 0, 0, &pixel);
+			fail("%s: red %u, want the image's PNG %s a gAMA", cases[i].what, pixel.rgbRed, cases[i].gamma ? "with" : "without");
+			bad = 1;
+		}
+		if (got) FreeImage_UnlockPage(mb, got, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		if (want) FreeImage_Unload(want);
+		buf_free(&mng);
+	}
+	if (!bad) {
+		ok("a top-level gAMA ends the sRGB before it and an sRGB the gAMA; an empty sRGB leaves a gAMA alone");
+	}
+	buf_free(&gamma);
+	buf_free(&image);
+	FreeImage_Unload(rgb);
+}
+
 /* a format's bytes for this image */
 static int save_bytes(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, Buf *out) {
 	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
@@ -1303,6 +1380,7 @@ int main(void) {
 	test_absurd_canvas();
 	test_color_description();
 	test_inherited_colour_space();
+	test_nullified_colour_chunks();
 	test_jng_profiles();
 
 	FreeImage_DeInitialise();
