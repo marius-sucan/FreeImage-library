@@ -21,6 +21,7 @@
 
 #include "FreeImage.h"
 #include "Utilities.h"
+#include "Plugin.h"
 
 #include "../Metadata/FreeImageTag.h"
 
@@ -64,6 +65,8 @@ typedef struct {
 	int out_bound_width;		//! bounding box of the frames
 	int out_bound_height;
 	int out_loop;
+	BYTE *out_profile;			//! the file's ICC profile, every frame's colors; NULL for sRGB
+	DWORD out_profile_size;
 } WebPPluginData;
 
 static BOOL WebP_FinishAnimation(WebPPluginData *state, FreeImageIO *io, fi_handle handle);
@@ -386,6 +389,7 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 	if(state->bitstream.bytes != NULL) {
 		free((void*)state->bitstream.bytes);
 	}
+	free(state->out_profile);
 	free(state);
 
 	return bResult;
@@ -989,20 +993,17 @@ WebP_EncodeToData(FIBITMAP *dib, int flags, WebPData *out) {
 	return bResult;
 }
 
-// once per file, from the first frame
+// once per file: the profile given, and the first frame's XMP and Exif
 static BOOL
-WebP_SetMetadataChunks(WebPMux *mux, FIBITMAP *dib) {
+WebP_SetMetadataChunks(WebPMux *mux, FIBITMAP *dib, const void *profile, DWORD profile_size) {
 	const int copy_data = 1;
 
-	{
-		FIICCPROFILE *iccProfile = FreeImage_GetICCProfile(dib);
-		if(iccProfile->size && iccProfile->data) {
-			WebPData icc_profile;
-			icc_profile.bytes = (uint8_t*)iccProfile->data;
-			icc_profile.size = (size_t)iccProfile->size;
-			if(WebPMuxSetChunk(mux, "ICCP", &icc_profile, copy_data) != WEBP_MUX_OK) {
-				return FALSE;
-			}
+	if(profile_size && profile) {
+		WebPData icc_profile;
+		icc_profile.bytes = (const uint8_t*)profile;
+		icc_profile.size = (size_t)profile_size;
+		if(WebPMuxSetChunk(mux, "ICCP", &icc_profile, copy_data) != WEBP_MUX_OK) {
+			return FALSE;
 		}
 	}
 	{
@@ -1147,7 +1148,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		if(WebPMuxSetImage(state->mux, &bitstream, 1 /* copy */) != WEBP_MUX_OK) {
 			goto done;
 		}
-		if(!WebP_SetMetadataChunks(state->mux, dib)) {
+		if(!WebP_SetMetadataChunks(state->mux, dib, FreeImage_GetICCProfile(dib)->data, FreeImage_GetICCProfile(dib)->size)) {
 			goto done;
 		}
 		bResult = WebP_AssembleAndWrite(state->mux, io, handle);
@@ -1157,8 +1158,36 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 	// --- a frame of an animation ---
 
-	if(!WebP_EncodeToData(dib, flags, &bitstream)) {
-		goto done;
+	if(state->out_pages == 0) {
+		// the first frame's profile, if it is a sound RGB profile
+		const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+		free(state->out_profile);
+		state->out_profile = NULL;
+		state->out_profile_size = 0;
+		if(icc->data && PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, TRUE)) {
+			state->out_profile = (BYTE*)malloc(icc->size);
+			if(state->out_profile == NULL) {
+				FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+				goto done;
+			}
+			memcpy(state->out_profile, icc->data, icc->size);
+			state->out_profile_size = icc->size;
+		}
+	}
+
+	{
+		// the file has one profile: a frame in other colors is converted to it
+		FIBITMAP *converted = NULL;
+		if(!ConvertToFileProfile(dib, state->out_profile, state->out_profile_size, &converted)) {
+			FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
+		}
+		const BOOL encoded = WebP_EncodeToData(converted ? converted : dib, flags, &bitstream);
+		if(converted != NULL) {
+			FreeImage_Unload(converted);
+		}
+		if(!encoded) {
+			goto done;
+		}
 	}
 
 	{
@@ -1192,7 +1221,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		if(state->out_pages == 0) {
 			// hold the first frame: alone it is a still image
-			if(!WebP_SetMetadataChunks(state->mux, dib)) {
+			if(!WebP_SetMetadataChunks(state->mux, dib, state->out_profile, state->out_profile_size)) {
 				goto done;
 			}
 

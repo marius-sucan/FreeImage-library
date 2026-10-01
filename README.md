@@ -56,7 +56,7 @@ Fixes:
 - fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
 - fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag;
 - fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
-- fixed APNG saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
+- fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
 - fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
 - fixed JNG files losing their ICC profile on save and on load; a JNG image in an MNG file takes the file's global profile;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;

@@ -678,6 +678,54 @@ static int apng_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* an animation page, as QPV makes them */
+static void frame_time(FIBITMAP *dib) {
+    FITAG *tag = FreeImage_CreateTag();
+    LONG ms = 100;
+    if (!tag) return;
+    FreeImage_SetTagKey(tag, "FrameTime");
+    FreeImage_SetTagType(tag, FIDT_LONG);
+    FreeImage_SetTagCount(tag, 1);
+    FreeImage_SetTagLength(tag, 4);
+    FreeImage_SetTagValue(tag, &ms);
+    FreeImage_SetMetadata(FIMD_ANIMATION, dib, "FrameTime", tag);
+    FreeImage_DeleteTag(tag);
+}
+
+/* the same for an animated WebP, whose pages are animation frames in its page cache too */
+static int webp_anim_case(void) {
+    FIBITMAP *a = tagged(FIT_BITMAP, 24, s_adobe, s_adobe_size), *b = tagged(FIT_BITMAP, 24, s_p3, s_p3_size);
+    const char *dir = getenv("IO_TEST_TMP");
+    char path[512];
+    FIMULTIBITMAP *doc;
+    BOOL saved = FALSE;
+    int pages = 0, whole = 1;
+    if (!a || !b) return CASE_BROKEN;
+    frame_time(a);
+    frame_time(b);
+    snprintf(path, sizeof(path), "%s/fi_io_webp_%d.webp", (dir && *dir) ? dir : ".", (int)getpid());
+
+    armed = 1; fail_new = 1;
+    doc = FreeImage_OpenMultiBitmap(FIF_WEBP, path, TRUE, FALSE, TRUE, 0);
+    if (doc) {
+        pages += FreeImage_AppendPage(doc, a) ? 1 : 0;
+        pages += FreeImage_AppendPage(doc, b) ? 1 : 0;
+        saved = FreeImage_CloseMultiBitmap(doc, 0);
+    }
+    armed = 0; fail_new = 0;
+
+    if (saved && pages) {
+        FIMULTIBITMAP *back = FreeImage_OpenMultiBitmap(FIF_WEBP, path, FALSE, TRUE, TRUE, 0);
+        whole = back && (FreeImage_GetPageCount(back) == pages);
+        if (back) FreeImage_CloseMultiBitmap(back, 0);
+    }
+    remove(path);
+    FreeImage_Unload(a);
+    FreeImage_Unload(b);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -709,6 +757,7 @@ int main(void) {
         sweep("display profile set: the new one or the old one", icc_display_set_case);
         sweep("FIF_LOAD_DISPLAY_ICC load: converted, as loaded or NULL", icc_display_load_case);
         sweep("APNG save, frames in different profiles: TRUE only for a file that loads", apng_case);
+        sweep("WebP animation, frames in different profiles: TRUE only for a file that loads", webp_anim_case);
     }
 #endif
     printf("--- %d failure(s) ---\n", failures);

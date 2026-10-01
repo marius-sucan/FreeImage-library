@@ -145,7 +145,7 @@ void DLL_CALLCONV InitHEIF(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitAPNG(Plugin *plugin, int format_id);
 
 // ==========================================================
-//   Shared between the PNG, APNG and JNG plugins
+//   Shared between the PNG, APNG, JNG and WebP plugins
 // ==========================================================
 
 // TRUE for an animated PNG (acTL chunk present)
