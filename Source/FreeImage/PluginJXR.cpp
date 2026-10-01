@@ -99,6 +99,26 @@ _jxr_io_EOS(WMPStream* pWS) {
 	return bDataRemaining;
 }
 
+/**
+Bytes from the start of the codestream to the end of the stream, or the most there can be if the end is unknown
+*/
+static UINT64
+CodestreamBytes(PKImageDecode *pDecoder) {
+	WMPStream *pWS = pDecoder->pStream;
+	FreeImageJXRIO *fio = (FreeImageJXRIO*)pWS->state.pvObj;
+	const size_t currentPos = fio->pos;
+	UINT64 bytes = (std::numeric_limits<UINT64>::max)();
+	if(fio->io->seek_proc(fio->handle, 0, SEEK_END) == 0) {
+		const INT64 end = fio->io->tell_proc(fio->handle);
+		const UINT64 from = (UINT64)fio->start + pDecoder->WMP.wmiDEMisc.uImageOffset;
+		if(end >= 0) {
+			bytes = ((UINT64)end > from) ? (UINT64)end - from : 0;
+		}
+	}
+	_jxr_io_SetPos(pWS, currentPos);
+	return bytes;
+}
+
 static ERR 
 _jxr_io_Close(WMPStream** ppWS) {
 	WMPStream *pWS = *ppWS;
@@ -1242,8 +1262,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// get image dimensions
 		pDecoder->GetSize(pDecoder, &width, &height);
 
+		// a codestream spends a bit or more on each 16 x 16 macroblock: an exact limit, so without PlausibleImageSize's margin
+		if(!header_only && !PlausibleImageSize((UINT64)width * height * bpp / 8, CodestreamBytes(pDecoder), 256 * (UINT64)bpp / 64)) {
+			throw FI_MSG_ERROR_CORRUPTED_IMAGE;
+		}
+
 		// allocate dst image
-		{			
+		{
 			dib = FreeImage_AllocateHeaderT(header_only, image_type, width, height, bpp, red_mask, green_mask, blue_mask);
 			if(!dib) {
 				throw FI_MSG_ERROR_DIB_MEMORY;

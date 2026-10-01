@@ -192,6 +192,7 @@ int main(void) {
         const DWORD main_cs = codestream(s, 0xbcc0), alpha_cs = codestream(s, 0xbcc2);
         BYTE *pf;
         DWORD at, n;
+        FIBITMAP *dib;
         work = (BYTE *)malloc(s->size);
         CHECK(main_cs != 0, "%s: no codestream", s->name);
 
@@ -237,6 +238,12 @@ int main(void) {
                     work[at + 13 + 2 * (j & 1)] = (BYTE)SIZES[j];
                     attempt(work, s->size);
                 }
+                /* a size its data cannot hold at a bit per macroblock is refused before allocating */
+                memcpy(work, s->data, s->size);
+                memset(work + at + 12, 0xff, 4);
+                dib = load(work, s->size);
+                CHECK(dib == NULL, "%s: 65536 x 65536 from %lu bytes loaded", s->name, (unsigned long)s->size);
+                FreeImage_Unload(dib);
             }
         }
 
