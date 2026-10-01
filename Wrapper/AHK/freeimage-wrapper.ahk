@@ -10,6 +10,8 @@
 ;
 ; 30 September 2026 - v2.02
 ; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
+; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
+; - the J2K_UNSCALED and JP2_UNSCALED load flags
 ;
 ; 29 September 2026 - v2.01
 ; - added the color management functions (ICC profiles, Little CMS): FreeImage_ConvertToICCProfile(), FreeImage_ApplyICCProfile(),
@@ -290,6 +292,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ;
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
+; J2K_UNSCALED = 1, JP2_UNSCALED = 1; keep samples of 1 to 7 and 9 to 15 bits as the file holds them, not spread over 8 or 16 bits; tagged "UnscaledBits"
 ; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
 ; JPEG_FAST = 0x0001; fast DCT: faster, a little less accurate; the default anyway, unless JPEG_ACCURATE is given
 ; JPEG_ACCURATE = 0x0002; accurate DCT and upsampling: the best quality, a little slower
@@ -1129,8 +1132,19 @@ FreeImage_MustTonemap(hImage, ImgPath:="") {
 ; -1 = FITM_ERROR    ; no image, or an unknown image type
 ;  0 = FITM_NONE     ; FreeImage_ConvertTo(hImage, "24Bits") or "32Bits" shows it as intended, FreeImage_ConvertToStandardType() the scalar types
 ;  1 = FITM_OPTIONAL ; linear light within the display's range, or an uncertain encoding: shown as it is, it may look dark or flat
-;  2 = FITM_REQUIRED ; HDR or floating-point RGB: FreeImage_ToneMapping(), which takes linear light; a PQ image needs its transfer curve undone first
+;  2 = FITM_REQUIRED ; HDR or floating-point RGB: FreeImage_ToneMapping()
+;  3 = FITM_PQ       ; a PQ image (SMPTE ST 2084): FreeImage_ConvertToLinear() undoes its curve, then FreeImage_ToneMapping()
+;  4 = FITM_UNSCALED ; samples of fewer bits than the image type holds, loaded with J2K_UNSCALED: load the file without it
+; The tone mapping operators take linear light: FreeImage_ConvertToLinear() gives it, whatever the code.
    Return DllCall(getFIMfunc("MustTonemapU"), "UPtr", hImage, "WStr", ImgPath, "Int")
+}
+
+FreeImage_ConvertToLinear(hImage, flags:=0) {
+; Returns an RGBF image (RGBAF with alpha) in linear light, 1.0 = SDR reference white, 203 cd/m2; feed it to FreeImage_ToneMapping().
+; The curve undone: the CICP tag's (PQ, HLG, sRGB, BT.709...), else the ICC profile's, else sRGB; floating-point images stay as they are.
+; flags: FI_LINEAR_SRGB_PRIMARIES = 0x01; convert the colors to sRGB's primaries, e.g. BT.2020 ones; otherwise they keep the image's.
+; Accepts standard bitmaps, UINT16, RGB16, RGBA16, FLOAT, RGBF and RGBAF images; returns 0 for the others.
+   Return DllCall(getFIMfunc("ConvertToLinear"), "UPtr", hImage, "Int", flags, "UPtr")
 }
 
 ; === ICC profile functions ===
@@ -2113,7 +2127,7 @@ getFIMfunc(funct) {
 
    Static fList0 := "|CreateTag|DeInitialise|GetCopyrightMessage|GetFIFCount|GetVersion|IsLittleEndian|"
         , fList4 := "|Clone|CloneTag|CloseMemory|ConvertTo16Bits555|ConvertTo16Bits565|ConvertTo24Bits|ConvertTo32Bits|ConvertTo4Bits|ConvertTo8Bits|ConvertToFloat|ConvertToGreyscale|ConvertToRGB16|ConvertToRGBA16|ConvertToRGBAF|ConvertToRGBF|ConvertToUINT16|DeleteTag|DestroyICCProfile|FIFSupportsICCProfiles|FIFSupportsNoPixels|FIFSupportsReading|FIFSupportsWriting|FindCloseMetadata|FlipHorizontal|FlipVertical|GetBits|GetBlueMask|GetBPP|GetColorsUsed|GetColorType|GetDIBSize|GetDotsPerMeterX|GetDotsPerMeterY|GetFIFDescription|GetFIFExtensionList|GetFIFFromFilename|GetFIFFromFilenameU|GetFIFFromFormat|GetFIFFromMime|GetFIFMimeType|GetFIFRegExpr|GetFormatFromFIF|GetGreenMask|GetHeight|GetICCProfile|GetImageType|GetInfo|GetInfoHeader|GetLine|GetMemorySize|GetPageCount|GetPalette|GetPitch|GetRedMask|GetTagCount|GetTagDescription|GetTagID|GetTagKey|GetTagLength|GetTagType|GetTagValue|GetThumbnail|GetTransparencyCount|GetTransparencyTable|GetTransparentIndex|GetWidth|HasBackgroundColor|HasPixels|HasRGBMasks|Initialise|Invert|IsPluginEnabled|IsTransparent|PreMultiplyWithAlpha|SetOutputMessage|SetOutputMessageStdCall|TellMemory|TellMemory64|Unload|"
-        , fList8 := "|AppendPage|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToStandardType|DeletePage|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetDisplayICCProfile|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|MustTonemap|MustTonemapU|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
+        , fList8 := "|AppendPage|CloneMetadata|CloseMultiBitmap|ColorQuantize|ConvertToLinear|ConvertToStandardType|DeletePage|Dither|FIFSupportsExportBPP|FIFSupportsExportType|FindNextMetadata|GetBackgroundColor|GetBuiltInICCProfile|GetChannel|GetComplexChannel|GetDisplayICCProfile|GetFileType|GetFileTypeFromMemory|GetFileTypeU|GetICCProfileColorSpace|GetMetadataCount|GetScanLine|LockPage|MultigridPoissonSolver|MustTonemap|MustTonemapU|OpenMemory|SetBackgroundColor|SetDotsPerMeterX|SetDotsPerMeterY|SetPluginEnabled|SetTagCount|SetTagDescription|SetTagID|SetTagKey|SetTagLength|SetTagType|SetTagValue|SetThumbnail|SetTransparent|SetTransparentIndex|Threshold|Validate|ValidateFromMemory|ValidateU|"
         , fList12 := "|AcquireMemory|AcquireMemory64|AdjustBrightness|AdjustContrast|AdjustCurve|AdjustGamma|ConvertLine16_555_To16_565|ConvertLine16_565_To16_555|ConvertLine16To24_555|ConvertLine16To24_565|ConvertLine16To32_555|ConvertLine16To32_565|ConvertLine16To4_555|ConvertLine16To4_565|ConvertLine16To8_555|ConvertLine16To8_565|ConvertLine1To4|ConvertLine1To8|ConvertLine24To16_555|ConvertLine24To16_565|ConvertLine24To32|ConvertLine24To4|ConvertLine24To8|ConvertLine32To16_555|ConvertLine32To16_565|ConvertLine32To24|ConvertLine32To4|ConvertLine32To8|ConvertLine4To8|ConvertToType|CreateICCProfile|FillBackground|FindFirstMetadata|GetFileTypeFromHandle|GetHistogram|GetLockedPageNumbers|InsertPage|Load|LoadFromMemory|LoadMultiBitmapFromMemory|LoadU|MakeThumbnail|MovePage|OpenMemory64|SeekMemory|SetChannel|SetComplexChannel|SetDisplayICCProfile|SetTransparencyTable|SwapPaletteIndices|TagToString|UnlockPage|ValidateFromHandle|ZLibCRC32|"
         , fList16 := "|ApplyICCProfile|Composite|ConvertCMYKToRGB|ConvertLine1To16_555|ConvertLine1To16_565|ConvertLine1To24|ConvertLine1To32|ConvertLine4To16_555|ConvertLine4To16_565|ConvertLine4To24|ConvertLine4To32|ConvertLine8To16_555|ConvertLine8To16_565|ConvertLine8To24|ConvertLine8To32|ConvertLine8To4|ConvertToCMYK|ConvertToICCProfile|GetICCProfileDescription|GetMetadata|GetPixelColor|GetPixelIndex|JPEGTransform|JPEGTransformU|LoadFromHandle|LookupSVGColor|LookupX11Color|OpenMultiBitmapFromHandle|ReadMemory|Rescale|Rotate|Save|SaveMultiBitmapToMemory|SaveToMemory|SaveU|SeekMemory64|SetMetadata|SetMetadataKeyValue|SetPixelColor|SetPixelIndex|SwapColors|WriteMemory|ZLibCompress|ZLibGUnzip|ZLibGZip|ZLibUncompress|"
         , fList20 := "|ApplyPaletteIndexMapping|ColorQuantizeEx|Copy|CreateView|Paste|RegisterExternalPlugin|RegisterLocalPlugin|SaveMultiBitmapToHandle|SaveToHandle|TmoDrago03|TmoFattal02|TmoReinhard05|"
