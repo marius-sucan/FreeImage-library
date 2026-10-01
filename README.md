@@ -50,7 +50,7 @@ Fixes:
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535: they looked black, and saved again they stayed black in every other program. Their samples are spread over 8 or 16 bits, rounded, as PNM, HEIF and AVIF do; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. The load flags J2K_UNSCALED and JP2_UNSCALED keep the file's values instead, tagged "UnscaledBits";
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
-- fixed camera RAW images carrying the file's own ICC profile, which describes the camera or the preview, not the decoded image; the 16-bit output carries a linear sRGB profile (linear grey for monochrome);
+- fixed camera RAW images carrying the file's own ICC profile, which describes the camera or the preview, not the decoded image; the 16-bit output carries a linear sRGB profile (linear grey for monochrome), and a JPEG preview keeps its own;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
 - fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;

@@ -553,6 +553,96 @@ static void test_icc(void) {
 	}
 }
 
+/* --- a JPEG preview's own profile ---------------------------------------- */
+static unsigned le16(const BYTE *p) { return p[0] | (p[1] << 8); }
+static unsigned le32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24); }
+static void put_le32(BYTE *p, unsigned v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); p[2] = (BYTE)(v >> 16); p[3] = (BYTE)(v >> 24); }
+
+/* fi_raw_rggb.dng with its IFD0 preview replaced by this JPEG (compression 7) appended to the file */
+static BYTE *with_jpeg_preview(const BYTE *dng, long dng_size, const BYTE *jpeg, unsigned jpeg_size, long *size) {
+	const long at = (dng_size + 1) & ~1L;
+	BYTE *out = (BYTE *)calloc((size_t)at + jpeg_size, 1);
+	unsigned ifd, count, i, patched = 0;
+	if (!out || dng_size < 8 || memcmp(dng, "II", 2) != 0) { free(out); return NULL; }
+	memcpy(out, dng, (size_t)dng_size);
+	memcpy(out + at, jpeg, jpeg_size);
+	ifd = le32(out + 4);
+	count = le16(out + ifd);
+	for (i = 0; i < count; i++) {
+		BYTE *entry = out + ifd + 2 + 12 * i;
+		switch (le16(entry)) {
+			case 259: entry[8] = 7; entry[9] = 0; patched++; break;		/* Compression: JPEG */
+			case 273: put_le32(entry + 8, (unsigned)at); patched++; break;	/* StripOffsets */
+			case 279: put_le32(entry + 8, jpeg_size); patched++; break;	/* StripByteCounts */
+		}
+	}
+	if (patched != 3) { free(out); return NULL; }
+	*size = at + (long)jpeg_size;
+	return out;
+}
+
+static FIBITMAP *load_memory(BYTE *data, long size, int flags) {
+	FIMEMORY *mem = FreeImage_OpenMemory(data, (DWORD)size);
+	FIBITMAP *dib = mem ? FreeImage_LoadFromMemory(FIF_RAW, mem, flags) : NULL;
+	if (mem) FreeImage_CloseMemory(mem);
+	return dib;
+}
+
+/* RAW_PREVIEW: the JPEG preview's own profile wins over the file's, which stands in for a preview without one */
+static void test_preview_profile(void) {
+	const char *file = "data/fi_raw_rggb.dng";
+	DWORD p3_size = 0;
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	long dng_size = 0;
+	BYTE *dng = slurp(file, &dng_size);
+	FIBITMAP *bitmap_preview = FreeImage_Load(FIF_RAW, file, RAW_PREVIEW);
+	int with_profile;
+	printf("-- a JPEG preview keeps its own profile\n");
+	if (!dng || !bitmap_preview) { fail(file, "preview profile", "cannot read the file"); free(dng); return; }
+	for (with_profile = 0; with_profile < 2; with_profile++) {
+		FIMEMORY *jmem = FreeImage_OpenMemory(NULL, 0);
+		FIBITMAP *rgb = FreeImage_Clone(bitmap_preview), *jpeg_alone = NULL, *full, *head;
+		BYTE *jpeg = NULL, *patched = NULL;
+		DWORD jpeg_size = 0;
+		long patched_size = 0;
+		const char *what = with_profile ? "a JPEG preview with Display P3" : "a JPEG preview without a profile";
+		if (with_profile) FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
+		else FreeImage_DestroyICCProfile(rgb);
+		if (!FreeImage_SaveToMemory(FIF_JPEG, rgb, jmem, JPEG_QUALITYSUPERB) || !FreeImage_AcquireMemory(jmem, &jpeg, &jpeg_size) ||
+		    !(patched = with_jpeg_preview(dng, dng_size, jpeg, jpeg_size, &patched_size))) {
+			fail(file, what, "no file made");
+		} else {
+			FIMEMORY *alone = FreeImage_OpenMemory(jpeg, jpeg_size);
+			jpeg_alone = FreeImage_LoadFromMemory(FIF_JPEG, alone, 0);
+			FreeImage_CloseMemory(alone);
+			full = load_memory(patched, patched_size, RAW_PREVIEW);
+			head = load_memory(patched, patched_size, RAW_PREVIEW | FIF_LOAD_NOPIXELS);
+			if (!full || !head || !jpeg_alone) {
+				fail(file, what, "a load failed");
+			} else if (digest(full) != digest(jpeg_alone)) {
+				fail(file, what, "LibRaw did not take the JPEG as the preview");
+			} else {
+				const int want = with_profile ? (int)p3_size : 516;
+				FIICCPROFILE *a = FreeImage_GetICCProfile(full), *b = FreeImage_GetICCProfile(head);
+				if ((int)a->size != want || (int)b->size != want ||
+				    (with_profile && (memcmp(a->data, p3, p3_size) != 0 || memcmp(b->data, p3, p3_size) != 0))) {
+					fail(file, what, "a %d-byte profile (header-only %d), want %s", (int)a->size, (int)b->size, with_profile ? "the preview's Display P3" : "the file's 516 bytes");
+				} else {
+					printf("  ok   %-30s %s\n", what, with_profile ? "keeps its Display P3, full and header-only" : "takes the file's 516 bytes, full and header-only");
+				}
+			}
+			if (full) FreeImage_Unload(full);
+			if (head) FreeImage_Unload(head);
+		}
+		if (jpeg_alone) FreeImage_Unload(jpeg_alone);
+		FreeImage_Unload(rgb);
+		FreeImage_CloseMemory(jmem);
+		free(patched);
+	}
+	FreeImage_Unload(bitmap_preview);
+	free(dng);
+}
+
 /* --- the plugin is read-only ---------------------------------------------- */
 static void test_readonly(void) {
 	FIBITMAP *dib;
@@ -618,6 +708,7 @@ int main(void) {
 	test_preview_turn();
 	test_crop();
 	test_icc();
+	test_preview_profile();
 	test_bayer();
 	test_readonly();
 	printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);

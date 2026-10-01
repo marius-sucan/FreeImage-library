@@ -857,7 +857,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			dib = libraw_LoadRawData(RawProcessor, 16, header_only);
 		}
 
-		if(dib && file_profile && (NULL != RawProcessor->imgdata.color.profile)) {
+		// a JPEG preview's own profile describes it better
+		if(dib && file_profile && (NULL != RawProcessor->imgdata.color.profile) && !FreeImage_GetICCProfile(dib)->data) {
 			FreeImage_CreateICCProfile(dib, RawProcessor->imgdata.color.profile, RawProcessor->imgdata.color.profile_length);
 		}
 
