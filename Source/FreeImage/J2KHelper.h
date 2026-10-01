@@ -34,7 +34,7 @@ int opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FO
 /**
 Conversion opj_image_t => FIBITMAP
 */
-FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL header_only);
+FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL header_only, BOOL unscaled);
 /**
 Conversion FIBITMAP => opj_image_t
 */

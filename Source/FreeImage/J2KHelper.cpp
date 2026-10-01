@@ -163,13 +163,62 @@ static int int_ceildivpow2(int a, int b) {
 }
 
 /**
+Samples of fewer bits than the bitmap's spread over its 8 or 16, rounded, as PNM, HEIF and AVIF
+do. Without a table, a sample keeps the file's value.
+*/
+class SampleScale {
+public:
+	SampleScale(int prec, int bits, BOOL unscaled) : m_maximum((1 << prec) - 1) {
+		if(!unscaled && (prec != bits)) {
+			const UINT64 top = (1u << bits) - 1;
+			const UINT64 maximum = (UINT64)m_maximum;
+			m_table.resize((size_t)m_maximum + 1);
+			for(UINT64 v = 0; v <= maximum; v++) {
+				m_table[(size_t)v] = (WORD)((v * top * 2 + maximum) / (2 * maximum));
+			}
+		}
+	}
+	// a value outside the file's range, from a damaged file, is clamped to it
+	inline int operator()(int value) const {
+		if(m_table.empty()) {
+			return value;
+		}
+		return m_table[(value < 0) ? 0 : ((value > m_maximum) ? m_maximum : value)];
+	}
+
+private:
+	std::vector<WORD> m_table;
+	int m_maximum;
+};
+
+/**
+The file's precision as the FIMD_CUSTOM tag "SignificantBits", or "UnscaledBits" when the samples hold the file's values
+*/
+static void
+AttachPrecision(FIBITMAP *dib, int prec, BOOL unscaled) {
+	const char *key = unscaled ? "UnscaledBits" : "SignificantBits";
+	const BYTE value = (BYTE)prec;
+	FITAG *tag = FreeImage_CreateTag();
+	if(tag) {
+		FreeImage_SetTagKey(tag, key);
+		FreeImage_SetTagType(tag, FIDT_BYTE);
+		FreeImage_SetTagCount(tag, 1);
+		FreeImage_SetTagLength(tag, 1);
+		FreeImage_SetTagValue(tag, &value);
+		FreeImage_SetMetadata(FIMD_CUSTOM, dib, key, tag);
+		FreeImage_DeleteTag(tag);
+	}
+}
+
+/**
 Convert a OpenJPEG image to a FIBITMAP
 @param format_id Plugin ID
 @param image OpenJPEG image
 @param header_only If TRUE, allocate a 'header only' FIBITMAP, otherwise allocate a full FIBITMAP
+@param unscaled If TRUE, samples of 1 to 7 and 9 to 15 bits keep the file's values, otherwise they are spread over 8 or 16 bits
 @return Returns the converted image if successful, returns NULL otherwise
 */
-FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL header_only) {
+FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL header_only, BOOL unscaled) {
 	FIBITMAP *dib = NULL;
 
 	try {
@@ -244,11 +293,19 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 			throw FI_MSG_ERROR_DIB_MEMORY;
 		}
 
+		const int prec = image->comps[0].prec;
+		const int depth = (prec <= 8) ? 8 : 16;
+		if(prec != depth) {
+			AttachPrecision(dib, prec, unscaled);
+		}
+
 		// "header only" FIBITMAP ?
 		if(header_only) {
 			return dib;
 		}
-		
+
+		const SampleScale scale(prec, depth, unscaled);
+
 		if(image->comps[0].prec <= 8) {
 			if(numcomps == 1) {
 				// 8-bit greyscale
@@ -274,7 +331,7 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int index = image->comps[0].data[pixel_pos];
 						index += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
 
-						bits[x] = (BYTE)index;
+						bits[x] = (BYTE)scale(index);
 					}
 				}
 			}
@@ -300,9 +357,9 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int b = image->comps[2].data[pixel_pos];
 						b += (image->comps[2].sgnd ? 1 << (image->comps[2].prec - 1) : 0);
 
-						bits[FI_RGBA_RED]   = (BYTE)r;
-						bits[FI_RGBA_GREEN] = (BYTE)g;
-						bits[FI_RGBA_BLUE]  = (BYTE)b;
+						bits[FI_RGBA_RED]   = (BYTE)scale(r);
+						bits[FI_RGBA_GREEN] = (BYTE)scale(g);
+						bits[FI_RGBA_BLUE]  = (BYTE)scale(b);
 						bits += 3;
 					}
 				}
@@ -332,10 +389,10 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int a = image->comps[3].data[pixel_pos];
 						a += (image->comps[3].sgnd ? 1 << (image->comps[3].prec - 1) : 0);
 
-						bits[FI_RGBA_RED]   = (BYTE)r;
-						bits[FI_RGBA_GREEN] = (BYTE)g;
-						bits[FI_RGBA_BLUE]  = (BYTE)b;
-						bits[FI_RGBA_ALPHA] = (BYTE)a;
+						bits[FI_RGBA_RED]   = (BYTE)scale(r);
+						bits[FI_RGBA_GREEN] = (BYTE)scale(g);
+						bits[FI_RGBA_BLUE]  = (BYTE)scale(b);
+						bits[FI_RGBA_ALPHA] = (BYTE)scale(a);
 						bits += 4;
 					}
 				}
@@ -357,7 +414,7 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int index = image->comps[0].data[pixel_pos];
 						index += (image->comps[0].sgnd ? 1 << (image->comps[0].prec - 1) : 0);
 
-						bits[x] = (WORD)index;
+						bits[x] = (WORD)scale(index);
 					}
 				}
 			}
@@ -383,9 +440,9 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int b = image->comps[2].data[pixel_pos];
 						b += (image->comps[2].sgnd ? 1 << (image->comps[2].prec - 1) : 0);
 
-						bits[x].red   = (WORD)r;
-						bits[x].green = (WORD)g;
-						bits[x].blue  = (WORD)b;
+						bits[x].red   = (WORD)scale(r);
+						bits[x].green = (WORD)scale(g);
+						bits[x].blue  = (WORD)scale(b);
 					}
 				}
 			}
@@ -414,10 +471,10 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 						int a = image->comps[3].data[pixel_pos];
 						a += (image->comps[3].sgnd ? 1 << (image->comps[3].prec - 1) : 0);
 
-						bits[x].red   = (WORD)r;
-						bits[x].green = (WORD)g;
-						bits[x].blue  = (WORD)b;
-						bits[x].alpha = (WORD)a;
+						bits[x].red   = (WORD)scale(r);
+						bits[x].green = (WORD)scale(g);
+						bits[x].blue  = (WORD)scale(b);
+						bits[x].alpha = (WORD)scale(a);
 					}
 				}
 			}

@@ -1,6 +1,6 @@
 # JPEG 2000 regression tests
 
-Three standalone programs covering the J2K and JP2 plugins (the bundled OpenJPEG
+Standalone programs covering the J2K and JP2 plugins (the bundled OpenJPEG
 library, `Source/LibOpenJPEG`, and the glue in `Source/FreeImage/J2KHelper.cpp`).
 Each prints a report and exits non-zero on failure. They were written for the
 upgrade from the 2014 OpenJPEG snapshot to 2.5.4 and are meant to be run again
@@ -11,15 +11,16 @@ at the next upgrade.
 | `regress` | Round-trips 6 pixel formats x 14 sizes (1x1 to 257x129) x 4 rates x both containers through memory streams, 684 in all, plus a file round-trip per format. Prints size + checksum per output and asserts that every save and reload works and that rate 1 (lossless) reloads pixel-exact. Encoded checksums change legitimately when the encoder changes; the FAIL lines and the tally are the assertions. |
 | `robust` | Truncated prefixes, junk appended, single-bit corruptions, wiped header regions, empty buffers: may load or be refused, must never crash. Also header-only loads (`FIF_LOAD_NOPIXELS`) and loads/saves through a `FreeImageIO` handle that does not start at offset 0. Run under ASan. |
 | `tiles` | An image whose code could pass the 4 GB OpenJPEG holds in a tile is encoded in tiles, and a JP2 file stops at 4 GB, its box length being 32-bit. Linked against `J2KHelper` and `PluginJP2` rebuilt with small limits: every image is tiled, in tiles of 256, and a JP2 may not pass 1 MB. 6 pixel formats at 600 x 300 must be saved in tiles and reload exactly (rate 1) or at their size (16:1); 1.5 MB of noise saves as J2K, and as JP2 returns FALSE and leaves no file. |
-| `corpus` | Decodes any JPEG 2000 files you give it, one line each (geometry, type, checksum of the pixel rows, decode time, messages) and can dump the pixels for the reference comparison below. Diff its output before and after a change. |
+| `precision` | Samples of 1, 4, 5, 7, 9, 10, 12 and 15 bits (8 and 16 as controls), 1, 3 and 4 components, unsigned and signed, J2K and JP2, encoded losslessly by OpenJPEG itself, since FreeImage writes 8 and 16 bits only. Every sample must load spread over 8 or 16 bits by the rounded rule, or as the file holds it with `J2K_UNSCALED` / `JP2_UNSCALED`; the `SignificantBits` or `UnscaledBits` tag, never both, header-only loads too; `FreeImage_MustTonemap` 0 or 4; a scaled 12-bit image saved again losslessly reloads as it was. |
+| `corpus` | Decodes any JPEG 2000 files you give it, one line each (geometry, type, checksum of the pixel rows, decode time, messages) and can dump the pixels for the reference comparison below; `-u` loads with `J2K_UNSCALED`. Diff its output before and after a change. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run            # regress, robust and tiles
+    make run            # regress, robust, tiles and precision
     make asan run       # the same, with AddressSanitizer - worth it for robust
-    make corpus         # then: ./corpus [-h] [-m] [-o N] [-d DIR] files...
+    make corpus         # then: ./corpus [-h] [-m] [-u] [-o N] [-d DIR] files...
 
 Scratch files are written to `$J2K_TEST_TMP`, or the current directory.
 `make clean` removes them.
@@ -31,6 +32,8 @@ Scratch files are written to `$J2K_TEST_TMP`, or the current directory.
   mode: a partial codestream is an error, not a partial image) while the junk-
   appended copies decode exactly, and both offset tests say `ok`.
 - `tiles` - `0 failure(s)`.
+- `precision` - `677 checks, 0 failures`. It was checked with three planted bugs, each
+  caught: samples never spread, the two tags swapped, truncated instead of rounded.
 - `corpus` on the openjpeg-data conformance suite (below) - `0 failed`, and
   every file `identical` in the reference comparison except `zoo2.jp2`, where 2
   of 7.6M samples differ by 1 (9/7 wavelet rounding between builds).
@@ -49,7 +52,7 @@ decoding the JPEG 2000 conformance files:
     git -C openjpeg-data sparse-checkout set input/conformance input/nonregression/htj2k
 
     mkdir fi ref
-    ./corpus -d fi openjpeg-data/input/conformance/*.j2k openjpeg-data/input/conformance/*.j2c openjpeg-data/input/conformance/*.jp2
+    ./corpus -u -d fi openjpeg-data/input/conformance/*.j2k openjpeg-data/input/conformance/*.j2c openjpeg-data/input/conformance/*.jp2
     for f in openjpeg-data/input/conformance/*.j2k openjpeg-data/input/conformance/*.j2c openjpeg-data/input/conformance/*.jp2; do
         ./refdec "$f" "ref/$(basename "$f").comps"; done
     python3 compcheck.py fi ref openjpeg-data/input/conformance/*.j2k openjpeg-data/input/conformance/*.j2c openjpeg-data/input/conformance/*.jp2
@@ -58,6 +61,8 @@ decoding the JPEG 2000 conformance files:
 and with FreeImage's sign convention; `compcheck.py` (needs numpy) applies the
 plugins' own rule for which components they keep - all of them when there are 1,
 3 or 4 of equal sampling and precision, otherwise the first one - and compares
-sample by sample. `input/nonregression` holds the fuzzer crash files and the HTJ2K
+sample by sample. `corpus -u` keeps the samples as the file holds them, as
+`refdec` writes them; without it, 1- to 7- and 9- to 15-bit samples are spread
+over 8 or 16 bits (see `precision`). `input/nonregression` holds the fuzzer crash files and the HTJ2K
 samples; feed those to `corpus` under ASan as well (they are the reason the old
 snapshot's "decoded" HTJ2K output was noise, and why the upgrade exists).

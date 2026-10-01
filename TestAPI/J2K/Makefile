@@ -4,7 +4,7 @@
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
-TESTS   = regress robust corpus
+TESTS   = regress robust corpus precision
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
@@ -38,7 +38,7 @@ asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
 run: all tiles
-	@for t in regress robust tiles; do \
+	@for t in regress robust tiles precision; do \
 	  echo "=== $$t ==="; ./$$t || echo "  ^ FAILED"; done
 
 clean-bin:

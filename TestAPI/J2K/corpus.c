@@ -118,13 +118,14 @@ static FIBITMAP *load_from_memory(FREE_IMAGE_FORMAT fif, const char *path, int f
 }
 
 int main(int argc, char **argv) {
-    int header_only = 0, from_memory = 0, i, failures = 0;
+    int header_only = 0, from_memory = 0, unscaled = 0, i, failures = 0;
     long offset = -1;
     const char *dumpdir = NULL;
 
     for (i = 1; i < argc && argv[i][0] == '-'; i++) {
         if (!strcmp(argv[i], "-h")) header_only = 1;
         else if (!strcmp(argv[i], "-m")) from_memory = 1;
+        else if (!strcmp(argv[i], "-u")) unscaled = 1;
         else if (!strcmp(argv[i], "-o") && i + 1 < argc) offset = atol(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dumpdir = argv[++i];
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
@@ -132,14 +133,14 @@ int main(int argc, char **argv) {
 
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(handler);
-    printf("FreeImage %s, %d files, mode=%s%s%s\n", FreeImage_GetVersion(), argc - i,
+    printf("FreeImage %s, %d files, mode=%s%s%s%s\n", FreeImage_GetVersion(), argc - i,
            header_only ? "header-only" : "full", from_memory ? " memory-io" : "",
-           offset >= 0 ? " offset-io" : "");
+           offset >= 0 ? " offset-io" : "", unscaled ? " unscaled" : "");
 
     for (; i < argc; i++) {
         const char *path = argv[i];
         FREE_IMAGE_FORMAT fif = fif_of(path);
-        int flags = header_only ? FIF_LOAD_NOPIXELS : 0;
+        int flags = (header_only ? FIF_LOAD_NOPIXELS : 0) | (unscaled ? J2K_UNSCALED : 0);
         FIBITMAP *dib;
         double t0, t1;
         msgbuf[0] = 0;

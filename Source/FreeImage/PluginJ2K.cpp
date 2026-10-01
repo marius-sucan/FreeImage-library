@@ -181,7 +181,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			if (header_only) {
 				// create output image 
-				dib = J2KImageToFIBITMAP(s_format_id, image, header_only);
+				dib = J2KImageToFIBITMAP(s_format_id, image, header_only, (flags & J2K_UNSCALED) == J2K_UNSCALED);
 				if(!dib) {
 					throw "Failed to import JPEG2000 image";
 				}
@@ -204,7 +204,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			d_codec = NULL;
 
 			// create output image 
-			dib = J2KImageToFIBITMAP(s_format_id, image, header_only);
+			dib = J2KImageToFIBITMAP(s_format_id, image, header_only, (flags & J2K_UNSCALED) == J2K_UNSCALED);
 			if(!dib) {
 				throw "Failed to import JPEG2000 image";
 			}

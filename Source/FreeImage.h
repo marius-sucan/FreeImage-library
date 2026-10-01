@@ -700,7 +700,9 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define ICO_MAKEALPHA		1		//! convert to 32bpp and create an alpha channel from the AND-mask when loading
 #define IFF_DEFAULT         0
 #define J2K_DEFAULT			0		//! save with a 16:1 rate
+#define J2K_UNSCALED		1		//! load samples of 1 to 7 and 9 to 15 bits as the file holds them, not spread over 8 or 16 bits
 #define JP2_DEFAULT			0		//! save with a 16:1 rate
+#define JP2_UNSCALED		1		//! load samples of 1 to 7 and 9 to 15 bits as the file holds them, not spread over 8 or 16 bits
 #define JPEG_DEFAULT        0		//! loading (see JPEG_FAST); saving (see JPEG_QUALITYGOOD|JPEG_SUBSAMPLING_420)
 #define JPEG_FAST           0x0001	//! load the file as fast as possible, sacrificing some quality
 #define JPEG_ACCURATE       0x0002	//! load the file with the best quality, sacrificing some speed

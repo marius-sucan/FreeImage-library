@@ -1,6 +1,7 @@
 regress
 robust
 corpus
+precision
 tiles
 tiles-obj/
 *.o
