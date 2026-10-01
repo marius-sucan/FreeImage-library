@@ -108,6 +108,7 @@ struct APNGinfo {
 	int pending_flags;				//! its save flags
 	int out_pages;					//! pages taken by Save()
 	std::vector<BYTE> out_ancillary; //! frame 0's ancillary chunks
+	std::vector<BYTE> out_profile;	//! the file's ICC profile, every frame's colors; empty for sRGB
 	std::vector<APNGFrame> out_frames;
 	DWORD out_width, out_height;	//! grown to hold every frame
 	DWORD out_plays;
@@ -846,14 +847,11 @@ CompressFrame(FIBITMAP *dib, int flags, BOOL with_metadata, std::vector<BYTE>& p
 		if((res_x > 0) && (res_y > 0)) {
 			png_set_pHYs(png_ptr, info_ptr, res_x, res_y, PNG_RESOLUTION_METER);
 		}
+		// AddFrame() checked it: an RGBA PNG can hold it
 		FIICCPROFILE *iccProfile = FreeImage_GetICCProfile(dib);
 		if(iccProfile->size && iccProfile->data) {
-			if(PNG_IsEmbeddableProfile((const BYTE *)iccProfile->data, iccProfile->size, TRUE)) {
-				png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
-				png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
-			} else {
-				FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile is invalid for this PNG and was left out");
-			}
+			png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
+			png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
 		}
 	}
 
@@ -1018,24 +1016,59 @@ Normalize, diff, compress and queue one page for Close().
 */
 static BOOL
 AddFrame(APNGinfo *info, FIBITMAP *dib, int flags, BOOL is_first) {
-	// one IHDR for all frames: always 8-bit RGBA
-	FIBITMAP *frame32 = FreeImage_ConvertTo32Bits(dib);
-	if(frame32 != NULL) {
-		// the conversion keeps the samples' encoding but drops the profile, which frame 0 writes
+	if(is_first) {
+		// frame 0's profile, if an RGBA PNG can hold it
 		const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
-		if(is_first && icc->data && !FreeImage_GetICCProfile(frame32)->data) {
-			FreeImage_CreateICCProfile(frame32, icc->data, (long)icc->size);
+		info->out_profile.clear();
+		if(icc->data && PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, TRUE)) {
+			info->out_profile.assign((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
 		}
-	} else {
-		FIBITMAP *standard = FreeImage_ConvertToStandardType(dib, TRUE);
-		if(standard != NULL) {
-			frame32 = FreeImage_ConvertTo32Bits(standard);
-			FreeImage_Unload(standard);
+	}
+	const void *profile = info->out_profile.empty() ? NULL : &info->out_profile[0];
+	const DWORD profile_size = (DWORD)info->out_profile.size();
+
+	// ConvertTo32Bits() cannot take UINT16: 8-bit grey first, with the page's profile
+	FIBITMAP *standard = NULL;
+	if(FreeImage_GetImageType(dib) == FIT_UINT16) {
+		standard = FreeImage_ConvertToStandardType(dib, TRUE);
+		if(standard == NULL) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
+			return FALSE;
 		}
+		const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+		if(icc->data) {
+			FreeImage_CreateICCProfile(standard, icc->data, (long)icc->size);
+		}
+	}
+	FIBITMAP *source = standard ? standard : dib;
+
+	// the file has one profile: a frame in other colors is converted to it
+	FIBITMAP *converted = NULL;
+	if(!ConvertToFileProfile(source, profile, profile_size, &converted)) {
+		FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
+	}
+
+	// one IHDR for all frames: always 8-bit RGBA
+	FIBITMAP *frame32 = FreeImage_ConvertTo32Bits(converted ? converted : source);
+	if(converted != NULL) {
+		FreeImage_Unload(converted);
+	}
+	if(standard != NULL) {
+		FreeImage_Unload(standard);
 	}
 	if(frame32 == NULL) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
+	}
+	// the profile CompressFrame() writes; without it the converted frames would be wrong
+	if(is_first) {
+		if(profile == NULL) {
+			FreeImage_DestroyICCProfile(frame32);
+		} else if(FreeImage_CreateICCProfile(frame32, (void*)profile, (long)profile_size)->data == NULL) {
+			FreeImage_Unload(frame32);
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+			return FALSE;
+		}
 	}
 
 	APNGFrame frame;

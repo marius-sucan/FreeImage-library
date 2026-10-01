@@ -819,13 +819,23 @@ static void multipage_save(void) {
         CHECK(doc && FreeImage_SaveMultiBitmapToMemory(FIF_APNG, doc, out, 0), "APNG: saved");
         if (doc) FreeImage_CloseMultiBitmap(doc, 0);
         FreeImage_CloseMemory(in);
+        /* one profile for every frame: the changed frame's, the display's, which the unchanged one is converted to */
         {
-            FIBITMAP *frame1, *orig1 = load(apng, 1, 0, BY_PAGE_FILE);
+            Bytes p3 = builtin(FICMS_PROFILE_DISPLAY_P3);
+            FIBITMAP *frame1, *orig1 = load(apng, 1, 0, BY_PAGE_FILE), *want = NULL;
+            FIBITMAP *converted = orig1 ? FreeImage_ConvertToICCProfile(orig1, p3.data, p3.size, FLAGS_0x101) : NULL;
+            if (converted) {
+                want = FreeImage_ConvertTo32Bits(converted);
+                FreeImage_Unload(converted);
+            }
             FreeImage_SeekMemory(out, 0, SEEK_SET);
             frame1 = locked_copy(FreeImage_LoadMultiBitmapFromMemory(FIF_APNG, out, 0), 1);
-            CHECK(frame1 && orig1 && pixel_digest(frame1) == pixel_digest(orig1), "APNG: the unchanged frame was saved in the display's colors");
+            CHECK(frame1 && want && pixel_digest(frame1) == pixel_digest(want), "APNG: the unchanged frame was not converted to the display's profile, the file's");
+            CHECK(frame1 && FreeImage_GetICCProfile(frame1)->data && same_bytes(&p3, FreeImage_GetICCProfile(frame1)->data, FreeImage_GetICCProfile(frame1)->size),
+                "APNG: the file does not carry the display's profile");
             if (frame1) FreeImage_Unload(frame1);
             if (orig1) FreeImage_Unload(orig1);
+            if (want) FreeImage_Unload(want);
         }
         FreeImage_CloseMemory(out);
         free(src.data);

@@ -758,6 +758,7 @@ public:
 	bool SetSource(FIBITMAP *dib);
 	bool SetDestination(const void *data, DWORD size, Model required, Model if_null);
 	bool SetProof(const void *data, DWORD size);
+	bool IsIdentity() const;
 	FIBITMAP *Convert();
 	BOOL Apply();
 
@@ -805,7 +806,6 @@ private:
 
 	bool OpenBuiltIn(Profile &profile, Model model, unsigned depth);
 	bool OpenGiven(Profile &profile, const void *data, DWORD size, const char *what);
-	bool IsIdentity() const;
 	bool CreateTransform(bool same_buffer);
 	void Tag(FIBITMAP *dib) const;
 	bool Run(FIBITMAP *target, Layout out, bool in_place);
@@ -2272,5 +2272,50 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 		FreeImage_OutputMessageProc(fif, FI_MSG_ERROR_MEMORY);
 		FreeImage_Unload(dib);
 		return NULL;
+	}
+}
+
+// ==========================================================
+//   Files with one profile for every frame
+// ==========================================================
+
+BOOL
+ConvertToFileProfile(FIBITMAP *dib, const void *profile, DWORD size, FIBITMAP **converted) {
+	*converted = NULL;
+	if (!FreeImage_HasPixels(dib)) {
+		return TRUE;
+	}
+	if (!profile || !size) {
+		profile = NULL;
+		size = 0;
+	}
+	try {
+		// CMYK always becomes RGB
+		Pixels px;
+		if (AnalysePixels(dib, px) || (px.model != MODEL_CMYK)) {
+			const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+			const void *own = (icc->data && icc->size) ? icc->data : NULL;
+			const DWORD own_size = own ? (DWORD)icc->size : 0;
+			if (own && profile && (own_size == size) && !memcmp(own, profile, size)) {
+				return TRUE;
+			}
+			// sRGB on both sides: no profile, or one sRGB or grey in all but name
+			TwinCache &twins = GetTwinCache();
+			if ((!own || twins.IsTwin(own, own_size)) && (!profile || twins.IsTwin(profile, size))) {
+				return TRUE;
+			}
+		}
+		ColorConverter converter(FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+		if (!converter.SetSource(dib) || !converter.SetDestination(profile, size, MODEL_NONE, converter.DefaultModel())) {
+			return FALSE;
+		}
+		if (converter.IsIdentity()) {
+			return TRUE;
+		}
+		*converted = converter.Convert();
+		return (*converted != NULL) ? TRUE : FALSE;
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
+		return FALSE;
 	}
 }

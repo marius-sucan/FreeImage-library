@@ -751,6 +751,240 @@ static void test_profile_written(void) {
 	if (!bad) ok("a grey profile is left out of the RGBA file, and the save succeeds");
 }
 
+/* the writer's conversions */
+#define CONVERT_FLAGS (FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION)
+
+enum { K_RGBA, K_GREY, K_RGB16, K_UINT16 };
+enum { SAME, CONVERTED, TWIN };
+
+typedef struct {
+	int kind;
+	const void *profile;
+	DWORD size;
+	int expect;		/* SAME: its own colors; CONVERTED: the file's; TWIN: its own, which a conversion would change */
+} FrameSpec;
+
+static DWORD be32(const BYTE *p) {
+	return ((DWORD)p[0] << 24) | ((DWORD)p[1] << 16) | ((DWORD)p[2] << 8) | p[3];
+}
+
+/* a built-in profile with the values of one XYZ tag added to (add) or replaced */
+static BYTE *patched_profile(int builtin, const char *sig, const DWORD xyz[3], int add, DWORD *size) {
+	const BYTE *src = (const BYTE *)FreeImage_GetBuiltInICCProfile(builtin, size);
+	BYTE *p = src ? (BYTE *)malloc(*size) : NULL;
+	DWORD n, i, k;
+	if (!p) return NULL;
+	memcpy(p, src, *size);
+	n = be32(p + 128);
+	for (i = 0; i < n && 132 + 12 * i + 12 <= *size; i++) {
+		const BYTE *entry = p + 132 + 12 * i;
+		if (!memcmp(entry, sig, 4) && be32(entry + 4) + 20 <= *size) {
+			for (k = 0; k < 3; k++) {
+				BYTE *x = p + be32(entry + 4) + 8 + 4 * k;
+				const DWORD v = add ? be32(x) + xyz[k] : xyz[k];
+				x[0] = (BYTE)(v >> 24); x[1] = (BYTE)(v >> 16); x[2] = (BYTE)(v >> 8); x[3] = (BYTE)v;
+			}
+			return p;
+		}
+	}
+	free(p);
+	return NULL;
+}
+
+/* a 64x48 frame of this kind spanning red and green, translucent when it has alpha */
+static FIBITMAP *make_kind(int kind, int seed, const void *profile, DWORD size) {
+	FIBITMAP *rgba = FreeImage_Allocate(64, 48, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *dib = NULL, *tmp;
+	unsigned x, y;
+	if (!rgba) return NULL;
+	for (y = 0; y < 48; y++) {
+		BYTE *line = FreeImage_GetScanLine(rgba, y);
+		for (x = 0; x < 64; x++) {
+			line[FI_RGBA_RED] = (BYTE)(x * 4);
+			line[FI_RGBA_GREEN] = (BYTE)(y * 5);
+			line[FI_RGBA_BLUE] = (BYTE)(x * y + seed * 20);
+			line[FI_RGBA_ALPHA] = (BYTE)(200 + ((x + y) & 0x3F));
+			line += 4;
+		}
+	}
+	switch (kind) {
+		case K_RGBA: dib = FreeImage_Clone(rgba); break;
+		case K_GREY: dib = FreeImage_ConvertToGreyscale(rgba); break;
+		case K_RGB16:
+			tmp = FreeImage_ConvertTo24Bits(rgba);
+			dib = tmp ? FreeImage_ConvertToRGB16(tmp) : NULL;
+			if (tmp) FreeImage_Unload(tmp);
+			break;
+		case K_UINT16:
+			tmp = FreeImage_ConvertToGreyscale(rgba);
+			dib = tmp ? FreeImage_ConvertToUINT16(tmp) : NULL;
+			if (tmp) FreeImage_Unload(tmp);
+			break;
+	}
+	FreeImage_Unload(rgba);
+	if (dib && profile) FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+	return dib;
+}
+
+/* the frame in a profile's colors (NULL: sRGB) as 8-bit RGBA, by the writer's steps */
+static FIBITMAP *in_colors(FIBITMAP *frame, const void *profile, DWORD size) {
+	FIBITMAP *src = frame, *standard = NULL, *converted, *out = NULL;
+	if (FreeImage_GetImageType(frame) == FIT_UINT16) {
+		FIICCPROFILE *icc = FreeImage_GetICCProfile(frame);
+		standard = FreeImage_ConvertToStandardType(frame, TRUE);
+		if (!standard) return NULL;
+		if (icc->data) FreeImage_CreateICCProfile(standard, icc->data, (long)icc->size);
+		src = standard;
+	}
+	converted = FreeImage_ConvertToICCProfile(src, profile, size, CONVERT_FLAGS);
+	if (converted) {
+		out = FreeImage_ConvertTo32Bits(converted);
+		FreeImage_Unload(converted);
+	}
+	if (standard) FreeImage_Unload(standard);
+	return out;
+}
+
+/* written and composited back, every frame has the colors expected and carries the file's profile */
+static int check_mixed(const char *what, const FrameSpec *spec, int n, const void *file_profile, DWORD file_size) {
+	const char *path = scratch("apng_mixed.png");
+	FIBITMAP *frames[10];
+	FIMULTIBITMAP *mb;
+	int i, bad = 0;
+
+	for (i = 0; i < n; i++) frames[i] = make_kind(spec[i].kind, i, spec[i].profile, spec[i].size);
+	if (!write_animation(path, frames, n)) { fail("%s: the animation was not written", what); bad++; goto out; }
+	if (has_iccp_chunk(path) != (file_profile ? 1 : 0)) { fail("%s: %s iCCP chunk", what, file_profile ? "no" : "an"); bad++; }
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	if (!mb) { fail("%s: the animation does not open", what); bad++; goto out; }
+	for (i = 0; i < n; i++) {
+		FIBITMAP *page = FreeImage_LockPage(mb, i);
+		FIBITMAP *own = in_colors(frames[i], spec[i].profile, spec[i].size);
+		FIBITMAP *file = in_colors(frames[i], file_profile, file_size);
+		FIBITMAP *want = (spec[i].expect == CONVERTED) ? file : own;
+		if (!page || !own || !file) {
+			fail("%s: frame %d did not load or convert", what, i); bad++;
+		} else {
+			int diff = pixel_diff(page, want);
+			if (diff) { fail("%s: frame %d, %d pixels not in the %s colors", what, i, diff, (spec[i].expect == CONVERTED) ? "file's" : "frame's own"); bad++; }
+			if (spec[i].expect != SAME && !pixel_diff(own, file)) { fail("%s: frame %d looks the same in both profiles: the check proves nothing", what, i); bad++; }
+			if (file_profile ? !has_profile(page, file_profile, file_size) : (FreeImage_GetICCProfile(page)->data != NULL)) {
+				fail("%s: frame %d does not carry the file's profile", what, i); bad++;
+			}
+		}
+		if (own) FreeImage_Unload(own);
+		if (file) FreeImage_Unload(file);
+		if (page) FreeImage_UnlockPage(mb, page, FALSE);
+	}
+	FreeImage_CloseMultiBitmap(mb, 0);
+
+out:
+	for (i = 0; i < n; i++) if (frames[i]) FreeImage_Unload(frames[i]);
+	remove(path);
+	return bad;
+}
+
+/* one profile for the file, frame 0's: the other frames are converted to it, an untagged frame being sRGB */
+static void test_mixed_profiles(void) {
+	DWORD adobe_size = 0, p3_size = 0, srgb_size = 0, grey_size = 0, linear_size = 0, prophoto_size = 0, twin_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	const void *srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	const void *linear = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_GRAY, &linear_size);
+	const void *prophoto = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &prophoto_size);
+	DWORD white_size = 0;
+	/* sRGB with the red primary nudged: within FreeImage's sRGB tolerance, yet a conversion changes pixels */
+	static const DWORD nudge[3] = { 0x20, 0, 0 };
+	/* Display P3 with a D65 media white: only an absolute colorimetric conversion would see it */
+	static const DWORD d65[3] = { 0xF353, 0x10000, 0x116C8 };
+	BYTE *twin = patched_profile(FICMS_PROFILE_SRGB, "rXYZ", nudge, 1, &twin_size);
+	BYTE *white = patched_profile(FICMS_PROFILE_DISPLAY_P3, "wtpt", d65, 0, &white_size);
+
+	printf("\n=== frames with different profiles are converted to the file's\n");
+
+	if (!adobe || !p3 || !srgb || !grey || !linear || !prophoto || !twin || !white) {
+		fail("the built-in profiles are not available");
+		free(twin);
+		free(white);
+		return;
+	}
+	{
+		const FrameSpec spec[9] = {
+			{ K_RGBA, adobe, adobe_size, SAME },
+			{ K_RGBA, p3, p3_size, CONVERTED },
+			{ K_RGBA, NULL, 0, CONVERTED },
+			{ K_RGBA, twin, twin_size, CONVERTED },
+			{ K_RGBA, adobe, adobe_size, SAME },
+			{ K_GREY, linear, linear_size, CONVERTED },
+			{ K_RGB16, prophoto, prophoto_size, CONVERTED },
+			{ K_UINT16, linear, linear_size, CONVERTED },
+			{ K_RGBA, white, white_size, CONVERTED }
+		};
+		if (!check_mixed("Adobe RGB file", spec, 9, adobe, adobe_size))
+			ok("Display P3, untagged, sRGB-like, linear grey, ProPhoto RGB16, UINT16 and D65-white frames take the first frame's Adobe RGB");
+	}
+	{
+		const FrameSpec spec[5] = {
+			{ K_RGBA, NULL, 0, SAME },
+			{ K_RGBA, twin, twin_size, TWIN },
+			{ K_GREY, grey, grey_size, SAME },
+			{ K_RGBA, p3, p3_size, CONVERTED },
+			{ K_RGBA, srgb, srgb_size, SAME }
+		};
+		if (!check_mixed("sRGB file", spec, 5, NULL, 0))
+			ok("after an untagged first frame, sRGB and its look-alikes keep their pixels and Display P3 becomes sRGB");
+	}
+	{
+		const FrameSpec spec[3] = {
+			{ K_RGBA, twin, twin_size, SAME },
+			{ K_RGBA, NULL, 0, TWIN },
+			{ K_RGBA, adobe, adobe_size, CONVERTED }
+		};
+		if (!check_mixed("sRGB-like file", spec, 3, twin, twin_size))
+			ok("a file whose profile is sRGB in all but name keeps untagged frames as they are");
+	}
+	{
+		const FrameSpec spec[3] = {
+			{ K_GREY, linear, linear_size, CONVERTED },
+			{ K_RGBA, adobe, adobe_size, CONVERTED },
+			{ K_RGBA, NULL, 0, SAME }
+		};
+		if (!check_mixed("grey-profile first frame", spec, 3, NULL, 0))
+			ok("a first frame whose profile the RGBA file cannot hold makes an sRGB file, itself converted");
+	}
+	free(twin);
+	free(white);
+
+	/* a tagged CMYK page saved alone: RGB, not its inks as RGBA */
+	{
+		const char *path = scratch("apng_cmyk.png");
+		FIBITMAP *cmyk = FreeImage_Allocate(40, 30, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *page = NULL, *want = NULL;
+		LONG ms = 100;
+		unsigned x, y;
+		int diff = -1;
+		if (cmyk) {
+			FreeImage_GetICCProfile(cmyk)->flags |= FIICC_COLOR_IS_CMYK;
+			for (y = 0; y < 30; y++) {
+				BYTE *line = FreeImage_GetScanLine(cmyk, y);
+				for (x = 0; x < 40; x++) {
+					line[0] = (BYTE)(x * 6); line[1] = (BYTE)(y * 8); line[2] = (BYTE)((x + y) * 3); line[3] = (BYTE)(x * y / 8);
+					line += 4;
+				}
+			}
+			set_tag(cmyk, "FrameTime", 0, FIDT_LONG, 4, &ms);
+			if (FreeImage_Save(FIF_APNG, cmyk, path, 0)) page = FreeImage_Load(FIF_APNG, path, 0);
+			want = in_colors(cmyk, NULL, 0);
+			if (page && want) diff = pixel_diff(page, want);
+		}
+		if (diff) fail("a CMYK page: %d pixels not converted to sRGB", diff);
+		else ok("a CMYK page is converted to sRGB");
+		if (page) FreeImage_Unload(page);
+		if (want) FreeImage_Unload(want);
+		if (cmyk) FreeImage_Unload(cmyk);
+		remove(path);
+	}
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -857,6 +1091,7 @@ int main(void) {
 	test_header_only();
 	test_color_description();
 	test_profile_written();
+	test_mixed_profiles();
 	test_refusals();
 	test_size();
 

@@ -475,6 +475,13 @@ FIF_LOAD_DISPLAY_ICC: the loaded image in the display's colors; NULL, the image 
 FIBITMAP* ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib);
 
 /**
+A frame of a file with one ICC profile for every frame, in that profile's colors (NULL: sRGB) as *converted;
+*converted is NULL when the frame already has them, and FALSE is returned when they cannot be converted
+@see See definition in ColorManagement.cpp
+*/
+BOOL ConvertToFileProfile(FIBITMAP *dib, const void *profile, DWORD size, FIBITMAP **converted);
+
+/**
 Attach the color description of a file, its ITU-T H.273 code points, as the FIMD_CUSTOM tag "CICP":
 4 FIDT_BYTE values, color primaries, transfer characteristics, matrix coefficients and the full range flag.
 Nothing is attached when the first three are all 2, unspecified.
