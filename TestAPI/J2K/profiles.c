@@ -8,6 +8,7 @@
 #include "FreeImage.h"
 #define OPJ_STATIC
 #include "../../Source/LibOpenJPEG/openjpeg.h"
+#include "../../Source/LibLCMS2/include/lcms2.h"
 
 static int failures = 0;
 static int checks = 0;
@@ -111,6 +112,108 @@ static void check(const char *what, FREE_IMAGE_FORMAT fif, const char *path, con
     FreeImage_Unload(head);
 }
 
+/* the METH byte of the first colr box, -1 without one */
+static int colr_method(const char *path) {
+    FILE *f = fopen(path, "rb");
+    BYTE buf[4096];
+    size_t n, i;
+    int meth = -1;
+    if (!f) return -1;
+    n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    for (i = 0; i + 5 <= n; i++) {
+        if (!memcmp(buf + i, "colr", 4)) { meth = buf[i + 4]; break; }
+    }
+    return meth;
+}
+
+static BYTE *read_all(const char *path, DWORD *size) {
+    FILE *f = fopen(path, "rb");
+    BYTE *data = NULL;
+    long n;
+    *size = 0;
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    if (n > 0 && (data = (BYTE *)malloc(n)) != NULL && fread(data, 1, n, f) == (size_t)n) *size = (DWORD)n;
+    fclose(f);
+    return data;
+}
+
+/* saved, reloaded: a restricted profile (matrix/TRC or grey TRC, PCS XYZ, the image's colour) in colr method 2; others left out */
+static void written(const char *what, FREE_IMAGE_FORMAT fif, FIBITMAP *dib, const void *profile, DWORD size, int kept) {
+    char path[512];
+    FIBITMAP *back;
+    scratch(path, sizeof(path), (fif == FIF_JP2) ? "fi_j2k_written.jp2" : "fi_j2k_written.j2k");
+    if (profile) FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+    else FreeImage_DestroyICCProfile(dib);
+    CHECK(FreeImage_Save(fif, dib, path, 1), "%s: not saved", what);
+    back = FreeImage_Load(fif, path, 0);
+    CHECK(back && FreeImage_GetBPP(back) == FreeImage_GetBPP(dib) && FreeImage_GetImageType(back) == FreeImage_GetImageType(dib), "%s: the pixel format changed", what);
+    if (back) CHECK(same_profile(back, kept ? profile : NULL, size), "%s: a %u-byte profile came back", what, (unsigned)FreeImage_GetICCProfile(back)->size);
+    if (fif == FIF_JP2) CHECK(colr_method(path) == (kept ? 2 : 1), "%s: colr method %d", what, colr_method(path));
+    FreeImage_Unload(back);
+    remove(path);
+}
+
+/* an RGB display profile of LUTs only, into PCS XYZ: neither matrix nor TRC tags */
+static BYTE *lut_xyz_profile(DWORD *size) {
+    cmsHPROFILE h = cmsCreateProfilePlaceholder(NULL);
+    cmsPipeline *a2b = cmsPipelineAlloc(NULL, 3, 3);
+    cmsUInt32Number n = 0;
+    BYTE *out = NULL;
+    *size = 0;
+    if (!h || !a2b) return NULL;
+    cmsSetDeviceClass(h, cmsSigDisplayClass);
+    cmsSetColorSpace(h, cmsSigRgbData);
+    cmsSetPCS(h, cmsSigXYZData);
+    cmsPipelineInsertStage(a2b, cmsAT_END, cmsStageAllocCLut16bit(NULL, 2, 3, 3, NULL));
+    cmsWriteTag(h, cmsSigAToB0Tag, a2b);
+    cmsWriteTag(h, cmsSigMediaWhitePointTag, cmsD50_XYZ());
+    if (cmsSaveProfileToMem(h, NULL, &n) && (out = (BYTE *)malloc(n)) != NULL && cmsSaveProfileToMem(h, out, &n)) *size = n;
+    cmsPipelineFree(a2b);
+    cmsCloseProfile(h);
+    return out;
+}
+
+static void test_written(void) {
+    DWORD adobe_size = 0, grey_size = 0, p3_size = 0, lut_size = 0;
+    const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+    const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+    const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+    BYTE *lut = read_all("../ICC/data/test3.icc", &lut_size);
+    FIBITMAP *rgb = FreeImage_Allocate(W, H, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    FIBITMAP *rgba, *rgb16, *grey8, *grey16;
+    unsigned i;
+    for (i = 0; i < FreeImage_GetPitch(rgb) * H; i++) FreeImage_GetBits(rgb)[i] = (BYTE)(i * 11 + 5);
+    rgba = FreeImage_ConvertTo32Bits(rgb);
+    rgb16 = FreeImage_ConvertToRGB16(rgb);
+    grey8 = FreeImage_ConvertToGreyscale(rgb);
+    grey16 = FreeImage_ConvertToUINT16(grey8);
+
+    written("24-bit Adobe RGB JP2", FIF_JP2, rgb, adobe, adobe_size, 1);
+    written("32-bit Display P3 JP2", FIF_JP2, rgba, p3, p3_size, 1);
+    written("RGB16 Adobe RGB JP2", FIF_JP2, rgb16, adobe, adobe_size, 1);
+    written("8-bit grey JP2", FIF_JP2, grey8, grey, grey_size, 1);
+    written("UINT16 grey JP2", FIF_JP2, grey16, grey, grey_size, 1);
+    written("an RGB profile on a grey JP2", FIF_JP2, grey8, adobe, adobe_size, 0);
+    written("a grey profile on an RGB JP2", FIF_JP2, rgb, grey, grey_size, 0);
+    if (lut) written("a LUT-based RGB profile into PCS Lab (test3.icc)", FIF_JP2, rgb, lut, lut_size, 0);
+    else CHECK(0, "../ICC/data/test3.icc: not read");
+    {
+        DWORD xyz_size = 0;
+        BYTE *xyz = lut_xyz_profile(&xyz_size);
+        CHECK(xyz && xyz_size == ((DWORD)xyz[0] << 24 | (DWORD)xyz[1] << 16 | (DWORD)xyz[2] << 8 | xyz[3]), "no LUT profile into PCS XYZ made");
+        if (xyz) written("a LUT-based RGB profile into PCS XYZ", FIF_JP2, rgb, xyz, xyz_size, 0);
+        free(xyz);
+    }
+    written("an untagged JP2", FIF_JP2, rgb, NULL, 0, 0);
+    written("a J2K codestream", FIF_J2K, rgb, adobe, adobe_size, 0);
+
+    FreeImage_Unload(rgb); FreeImage_Unload(rgba); FreeImage_Unload(rgb16);
+    FreeImage_Unload(grey8); FreeImage_Unload(grey16);
+    free(lut);
+}
+
 int main(void) {
     DWORD adobe_size = 0, grey_size = 0;
     const void *adobe, *grey;
@@ -141,6 +244,8 @@ int main(void) {
     CHECK(encode(path, OPJ_CODEC_J2K, 3, 8, adobe, adobe_size), "J2K: not encoded");
     check("J2K codestream", FIF_J2K, path, NULL, 0, 3, 8);
     remove(path);
+
+    test_written();
 
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();

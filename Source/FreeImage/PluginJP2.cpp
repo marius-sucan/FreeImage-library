@@ -22,6 +22,7 @@
 #include "FreeImage.h"
 #include "Utilities.h"
 #include "../LibOpenJPEG/openjpeg.h"
+#include "../LibLCMS2/include/lcms2.h"
 #include "J2KHelper.h"
 
 // ==========================================================
@@ -50,6 +51,34 @@ OpenJPEG Warning callback
 */
 static void jp2_warning_callback(const char *msg, void *client_data) {
 	FreeImage_OutputMessageProc(s_format_id, "Warning: %s", msg);
+}
+
+static void
+MuteLittleCMS(cmsContext, cmsUInt32Number, const char *) {
+}
+
+/**
+JP2's restricted ICC profile (colr method 2): grey or three-component matrix/TRC, into PCS XYZ, of the image's colour
+*/
+static BOOL
+IsRestrictedICC(const BYTE *profile, DWORD size, int numcomps) {
+	if((size < 132) || ((((DWORD)profile[0] << 24) | ((DWORD)profile[1] << 16) | ((DWORD)profile[2] << 8) | (DWORD)profile[3]) != size)) {
+		return FALSE;
+	}
+	cmsContext context = cmsCreateContext(NULL, NULL);
+	if(!context) {
+		return FALSE;
+	}
+	cmsSetLogErrorHandlerTHR(context, MuteLittleCMS);
+	BOOL restricted = FALSE;
+	cmsHPROFILE handle = cmsOpenProfileFromMemTHR(context, profile, size);
+	if(handle) {
+		const cmsColorSpaceSignature space = (numcomps >= 3) ? cmsSigRgbData : cmsSigGrayData;
+		restricted = ((cmsGetColorSpace(handle) == space) && (cmsGetPCS(handle) == cmsSigXYZData) && cmsIsMatrixShaper(handle)) ? TRUE : FALSE;
+		cmsCloseProfile(handle);
+	}
+	cmsDeleteContext(context);
+	return restricted;
 }
 
 // ==========================================================
@@ -276,6 +305,21 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			image = FIBITMAPToJ2KImage(s_format_id, dib, &parameters);
 			if(!image) {
 				return FALSE;
+			}
+
+			// the profile goes into the colr box; opj_image_destroy() frees it with free()
+			const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+			if(icc->data && icc->size) {
+				if(IsRestrictedICC((const BYTE*)icc->data, icc->size, (int)image->numcomps)) {
+					image->icc_profile_buf = (OPJ_BYTE*)malloc(icc->size);
+					if(!image->icc_profile_buf) {
+						throw FI_MSG_ERROR_MEMORY;
+					}
+					memcpy(image->icc_profile_buf, icc->data, icc->size);
+					image->icc_profile_len = icc->size;
+				} else {
+					FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile is not one a JP2 file can hold and was left out");
+				}
 			}
 
 			// decide if MCT should be used
