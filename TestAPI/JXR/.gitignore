@@ -2,6 +2,8 @@ regress
 edge
 narrowio
 meta
+tags
+robust
 bigfile
 *.o
 fi_jxr_*.jxr

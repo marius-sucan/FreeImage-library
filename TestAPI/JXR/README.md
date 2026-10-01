@@ -1,6 +1,6 @@
 # JPEG XR regression tests
 
-Six standalone programs covering the JXR plugin. Each prints a report and exits
+Seven standalone programs covering the JXR plugin. Each prints a report and exits
 non-zero on failure. They exist because the defects they cover all live in places
 ordinary round-trip testing never reaches: error paths, unexercised save flags,
 64-bit arithmetic, and a `FreeImageIO` of the caller's own.
@@ -12,14 +12,15 @@ ordinary round-trip testing never reaches: error paths, unexercised save flags,
 | `narrowio` | A lossless save through `FreeImage_SaveToHandle` and the reload through `FreeImage_LoadFromHandle`, with a `FreeImageIO` of the test's own (64-bit positions through `fseeko`/`ftello`). |
 | `meta` | ICC + EXIF + XMP round-trip, covering `WriteMetadata`'s return value and `ReadProfile`. |
 | `tags` | The 14 Exif tags the container holds as descriptive metadata (strings, the ratings, the UTF-16 XPTitle, the two-SHORT PageNumber), each alone, all together, and only those short enough to sit in their IFD entry, saved lossless: the pixels and the tags must come back. A tag of a type the container does not take is left out, the others kept. Then a TIFF with a PageNumber, `Wrapper/FreeImagePlus/test/test.tif` (or argv[1]). |
+| `robust` | Some 6,300 damaged files made from six saved ones: descriptive tags of another type or count (and a PageNumber of one SHORT, as older release builds wrote it), every container pixel format, every codestream colour format and bit depth, internal colour format, alpha flag and size, cuts, and random damage. Each may load or not, but never crash, abort or leak. Run under ASan too. |
 | `bigfile` | 46341 x 46341 (2.15 Gpx) saved lossless to a 2.17 GiB file and verified pixel by pixel on reload. Needs ~4.5 GB RAM, ~2.4 GB free space, ~2 minutes. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run            # regress, edge, narrowio, meta, tags
-    make asan run       # the same, with AddressSanitizer - worth it for edge and meta
+    make run            # regress, edge, narrowio, meta, tags, robust
+    make asan run       # the same, with AddressSanitizer - worth it for edge, meta and robust
     make bigfile-run    # the 2 GiB test, separately: it is slow and memory-hungry
 
 Scratch files are written to `$JXR_TEST_TMP`, or the current directory.
@@ -37,4 +38,5 @@ Scratch files are written to `$JXR_TEST_TMP`, or the current directory.
 - `meta` - ICC profile back identical, XMP present. `EXIF_MAIN` returning fewer tags
   than it started with is expected: the JXR container defines only a subset.
 - `tags` - `0 failures`.
+- `robust` - `0 failures`; no AddressSanitizer report under `make asan run`.
 - `bigfile` - `crosses 2GiB=YES` and `exact round-trip over all 2.15 Gpx`.

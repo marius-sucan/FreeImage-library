@@ -349,7 +349,7 @@ Int DecodeSignificantRun (Int iMaxRun, struct CAdaptiveHuffman *pAHexpt, BitIOIn
 {
     Int iIndex;
     static const Int aRemap[] = {1,2,3,5,7,   1,2,3,5,7,   /*1,2,3,4,6,  */1,2,3,4,5 };
-    Int iBin = gSignificantRunBin[iMaxRun];
+    Int iBin = (iMaxRun >= 0 && iMaxRun < 15) ? gSignificantRunBin[iMaxRun] : 0; // FreeImage: corrupt blocks ask for -1 or 15
     Int iRun = 0, iFLC = 0;
 
     if (iMaxRun < 5) {

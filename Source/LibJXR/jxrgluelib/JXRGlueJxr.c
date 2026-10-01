@@ -200,7 +200,9 @@ void FreeDescMetadata(DPKPROPVARIANT *pvar)
             break;
 
         default:
-            assert(FALSE); // This case is not handled
+            // FreeImage: a byte array a file held in a tag of another type, freed, not asserted on
+            if ((DPKVT_BYREF | DPKVT_UI1) == pvar->vt)
+                PKFree((void **) &pvar->VT.pbVal);
             break;
 
         case DPKVT_EMPTY:
@@ -1551,6 +1553,27 @@ Cleanup:
 //================================================================
 // PKImageDecode_WMP
 //================================================================
+// FreeImage: a repeated tag replaces the first, one of another type is dropped; a page number may be one SHORT
+static ERR ReadDescMetadata(struct WMPStream* pWS, U16 uType, U32 uCount, U32 uValue, DPKPROPVARIANT *pvar, DPKVARTYPE vt)
+{
+    ERR err = WMP_errSuccess;
+
+    FreeDescMetadata(pvar);
+    err = ReadPropvar(pWS, uType, uCount, uValue, pvar);
+    if (DPKVT_UI4 == vt && DPKVT_UI2 == pvar->vt)
+    {
+        const U16 uiPage = pvar->VT.uiVal;
+        pvar->VT.ulVal = uiPage;
+        pvar->vt = DPKVT_UI4;
+    }
+    if (vt != pvar->vt)
+    {
+        FreeDescMetadata(pvar);
+        memset(pvar, 0, sizeof(*pvar));
+    }
+    return err;
+}
+
 ERR ParsePFDEntry(
     PKImageDecode* pID,
     U16 uTag,
@@ -1593,9 +1616,12 @@ ERR ParsePFDEntry(
 
         case WMP_tagTransformation:
             FailIf(1 != uCount, WMP_errUnsupportedFormat);
-            assert(uValue < O_MAX);
-            pID->WMP.fOrientationFromContainer = TRUE;
-            pID->WMP.oOrientationFromContainer = uValue;
+            // FreeImage: an orientation out of range is ignored, not asserted on
+            if (uValue < O_MAX)
+            {
+                pID->WMP.fOrientationFromContainer = TRUE;
+                pID->WMP.oOrientationFromContainer = uValue;
+            }
             break;
 
         case WMP_tagImageWidth:
@@ -1676,95 +1702,82 @@ ERR ParsePFDEntry(
 
         // Descriptive Metadata
         case WMP_tagImageDescription:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarImageDescription));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarImageDescription.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarImageDescription, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagCameraMake:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarCameraMake));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarCameraMake.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarCameraMake, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagCameraModel:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarCameraModel));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarCameraModel.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarCameraModel, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagSoftware:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarSoftware));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarSoftware.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarSoftware, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagDateTime:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarDateTime));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarDateTime.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarDateTime, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagArtist:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarArtist));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarArtist.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarArtist, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagCopyright:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarCopyright));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarCopyright.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarCopyright, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagRatingStars:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarRatingStars));
-            assert(DPKVT_UI2 == pID->WMP.sDescMetadata.pvarRatingStars.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarRatingStars, DPKVT_UI2)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagRatingValue:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarRatingValue));
-            assert(DPKVT_UI2 == pID->WMP.sDescMetadata.pvarRatingValue.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarRatingValue, DPKVT_UI2)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagCaption:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarCaption));
-            assert((DPKVT_BYREF | DPKVT_UI1) == pID->WMP.sDescMetadata.pvarCaption.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarCaption, (DPKVARTYPE)(DPKVT_BYREF | DPKVT_UI1)));
 
             // Change type from C-style byte array to LPWSTR
-            assert((U8*)pID->WMP.sDescMetadata.pvarCaption.VT.pwszVal ==
-                pID->WMP.sDescMetadata.pvarCaption.VT.pbVal);
-            assert(0 == pID->WMP.sDescMetadata.pvarCaption.VT.pwszVal[uCount/sizeof(U16) - 1]); // Confirm null-term
-            //  make sure null term (ReadPropvar allocated enough space for this)
-            pID->WMP.sDescMetadata.pvarCaption.VT.pwszVal[uCount/sizeof(U16)] = 0;
-            pID->WMP.sDescMetadata.pvarCaption.vt = DPKVT_LPWSTR;
+            // FreeImage: only a byte array, its terminator forced, not asserted on
+            if ((DPKVT_BYREF | DPKVT_UI1) == pID->WMP.sDescMetadata.pvarCaption.vt)
+            {
+                //  make sure null term (ReadPropvar allocated enough space for this)
+                pID->WMP.sDescMetadata.pvarCaption.VT.pwszVal[uCount/sizeof(U16)] = 0;
+                pID->WMP.sDescMetadata.pvarCaption.vt = DPKVT_LPWSTR;
+            }
             break;
 
         case WMP_tagDocumentName:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarDocumentName));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarDocumentName.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarDocumentName, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagPageName:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarPageName));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarPageName.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarPageName, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagPageNumber:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarPageNumber));
-            assert(DPKVT_UI4 == pID->WMP.sDescMetadata.pvarPageNumber.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarPageNumber, DPKVT_UI4)); // FreeImage: ReadDescMetadata
             break;
 
         case WMP_tagHostComputer:
-            CallIgnoreError(errTmp, ReadPropvar(pWS, uType, uCount, uValue,
-                &pID->WMP.sDescMetadata.pvarHostComputer));
-            assert(DPKVT_LPSTR == pID->WMP.sDescMetadata.pvarHostComputer.vt);
+            CallIgnoreError(errTmp, ReadDescMetadata(pWS, uType, uCount, uValue,
+                &pID->WMP.sDescMetadata.pvarHostComputer, DPKVT_LPSTR)); // FreeImage: ReadDescMetadata
             break;
 
         default:
@@ -1828,7 +1841,7 @@ ERR ReadContainer(
     //================================
     // Header
     Call(pWS->Read(pWS, szSig, sizeof(szSig))); offPos += 2;
-    FailIf(szSig != strstr(szSig, "II"), WMP_errUnsupportedFormat);
+    FailIf('I' != szSig[0] || 'I' != szSig[1], WMP_errUnsupportedFormat); // FreeImage: szSig has no NUL for strstr
 
     Call(GetUShort(pWS, offPos, &uWmpID)); offPos += 2;
     FailIf(WMP_valWMPhotoID != (0x00FF & uWmpID), WMP_errUnsupportedFormat);
@@ -1871,6 +1884,7 @@ ERR PKImageDecode_Initialize_WMP(
     ERR err = WMP_errSuccess;
 
     CWMImageInfo* pII = NULL;
+    PKPixelInfo PI = { 0 };
 
     //================================
     Call(PKImageDecode_Initialize(pID, pWS));
@@ -1886,8 +1900,13 @@ ERR PKImageDecode_Initialize_WMP(
     pID->WMP.fFirstNonZeroDecode = FALSE;
 
     FailIf(ICERR_OK != ImageStrDecGetInfo(&pID->WMP.wmiI, &pID->WMP.wmiSCP), WMP_errFail);
-    assert(Y_ONLY <= pID->WMP.wmiSCP.cfColorFormat && pID->WMP.wmiSCP.cfColorFormat < CFT_MAX);
-    assert(BD_SHORT == pID->WMP.wmiSCP.bdBitDepth || BD_LONG == pID->WMP.wmiSCP.bdBitDepth);
+    // FreeImage: errors, not asserts
+    FailIf(!(Y_ONLY <= pID->WMP.wmiSCP.cfColorFormat && pID->WMP.wmiSCP.cfColorFormat < CFT_MAX), WMP_errUnsupportedFormat);
+    FailIf(!(BD_SHORT == pID->WMP.wmiSCP.bdBitDepth || BD_LONG == pID->WMP.wmiSCP.bdBitDepth), WMP_errUnsupportedFormat);
+    // FreeImage: the container's pixel format lays out the output, so the codestream has to be in it
+    PI.pGUIDPixFmt = &pID->guidPixFormat;
+    FailIf(0 == pID->WMP.wmiI.cBitsPerUnit || WMP_errSuccess != PixelFormatLookup(&PI, LOOKUP_FORWARD), WMP_errUnsupportedFormat);
+    FailIf(PI.cfColorFormat != pID->WMP.wmiI.cfColorFormat || PI.bdBitDepth != pID->WMP.wmiI.bdBitDepth, WMP_errUnsupportedFormat);
 
     // If HD Photo container provided an orientation, this should override bitstream orientation
     // If container did NOT provide an orientation, force O_NONE. This is to be consistent with
@@ -2029,6 +2048,7 @@ ERR PKImageDecode_Copy_WMP(
             pID->WMP.cLinesCropped = 0;
             pID->WMP.fFirstNonZeroDecode = FALSE;
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC), WMP_errFail);   
+            pID->WMP.ctxSC = NULL; // FreeImage: so Release does not terminate it again
             Call(pID->WMP.wmiSCP.pWStream->SetPos(pID->WMP.wmiSCP.pWStream, pID->WMP.cMarker));
             FailIf(ICERR_OK != ImageStrDecInit(&pID->WMP.wmiI, &pID->WMP.wmiSCP, &pID->WMP.ctxSC), WMP_errFail);
         }
@@ -2080,6 +2100,7 @@ ERR PKImageDecode_Copy_WMP(
         // If we're past the top of the image, then we're done, so terminate.
         if (linesperMBRow * (cMBRow - 1) >= (U32) pID->WMP.cLinesCropped + pID->WMP.wmiI.cROIHeight) {
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC), WMP_errFail);        
+            pID->WMP.ctxSC = NULL; // FreeImage: so Release does not terminate it again
         }
         pID->WMP.DecoderCurrMBRow = cMBRow; // Set to next possible MBRow that is decodable
 
@@ -2132,6 +2153,13 @@ ERR PKImageDecode_Copy_WMP(
 
         pID->WMP.wmiSCP_Alpha.fMeasurePerf = TRUE;
         Call(pWS->SetPos(pWS, pID->WMP.wmiDEMisc.uAlphaOffset));
+        {
+            // FreeImage: the alpha plane has to be the image's size, else it is decoded as a thumbnail or past its rows
+            CWMImageInfo wmiI = { 0 };
+            CWMIStrCodecParam wmiSCP = pID->WMP.wmiSCP_Alpha;
+            FailIf(ICERR_OK != ImageStrDecGetInfo(&wmiI, &wmiSCP), WMP_errFail);
+            FailIf(wmiI.cWidth != pID->uWidth || wmiI.cHeight != pID->uHeight, WMP_errFail);
+        }
 #ifdef REENTRANT_MODE
         if (0 == pID->WMP.DecoderCurrAlphaMBRow) // add this to WMP struct!
         {
@@ -2148,6 +2176,7 @@ ERR PKImageDecode_Copy_WMP(
         {
             pID->WMP.DecoderCurrAlphaMBRow = 0;
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC_Alpha), WMP_errFail);
+            pID->WMP.ctxSC_Alpha = NULL; // FreeImage: so Release does not terminate it again
             FailIf(ICERR_OK != ImageStrDecInit(&pID->WMP.wmiI_Alpha, &pID->WMP.wmiSCP_Alpha, &pID->WMP.ctxSC_Alpha), WMP_errFail);
         }
 
@@ -2162,6 +2191,7 @@ ERR PKImageDecode_Copy_WMP(
         // If we're past the top of the image, then we're done, so terminate
         if (linesperMBRow * (cMBRow - 1) >= (U32) pID->WMP.cLinesCropped + pID->WMP.wmiI.cROIHeight) {
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC_Alpha), WMP_errFail);
+            pID->WMP.ctxSC_Alpha = NULL; // FreeImage: so Release does not terminate it again
         }
         pID->WMP.DecoderCurrAlphaMBRow = cMBRow; // Set to next possible MBRow that is decodable
         wmiBI.pv = pb;
@@ -2281,6 +2311,12 @@ ERR PKImageDecode_Release_WMP(PKImageDecode** ppID)
     FreeDescMetadata(&pID->WMP.sDescMetadata.pvarPageName);
     FreeDescMetadata(&pID->WMP.sDescMetadata.pvarPageNumber);
     FreeDescMetadata(&pID->WMP.sDescMetadata.pvarHostComputer);
+
+    // FreeImage: a decode stopped by an error left its contexts
+    if (pID->WMP.ctxSC)
+        ImageStrDecTerm(pID->WMP.ctxSC);
+    if (pID->WMP.ctxSC_Alpha)
+        ImageStrDecTerm(pID->WMP.ctxSC_Alpha);
 
     // Release base class
     Call(PKImageDecode_Release(ppID));

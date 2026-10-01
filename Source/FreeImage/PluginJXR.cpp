@@ -462,6 +462,10 @@ ReadPropVariant(WORD tag_id, const DPKPROPVARIANT & varSrc, FIBITMAP *dib) {
 	if(varSrc.vt == DPKVT_EMPTY) {
 		return FALSE;
 	}
+	// a string the decoder could not read
+	if(((varSrc.vt == DPKVT_LPSTR) || (varSrc.vt == DPKVT_LPWSTR)) && !varSrc.VT.pszVal) {
+		return FALSE;
+	}
 
 	// get the tag key
 	TagLib& s = TagLib::instance();

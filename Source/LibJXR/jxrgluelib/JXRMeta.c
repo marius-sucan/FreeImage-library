@@ -246,7 +246,15 @@ Cleanup:
 }
 
 
+// FreeImage: IFDs that point back to one another stop at this depth, not at the end of the stack
+static ERR StreamCalcIFDSizeDepth(struct WMPStream* pWS, U32 uIFDOfs, U32 *pcbifd, U32 uDepth);
+
 ERR StreamCalcIFDSize(struct WMPStream* pWS, U32 uIFDOfs, U32 *pcbifd)
+{
+    return StreamCalcIFDSizeDepth(pWS, uIFDOfs, pcbifd, 0);
+}
+
+static ERR StreamCalcIFDSizeDepth(struct WMPStream* pWS, U32 uIFDOfs, U32 *pcbifd, U32 uDepth)
 {
     ERR err = WMP_errSuccess;
     size_t offCurPos = 0;
@@ -260,6 +268,7 @@ ERR StreamCalcIFDSize(struct WMPStream* pWS, U32 uIFDOfs, U32 *pcbifd)
     U32 cbInteroperabilityIFD = 0;
 
     *pcbifd = 0;
+    FailIf(uDepth > 4, WMP_errUnsupportedFormat); // FreeImage: see StreamCalcIFDSizeDepth
     Call(pWS->GetPos(pWS, &offCurPos));
     GetPosOK = TRUE;
 
@@ -281,15 +290,15 @@ ERR StreamCalcIFDSize(struct WMPStream* pWS, U32 uIFDOfs, U32 *pcbifd)
         FailIf(type == 0 || type >= sizeof(IFDEntryTypeSizes) / sizeof(IFDEntryTypeSizes[0]), WMP_errUnsupportedFormat);
         if ( tag == WMP_tagEXIFMetadata )
         {
-            Call(StreamCalcIFDSize(pWS, value, &cbEXIFIFD));
+            Call(StreamCalcIFDSizeDepth(pWS, value, &cbEXIFIFD, uDepth + 1)); // FreeImage: depth
         }
         else if ( tag == WMP_tagGPSInfoMetadata )
         {
-            Call(StreamCalcIFDSize(pWS, value, &cbGPSInfoIFD));
+            Call(StreamCalcIFDSizeDepth(pWS, value, &cbGPSInfoIFD, uDepth + 1)); // FreeImage: depth
         }
         else if ( tag == WMP_tagInteroperabilityIFD )
         {
-            Call(StreamCalcIFDSize(pWS, value, &cbInteroperabilityIFD));
+            Call(StreamCalcIFDSizeDepth(pWS, value, &cbInteroperabilityIFD, uDepth + 1)); // FreeImage: depth
         }
         else
         {
@@ -674,7 +683,17 @@ ERR ReadBinaryData(__in_ecount(1) struct WMPStream* pWS,
     ERR err = WMP_errSuccess;
     U8 *pbData = NULL;
 
-    Call(PKAlloc((void **) &pbData, uCount + 2)); // Allocate buffer to store data with space for an added ascii or unicode null
+    // FreeImage: the data has to be in the stream before its buffer is allocated, sized in size_t
+    if (uCount > 4)
+    {
+        size_t offPosPrev = 0;
+        U8 cLast = 0;
+        Call(pWS->GetPos(pWS, &offPosPrev));
+        Call(pWS->SetPos(pWS, (size_t)uValue + uCount - 1));
+        Call(pWS->Read(pWS, &cLast, 1));
+        Call(pWS->SetPos(pWS, offPosPrev));
+    }
+    Call(PKAlloc((void **) &pbData, (size_t)uCount + 2)); // Allocate buffer to store data with space for an added ascii or unicode null
     if (uCount <= 4)
     {
         unsigned int i;
@@ -719,9 +738,8 @@ ERR ReadPropvar(__in_ecount(1) struct WMPStream* pWS,
     switch (uType)
     {
         case WMP_typASCII:
-            pvar->vt = DPKVT_LPSTR;
             Call(ReadBinaryData(pWS, uCount, uValue, (U8 **) &pvar->VT.pszVal));
-            assert(0 == pvar->VT.pszVal[uCount - 1]); // Check that it's null-terminated
+            pvar->vt = DPKVT_LPSTR; // FreeImage: typed once read; a missing NUL is added below, not asserted on
             // make sure (ReadBinaryData allocated uCount + 2 so this and unicode can have forced nulls)
             pvar->VT.pszVal[uCount] = 0;
             break;
@@ -731,8 +749,8 @@ ERR ReadPropvar(__in_ecount(1) struct WMPStream* pWS,
             // Return as regular C array rather than safearray, as this type is sometimes
             // used to convey unicode (which does not require a count field). Caller knows
             // uCount and can convert to safearray if necessary.
-            pvar->vt = (DPKVT_BYREF | DPKVT_UI1);
             Call(ReadBinaryData(pWS, uCount, uValue, &pvar->VT.pbVal));
+            pvar->vt = (DPKVT_BYREF | DPKVT_UI1); // FreeImage: typed once read
             break;
 
         case WMP_typSHORT:
@@ -748,13 +766,13 @@ ERR ReadPropvar(__in_ecount(1) struct WMPStream* pWS,
             }
             else
             {
-                assert(FALSE); // NYI
+                // FreeImage: an error, not an assert
                 FailIf(TRUE, WMP_errNotYetImplemented);
             }
             break;
 
         default:
-            assert(FALSE); // Unhandled type
+            // FreeImage: an error, not an assert
             FailIf(TRUE, WMP_errNotYetImplemented);
             break;
     }

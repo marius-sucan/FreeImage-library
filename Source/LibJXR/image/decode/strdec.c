@@ -917,9 +917,7 @@ Int outputMBRow(CWMImageStrCodec * pSC)
 	size_t * pOffsetX = pSC->m_Dparam->pOffsetX, *pOffsetY = pSC->m_Dparam->pOffsetY + (pSC->cRow - 1) * (cfExt == YUV_420 ? 8 : 16), iY;
 
 
-	if (pSC->m_pNextSC) {
-		assert(pSC->m_param.bScaledArith == pSC->m_pNextSC->m_param.bScaledArith);  // will be relaxed later
-	}
+	// FreeImage: no assert that the alpha plane's bScaledArith matches, the file sets it
 
 	// guard output buffer
 	if (checkImageBuffer(pSC, pSC->WMII.oOrientation >= O_RCW ? pSC->WMII.cROIHeight : pSC->WMII.cROIWidth, cHeight - iFirstRow) != ICERR_OK) {
@@ -2786,6 +2784,7 @@ Int initLookupTables(CWMImageStrCodec* pSC)
 		i = cStrideX, cStrideX = cStrideY, cStrideY = i;
 	}
 
+	free(pSC->m_Dparam->pOffsetX); // FreeImage: an interleaved alpha plane shares m_Dparam, and comes second
 	pSC->m_Dparam->pOffsetX = (size_t *)malloc(w * sizeof(size_t));
 	if (pSC->m_Dparam->pOffsetX == NULL || w * sizeof(size_t) < w) {
 		return ICERR_ERROR;
@@ -2805,6 +2804,7 @@ Int initLookupTables(CWMImageStrCodec* pSC)
 			(pSC->m_Dparam->cROIRightX - pSC->m_Dparam->cROILeftX + pSC->m_Dparam->cThumbnailScale) / pSC->m_Dparam->cThumbnailScale / ((pII->cfColorFormat == YUV_420 || pII->cfColorFormat == YUV_422) ? 2 : 1)) - 1 - i : i) * cStrideX;
 	}
 
+	free(pSC->m_Dparam->pOffsetY); // FreeImage: see pOffsetX
 	pSC->m_Dparam->pOffsetY = (size_t *)malloc(h * sizeof(size_t));
 	if (pSC->m_Dparam->pOffsetY == NULL || h * sizeof(size_t) < h) {
 		return ICERR_ERROR;
@@ -3060,7 +3060,7 @@ Int ReadImagePlaneHeader(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CCoreParame
 		pSC->cNumChannels = 4;
 		break;
 	default:
-		break;
+		Call(WMP_errUnsupportedFormat); // FreeImage: reserved, no channel count
 	}
 
 	// float and 32s additional parameters
@@ -3160,7 +3160,7 @@ Int ReadWMIHeader(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CCoreParameters *p
 // 0
 	/** signature **/
 	Call(pWS->Read(pWS, szMS, sizeof(szMS)));
-	FailIf(szMS != (U8 *)strstr((char *)szMS, "WMPHOTO"), WMP_errUnsupportedFormat);
+	FailIf(0 != memcmp(szMS, "WMPHOTO", 7), WMP_errUnsupportedFormat); // FreeImage: szMS has no NUL for strstr
 	//================================
 	Call(attach_SB(pSB, pWS));
 
@@ -3430,6 +3430,78 @@ static void InitializeStrDec(CWMImageStrCodec *pSC, const CCoreParameters *pPara
     pSC->m_bSecondary = FALSE;
 }
 
+// FreeImage: what outputMBRow writes for a pixel has to fit in the caller's cBitsPerUnit
+static Int ValidateOutputLayout(const CWMImageInfo* pII, const CWMIStrCodecParam* pSCP, const CCoreParameters* pCP)
+{
+	const COLORFORMAT cf = pII->cfColorFormat, cfExt = (pCP->cfColorFormat == Y_ONLY ? Y_ONLY : cf);
+	size_t cbElement = 0, cElement = 0, cChannel = 0;
+
+	switch (pII->bdBitDepth) {
+	case BD_1:
+		return (pCP->cfColorFormat == Y_ONLY && pII->cLeadingPadding == 0 && pII->cBitsPerUnit > 0) ? ICERR_OK : ICERR_ERROR;
+	case BD_8:
+		cbElement = 1;
+		break;
+	case BD_16:
+	case BD_16S:
+	case BD_16F:
+	case BD_5:
+	case BD_565:
+		cbElement = 2;
+		break;
+	case BD_32:
+	case BD_32S:
+	case BD_32F:
+	case BD_10:
+		cbElement = 4;
+		break;
+	default:
+		return ICERR_ERROR;
+	}
+
+	switch (cfExt) {
+	case Y_ONLY:
+		// CF_RGB output gets the luma in all three
+		cElement = (cf == CF_RGB ? 3 : 1), cChannel = 1;
+		break;
+	case YUV_444:
+	case NCOMPONENT:
+		cElement = cChannel = pCP->cNumChannels;
+		break;
+	case CF_RGB:
+		cElement = cChannel = 3;
+		break;
+	case CF_RGBE:
+		cElement = 4, cChannel = 3;
+		break;
+	case CMYK:
+		cElement = cChannel = 4;
+		break;
+	default:
+		// subsampled YCC, which FreeImage does not load
+		return ICERR_ERROR;
+	}
+
+	// the formats outputMBRow has a case for
+	if (pII->bdBitDepth == BD_5 || pII->bdBitDepth == BD_565 || pII->bdBitDepth == BD_10) {
+		if (cfExt != CF_RGB) {
+			return ICERR_ERROR;
+		}
+		cElement = 1;
+	}
+	if ((cfExt == CF_RGBE && pII->bdBitDepth != BD_8) ||
+		(cfExt == CMYK && pII->bdBitDepth != BD_8 && pII->bdBitDepth != BD_16 && pII->bdBitDepth != BD_16S)) {
+		return ICERR_ERROR;
+	}
+
+	// interleaved alpha goes after the colour, see outputMBRowAlpha
+	if (pCP->bAlphaChannel && pSCP->uAlphaMode > 0 && (cf == CF_RGB || cf == CMYK)) {
+		cElement = max(cElement, (size_t)(cf == CMYK ? 5 : 4));
+	}
+
+	return (cChannel <= pCP->cNumChannels && pII->cLeadingPadding + cElement <= (pII->cBitsPerUnit >> 3) / cbElement) ? ICERR_OK : ICERR_ERROR;
+}
+
 /*************************************************************************
   ImageStrDecInit
 *************************************************************************/
@@ -3477,6 +3549,9 @@ Int ImageStrDecInit(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CTXSTRCODEC* pct
 	//================================================
 	SC.WMISCP = *pSCP;
 	SC.WMII = *pII;
+	if (ValidateOutputLayout(pII, pSCP, &SC.m_param) != ICERR_OK) {
+		return ICERR_ERROR;
+	}
 
 	// original image size
 	SC.WMII.cWidth += SC.m_param.cExtraPixelsLeft + SC.m_param.cExtraPixelsRight;
@@ -3565,7 +3640,12 @@ Int ImageStrDecInit(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CTXSTRCODEC* pct
 		// read plane header of second image plane
 		Call(attach_SB(&SB, pSCP->pWStream));
 		InitializeStrDec(pNextSC, &SC.m_param, &SC);
-		ReadImagePlaneHeader(&pNextSC->WMII, &pNextSC->WMISCP, &pNextSC->m_param, &SB);
+		if (ReadImagePlaneHeader(&pNextSC->WMII, &pNextSC->WMISCP, &pNextSC->m_param, &SB) != ICERR_OK) {
+			// FreeImage: a broken alpha plane header
+			free(pNextSC);
+			free(pSC);
+			return ICERR_ERROR;
+		}
 		detach_SB(&SB);
 
 		// 2. initialize pNextSC
@@ -3718,6 +3798,10 @@ Int ImageStrDecDecode(CTXSTRCODEC ctxSC, const CWMImageBufferInfo* pBI
 #ifdef REENTRANT_MODE
 	for (pSC->cRow = pSC->WMIBI.uiFirstMBRow; pSC->cRow <= pSC->WMIBI.uiLastMBRow; pSC->cRow++) {
 		// const COLORFORMAT cfExt = (pSC->m_param.cfColorFormat == Y_ONLY ? Y_ONLY : pSC->WMII.cfColorFormat);
+		if (pSC->cRow > cMBRow) {
+			// FreeImage: past the bottom row, as for an alpha plane shorter than its image
+			return ICERR_ERROR;
+		}
 
 		if (0 == pSC->cRow) {
 			ProcessLeft = pSC->ProcessTopLeft;
@@ -3841,6 +3925,7 @@ Int ImageStrDecTerm(CTXSTRCODEC ctxSC)
 	PERFTIMER_DELETE(pSC->m_fMeasurePerf, pSC->m_ptEncDecPerf);
 	PERFTIMER_DELETE(pSC->m_fMeasurePerf, pSC->m_ptEndToEndPerf);
 
+	free(pSC->m_pNextSC); // FreeImage: the interleaved alpha plane's own block
 	free(pSC);
 
 	return ICERR_OK;
