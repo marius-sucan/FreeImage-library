@@ -278,13 +278,19 @@ cmsToneCurve* AllocateToneCurveStruct(cmsContext ContextID, cmsUInt32Number nEnt
         for (i=0; i < nSegments; i++) {
 
             // Type 0 is a special marker for table-based curves
-            if (Segments[i].Type == 0)
+            if (Segments[i].Type == 0) {
                 p ->SegInterp[i] = _cmsComputeInterpParams(ContextID, Segments[i].nGridPoints, 1, 1, NULL, CMS_LERP_FLAGS_FLOAT);
+                // FreeImage: out of memory
+                if (p ->SegInterp[i] == NULL) goto Error;
+            }
 
             memmove(&p ->Segments[i], &Segments[i], sizeof(cmsCurveSegment));
 
-            if (Segments[i].Type == 0 && Segments[i].SampledPoints != NULL)
+            if (Segments[i].Type == 0 && Segments[i].SampledPoints != NULL) {
                 p ->Segments[i].SampledPoints = (cmsFloat32Number*) _cmsDupMem(ContextID, Segments[i].SampledPoints, sizeof(cmsFloat32Number) * Segments[i].nGridPoints);
+                // FreeImage: out of memory
+                if (p ->Segments[i].SampledPoints == NULL) goto Error;
+            }
             else
                 p ->Segments[i].SampledPoints = NULL;
 

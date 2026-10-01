@@ -607,16 +607,16 @@ private:
 	Profile &operator=(const Profile &);
 };
 
-// the image's profile, even when the caller passes the image's own profile
-static void
+// the image's profile, even when the caller passes the image's own profile; false, the image untagged, when out of memory
+static bool
 AttachProfile(FIBITMAP *dib, const void *data, DWORD size) {
 	FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
 	const BYTE *current = (const BYTE*)icc->data;
 	const BYTE *bytes = (const BYTE*)data;
+	if (current && (size == icc->size) && ((bytes == current) || !memcmp(bytes, current, size))) {
+		return true;
+	}
 	if (current && (bytes >= current) && (bytes < current + icc->size)) {
-		if ((bytes == current) && (size == icc->size)) {
-			return;
-		}
 		void *copy = malloc(size);
 		if (copy) {
 			memcpy(copy, data, size);
@@ -625,9 +625,10 @@ AttachProfile(FIBITMAP *dib, const void *data, DWORD size) {
 		} else {
 			FreeImage_DestroyICCProfile(dib);
 		}
-		return;
+	} else {
+		FreeImage_CreateICCProfile(dib, (void*)data, (long)size);
 	}
-	FreeImage_CreateICCProfile(dib, (void*)data, (long)size);
+	return FreeImage_GetICCProfile(dib)->data != NULL;
 }
 
 // the most transforms a display keeps
@@ -807,7 +808,8 @@ private:
 	bool OpenBuiltIn(Profile &profile, Model model, unsigned depth);
 	bool OpenGiven(Profile &profile, const void *data, DWORD size, const char *what);
 	bool CreateTransform(bool same_buffer);
-	void Tag(FIBITMAP *dib) const;
+	bool Tag(FIBITMAP *dib, void *copy) const;
+	FIBITMAP *Tagged(FIBITMAP *dst) const;
 	bool Run(FIBITMAP *target, Layout out, bool in_place);
 	bool RunTable(FIBITMAP *target, Layout out, bool in_place);
 	bool RunRows(FIBITMAP *target, Layout out, bool in_place);
@@ -996,13 +998,19 @@ CreateTransform(bool same_buffer) {
 	return true;
 }
 
-// the destination profile, or none for FreeImage's default space
-void ColorConverter::
-Tag(FIBITMAP *dib) const {
+// the destination profile, or none for FreeImage's default space; copy is the profile in a malloc() buffer it takes, or NULL
+bool ColorConverter::
+Tag(FIBITMAP *dib, void *copy) const {
 	// before the source profile, which may be the image's own, is replaced
 	const bool converted = !IsIdentity();
-	if (m_destination.tag) {
-		AttachProfile(dib, m_destination.bytes, m_destination.size);
+	bool tagged = true;
+	if (copy) {
+		FreeImage_DestroyICCProfile(dib);
+		FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+		icc->data = copy;
+		icc->size = m_destination.size;
+	} else if (m_destination.tag) {
+		tagged = AttachProfile(dib, m_destination.bytes, m_destination.size);
 	} else {
 		FreeImage_DestroyICCProfile(dib);
 	}
@@ -1016,6 +1024,18 @@ Tag(FIBITMAP *dib) const {
 	if (converted) {
 		FreeImage_SetMetadata(FIMD_CUSTOM, dib, "CICP", NULL);
 	}
+	return tagged;
+}
+
+// dst with the destination profile, or NULL: without it, its colors would be taken for another space's
+FIBITMAP *ColorConverter::
+Tagged(FIBITMAP *dst) const {
+	if (!Tag(dst, NULL)) {
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
+		FreeImage_Unload(dst);
+		return NULL;
+	}
+	return dst;
 }
 
 bool ColorConverter::
@@ -1304,8 +1324,7 @@ Convert() {
 			FreeImage_Unload(dst);
 			return NULL;
 		}
-		Tag(dst);
-		return dst;
+		return Tagged(dst);
 	}
 	FIBITMAP *dst = AllocateLayout(out, m_width, m_height);
 	if (!dst) {
@@ -1317,25 +1336,34 @@ Convert() {
 		FreeImage_Unload(dst);
 		return NULL;
 	}
-	Tag(dst);
-	return dst;
+	return Tagged(dst);
 }
 
 BOOL ColorConverter::
 Apply() {
 	if (IsIdentity()) {
-		Tag(m_dib);
-		return TRUE;
+		return Tag(m_dib, NULL) ? TRUE : FALSE;
 	}
 	const Layout out = InPlaceLayout(m_px, m_destination.model);
 	if (out == LAYOUT_NONE) {
 		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: this conversion changes the pixel format, use FreeImage_ConvertToICCProfile");
 		return FALSE;
 	}
+	// copied before the pixels change: they cannot be left without it
+	void *copy = NULL;
+	if (m_destination.tag) {
+		copy = malloc(m_destination.size);
+		if (!copy) {
+			FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
+			return FALSE;
+		}
+		memcpy(copy, m_destination.bytes, m_destination.size);
+	}
 	if (!Run(m_dib, out, true)) {
+		free(copy);
 		return FALSE;
 	}
-	Tag(m_dib);
+	Tag(m_dib, copy);
 	return TRUE;
 }
 

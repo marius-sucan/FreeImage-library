@@ -350,10 +350,22 @@ void* MatrixElemDup(cmsStage* mpe)
     sz = mpe ->InputChannels * mpe ->OutputChannels;
 
     NewElem ->Double = (cmsFloat64Number*) _cmsDupMem(mpe ->ContextID, Data ->Double, sz * sizeof(cmsFloat64Number)) ;
+    // FreeImage: out of memory
+    if (NewElem ->Double == NULL) {
+        _cmsFree(mpe ->ContextID, NewElem);
+        return NULL;
+    }
 
-    if (Data ->Offset)
+    if (Data ->Offset) {
         NewElem ->Offset = (cmsFloat64Number*) _cmsDupMem(mpe ->ContextID,
                                                 Data ->Offset, mpe -> OutputChannels * sizeof(cmsFloat64Number)) ;
+        // FreeImage: out of memory
+        if (NewElem ->Offset == NULL) {
+            _cmsFree(mpe ->ContextID, NewElem ->Double);
+            _cmsFree(mpe ->ContextID, NewElem);
+            return NULL;
+        }
+    }
 
     return (void*) NewElem;
 }

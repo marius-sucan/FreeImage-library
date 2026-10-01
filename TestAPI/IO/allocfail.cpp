@@ -1,6 +1,7 @@
 /* FreeImage 3 - I/O test: every allocation libfreeimage.a makes, failed in turn, crashes nothing */
 /* malloc, calloc and realloc are wrapped at link time, new(std::nothrow) replaced; each case runs in a child per failed allocation */
 #include <new>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,8 @@
 #endif
 #endif
 #include "FreeImage.h"
+#define CMS_NO_REGISTER_KEYWORD 1
+#include "../../Source/LibLCMS2/include/lcms2.h"
 
 static int failures = 0;
 
@@ -410,6 +413,271 @@ static int loadmem_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- color management */
+
+static const void *s_adobe = NULL, *s_p3 = NULL, *s_prophoto = NULL;
+static DWORD s_adobe_size = 0, s_p3_size = 0, s_prophoto_size = 0;
+static BYTE *s_press = NULL, *s_lut = NULL, *s_png = NULL;
+static DWORD s_press_size = 0, s_lut_size = 0, s_png_size = 0;
+
+/* a CMYK press profile built with Little CMS: the naive inks to Lab, and back */
+static cmsInt32Number press_forward(const cmsUInt16Number in[], cmsUInt16Number out[], void *cargo) {
+    const double k = in[3] / 65535.0;
+    double rgb[3];
+    for (int i = 0; i < 3; i++) rgb[i] = (1.0 - in[i] / 65535.0) * (1.0 - k);
+    cmsDoTransform((cmsHTRANSFORM)cargo, rgb, out, 1);
+    return TRUE;
+}
+
+static cmsInt32Number press_reverse(const cmsUInt16Number in[], cmsUInt16Number out[], void *cargo) {
+    double rgb[3];
+    cmsDoTransform((cmsHTRANSFORM)cargo, in, rgb, 1);
+    const double k = 1.0 - fmax(rgb[0], fmax(rgb[1], rgb[2]));
+    for (int i = 0; i < 3; i++) {
+        const double c = (k < 1.0) ? (1.0 - rgb[i] - k) / (1.0 - k) : 0.0;
+        out[i] = (cmsUInt16Number)(fmin(fmax(c, 0.0), 1.0) * 65535.0 + 0.5);
+    }
+    out[3] = (cmsUInt16Number)(fmin(fmax(k, 0.0), 1.0) * 65535.0 + 0.5);
+    return TRUE;
+}
+
+static BYTE *make_press(DWORD *size) {
+    cmsHPROFILE srgb = cmsCreate_sRGBProfile(), lab = cmsCreateLab4Profile(NULL), h = cmsCreateProfilePlaceholder(NULL);
+    cmsHTRANSFORM to_lab = cmsCreateTransform(srgb, TYPE_RGB_DBL, lab, TYPE_Lab_16, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE);
+    cmsHTRANSFORM to_rgb = cmsCreateTransform(lab, TYPE_Lab_16, srgb, TYPE_RGB_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE);
+    cmsPipeline *a2b = cmsPipelineAlloc(NULL, 4, 3), *b2a = cmsPipelineAlloc(NULL, 3, 4);
+    cmsStage *forward = cmsStageAllocCLut16bit(NULL, 9, 4, 3, NULL), *reverse = cmsStageAllocCLut16bit(NULL, 17, 3, 4, NULL);
+    cmsUInt32Number n = 0;
+    BYTE *data = NULL;
+    cmsStageSampleCLut16bit(forward, press_forward, to_lab, 0);
+    cmsStageSampleCLut16bit(reverse, press_reverse, to_rgb, 0);
+    cmsPipelineInsertStage(a2b, cmsAT_END, forward);
+    cmsPipelineInsertStage(b2a, cmsAT_END, reverse);
+    cmsSetProfileVersion(h, 2.1);
+    cmsSetDeviceClass(h, cmsSigOutputClass);
+    cmsSetColorSpace(h, cmsSigCmykData);
+    cmsSetPCS(h, cmsSigLabData);
+    cmsWriteTag(h, cmsSigMediaWhitePointTag, cmsD50_XYZ());
+    cmsWriteTag(h, cmsSigAToB0Tag, a2b);
+    cmsWriteTag(h, cmsSigBToA0Tag, b2a);
+    if (cmsSaveProfileToMem(h, NULL, &n) && n && (data = (BYTE *)malloc(n)) != NULL && !cmsSaveProfileToMem(h, data, &n)) {
+        free(data);
+        data = NULL;
+    }
+    *size = data ? n : 0;
+    cmsPipelineFree(a2b);
+    cmsPipelineFree(b2a);
+    cmsDeleteTransform(to_lab);
+    cmsDeleteTransform(to_rgb);
+    cmsCloseProfile(h);
+    cmsCloseProfile(srgb);
+    cmsCloseProfile(lab);
+    return data;
+}
+
+static BYTE *read_bytes(const char *path, DWORD *size) {
+    FILE *f = fopen(path, "rb");
+    BYTE *data = NULL;
+    long n;
+    *size = 0;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) == 0 && (n = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0 && (data = (BYTE *)malloc(n)) != NULL) {
+        if (fread(data, 1, n, f) == (size_t)n) *size = (DWORD)n;
+        else { free(data); data = NULL; }
+    }
+    fclose(f);
+    return data;
+}
+
+/* the profiles, the display and an Adobe RGB PNG, made before the sweeps */
+static int icc_setup(void) {
+    FIBITMAP *dib = pattern(FIT_BITMAP, 40, 24, 24);
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BYTE *data = NULL;
+    DWORD size = 0;
+    s_adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &s_adobe_size);
+    s_p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &s_p3_size);
+    s_prophoto = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &s_prophoto_size);
+    s_press = make_press(&s_press_size);
+    /* a LUT profile with a Lab connection space, from the color management tests */
+    s_lut = read_bytes("../ICC/data/test3.icc", &s_lut_size);
+    if (dib && mem) {
+        FreeImage_CreateICCProfile(dib, (void *)s_adobe, (long)s_adobe_size);
+        if (FreeImage_SaveToMemory(FIF_PNG, dib, mem, 0) && FreeImage_AcquireMemory(mem, &data, &size) && (s_png = (BYTE *)malloc(size)) != NULL) {
+            memcpy(s_png, data, size);
+            s_png_size = size;
+        }
+    }
+    if (mem) FreeImage_CloseMemory(mem);
+    FreeImage_Unload(dib);
+    return s_adobe && s_p3 && s_prophoto && s_press && s_png && FreeImage_SetDisplayICCProfile(s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+}
+
+static FIBITMAP *tagged(FREE_IMAGE_TYPE type, int bpp, const void *profile, DWORD size) {
+    FIBITMAP *dib = pattern(type, 40, 24, bpp);
+    if (dib && profile) FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+    return dib;
+}
+
+static int has_profile(FIBITMAP *dib, const void *profile, DWORD size) {
+    const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+    return icc->data && (icc->size == size) && !memcmp(icc->data, profile, size);
+}
+
+/* NULL, or the whole image, carrying the profile its pixels are in */
+static int converted_ok(FIBITMAP *dib, const void *profile, DWORD size) {
+    return !dib || (FreeImage_HasPixels(dib) && (FreeImage_GetWidth(dib) == 40) && (FreeImage_GetHeight(dib) == 24) && has_profile(dib, profile, size));
+}
+
+/* Adobe RGB to Display P3 at 8 bits, in place too, and RGB16 to ProPhoto RGB at 16 bits */
+static int icc_convert_case(void) {
+    FIBITMAP *rgb = tagged(FIT_BITMAP, 24, s_adobe, s_adobe_size), *rgba = tagged(FIT_BITMAP, 32, s_adobe, s_adobe_size);
+    FIBITMAP *rgb16 = tagged(FIT_RGB16, 48, s_adobe, s_adobe_size), *a, *b;
+    BOOL applied;
+    int whole;
+    if (!rgb || !rgba || !rgb16) return CASE_BROKEN;
+
+    armed = 1;
+    a = FreeImage_ConvertToICCProfile(rgb, s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+    b = FreeImage_ConvertToICCProfile(rgb16, s_prophoto, s_prophoto_size, FICMS_INTENT_PERCEPTUAL);
+    applied = FreeImage_ApplyICCProfile(rgba, s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+    armed = 0;
+
+    whole = converted_ok(a, s_p3, s_p3_size) && converted_ok(b, s_prophoto, s_prophoto_size) &&
+        (applied ? has_profile(rgba, s_p3, s_p3_size) : has_profile(rgba, s_adobe, s_adobe_size));
+    FreeImage_Unload(a);
+    FreeImage_Unload(b);
+    FreeImage_Unload(rgb);
+    FreeImage_Unload(rgba);
+    FreeImage_Unload(rgb16);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* sRGB to a CMYK press with black point compensation, and back to Adobe RGB */
+static int icc_cmyk_case(void) {
+    FIBITMAP *rgb = tagged(FIT_BITMAP, 24, NULL, 0), *cmyk, *back = NULL;
+    int whole;
+    if (!rgb) return CASE_BROKEN;
+
+    armed = 1;
+    cmyk = FreeImage_ConvertToCMYK(rgb, s_press, s_press_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+    if (cmyk) back = FreeImage_ConvertCMYKToRGB(cmyk, s_adobe, s_adobe_size, FICMS_INTENT_PERCEPTUAL | FICMS_BLACKPOINT_COMPENSATION);
+    armed = 0;
+
+    whole = converted_ok(cmyk, s_press, s_press_size) && (!cmyk || (FreeImage_GetICCProfile(cmyk)->flags & FIICC_COLOR_IS_CMYK)) &&
+        converted_ok(back, s_adobe, s_adobe_size);
+    FreeImage_Unload(cmyk);
+    FreeImage_Unload(back);
+    FreeImage_Unload(rgb);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* Adobe RGB proofed on the press for a Display P3 display, the colors the press cannot print marked */
+static int icc_proof_case(void) {
+    FIBITMAP *rgb = tagged(FIT_BITMAP, 24, s_adobe, s_adobe_size), *proof;
+    int whole;
+    if (!rgb) return CASE_BROKEN;
+
+    armed = 1;
+    proof = FreeImage_SoftProof(rgb, s_press, s_press_size, s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_GAMUT_CHECK);
+    armed = 0;
+
+    whole = converted_ok(proof, s_p3, s_p3_size);
+    FreeImage_Unload(proof);
+    FreeImage_Unload(rgb);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* a LUT profile with a Lab connection space converted to sRGB, and its description */
+static int icc_lut_case(void) {
+    FIBITMAP *rgb = tagged(FIT_BITMAP, 24, s_lut, s_lut_size), *res;
+    char text[64];
+    int whole;
+    if (!rgb) return CASE_BROKEN;
+    memset(text, 'x', sizeof(text));
+
+    armed = 1;
+    res = FreeImage_ConvertToICCProfile(rgb, NULL, 0, FICMS_INTENT_PERCEPTUAL | FICMS_BLACKPOINT_COMPENSATION);
+    FreeImage_GetICCProfileDescription(s_lut, s_lut_size, text, sizeof(text));
+    FreeImage_GetICCProfileColorSpace(s_lut, s_lut_size);
+    armed = 0;
+
+    whole = (!res || (FreeImage_HasPixels(res) && !FreeImage_GetICCProfile(res)->data)) && memchr(text, 0, sizeof(text));
+    FreeImage_Unload(res);
+    FreeImage_Unload(rgb);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* the display becomes Adobe RGB, or stays Display P3 */
+static int icc_display_set_case(void) {
+    BYTE now[4096];
+    DWORD n;
+    BOOL done;
+
+    armed = 1; fail_new = 1;
+    done = FreeImage_SetDisplayICCProfile(s_adobe, s_adobe_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+    armed = 0; fail_new = 0;
+
+    n = FreeImage_GetDisplayICCProfile(now, sizeof(now));
+    if (seen < fail_at) return NOT_REACHED;
+    if (done) return ((n == s_adobe_size) && !memcmp(now, s_adobe, n)) ? CASE_OK : CASE_BROKEN;
+    return ((n == s_p3_size) && !memcmp(now, s_p3, n)) ? CASE_OK : CASE_BROKEN;
+}
+
+/* FIF_LOAD_DISPLAY_ICC: an Adobe RGB PNG comes in the display's colors, as it was, or not at all */
+static int icc_display_load_case(void) {
+    FIMEMORY *mem = FreeImage_OpenMemory(s_png, s_png_size);
+    FIBITMAP *dib;
+    int whole;
+    if (!mem) return CASE_BROKEN;
+
+    armed = 1; fail_new = 1;
+    dib = FreeImage_LoadFromMemory(FIF_PNG, mem, FIF_LOAD_DISPLAY_ICC);
+    armed = 0; fail_new = 0;
+
+    whole = !dib || converted_ok(dib, s_p3, s_p3_size) || converted_ok(dib, s_adobe, s_adobe_size);
+    FreeImage_Unload(dib);
+    FreeImage_CloseMemory(mem);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* an Adobe RGB frame, then a Display P3 one converted to it: a save that says TRUE loads with every page appended */
+static int apng_case(void) {
+    FIBITMAP *a = tagged(FIT_BITMAP, 24, s_adobe, s_adobe_size), *b = tagged(FIT_BITMAP, 24, s_p3, s_p3_size);
+    const char *dir = getenv("IO_TEST_TMP");
+    char path[512];
+    FIMULTIBITMAP *doc;
+    BOOL saved = FALSE;
+    int pages = 0, whole = 1;
+    if (!a || !b) return CASE_BROKEN;
+    snprintf(path, sizeof(path), "%s/fi_io_apng_%d.png", (dir && *dir) ? dir : ".", (int)getpid());
+
+    armed = 1; fail_new = 1;
+    doc = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
+    if (doc) {
+        pages += FreeImage_AppendPage(doc, a) ? 1 : 0;
+        pages += FreeImage_AppendPage(doc, b) ? 1 : 0;
+        saved = FreeImage_CloseMultiBitmap(doc, 0);
+    }
+    armed = 0; fail_new = 0;
+
+    if (saved && pages) {
+        FIMULTIBITMAP *back = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
+        whole = back && (FreeImage_GetPageCount(back) == pages);
+        if (back) FreeImage_CloseMultiBitmap(back, 0);
+    }
+    remove(path);
+    FreeImage_Unload(a);
+    FreeImage_Unload(b);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -431,6 +699,17 @@ int main(void) {
     sweep("EXR save: TRUE only for a file that loads", exr_save);
     sweep("JNG save: TRUE only for a file that loads", jng_save);
     sweep("TIFF load: no crash", tiff_load);
+    if (!icc_setup()) {
+        report("color management: the test profiles", 0);
+    } else {
+        sweep("ICC conversions, 8-bit, 16-bit, in place: NULL or tagged", icc_convert_case);
+        sweep("ICC CMYK and back, black point compensation: NULL or tagged", icc_cmyk_case);
+        sweep("ICC soft proof with a gamut check: NULL or tagged", icc_proof_case);
+        if (s_lut) sweep("ICC LUT profile, Lab connection space: NULL or sRGB", icc_lut_case);
+        sweep("display profile set: the new one or the old one", icc_display_set_case);
+        sweep("FIF_LOAD_DISPLAY_ICC load: converted, as loaded or NULL", icc_display_load_case);
+        sweep("APNG save, frames in different profiles: TRUE only for a file that loads", apng_case);
+    }
 #endif
     printf("--- %d failure(s) ---\n", failures);
     return failures ? 1 : 0;

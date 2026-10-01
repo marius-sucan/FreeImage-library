@@ -590,6 +590,8 @@ static
 void* defMtxCreate(cmsContext id)
 {
     _cmsMutex* ptr_mutex = (_cmsMutex*) _cmsMalloc(id, sizeof(_cmsMutex));
+    // FreeImage: out of memory; the profile's locks then fail
+    if (ptr_mutex == NULL) return NULL;
     _cmsInitMutexPrimitive(ptr_mutex);
     return (void*) ptr_mutex;   
 }
@@ -597,6 +599,8 @@ void* defMtxCreate(cmsContext id)
 static
 void defMtxDestroy(cmsContext id, void* mtx)
 {
+    // FreeImage: a mutex that could not be allocated
+    if (mtx == NULL) return;
     _cmsDestroyMutexPrimitive((_cmsMutex *) mtx); 
     _cmsFree(id, mtx);
 }
@@ -605,6 +609,8 @@ static
 cmsBool defMtxLock(cmsContext id, void* mtx)
 {
     cmsUNUSED_PARAMETER(id);
+    // FreeImage: a mutex that could not be allocated
+    if (mtx == NULL) return FALSE;
     return _cmsLockPrimitive((_cmsMutex *) mtx) == 0;     
 }
 
@@ -612,6 +618,8 @@ static
 void defMtxUnlock(cmsContext id, void* mtx)
 {
     cmsUNUSED_PARAMETER(id);
+    // FreeImage: a mutex that could not be allocated
+    if (mtx == NULL) return;
     _cmsUnlockPrimitive((_cmsMutex *) mtx); 
 }
 
