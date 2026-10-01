@@ -98,6 +98,10 @@ from the plugin:
   alpha from the low bytes, an alpha of 0 making grey or RGB transparent and
   any other opaque; the depths PNG does not allow are refused. The expected
   values are written out in the test, worked from the spec's text.
+- **Viewable BASI objects.** "If the viewable field is omitted, the object is
+  not viewable", and "any attempt to display a nonviewable object must be
+  ignored": a BASI with viewable 0 or none is no page, at once, by SHOW or
+  cycled in by SHOW mode 6; with viewable 1 it is one.
 - **16-bit grey layers** are drawn by their high byte, a linear grey one
   converted to grey sRGB at 16 bits first.
 - **JNG profiles.** A JNG's iCCP describes its JPEG data and wins over an APP2

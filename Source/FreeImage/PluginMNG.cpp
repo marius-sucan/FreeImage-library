@@ -454,8 +454,9 @@ struct MNGObject {
 	WORD id;
 	MNGFrame frame;
 	BOOL do_not_show;
+	BOOL viewable;			//! FALSE: a BASI object no SHOW can display
 
-	MNGObject() : id(0), do_not_show(FALSE) {
+	MNGObject() : id(0), do_not_show(FALSE), viewable(TRUE) {
 	}
 };
 
@@ -687,8 +688,9 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 				frame.is_basi = (type == CHUNK_BASI) ? TRUE : FALSE;
 
 				// IHDR, BASI and JHDR all open with a 4-byte width and height
+				BOOL viewable = frame.is_basi ? FALSE : TRUE;
 				if(length >= 8) {
-					if(!ReadBytesAt(io, handle, payload_start, (length < 16) ? length : 16, payload)) {
+					if(!ReadBytesAt(io, handle, payload_start, (length < 22) ? length : 22, payload)) {
 						break;
 					}
 					frame.width = GetDWORD(&payload[0]);
@@ -697,6 +699,10 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 					if(!frame.is_jng && (length >= 13) && (payload[11] == 64)) {
 						info->complex_features = TRUE;
 						WarnComplex(info);
+					}
+					// a BASI object is viewable only when it says so; an omitted field is 0 (4.2.5)
+					if(frame.is_basi && (length >= 22) && (payload[21] == 1)) {
+						viewable = TRUE;
 					}
 				}
 
@@ -728,11 +734,12 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 					if(stored) {
 						stored->frame = frame;
 						stored->do_not_show = object.do_not_show;
+						stored->viewable = viewable;
 					}
 				}
 
-				// hidden objects become pages only when shown
-				if(!object.do_not_show) {
+				// hidden objects become pages only when shown; nonviewable ones never do
+				if(!object.do_not_show && viewable) {
 					if(!AddLayer(info, frame, framing, subframe, &first_image)) {
 						FreeImage_OutputMessageProc(s_format_id,
 							"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
@@ -898,7 +905,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 					}
 					cursors[slot].next = chosen + 1;
 
-					if(show_mode == 6) {
+					if((show_mode == 6) && objects[range[chosen]].viewable) {
 						if(!AddLayer(info, objects[range[chosen]].frame, framing,
 									 subframe, &first_image)) {
 							FreeImage_OutputMessageProc(s_format_id,
@@ -924,7 +931,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 						case 5: stored.do_not_show = stored.do_not_show ? FALSE : TRUE; break;
 						default: break;	// 2 displays without changing the flag
 					}
-					if(displays && !stored.do_not_show) {
+					if(displays && !stored.do_not_show && stored.viewable) {
 						if(!AddLayer(info, stored.frame, framing, subframe, &first_image)) {
 							FreeImage_OutputMessageProc(s_format_id,
 								"MNG: the file names more than %d layers", MNG_MAX_FRAMES);

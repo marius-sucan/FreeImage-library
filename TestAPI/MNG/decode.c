@@ -1551,6 +1551,69 @@ static void test_basi_samples(void) {
 	}
 }
 
+/* a BASI object is shown only when viewable is 1; omitted, the field is 0, and a SHOW of it is ignored (4.2.5) */
+static void test_basi_viewable(void) {
+	/* length of the BASI chunk, its viewable byte, the SHOW mode that shows it (-1: none, shown at once); pages: the BASI's and an 8x8 PNG's */
+	static const struct { const char *what; int length; BYTE viewable; int show; int pages; } cases[] = {
+		{ "viewable 1", 22, 1, -1, 2 },
+		{ "viewable 0", 22, 0, -1, 1 },
+		{ "no viewable field", 21, 0, -1, 1 },
+		{ "no alpha, no viewable field", 19, 0, -1, 1 },
+		{ "viewable 1, shown by SHOW", 22, 1, 0, 2 },
+		{ "viewable 0, shown by SHOW", 22, 0, 0, 1 },
+		{ "viewable 1, cycled by SHOW mode 6", 22, 1, 6, 2 },
+		{ "viewable 0, cycled by SHOW mode 6", 22, 0, 6, 1 }
+	};
+	int i, bad = 0;
+
+	printf("viewable BASI objects\n");
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])); i++) {
+		FIMULTIBITMAP *mb;
+		FIBITMAP *dib;
+		Buf mng;
+		int pages;
+
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 0, 0, 0, 0x07);
+		if (cases[i].show >= 0) {
+			mng_defi(&mng, 1, 1, 0, 0, 0);
+		}
+		basi_chunk(&mng, 2, 16, 0xC8C8, 0x3232, 0x3232, 0xFFFF, cases[i].length, cases[i].viewable);
+		if (cases[i].show >= 0) {
+			mng_defi(&mng, 2, 1, 0, 0, 0);
+		} else {
+			mng_defi(&mng, 0, 0, 0, 0, 0);
+		}
+		mng_image(&mng, 8, 8, 0, 255, 0, 24);
+		if (cases[i].show == 0) {
+			mng_show(&mng, 1, 2, 0);
+		} else if (cases[i].show == 6) {
+			/* one object per SHOW: the BASI, then the PNG */
+			mng_show(&mng, 1, 2, 6);
+			mng_show(&mng, 1, 2, 6);
+		}
+		mng_mend(&mng);
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_basi_viewable.mng", &mng), FALSE, TRUE, FALSE, 0);
+		buf_free(&mng);
+		pages = mb ? FreeImage_GetPageCount(mb) : -1;
+		dib = mb ? FreeImage_LockPage(mb, pages - 1) : NULL;
+		if (pages != cases[i].pages) {
+			fail("%s: %d pages, want %d", cases[i].what, pages, cases[i].pages);
+			bad = 1;
+		} else if (!dib || FreeImage_GetWidth(dib) != 8) {
+			fail("%s: the last page is not the PNG image", cases[i].what);
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) {
+		ok("a BASI with viewable 1 is a page, at once or by SHOW of either kind; with 0 or no viewable field it is none");
+	}
+}
+
 /* a 16-bit grey image of one value, tagged when profile is given */
 static FIBITMAP *grey16(unsigned width, unsigned height, WORD value, const void *profile, DWORD size) {
 	FIBITMAP *dib = FreeImage_AllocateT(FIT_UINT16, width, height, 16, 0, 0, 0);
@@ -2016,6 +2079,7 @@ int main(void) {
 	test_canvas_colour_space();
 	test_basi_colour_space();
 	test_basi_samples();
+	test_basi_viewable();
 	test_grey16_layers();
 	test_background_colour_space();
 	test_unconvertible_canvas();
