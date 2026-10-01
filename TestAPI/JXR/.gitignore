@@ -4,6 +4,7 @@ narrowio
 meta
 tags
 robust
+orient
 bigfile
 *.o
 fi_jxr_*.jxr

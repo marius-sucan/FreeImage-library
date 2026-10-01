@@ -1089,6 +1089,66 @@ SetDecoderParameters(PKImageDecode *pDecoder, int flags) {
 	// more options to come ...
 }
 
+/** dst_line pixels c0 to c1 from pixel x of src_lines, N bytes each */
+template <size_t N> static void
+TurnPixels(const BYTE * const *src_lines, unsigned c0, unsigned c1, unsigned x, BYTE *dst_line) {
+	for(unsigned col = c0; col < c1; col++) {
+		memcpy(dst_line + (size_t)col * N, src_lines[col - c0] + (size_t)x * N, N);
+	}
+}
+
+/**
+Turn an image as a container orientation of a quarter turn says: 90 degrees clockwise first, then its flips
+@param src Upright image, w x h
+@param dst Turned image, h x w
+@param oOrientation O_RCW, O_RCW_FLIPV, O_RCW_FLIPH or O_RCW_FLIPVH
+*/
+static void
+TurnUpright(FIBITMAP *src, FIBITMAP *dst, ORIENTATION oOrientation) {
+	const unsigned w = FreeImage_GetWidth(src);
+	const unsigned h = FreeImage_GetHeight(src);
+	const unsigned bpp = FreeImage_GetBPP(src);
+	const unsigned bytespp = bpp / 8;
+	const BOOL flip_v = (oOrientation == O_RCW_FLIPV) || (oOrientation == O_RCW_FLIPVH);
+	const BOOL flip_h = (oOrientation == O_RCW_FLIPH) || (oOrientation == O_RCW_FLIPVH);
+	// 64 src scanlines at a time, which stay in the cache
+	const unsigned BLOCK = 64;
+	const BYTE *src_lines[BLOCK];
+
+	// scanlines run bottom-up: dst scanline d is src column x, read along src scanlines
+	for(unsigned c0 = 0; c0 < h; c0 += BLOCK) {
+		const unsigned c1 = MIN(c0 + BLOCK, h);
+		for(unsigned col = c0; col < c1; col++) {
+			src_lines[col - c0] = FreeImage_GetScanLine(src, flip_h ? h - 1 - col : col);
+		}
+		for(unsigned d = 0; d < w; d++) {
+			const unsigned x = flip_v ? d : w - 1 - d;
+			BYTE *dst_line = FreeImage_GetScanLine(dst, d);
+			switch(bytespp) {
+				case 0:
+					for(unsigned col = c0; col < c1; col++) {
+						const BYTE mask = (BYTE)(0x80 >> (col & 7));
+						if(src_lines[col - c0][x >> 3] & (0x80 >> (x & 7))) {
+							dst_line[col >> 3] |= mask;
+						} else {
+							dst_line[col >> 3] &= (BYTE)~mask;
+						}
+					}
+					break;
+				case 1: TurnPixels<1>(src_lines, c0, c1, x, dst_line); break;
+				case 2: TurnPixels<2>(src_lines, c0, c1, x, dst_line); break;
+				case 3: TurnPixels<3>(src_lines, c0, c1, x, dst_line); break;
+				case 4: TurnPixels<4>(src_lines, c0, c1, x, dst_line); break;
+				case 6: TurnPixels<6>(src_lines, c0, c1, x, dst_line); break;
+				case 8: TurnPixels<8>(src_lines, c0, c1, x, dst_line); break;
+				case 12: TurnPixels<12>(src_lines, c0, c1, x, dst_line); break;
+				case 16: TurnPixels<16>(src_lines, c0, c1, x, dst_line); break;
+				default: break;
+			}
+		}
+	}
+}
+
 /**
 Copy or convert & copy decoded pixels into the dib
 @param pDecoder Decoder handle
@@ -1286,6 +1346,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			float resX, resY;	// image resolution (in dots per inch)
 			// convert from English units, i.e. dots per inch to universal units, i.e. dots per meter
 			pDecoder->GetResolution(pDecoder, &resX, &resY);
+			if(pDecoder->WMP.wmiI.oOrientation >= O_RCW) {
+				// turned a quarter, like the size
+				const float res = resX;
+				resX = resY;
+				resY = res;
+			}
 			FreeImage_SetDotsPerMeterX(dib, (unsigned)(resX / 0.0254F + 0.5F));
 			FreeImage_SetDotsPerMeterY(dib, (unsigned)(resY / 0.0254F + 0.5F));
 		}
@@ -1305,7 +1371,22 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 		
 		// copy pixels into the dib, perform pixel conversion if needed
-		error_code = CopyPixels(pDecoder, guid_format, dib, width, height);
+		if(pDecoder->WMP.wmiI.oOrientation >= O_RCW) {
+			// jxrlib decodes row by row and cannot turn an image a quarter: decode it upright, then turn it
+			const ORIENTATION oOrientation = pDecoder->WMP.wmiI.oOrientation;
+			FIBITMAP *upright = FreeImage_AllocateT(image_type, height, width, bpp, red_mask, green_mask, blue_mask);
+			if(!upright) {
+				throw FI_MSG_ERROR_DIB_MEMORY;
+			}
+			pDecoder->WMP.wmiI.oOrientation = O_NONE;
+			error_code = CopyPixels(pDecoder, guid_format, upright, height, width);
+			if(error_code == WMP_errSuccess) {
+				TurnUpright(upright, dib, oOrientation);
+			}
+			FreeImage_Unload(upright);
+		} else {
+			error_code = CopyPixels(pDecoder, guid_format, dib, width, height);
+		}
 		JXR_CHECK(error_code);
 
 		// free the decoder

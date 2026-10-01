@@ -62,6 +62,7 @@ Fixes:
 - fixed JPEG XR saves of images with a page number, rating or title tag crashing, or writing a file that cannot be opened;
 - fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
 - fixed JPEG XR files too small to hold the image they declare allocating it and taking seconds to load;
+- fixed JPEG XR images stored rotated by 90 degrees failing to load;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;

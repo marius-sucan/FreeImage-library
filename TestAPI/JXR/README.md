@@ -1,6 +1,6 @@
 # JPEG XR regression tests
 
-Seven standalone programs covering the JXR plugin. Each prints a report and exits
+Eight standalone programs covering the JXR plugin. Each prints a report and exits
 non-zero on failure. They exist because the defects they cover all live in places
 ordinary round-trip testing never reaches: error paths, unexercised save flags,
 64-bit arithmetic, and a `FreeImageIO` of the caller's own.
@@ -13,13 +13,14 @@ ordinary round-trip testing never reaches: error paths, unexercised save flags,
 | `meta` | ICC + EXIF + XMP round-trip, covering `WriteMetadata`'s return value and `ReadProfile`. |
 | `tags` | The 14 Exif tags the container holds as descriptive metadata (strings, the ratings, the UTF-16 XPTitle, the two-SHORT PageNumber), each alone, all together, and only those short enough to sit in their IFD entry, saved lossless: the pixels and the tags must come back. A tag of a type the container does not take is left out, the others kept. Then a TIFF with a PageNumber, `Wrapper/FreeImagePlus/test/test.tif` (or argv[1]). |
 | `robust` | Some 6,300 damaged files made from six saved ones: descriptive tags of another type or count (and a PageNumber of one SHORT, as older release builds wrote it), every container pixel format, every codestream colour format and bit depth, internal colour format, alpha flag and size, sizes the data cannot hold, cuts, and random damage. Each may load or not, but never crash, abort or leak; a size the data cannot hold is refused before allocating. Run under ASan too. |
+| `orient` | Every pixel format saved losslessly, its container orientation set to each of the 8 values: the image loads as the upright one flipped, or turned a quarter clockwise and then flipped, with width, height and resolution swapped on a quarter turn, header-only loads too. |
 | `bigfile` | 46341 x 46341 (2.15 Gpx) saved lossless to a 2.17 GiB file and verified pixel by pixel on reload. Needs ~4.5 GB RAM, ~2.4 GB free space, ~2 minutes. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run            # regress, edge, narrowio, meta, tags, robust
+    make run            # regress, edge, narrowio, meta, tags, robust, orient
     make asan run       # the same, with AddressSanitizer - worth it for edge, meta and robust
     make bigfile-run    # the 2 GiB test, separately: it is slow and memory-hungry
 
@@ -39,4 +40,5 @@ Scratch files are written to `$JXR_TEST_TMP`, or the current directory.
   than it started with is expected: the JXR container defines only a subset.
 - `tags` - `0 failures`.
 - `robust` - `0 failures`; no AddressSanitizer report under `make asan run`.
+- `orient` - `0 failures`.
 - `bigfile` - `crosses 2GiB=YES` and `exact round-trip over all 2.15 Gpx`.
