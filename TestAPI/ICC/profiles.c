@@ -704,6 +704,93 @@ static void cmyk_pages_cached(const Bytes *press) {
     if (changed) FreeImage_Unload(changed);
 }
 
+/* a little-endian Exif APP1 payload: ColorSpace, and an interoperability index when one is given */
+static unsigned make_exif(BYTE *out, WORD color_space, const char *index) {
+    BYTE *t = out + 6;
+    unsigned n = index ? 2 : 1;
+    memcpy(out, "Exif\0\0", 6);
+    memset(t, 0, 80);
+    memcpy(t, "II\x2a\0\x08\0\0\0", 8);
+    /* IFD0 at 8: the Exif IFD pointer */
+    t[8] = 1; t[10] = 0x69; t[11] = 0x87; t[12] = 4; t[14] = 1; t[18] = 26;
+    /* the Exif IFD at 26: ColorSpace, then the interoperability IFD pointer */
+    t[26] = (BYTE)n;
+    t[28] = 0x01; t[29] = 0xA0; t[30] = 3; t[32] = 1; t[36] = (BYTE)color_space; t[37] = (BYTE)(color_space >> 8);
+    if (index) {
+        t[40] = 0x05; t[41] = 0xA0; t[42] = 4; t[44] = 1; t[48] = 56;
+        /* the interoperability IFD at 56: InteroperabilityIndex, 4 ASCII bytes in the entry */
+        t[56] = 1; t[58] = 0x01; t[60] = 2; t[62] = 4; memcpy(t + 66, index, 3);
+        return 6 + 74;
+    }
+    return 6 + 44;
+}
+
+/* cameras in Adobe RGB mode say so in Exif, not with a profile: ColorSpace 2, or uncalibrated with DCF's "R03" */
+static void exif_adobe_rgb(const Bytes *press) {
+    static const struct { const char *what; WORD color_space; const char *index; int adobe; } cases[] = {
+        { "uncalibrated, R03", 0xFFFF, "R03", 1 },
+        { "ColorSpace 2", 2, NULL, 1 },
+        { "sRGB, R03", 1, "R03", 0 },
+        { "uncalibrated, R98", 0xFFFF, "R98", 0 },
+        { "uncalibrated, no index", 0xFFFF, NULL, 0 },
+    };
+    const char *path = scratch("icc_exif.jpg");
+    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB), pro = builtin(FICMS_PROFILE_PROPHOTO_RGB);
+    FIBITMAP *rgb = FreeImage_Allocate(24, 16, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    FIBITMAP *grey = FreeImage_ConvertToGreyscale(rgb), *cmyk = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
+    BYTE exif[128];
+    unsigned i, k;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const unsigned size = make_exif(exif, cases[i].color_space, cases[i].index);
+        FITAG *tag = FreeImage_CreateTag();
+        FreeImage_SetTagKey(tag, "ExifRaw");
+        FreeImage_SetTagType(tag, FIDT_BYTE);
+        FreeImage_SetTagCount(tag, size);
+        FreeImage_SetTagLength(tag, size);
+        FreeImage_SetTagValue(tag, exif);
+        FreeImage_SetMetadata(FIMD_EXIF_RAW, rgb, "ExifRaw", tag);
+        FreeImage_SetMetadata(FIMD_EXIF_RAW, grey, "ExifRaw", tag);
+        FreeImage_SetMetadata(FIMD_EXIF_RAW, cmyk, "ExifRaw", tag);
+        FreeImage_DeleteTag(tag);
+        if (!FreeImage_Save(FIF_JPEG, rgb, path, JPEG_QUALITYGOOD)) { fail("Exif %s: not saved", cases[i].what); continue; }
+        /* the full load, header-only, and as grey, like a profile in APP2 */
+        for (k = 0; k < 3; k++) {
+            const int flags[3] = { 0, FIF_LOAD_NOPIXELS, JPEG_GREYSCALE };
+            FIBITMAP *back = FreeImage_Load(FIF_JPEG, path, flags[k]);
+            FITAG *t = NULL;
+            FIICCPROFILE *icc = back ? FreeImage_GetICCProfile(back) : NULL;
+            CHECK(back && FreeImage_GetMetadata(FIMD_EXIF_EXIF, back, "ColorSpace", &t), "Exif %s: no Exif read back", cases[i].what);
+            CHECK(icc && (cases[i].adobe ? (icc->data && icc->size == adobe.size && !memcmp(icc->data, adobe.data, adobe.size)) : !icc->data),
+                "Exif %s, flags 0x%x: a %u-byte profile, want %s", cases[i].what, flags[k], icc ? (unsigned)icc->size : 0, cases[i].adobe ? "Adobe RGB" : "none");
+            if (back) FreeImage_Unload(back);
+        }
+        if (!cases[i].adobe) continue;
+        /* a profile of the file's own wins */
+        FreeImage_CreateICCProfile(rgb, pro.data, pro.size);
+        if (FreeImage_Save(FIF_JPEG, rgb, path, JPEG_QUALITYGOOD)) {
+            FIBITMAP *back = FreeImage_Load(FIF_JPEG, path, 0);
+            CHECK(back && FreeImage_GetICCProfile(back)->size == pro.size && !memcmp(FreeImage_GetICCProfile(back)->data, pro.data, pro.size), "Exif %s: the APP2 profile lost", cases[i].what);
+            if (back) FreeImage_Unload(back);
+        }
+        FreeImage_DestroyICCProfile(rgb);
+        /* Exif describes a camera's colour images: not grey or CMYK ones */
+        if (FreeImage_Save(FIF_JPEG, grey, path, JPEG_QUALITYGOOD)) {
+            FIBITMAP *back = FreeImage_Load(FIF_JPEG, path, 0);
+            CHECK(back && !FreeImage_GetICCProfile(back)->data, "Exif %s: a grey JPEG has a profile", cases[i].what);
+            if (back) FreeImage_Unload(back);
+        }
+        FreeImage_DestroyICCProfile(cmyk);
+        FreeImage_GetICCProfile(cmyk)->flags |= FIICC_COLOR_IS_CMYK;
+        if (FreeImage_Save(FIF_JPEG, cmyk, path, JPEG_QUALITYGOOD)) {
+            FIBITMAP *back = FreeImage_Load(FIF_JPEG, path, JPEG_CMYK);
+            CHECK(back && !FreeImage_GetICCProfile(back)->data, "Exif %s: an untagged CMYK JPEG has a profile", cases[i].what);
+            if (back) FreeImage_Unload(back);
+        }
+    }
+    remove(path);
+    FreeImage_Unload(rgb); FreeImage_Unload(grey); FreeImage_Unload(cmyk);
+}
+
 int main(int argc, char **argv) {
     Bytes press;
     int record = (argc > 1 && !strcmp(argv[1], "--record"));
@@ -715,6 +802,7 @@ int main(int argc, char **argv) {
     colorimetry();
     descriptions(&press);
     files(&press);
+    exif_adobe_rgb(&press);
     png_with_profile_and_gamma();
     tiled_cmyk_tiff(&press);
     header_only_cmyk_tiff(&press);

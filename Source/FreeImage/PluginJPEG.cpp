@@ -703,6 +703,34 @@ jpeg_read_jfxx(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
 
 
 /**
+Exif's Adobe RGB, which cameras write instead of a profile: ColorSpace 2, or uncalibrated (0xFFFF) with DCF's interoperability index "R03"
+*/
+static BOOL
+IsExifAdobeRGB(j_decompress_ptr cinfo, FIBITMAP *dib) {
+	if((cinfo->jpeg_color_space != JCS_YCbCr) && (cinfo->jpeg_color_space != JCS_RGB)) {
+		return FALSE;
+	}
+	FITAG *tag = NULL;
+	if(!FreeImage_GetMetadata(FIMD_EXIF_EXIF, dib, "ColorSpace", &tag) || !tag || (FreeImage_GetTagCount(tag) != 1) || !FreeImage_GetTagValue(tag)) {
+		return FALSE;
+	}
+	DWORD color_space = 0;
+	if(FreeImage_GetTagType(tag) == FIDT_SHORT) {
+		color_space = *(const WORD*)FreeImage_GetTagValue(tag);
+	} else if(FreeImage_GetTagType(tag) == FIDT_LONG) {
+		color_space = *(const DWORD*)FreeImage_GetTagValue(tag);
+	}
+	if(color_space == 2) {
+		return TRUE;
+	}
+	if((color_space != 0xFFFF) || !FreeImage_GetMetadata(FIMD_EXIF_INTEROP, dib, "InteroperabilityIndex", &tag) || !tag) {
+		return FALSE;
+	}
+	const BYTE *index = (const BYTE*)FreeImage_GetTagValue(tag);
+	return (index && (FreeImage_GetTagLength(tag) >= 3) && (memcmp(index, "R03", 3) == 0)) ? TRUE : FALSE;
+}
+
+/**
 	Read JPEG special markers
 */
 static BOOL 
@@ -750,6 +778,12 @@ read_markers(j_decompress_ptr cinfo, FIBITMAP *dib) {
 		FreeImage_CreateICCProfile(dib, icc_profile, icc_length);
 		// clean up
 		free(icc_profile);
+	} else if(IsExifAdobeRGB(cinfo, dib)) {
+		DWORD size = 0;
+		const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &size);
+		if(adobe) {
+			FreeImage_CreateICCProfile(dib, (void*)adobe, (long)size);
+		}
 	}
 
 	return TRUE;

@@ -53,6 +53,7 @@ Fixes:
 - fixed camera RAW images carrying the file's own ICC profile, which describes the camera or the preview, not the decoded image; the 16-bit output carries a linear sRGB profile (linear grey for monochrome);
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
+- fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
 - fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
