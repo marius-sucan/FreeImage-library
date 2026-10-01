@@ -27,7 +27,6 @@
 //
 //*@@@---@@@@******************************************************************
 #include <limits.h>
-#include <wchar.h>	// wcslen: implicitly declared it returns int, which C23 compilers reject
 #include <JXRGlue.h>
 
 
@@ -57,6 +56,15 @@ void CalcMetadataSizeLPSTR(const DPKPROPVARIANT var,
         *pcInactiveMetadata += 1;
 }
 
+// FreeImage: the length of a UTF-16 string; wchar_t has 4 bytes outside Windows
+static size_t U16Length(const U16 *pwsz)
+{
+    size_t cch = 0;
+    while (pwsz[cch])
+        cch++;
+    return cch;
+}
+
 void CalcMetadataSizeLPWSTR(const DPKPROPVARIANT var,
                             U16 *pcInactiveMetadata,
                             U32 *pcbOffsetSize,
@@ -64,7 +72,7 @@ void CalcMetadataSizeLPWSTR(const DPKPROPVARIANT var,
 {
     if (DPKVT_EMPTY != var.vt)
     {
-        U32 uiCBWithNull = sizeof(U16) * ((U32)wcslen((wchar_t *) var.VT.pwszVal) + 1); // +1 for NULL term;
+        U32 uiCBWithNull = sizeof(U16) * ((U32)U16Length(var.VT.pwszVal) + 1); // FreeImage: U16Length, +1 for NULL term;
         assert(DPKVT_LPWSTR == var.vt);
 
         // We only use offset if size > 4
@@ -149,7 +157,7 @@ ERR CopyDescMetadata(DPKPROPVARIANT *pvarDst,
             
         case DPKVT_LPWSTR:
             pvarDst->vt = DPKVT_LPWSTR;
-            uiSize = sizeof(U16) * (wcslen((wchar_t *) varSrc.VT.pwszVal) + 1); // +1 for NULL term
+            uiSize = sizeof(U16) * (U16Length(varSrc.VT.pwszVal) + 1); // FreeImage: U16Length, +1 for NULL term
             Call(PKAlloc((void **) &pvarDst->VT.pszVal, uiSize));
             memcpy(pvarDst->VT.pwszVal, varSrc.VT.pwszVal, uiSize);
             break;
@@ -217,8 +225,7 @@ ERR WriteDescMetadata(PKImageEncode *pIE,
     U32 uiDataWrittenToOffset = 0;
     U16 uiTemp = 0;
 
-    if (0 == pDEMisc->uDescMetadataOffset || 0 == pDEMisc->uDescMetadataByteCount)
-        goto Cleanup; // Nothing to do here
+    // FreeImage: no early exit without a data area: values that fit in their entry are counted, and written
 
     // Sanity check before - can be equal due to remaining metadata being DPKVT_EMPTY
     assert(*puiCurrDescMetadataOffset <= pDEMisc->uDescMetadataByteCount);
@@ -251,7 +258,7 @@ ERR WriteDescMetadata(PKImageEncode *pIE,
 
         case DPKVT_UI4:
             CalcMetadataSizeUI4(var, &uiTemp, &uiMetadataOffsetSize);
-            pwmpDE->uCount = 1;
+            pwmpDE->uCount = (WMP_typSHORT == pwmpDE->uType) ? 2 : 1; // FreeImage: PageNumber, two SHORTs, read back as UI4
             pwmpDE->uValueOrOffset = var.VT.ulVal;
             Call(WriteWmpDE(pWS, poffPos, pwmpDE, NULL, NULL));
             break;

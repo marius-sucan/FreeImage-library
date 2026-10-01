@@ -833,7 +833,7 @@ ERR WriteWmpDE(
 
                 if (pDE->uCount > 1)
                 {
-                    assert(FALSE); // Untested - remove this assert after this has been tested
+                    // FreeImage: reached by PageNumber
                     uiShrt2 = *(U16*)(pbData + 2);
                 }
 

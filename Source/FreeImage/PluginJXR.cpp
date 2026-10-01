@@ -486,12 +486,19 @@ ReadPropVariant(WORD tag_id, const DPKPROPVARIANT & varSrc, FIBITMAP *dib) {
 				break;
 			
 			case DPKVT_LPWSTR:
+			{
+				// UTF-16: wchar_t has 4 bytes outside Windows
+				DWORD length = 0;
+				while(varSrc.VT.pwszVal[length]) {
+					length++;
+				}
 				FreeImage_SetTagType(tag, FIDT_UNDEFINED);
-				dwSize = (DWORD)(sizeof(U16) * (wcslen((wchar_t *) varSrc.VT.pwszVal) + 1)); // +1 for NULL term
+				dwSize = (DWORD)(sizeof(U16) * (length + 1)); // +1 for NULL term
 				FreeImage_SetTagCount(tag, dwSize);
 				FreeImage_SetTagLength(tag, dwSize);
 				FreeImage_SetTagValue(tag, varSrc.VT.pwszVal);
 				break;
+			}
 	            
 			case DPKVT_UI2:
 				FreeImage_SetTagType(tag, FIDT_SHORT);
@@ -501,11 +508,15 @@ ReadPropVariant(WORD tag_id, const DPKPROPVARIANT & varSrc, FIBITMAP *dib) {
 				break;
 
 			case DPKVT_UI4:
-				FreeImage_SetTagType(tag, FIDT_LONG);
-				FreeImage_SetTagCount(tag, 1);
+			{
+				// PageNumber: the decoder packs its two SHORTs, the page and the page count
+				const WORD pages[2] = { (WORD)(varSrc.VT.ulVal & 0xFFFF), (WORD)(varSrc.VT.ulVal >> 16) };
+				FreeImage_SetTagType(tag, FIDT_SHORT);
+				FreeImage_SetTagCount(tag, 2);
 				FreeImage_SetTagLength(tag, 4);
-				FreeImage_SetTagValue(tag, &varSrc.VT.ulVal);
+				FreeImage_SetTagValue(tag, pages);
 				break;
+			}
 
 			default:
 				// type comes from the file: drop the tag, do not assert
@@ -657,12 +668,12 @@ ReadMetadata(PKImageDecode *pID, FIBITMAP *dib) {
 // ==========================================================
 
 /**
-Convert a FITAG (coming from FIMD_EXIF_MAIN) to a DPKPROPVARIANT.
+Convert a FITAG (coming from FIMD_EXIF_MAIN) to the DPKPROPVARIANT type the encoder takes for this tag, or leave it out.
 No allocation is needed here, the function just copy pointers when needed. 
 @see WriteDescriptiveMetadata
 */
 static BOOL
-WritePropVariant(FIBITMAP *dib, WORD tag_id, DPKPROPVARIANT & varDst) {
+WritePropVariant(FIBITMAP *dib, WORD tag_id, DPKVARTYPE vt, DPKPROPVARIANT & varDst) {
 	FITAG *tag = NULL;
 
 	TagLib& s = TagLib::instance();
@@ -676,25 +687,48 @@ WritePropVariant(FIBITMAP *dib, WORD tag_id, DPKPROPVARIANT & varDst) {
 	if(!FreeImage_GetMetadata(FIMD_EXIF_MAIN, dib, key, &tag)) {
 		return FALSE;
 	}
+	const FREE_IMAGE_MDTYPE type = FreeImage_GetTagType(tag);
+	const DWORD count = FreeImage_GetTagCount(tag);
+	const void *value = FreeImage_GetTagValue(tag);
+	if(!value) {
+		return FALSE;
+	}
 
-	// set the tag value
-	switch(FreeImage_GetTagType(tag)) {
-		case FIDT_ASCII:
-			varDst.vt = DPKVT_LPSTR;
-			varDst.VT.pszVal = (char*)FreeImage_GetTagValue(tag);
+	// the encoder takes one type per tag: another asserts, or is written as garbage
+	switch(vt) {
+		case DPKVT_LPSTR:
+			// FreeImage ends ASCII values with a NUL
+			if(type == FIDT_ASCII) {
+				varDst.vt = DPKVT_LPSTR;
+				varDst.VT.pszVal = (char*)value;
+			}
 			break;
-		case FIDT_BYTE:
-		case FIDT_UNDEFINED:
-			varDst.vt = DPKVT_LPWSTR;
-			varDst.VT.pwszVal = (U16*)FreeImage_GetTagValue(tag);
+		case DPKVT_LPWSTR:
+			// UTF-16, as Windows' XP tags hold it: only with its NUL
+			if((type == FIDT_BYTE) || (type == FIDT_UNDEFINED)) {
+				const U16 *text = (const U16*)value;
+				for(DWORD i = 0; i < FreeImage_GetTagLength(tag) / sizeof(U16); i++) {
+					if(text[i] == 0) {
+						varDst.vt = DPKVT_LPWSTR;
+						varDst.VT.pwszVal = (U16*)value;
+						break;
+					}
+				}
+			}
 			break;
-		case FIDT_SHORT:
-			varDst.vt = DPKVT_UI2;
-			varDst.VT.uiVal = *((U16*)FreeImage_GetTagValue(tag));
+		case DPKVT_UI2:
+			if((type == FIDT_SHORT) && count) {
+				varDst.vt = DPKVT_UI2;
+				varDst.VT.uiVal = *((const U16*)value);
+			}
 			break;
-		case FIDT_LONG:
-			varDst.vt = DPKVT_UI4;
-			varDst.VT.ulVal = *((U32*)FreeImage_GetTagValue(tag));
+		case DPKVT_UI4:
+			// PageNumber: the page and the page count, two SHORTs packed as the decoder reads them
+			if((type == FIDT_SHORT) && count) {
+				const U16 *pages = (const U16*)value;
+				varDst.vt = DPKVT_UI4;
+				varDst.VT.ulVal = pages[0] | ((count > 1) ? ((U32)pages[1] << 16) : 0);
+			}
 			break;
 		default:
 			break;
@@ -713,20 +747,20 @@ WriteDescriptiveMetadata(PKImageEncode *pIE, FIBITMAP *dib) {
 	DESCRIPTIVEMETADATA DescMetadata;
 
 	// fill the DESCRIPTIVEMETADATA structure (use pointers to arrays when needed)
-	WritePropVariant(dib, WMP_tagImageDescription, DescMetadata.pvarImageDescription);
-	WritePropVariant(dib, WMP_tagCameraMake, DescMetadata.pvarCameraMake);
-	WritePropVariant(dib, WMP_tagCameraModel, DescMetadata.pvarCameraModel);
-	WritePropVariant(dib, WMP_tagSoftware, DescMetadata.pvarSoftware);
-	WritePropVariant(dib, WMP_tagDateTime, DescMetadata.pvarDateTime);
-	WritePropVariant(dib, WMP_tagArtist, DescMetadata.pvarArtist);
-	WritePropVariant(dib, WMP_tagCopyright, DescMetadata.pvarCopyright);
-	WritePropVariant(dib, WMP_tagRatingStars, DescMetadata.pvarRatingStars);
-	WritePropVariant(dib, WMP_tagRatingValue, DescMetadata.pvarRatingValue);
-	WritePropVariant(dib, WMP_tagCaption, DescMetadata.pvarCaption);
-	WritePropVariant(dib, WMP_tagDocumentName, DescMetadata.pvarDocumentName);
-	WritePropVariant(dib, WMP_tagPageName, DescMetadata.pvarPageName);
-	WritePropVariant(dib, WMP_tagPageNumber, DescMetadata.pvarPageNumber);
-	WritePropVariant(dib, WMP_tagHostComputer, DescMetadata.pvarHostComputer);
+	WritePropVariant(dib, WMP_tagImageDescription, DPKVT_LPSTR, DescMetadata.pvarImageDescription);
+	WritePropVariant(dib, WMP_tagCameraMake, DPKVT_LPSTR, DescMetadata.pvarCameraMake);
+	WritePropVariant(dib, WMP_tagCameraModel, DPKVT_LPSTR, DescMetadata.pvarCameraModel);
+	WritePropVariant(dib, WMP_tagSoftware, DPKVT_LPSTR, DescMetadata.pvarSoftware);
+	WritePropVariant(dib, WMP_tagDateTime, DPKVT_LPSTR, DescMetadata.pvarDateTime);
+	WritePropVariant(dib, WMP_tagArtist, DPKVT_LPSTR, DescMetadata.pvarArtist);
+	WritePropVariant(dib, WMP_tagCopyright, DPKVT_LPSTR, DescMetadata.pvarCopyright);
+	WritePropVariant(dib, WMP_tagRatingStars, DPKVT_UI2, DescMetadata.pvarRatingStars);
+	WritePropVariant(dib, WMP_tagRatingValue, DPKVT_UI2, DescMetadata.pvarRatingValue);
+	WritePropVariant(dib, WMP_tagCaption, DPKVT_LPWSTR, DescMetadata.pvarCaption);
+	WritePropVariant(dib, WMP_tagDocumentName, DPKVT_LPSTR, DescMetadata.pvarDocumentName);
+	WritePropVariant(dib, WMP_tagPageName, DPKVT_LPSTR, DescMetadata.pvarPageName);
+	WritePropVariant(dib, WMP_tagPageNumber, DPKVT_UI4, DescMetadata.pvarPageNumber);
+	WritePropVariant(dib, WMP_tagHostComputer, DPKVT_LPSTR, DescMetadata.pvarHostComputer);
 
 	// copy the structure to the encoder
 	error_code = pIE->SetDescriptiveMetadata(pIE, &DescMetadata);

@@ -59,6 +59,7 @@ Fixes:
 - fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
 - fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
 - fixed JNG files losing their ICC profile on save and on load; a JNG image in an MNG file takes the file's global profile;
+- fixed JPEG XR saves of images with a page number, rating or title tag crashing, or writing a file that cannot be opened;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
