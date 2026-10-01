@@ -383,13 +383,18 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 }
 
 /**
-The 16-bit output is linear light (gamm 1/1, set below) in LibRaw's default sRGB primaries: the CICP tag says so
+The 16-bit output is linear light (gamm 1/1, set below) in LibRaw's default sRGB primaries: the CICP tag and a linear profile say so
 */
 static FIBITMAP *
 DescribeOutput(FIBITMAP *dib, int bitspersample) {
 	if(dib && (bitspersample == 16)) {
 		const BOOL color = (FreeImage_GetImageType(dib) == FIT_RGB16) ? TRUE : FALSE;
 		SetCICPMetadata(dib, color ? 1 : 2, 8, 0, TRUE);
+		DWORD size = 0;
+		const void *profile = FreeImage_GetBuiltInICCProfile(color ? FICMS_PROFILE_LINEAR_SRGB : FICMS_PROFILE_LINEAR_GRAY, &size);
+		if(profile) {
+			FreeImage_CreateICCProfile(dib, (void*)profile, (long)size);
+		}
 	}
 	return dib;
 }
@@ -825,14 +830,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw "LibRaw : failed to open input stream (unknown format)";
 		}
 
+		// the file's profile describes its preview or the sensor's colors, never LibRaw's output
+		BOOL file_profile = FALSE;
+
 		// a header-only load takes its load's path: each sizes and turns the image its own way
 		if((flags & RAW_UNPROCESSED) == RAW_UNPROCESSED) {
 			// load raw data without post-processing (i.e. as a Bayer matrix)
 			dib = libraw_LoadUnprocessedData(RawProcessor, header_only);
+			file_profile = TRUE;
 		}
 		else if((flags & RAW_PREVIEW) == RAW_PREVIEW) {
 			// try to get the embedded JPEG
 			dib = libraw_LoadEmbeddedPreview(RawProcessor, header_only ? FIF_LOAD_NOPIXELS : 0);
+			file_profile = (dib != NULL);
 			if(!dib) {
 				// no JPEG preview: try to load as 8-bit/sample (i.e. RGB 24-bit)
 				dib = libraw_LoadRawData(RawProcessor, 8, header_only);
@@ -847,8 +857,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			dib = libraw_LoadRawData(RawProcessor, 16, header_only);
 		}
 
-		// save ICC profile if present
-		if(dib && (NULL != RawProcessor->imgdata.color.profile)) {
+		if(dib && file_profile && (NULL != RawProcessor->imgdata.color.profile)) {
 			FreeImage_CreateICCProfile(dib, RawProcessor->imgdata.color.profile, RawProcessor->imgdata.color.profile_length);
 		}
 

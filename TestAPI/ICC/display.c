@@ -694,7 +694,7 @@ static void header_only(void) {
     printf("header-only            %d loads unchanged\n", same);
 }
 
-/* PSD_LAB gives way; RAW_UNPROCESSED is left alone; floats are untouched; CMYK becomes RGB */
+/* PSD_LAB gives way; RAW_UNPROCESSED is left alone; floats are untouched; CMYK becomes RGB; linear RAW and playback canvases convert from their profiles */
 static void flag_rules(void) {
     const Fixture *lab = find("Lab PSD"), *raw = find("DNG, RAW_UNPROCESSED"), *fl = find("float TIFF"), *c;
     FIBITMAP *a, *b;
@@ -726,6 +726,17 @@ static void flag_rules(void) {
                 (FreeImage_GetBPP(a) == 24 || FreeImage_GetImageType(a) == FIT_RGB16), "%s: RGB with the flag", c->name);
             if (a) FreeImage_Unload(a);
         }
+    }
+    /* the 16-bit RAW output is linear; converted, it is encoded for display and its linear CICP tag is gone */
+    if ((c = find("DNG"))) {
+        FITAG *tag_a = NULL, *tag_b = NULL;
+        a = FreeImage_Load(FIF_RAW, c->path, FIF_LOAD_DISPLAY_ICC);
+        b = FreeImage_Load(FIF_RAW, c->path, 0);
+        CHECK(a && b && FreeImage_MustTonemap(b, NULL) == FITM_OPTIONAL && FreeImage_MustTonemap(a, NULL) == FITM_NONE &&
+            FreeImage_GetMetadata(FIMD_CUSTOM, b, "CICP", &tag_b) && !FreeImage_GetMetadata(FIMD_CUSTOM, a, "CICP", &tag_a) &&
+            pixel_digest(a) != pixel_digest(b), "DNG: the flag left the 16-bit output linear");
+        if (a) FreeImage_Unload(a);
+        if (b) FreeImage_Unload(b);
     }
     /* a playback canvas is converted from its frames' profile, not taken as sRGB */
     {

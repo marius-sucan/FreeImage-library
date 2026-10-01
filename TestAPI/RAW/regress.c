@@ -494,33 +494,62 @@ static void test_crop(void) {
 	}
 }
 
-/* --- the embedded colour profile ------------------------------------------ */
+/* --- the colour profiles ---------------------------------------------------- */
+/* linear sRGB or grey at 16 bits, none at 8; the file's own profile, which describes its preview or the camera, only on RAW_PREVIEW and RAW_UNPROCESSED */
 static void test_icc(void) {
+	DWORD srgb_size = 0, grey_size = 0;
+	const void *srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_SRGB, &srgb_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_GRAY, &grey_size);
 	int i;
-	printf("-- the embedded ICC profile reaches the bitmap\n");
+	printf("-- linear profiles on the 16-bit output, the file's own on the preview and the sensor data\n");
 	for (i = 0; i < NFILES; i++) {
-		FIBITMAP *dib = FreeImage_Load(FIF_RAW, FILES[i], 0);
+		const int own = (strcmp(FILES[i], "data/fi_raw_rggb.dng") == 0) ? 516 : 0;
+		const void *linear = is_mono(FILES[i]) ? grey : srgb;
+		const DWORD linear_size = is_mono(FILES[i]) ? grey_size : srgb_size;
+		FIBITMAP *d16 = FreeImage_Load(FIF_RAW, FILES[i], 0);
+		FIBITMAP *d8 = FreeImage_Load(FIF_RAW, FILES[i], RAW_DISPLAY);
+		FIBITMAP *preview = FreeImage_Load(FIF_RAW, FILES[i], RAW_PREVIEW);
+		FIBITMAP *sensor = FreeImage_Load(FIF_RAW, FILES[i], RAW_UNPROCESSED);
 		FIICCPROFILE *p;
-		int want = (strcmp(FILES[i], "data/fi_raw_rggb.dng") == 0) ? 516 : 0;
-		if (!dib) { fail(FILES[i], "icc", "load failed"); continue; }
-		p = FreeImage_GetICCProfile(dib);
-		if (!p || (int)p->size != want) {
-			fail(FILES[i], "icc", "want %d bytes, got %d", want, p ? (int)p->size : 0);
-		} else if (want) {
-			const BYTE *d = (const BYTE *)p->data;
-			unsigned declared = ((unsigned)d[0] << 24) | ((unsigned)d[1] << 16) |
-			                    ((unsigned)d[2] << 8) | d[3];
-			/* a profile is its own length followed, at offset 36, by 'acsp' */
-			if (declared != (unsigned)want)
-				fail(FILES[i], "icc", "the profile's own length field says %u", declared);
-			else if (memcmp(d + 36, "acsp", 4) != 0)
-				fail(FILES[i], "icc", "no 'acsp' signature at offset 36");
-			else
-				printf("  ok   %-30s %d bytes, well formed\n", FILES[i], want);
+		int bad = 0;
+		if (!d16 || !d8 || !preview || !sensor) {
+			fail(FILES[i], "icc", "a load failed");
 		} else {
-			printf("  ok   %-30s no profile, as expected\n", FILES[i]);
+			p = FreeImage_GetICCProfile(d16);
+			if (!p->data || p->size != linear_size || memcmp(p->data, linear, linear_size) != 0) {
+				fail(FILES[i], "icc", "the 16-bit output has a %d-byte profile, not linear %s", (int)p->size, is_mono(FILES[i]) ? "grey" : "sRGB");
+				bad = 1;
+			}
+			if (FreeImage_GetICCProfile(d8)->data) {
+				fail(FILES[i], "icc", "RAW_DISPLAY has a %d-byte profile", (int)FreeImage_GetICCProfile(d8)->size);
+				bad = 1;
+			}
+			if ((int)FreeImage_GetICCProfile(preview)->size != own || (int)FreeImage_GetICCProfile(sensor)->size != own) {
+				fail(FILES[i], "icc", "want the file's %d bytes on RAW_PREVIEW and RAW_UNPROCESSED, got %d and %d", own,
+					(int)FreeImage_GetICCProfile(preview)->size, (int)FreeImage_GetICCProfile(sensor)->size);
+				bad = 1;
+			} else if (own) {
+				const BYTE *d = (const BYTE *)FreeImage_GetICCProfile(sensor)->data;
+				unsigned declared = ((unsigned)d[0] << 24) | ((unsigned)d[1] << 16) |
+				                    ((unsigned)d[2] << 8) | d[3];
+				/* a profile is its own length followed, at offset 36, by 'acsp' */
+				if (declared != (unsigned)own) {
+					fail(FILES[i], "icc", "the profile's own length field says %u", declared);
+					bad = 1;
+				} else if (memcmp(d + 36, "acsp", 4) != 0) {
+					fail(FILES[i], "icc", "no 'acsp' signature at offset 36");
+					bad = 1;
+				}
+			}
+			if (!bad) {
+				printf("  ok   %-30s linear %s at 16 bits, %s\n", FILES[i], is_mono(FILES[i]) ? "grey" : "sRGB",
+					own ? "its own 516 bytes, well formed, on the preview and the sensor data" : "no profile of its own");
+			}
 		}
-		FreeImage_Unload(dib);
+		if (d16) FreeImage_Unload(d16);
+		if (d8) FreeImage_Unload(d8);
+		if (preview) FreeImage_Unload(preview);
+		if (sensor) FreeImage_Unload(sensor);
 	}
 }
 
