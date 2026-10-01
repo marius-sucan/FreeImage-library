@@ -59,6 +59,7 @@ Fixes:
 - fixed 16-bit greyscale APNG files failing to load with APNG_PLAYBACK, and such MNG images missing from MNG_PLAYBACK frames;
 - fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
 - fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
+- APNG saves without an ICC profile now say they are sRGB, with sRGB, gAMA and cHRM chunks;
 - fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
 - fixed JNG files losing their ICC profile on save and on load; a JNG image in an MNG file takes the file's global profile;
 - fixed JPEG XR saves of images with a page number, rating or title tag crashing, or writing a file that cannot be opened;

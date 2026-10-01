@@ -110,6 +110,7 @@ struct APNGinfo {
 	int out_pages;					//! pages taken by Save()
 	std::vector<BYTE> out_ancillary; //! frame 0's ancillary chunks
 	std::vector<BYTE> out_profile;	//! the file's ICC profile, every frame's colors; empty for sRGB
+	BOOL out_srgb;					//! without a profile: the file says it is sRGB
 	std::vector<APNGFrame> out_frames;
 	DWORD out_width, out_height;	//! grown to hold every frame
 	DWORD out_plays;
@@ -117,7 +118,7 @@ struct APNGinfo {
 
 	APNGinfo() : read(FALSE), canvas_width(0), canvas_height(0), num_plays(0), animated(FALSE),
 		canvas(NULL), previous_canvas(NULL), canvas_page(-1), description(NULL), described(FALSE),
-		pending(NULL), pending_flags(0), out_pages(0), out_width(0), out_height(0), out_plays(0),
+		pending(NULL), pending_flags(0), out_pages(0), out_srgb(FALSE), out_width(0), out_height(0), out_plays(0),
 		out_previous(NULL) {
 		memset(ihdr, 0, sizeof(ihdr));
 	}
@@ -817,10 +818,11 @@ _FlushVectorProc(png_structp png_ptr) {
 
 /**
 Compress a 32-bit dib to an RGBA PNG in memory.
+@param srgb With metadata and no ICC profile: write the sRGB chunk
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 static BOOL
-CompressFrame(FIBITMAP *dib, int flags, BOOL with_metadata, std::vector<BYTE>& png) {
+CompressFrame(FIBITMAP *dib, int flags, BOOL with_metadata, BOOL srgb, std::vector<BYTE>& png) {
 	png_structp png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, (png_voidp)NULL, error_handler, warning_handler);
 	if(png_ptr == NULL) {
 		return FALSE;
@@ -865,6 +867,9 @@ CompressFrame(FIBITMAP *dib, int flags, BOOL with_metadata, std::vector<BYTE>& p
 		if(iccProfile->size && iccProfile->data) {
 			png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
 			png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
+		} else if(srgb) {
+			// samples known to be sRGB (PNG 3, 12.2), with the gAMA and cHRM it implies (11.3.2.5)
+			png_set_sRGB_gAMA_and_cHRM(png_ptr, info_ptr, PNG_sRGB_INTENT_PERCEPTUAL);
 		}
 	}
 
@@ -1036,6 +1041,10 @@ AddFrame(APNGinfo *info, FIBITMAP *dib, int flags, BOOL is_first) {
 		if(icc->data && PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, TRUE)) {
 			info->out_profile.assign((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
 		}
+		// else every frame becomes sRGB, which the file says unless frame 0's CICP tag names other colours
+		BYTE cicp[4];
+		info->out_srgb = (info->out_profile.empty() &&
+			(!GetCICPMetadata(dib, cicp) || ((cicp[0] == 1) && (cicp[1] == 13) && (cicp[2] == 0)))) ? TRUE : FALSE;
 	}
 	const void *profile = info->out_profile.empty() ? NULL : &info->out_profile[0];
 	const DWORD profile_size = (DWORD)info->out_profile.size();
@@ -1131,7 +1140,7 @@ AddFrame(APNGinfo *info, FIBITMAP *dib, int flags, BOOL is_first) {
 	BOOL bResult = FALSE;
 	{
 		std::vector<BYTE> png;
-		if(CompressFrame(encoded, flags, is_first, png)) {
+		if(CompressFrame(encoded, flags, is_first, is_first && info->out_srgb, png)) {
 			bResult = SplitPNG(png, is_first ? &info->out_ancillary : NULL, frame.data);
 		}
 	}
@@ -1183,7 +1192,7 @@ CompressBackdrop(DWORD width, DWORD height, int flags, std::vector<BYTE>& data) 
 		return FALSE;
 	}
 	std::vector<BYTE> png;
-	const BOOL bResult = CompressFrame(dib, flags, FALSE, png) ? SplitPNG(png, NULL, data) : FALSE;
+	const BOOL bResult = CompressFrame(dib, flags, FALSE, FALSE, png) ? SplitPNG(png, NULL, data) : FALSE;
 	FreeImage_Unload(dib);
 	return bResult;
 }

@@ -867,6 +867,133 @@ static void test_trailing_chunks(void) {
 	remove(path);
 }
 
+/* the colour chunks of a PNG file: which there are, the sRGB intent, gAMA, cHRM, and whether they all come before acTL */
+typedef struct { int srgb, intent, iccp, gama, chrm, before_actl; DWORD gamma, chromaticities[8]; } ColourChunks;
+
+static int colour_chunks(const char *path, ColourChunks *c) {
+	FILE *f = fopen(path, "rb");
+	BYTE head[8], body[64];
+	int actl = 0, ok = 0;
+	memset(c, 0, sizeof(*c));
+	c->before_actl = 1;
+	if (!f) return 0;
+	if (fseek(f, 8, SEEK_SET) == 0) {
+		while (fread(head, 1, 8, f) == 8) {
+			const DWORD length = ((DWORD)head[0] << 24) | ((DWORD)head[1] << 16) | ((DWORD)head[2] << 8) | head[3];
+			const int colour = !memcmp(head + 4, "sRGB", 4) || !memcmp(head + 4, "gAMA", 4) || !memcmp(head + 4, "cHRM", 4);
+			if (colour && actl) c->before_actl = 0;
+			if (!memcmp(head + 4, "acTL", 4)) actl = 1;
+			if (!memcmp(head + 4, "iCCP", 4)) c->iccp++;
+			if (colour && length <= sizeof(body)) {
+				int i;
+				if (fread(body, 1, length, f) != length) break;
+				if (!memcmp(head + 4, "sRGB", 4) && length == 1) { c->srgb++; c->intent = body[0]; }
+				if (!memcmp(head + 4, "gAMA", 4) && length == 4) {
+					c->gama++; c->gamma = ((DWORD)body[0] << 24) | ((DWORD)body[1] << 16) | ((DWORD)body[2] << 8) | body[3];
+				}
+				if (!memcmp(head + 4, "cHRM", 4) && length == 32) {
+					c->chrm++;
+					for (i = 0; i < 8; i++) {
+						c->chromaticities[i] = ((DWORD)body[4 * i] << 24) | ((DWORD)body[4 * i + 1] << 16) | ((DWORD)body[4 * i + 2] << 8) | body[4 * i + 3];
+					}
+				}
+				if (fseek(f, 4, SEEK_CUR) != 0) break;
+			} else if (fseek(f, (long)length + 4, SEEK_CUR) != 0) {
+				break;
+			}
+			if (!memcmp(head + 4, "IEND", 4)) { ok = 1; break; }
+		}
+	}
+	fclose(f);
+	return ok;
+}
+
+static void set_cicp(FIBITMAP *dib, BYTE primaries, BYTE transfer) {
+	BYTE value[4];
+	FITAG *tag = FreeImage_CreateTag();
+	value[0] = primaries; value[1] = transfer; value[2] = 0; value[3] = 1;
+	FreeImage_SetTagKey(tag, "CICP");
+	FreeImage_SetTagType(tag, FIDT_BYTE);
+	FreeImage_SetTagCount(tag, 4);
+	FreeImage_SetTagLength(tag, 4);
+	FreeImage_SetTagValue(tag, value);
+	FreeImage_SetMetadata(FIMD_CUSTOM, dib, "CICP", tag);
+	FreeImage_DeleteTag(tag);
+}
+
+/* an animation saved without an ICC profile is in sRGB and says so: sRGB, gAMA and cHRM chunks (PNG 3, 11.3.2.5 and 12.2) */
+static void test_srgb_chunk(void) {
+	static const DWORD srgb_chrm[8] = { 31270, 32900, 64000, 33000, 30000, 60000, 15000, 6000 };
+	const char *path = scratch("apng_srgb.png");
+	DWORD adobe_size = 0, grey_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	/* frame 0: 0 untagged, 1 Adobe RGB, 2 FreeImage's grey profile, 3 a PQ CICP tag, 4 an sRGB CICP tag; 3 and 4 saved alone */
+	static const struct { const char *what; int kind; int srgb; } cases[5] = {
+		{ "untagged frames", 0, 1 },
+		{ "an Adobe RGB frame 0", 1, 0 },
+		{ "a frame 0 with a grey profile", 2, 1 },
+		{ "a frame tagged CICP PQ", 3, 0 },
+		{ "a frame tagged CICP sRGB", 4, 1 }
+	};
+	int k, bad = 0;
+
+	printf("\n=== an animation without an ICC profile says it is sRGB\n");
+
+	for (k = 0; k < 5; k++) {
+		FIBITMAP *frames[2];
+		ColourChunks c;
+		int i, written;
+		for (i = 0; i < 2; i++) {
+			frames[i] = make_frame(40, 30, i, i * 8, 4, 255);
+		}
+		if (cases[k].kind == 1) FreeImage_CreateICCProfile(frames[0], (void *)adobe, (long)adobe_size);
+		if (cases[k].kind == 2) FreeImage_CreateICCProfile(frames[0], (void *)grey, (long)grey_size);
+		if (cases[k].kind >= 3) {
+			const LONG time = 100;
+			set_cicp(frames[0], (cases[k].kind == 3) ? 9 : 1, (cases[k].kind == 3) ? 16 : 13);
+			set_tag(frames[0], "FrameTime", 0x1005, FIDT_LONG, 4, &time);
+			written = FreeImage_Save(FIF_APNG, frames[0], path, 0);
+		} else {
+			written = write_animation(path, frames, 2);
+		}
+		if (!written || !colour_chunks(path, &c)) {
+			fail("%s: not written", cases[k].what);
+			bad++;
+		} else if (cases[k].srgb) {
+			if (c.srgb != 1 || c.intent != 0 || c.gama != 1 || c.gamma != 45455 || c.chrm != 1 ||
+				memcmp(c.chromaticities, srgb_chrm, sizeof(srgb_chrm)) || c.iccp) {
+				fail("%s: sRGB %d (intent %d), gAMA %d (%u), cHRM %d, iCCP %d; want one perceptual sRGB, gAMA 45455, sRGB's cHRM, no iCCP",
+					 cases[k].what, c.srgb, c.intent, c.gama, (unsigned)c.gamma, c.chrm, c.iccp);
+				bad++;
+			} else if (!c.before_actl) {
+				fail("%s: a colour chunk after acTL", cases[k].what);
+				bad++;
+			}
+		} else if (c.srgb || c.gama || c.chrm || (c.iccp != (cases[k].kind == 1))) {
+			fail("%s: sRGB %d, gAMA %d, cHRM %d, iCCP %d; want %s", cases[k].what, c.srgb, c.gama, c.chrm, c.iccp,
+				 (cases[k].kind == 1) ? "the iCCP alone" : "no colour chunk");
+			bad++;
+		}
+		if (k == 0 && !bad) {
+			/* the frames come back as they went in */
+			FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
+			for (i = 0; i < 2; i++) {
+				FIBITMAP *page = mb ? FreeImage_LockPage(mb, i) : NULL;
+				if (!page || pixel_diff(page, frames[i]) != 0) {
+					fail("untagged frames: frame %d came back changed", i);
+					bad++;
+				}
+				if (page) FreeImage_UnlockPage(mb, page, FALSE);
+			}
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		}
+		for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+	}
+	if (!bad) ok("sRGB, gAMA and cHRM before acTL without a profile, frames unchanged; none beside an iCCP or for PQ");
+	remove(path);
+}
+
 /* the composited canvas carries the profile and CICP tag every frame carries */
 static void test_color_description(void) {
 	const char *path = scratch("apng_color.png");
@@ -1333,6 +1460,7 @@ int main(void) {
 	test_color_description();
 	test_grey16_playback();
 	test_trailing_chunks();
+	test_srgb_chunk();
 	test_profile_written();
 	test_mixed_profiles();
 	test_refusals();
