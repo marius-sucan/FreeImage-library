@@ -46,6 +46,7 @@ Fixes:
 - fixed bugs related to CMYK support in TIFF and JPG files;
 - fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
 - fixed PNG files with both a cICP and a gAMA chunk being gamma-corrected on load; cICP wins over gAMA, as PNG 3 asks;
+- fixed JPEG 2000 (JP2) files losing their ICC profile on load;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535: they looked black, and saved again they stayed black in every other program. Their samples are spread over 8 or 16 bits, rounded, as PNM, HEIF and AVIF do; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. The load flags J2K_UNSCALED and JP2_UNSCALED keep the file's values instead, tagged "UnscaledBits";
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
@@ -122,6 +123,6 @@ Color management:
 - FreeImage_SetDisplayICCProfile() sets the profile and rendering intent FIF_LOAD_DISPLAY_ICC converts to, for example the profile of the monitor showing the image, or with NULL detects the screen's again; FreeImage_GetDisplayICCProfile() returns it;
 
 Bugs or limitations identified:
-- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG 2000 images, get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
+- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

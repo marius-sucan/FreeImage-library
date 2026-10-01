@@ -2,6 +2,7 @@ regress
 robust
 corpus
 precision
+profiles
 tiles
 tiles-obj/
 *.o

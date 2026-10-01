@@ -299,6 +299,11 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 			AttachPrecision(dib, prec, unscaled);
 		}
 
+		// a JP2 colr box's profile; CIELab leaves its parameters there with a length of 0
+		if(image->icc_profile_buf && image->icc_profile_len) {
+			FreeImage_CreateICCProfile(dib, image->icc_profile_buf, (long)image->icc_profile_len);
+		}
+
 		// "header only" FIBITMAP ?
 		if(header_only) {
 			return dib;

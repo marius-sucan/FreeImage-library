@@ -112,6 +112,11 @@ SupportsExportType(FREE_IMAGE_TYPE type) {
 	);
 }
 
+static BOOL DLL_CALLCONV
+SupportsICCProfiles() {
+	return TRUE;
+}
+
 // ----------------------------------------------------------
 
 static void * DLL_CALLCONV
@@ -353,5 +358,5 @@ InitJP2(Plugin *plugin, int format_id) {
 	plugin->mime_proc = MimeType;
 	plugin->supports_export_bpp_proc = SupportsExportDepth;
 	plugin->supports_export_type_proc = SupportsExportType;
-	plugin->supports_icc_profiles_proc = NULL;
+	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
 }
