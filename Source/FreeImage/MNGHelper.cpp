@@ -21,6 +21,10 @@
 
 #include "FreeImage.h"
 #include "Utilities.h"
+#include "Plugin.h"
+#include "../ZLib/zlib.h"
+
+#include <new>
 
 /**
 References
@@ -55,6 +59,9 @@ http://libpng.org/pub/mng/spec/
 
 /** Size of a JDAT chunk on writing */
 const DWORD JPEG_CHUNK_SIZE	= 8192;
+
+/** The largest iCCP profile, libpng's PNG_USER_CHUNK_MALLOC_MAX */
+const DWORD MAX_ICCP_PROFILE = 8000000;
 
 /** PNG signature */
 static const BYTE g_png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
@@ -227,6 +234,9 @@ mng_GetChunckType(const BYTE *mChunkName) {
 	}
 	if(memcmp(mChunkName, mng_gAMA, 4) == 0) {
 		return gAMA;
+	}
+	if(memcmp(mChunkName, mng_iCCP, 4) == 0) {
+		return iCCP;
 	}
 	if(memcmp(mChunkName, mng_pHYs, 4) == 0) {
 		return pHYs;
@@ -764,6 +774,81 @@ mng_SetMetadata_tEXt(tEXtMAP &key_value_pair, const BYTE *mChunk, DWORD mLength)
 	return TRUE;
 }
 
+/**
+Read the profile of an iCCP chunk: a name of 1 to 79 bytes, a NUL, compression method 0, a zlib stream
+@return Returns FALSE for a chunk that cannot be read or inflates past libpng's chunk limit
+*/
+static BOOL
+mng_ReadICCP(const BYTE *chunk, DWORD length, std::vector<BYTE>& profile) {
+	DWORD name = 0;
+	while((name < length) && (name < 80) && chunk[name]) {
+		name++;
+	}
+	if((name == 0) || (name >= 80) || (length < name + 2) || (chunk[name + 1] != 0)) {
+		return FALSE;
+	}
+	z_stream stream;
+	memset(&stream, 0, sizeof(stream));
+	if(inflateInit(&stream) != Z_OK) {
+		return FALSE;
+	}
+	stream.next_in = (Bytef*)(chunk + name + 2);
+	stream.avail_in = (uInt)(length - name - 2);
+	int status = Z_OK;
+	try {
+		BYTE buffer[4096];
+		while(status == Z_OK) {
+			stream.next_out = buffer;
+			stream.avail_out = sizeof(buffer);
+			status = inflate(&stream, Z_NO_FLUSH);
+			const size_t produced = sizeof(buffer) - stream.avail_out;
+			if(profile.size() + produced > MAX_ICCP_PROFILE) {
+				status = Z_MEM_ERROR;
+			} else {
+				profile.insert(profile.end(), buffer, buffer + produced);
+			}
+		}
+	} catch(std::bad_alloc&) {
+		status = Z_MEM_ERROR;
+	}
+	inflateEnd(&stream);
+	if(status != Z_STREAM_END) {
+		profile.clear();
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/**
+Write the image's profile as an iCCP chunk, when a JNG of this colour can hold it
+@return Returns FALSE when the chunk could not be written
+*/
+static BOOL
+mng_WriteICCP(int format_id, FIBITMAP *dib, BOOL color, FIMEMORY *hJngMemory) {
+	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	if(!icc->data || !icc->size) {
+		return TRUE;
+	}
+	if((icc->size > MAX_ICCP_PROFILE) || !PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, color)) {
+		FreeImage_OutputMessageProc(format_id, "Warning: the ICC profile is invalid for this JNG and was left out");
+		return TRUE;
+	}
+	// name, NUL, compression method 0, zlib stream
+	static const char name[] = "Embedded Profile";
+	const DWORD head = (DWORD)sizeof(name) + 1;
+	uLongf packed = compressBound((uLong)icc->size);
+	BYTE *chunk = (BYTE*)malloc(head + packed);
+	if(!chunk) {
+		return FALSE;
+	}
+	memcpy(chunk, name, sizeof(name));
+	chunk[sizeof(name)] = 0;
+	BOOL written = (compress2(chunk + head, &packed, (const Bytef*)icc->data, (uLong)icc->size, Z_BEST_COMPRESSION) == Z_OK);
+	written = written && mng_WriteChunk(mng_iCCP, chunk, head + (DWORD)packed, hJngMemory);
+	free(chunk);
+	return written;
+}
+
 // --------------------------------------------------------------------------
 
 /**
@@ -806,6 +891,9 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 	BYTE jng_alpha_compression_method = 0;
 	BYTE jng_alpha_filter_method = 0;
 	BYTE jng_alpha_interlace_method = 0;
+
+	std::vector<BYTE> jng_profile;	// from the first iCCP chunk
+	BOOL jng_iccp_seen = FALSE;
 
 	DWORD mng_frame_width = 0;
 	DWORD mng_frame_height = 0;
@@ -1102,6 +1190,14 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 				case gAMA:
 					break;
 
+				case iCCP:
+					// the first one counts, as in PNG
+					if(!jng_iccp_seen) {
+						jng_iccp_seen = TRUE;
+						mng_ReadICCP(mChunk, mLength, jng_profile);
+					}
+					break;
+
 				case pHYs:
 					// Bounds check
 					if (NULL == mChunk || mLength < 8)
@@ -1152,6 +1248,11 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 		// convert to 32-bit if a transparent layer is available
 		if(!header_only && dib_alpha) {
 			FIBITMAP *dst = FreeImage_ConvertTo32Bits(dib);
+			// the conversion drops the profile of the JPEG data
+			const FIICCPROFILE *jpeg_icc = FreeImage_GetICCProfile(dib);
+			if(dst && jpeg_icc->data) {
+				FreeImage_CreateICCProfile(dst, jpeg_icc->data, (long)jpeg_icc->size);
+			}
 			if((FreeImage_GetBPP(dib_alpha) == 8) && (FreeImage_GetImageType(dib_alpha) == FIT_BITMAP)) {
 				FreeImage_SetChannel(dst, dib_alpha, FICC_ALPHA);
 			} else {
@@ -1165,6 +1266,11 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 		FreeImage_Unload(dib_alpha);
 
 		if(dib) {
+			// a JNG's iCCP describes the decoded JPEG data, ahead of a profile inside it
+			if(jng_color_type && !jng_profile.empty() &&
+			   PNG_IsEmbeddableProfile(&jng_profile[0], (DWORD)jng_profile.size(), (jng_color_type & 2) ? TRUE : FALSE)) {
+				FreeImage_CreateICCProfile(dib, &jng_profile[0], (long)jng_profile.size());
+			}
 			// set metadata
 			FreeImage_SetDotsPerMeterX(dib, res_x);
 			FreeImage_SetDotsPerMeterY(dib, res_y);
@@ -1294,6 +1400,11 @@ mng_WriteJNG(int format_id, FreeImageIO *io, FIBITMAP *dib, fi_handle handle, in
 		buffer[15] = jng_alpha_interlace_method;
 
 		if(!mng_WriteChunk(mng_JHDR, &buffer[0], 16, hJngMemory)) {
+			throw JNG_WRITE_FAILED;
+		}
+
+		// --- write an iCCP chunk: the JPEG data is written without markers ---
+		if(!mng_WriteICCP(format_id, dib, (jng_color_type & 2) ? TRUE : FALSE, hJngMemory)) {
 			throw JNG_WRITE_FAILED;
 		}
 

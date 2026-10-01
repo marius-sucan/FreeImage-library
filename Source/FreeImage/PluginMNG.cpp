@@ -1198,12 +1198,31 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 	return TRUE;
 }
 
+// a JNG without colour space chunks of its own inherits the global iCCP, which the JNG reader uses
 static BOOL
-BuildJNGStream(const std::vector<BYTE>& raw, std::vector<BYTE>& out) {
+BuildJNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYTE>& raw, std::vector<BYTE>& out) {
 	if(raw.size() < MNG_CHUNK_OVERHEAD) {
 		return FALSE;
 	}
 	out.insert(out.end(), g_jng_signature, g_jng_signature + 8);
+
+	const MNGGlobals& globals = info->globals[frame.globals];
+	std::vector<MNGChunkRef> chunks;
+	if(!globals.iccp.empty() && SplitChunks(raw, chunks) && (chunks[0].type == CHUNK_JHDR) && !chunks[0].cut) {
+		BOOL described = FALSE;
+		for(size_t i = 0; i < chunks.size(); i++) {
+			const DWORD type = chunks[i].type;
+			if((type == CHUNK_iCCP) || (type == CHUNK_sRGB) || (type == CHUNK_gAMA) || (type == CHUNK_cHRM)) {
+				described = TRUE;
+			}
+		}
+		if(!described) {
+			out.insert(out.end(), chunks[0].raw, chunks[0].raw + chunks[0].raw_length);
+			AppendGlobalChunk(out, CHUNK_iCCP, globals.iccp);
+			out.insert(out.end(), raw.begin() + chunks[0].raw_length, raw.end());
+			return TRUE;
+		}
+	}
 	out.insert(out.end(), raw.begin(), raw.end());
 	return TRUE;
 }
@@ -1288,7 +1307,7 @@ DecodeFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 
 	std::vector<BYTE> stream;
 	if(frame.is_jng) {
-		if(!BuildJNGStream(raw, stream)) {
+		if(!BuildJNGStream(info, frame, raw, stream)) {
 			return NULL;
 		}
 	} else {

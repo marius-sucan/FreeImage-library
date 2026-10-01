@@ -73,6 +73,11 @@ from the plugin:
 - **The canvas's colors.** A composed page carries the ICC profile and CICP
   tag of its own image: the global iCCP, or the image's own, never a grey one
   on the RGBA canvas; read forwards and backwards, with pixels and without.
+- **JNG profiles.** A JNG's iCCP describes its JPEG data and wins over an APP2
+  profile inside it, which stands otherwise, through the alpha merge and
+  header-only too; a grey iCCP in a colour JNG is left out. A JNG image in an
+  MNG inherits the global iCCP, page and canvas, unless it has colour space
+  chunks of its own (an sRGB chunk here), as the spec's top-level rule says.
 
 ## regress
 
@@ -119,8 +124,12 @@ embedded image whose IEND never arrives; a MEND before any image; an ENDL with
 no LOOP and a LOOP with no ENDL; 250 nested loops; SHOW naming objects that do
 not exist, ranges the wrong way round, and modes the spec does not define; a bad
 CRC on each chunk that steers the parser; impossible canvases; images placed far
-off the canvas in both directions, including at `INT_MIN`; and four kilobytes of
-garbage behind a valid signature.
+off the canvas in both directions, including at `INT_MIN`; four kilobytes of
+garbage behind a valid signature; and twelve damaged iCCP chunks in a JNG
+with alpha - empty, a 99-byte name, no NUL or no method, method 1, data that
+is not zlib, a cut stream, a lying size field, 9 MB of zeros, a grey profile
+in a colour JNG, bytes that are no profile, a bad one before a good one -
+loaded standalone and as an MNG frame, without a profile.
 
 `make asan-run` is the one that matters here. The plugin parses the container by
 hand - chunk headers, lengths, the extent of each embedded datastream, the

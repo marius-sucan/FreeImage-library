@@ -468,6 +468,135 @@ static void test_garbage(void) {
 	survive(path, "4 KB of garbage behind a MNG signature");
 }
 
+/* an iCCP payload: name, NUL, method, then data zlib-compressed (raw when compress is 0) */
+static void iccp(Buf *out, const char *name, int name_nul, int method, const BYTE *data, DWORD size, int compress) {
+	buf_init(out);
+	buf_add(out, name, strlen(name));
+	if (name_nul) {
+		buf_byte(out, 0);
+	}
+	if (method >= 0) {
+		buf_byte(out, (BYTE)method);
+	}
+	if (data && compress) {
+		const DWORD bound = size + size / 1000 + 64;
+		BYTE *packed = (BYTE *)malloc(bound);
+		const DWORD n = packed ? FreeImage_ZLibCompress(packed, bound, (BYTE *)data, size) : 0;
+		if (n) {
+			buf_add(out, packed, compress > 0 ? n : n / 2);
+		}
+		free(packed);
+	} else if (data) {
+		buf_add(out, data, size);
+	}
+}
+
+/* damaged iCCP chunks in a JNG with alpha: loaded without a profile, standalone and as an MNG frame */
+static void test_jng_iccp(void) {
+	DWORD adobe_size = 0, grey_size = 0;
+	const BYTE *adobe = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const BYTE *grey = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	FIBITMAP *img = FreeImage_Allocate(W, H, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+	BYTE *jng = NULL, *wrong = (BYTE *)malloc(adobe_size), *zeros = (BYTE *)calloc(9000000, 1), noise[1000];
+	DWORD jng_size = 0, jhdr_end = 8 + 12 + 16;
+	char long_name[100];
+	unsigned i;
+	int k;
+
+	printf("damaged iCCP chunks in a JNG\n");
+
+	for (i = 0; i < FreeImage_GetPitch(img) * H; i++) {
+		FreeImage_GetBits(img)[i] = (BYTE)(i * 5 + 1);
+	}
+	for (i = 0; i < sizeof(noise); i++) {
+		noise[i] = (BYTE)(i * 131 + 7);
+	}
+	memset(long_name, 'a', sizeof(long_name) - 1);
+	long_name[sizeof(long_name) - 1] = 0;
+	memcpy(wrong, adobe, adobe_size);
+	wrong[3] ^= 4;	/* the declared size no longer matches */
+	if (!FreeImage_SaveToMemory(FIF_JNG, img, mem, 0) || !FreeImage_AcquireMemory(mem, &jng, &jng_size) || jng_size < jhdr_end || !zeros) {
+		fail("no JNG to damage");
+		goto out;
+	}
+
+	for (k = 0; k < 12; k++) {
+		static const char *what[12] = {
+			"an empty iCCP", "a name of 99 bytes", "no compression method", "compression method 1",
+			"data that is not zlib", "a cut zlib stream", "a profile whose size field lies",
+			"9 MB of zeros", "a grey profile in a colour JNG", "1000 bytes that are no profile",
+			"no NUL after the name", "a damaged iCCP before a good one"
+		};
+		Buf payload, file, mng;
+		char name[64];
+		FIBITMAP *dib;
+		int f;
+		switch (k) {
+			case 0: buf_init(&payload); break;
+			case 1: iccp(&payload, long_name, 1, 0, adobe, adobe_size, 1); break;
+			case 2: iccp(&payload, "p", 1, -1, NULL, 0, 0); break;
+			case 3: iccp(&payload, "p", 1, 1, adobe, adobe_size, 1); break;
+			case 4: iccp(&payload, "p", 1, 0, noise, sizeof(noise), 0); break;
+			case 5: iccp(&payload, "p", 1, 0, adobe, adobe_size, -1); break;
+			case 6: iccp(&payload, "p", 1, 0, wrong, adobe_size, 1); break;
+			case 7: iccp(&payload, "p", 1, 0, zeros, 9000000, 1); break;
+			case 8: iccp(&payload, "p", 1, 0, grey, grey_size, 1); break;
+			case 9: iccp(&payload, "p", 1, 0, noise, sizeof(noise), 1); break;
+			case 10: iccp(&payload, "profile", 0, 0, adobe, adobe_size, 1); break;
+			default: iccp(&payload, "p", 1, 0, noise, sizeof(noise), 1); break;
+		}
+		buf_init(&file);
+		buf_add(&file, jng, jhdr_end);
+		chunk(&file, "iCCP", payload.data, (DWORD)payload.size);
+		if (k == 11) {
+			Buf good;
+			iccp(&good, "p", 1, 0, adobe, adobe_size, 1);
+			chunk(&file, "iCCP", good.data, (DWORD)good.size);
+			buf_free(&good);
+		}
+		buf_add(&file, jng + jhdr_end, jng_size - jhdr_end);
+
+		for (f = 0; f < 2; f++) {
+			FIMEMORY *in = FreeImage_OpenMemory(file.data, (DWORD)file.size);
+			dib = FreeImage_LoadFromMemory(FIF_JNG, in, f ? FIF_LOAD_NOPIXELS : 0);
+			if (!dib) {
+				fail("%s: the JNG did not load%s", what[k], f ? " header-only" : "");
+			} else if (FreeImage_GetICCProfile(dib)->data) {
+				fail("%s: a %u-byte profile came through%s", what[k], (unsigned)FreeImage_GetICCProfile(dib)->size, f ? " header-only" : "");
+			} else if (!f && FreeImage_GetBPP(dib) != 32) {
+				fail("%s: %u bits per pixel", what[k], FreeImage_GetBPP(dib));
+			}
+			if (dib) {
+				FreeImage_Unload(dib);
+			}
+			FreeImage_CloseMemory(in);
+		}
+
+		/* the same JNG as an MNG frame */
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 1, 1, 0, 1 | (1 << 4));
+		buf_add(&mng, file.data + 8, file.size - 8);
+		mng_mend(&mng);
+		snprintf(name, sizeof(name), "mng_jng_iccp_%d.mng", k);
+		{
+			const char *path = write_file(name, &mng);
+			survive(path, what[k]);
+			remove(path);
+		}
+		buf_free(&mng);
+		buf_free(&file);
+		buf_free(&payload);
+	}
+
+out:
+	FreeImage_CloseMemory(mem);
+	FreeImage_Unload(img);
+	free(wrong);
+	free(zeros);
+}
+
 /* --------------------------------------------------------------------- */
 
 int main(void) {
@@ -485,6 +614,7 @@ int main(void) {
 	test_huge_canvas();
 	test_off_canvas();
 	test_garbage();
+	test_jng_iccp();
 
 	FreeImage_DeInitialise();
 

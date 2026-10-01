@@ -949,6 +949,203 @@ out:
 	FreeImage_Unload(mono);
 }
 
+/* a format's bytes for this image */
+static int save_bytes(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, Buf *out) {
+	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+	BYTE *data = NULL;
+	DWORD size = 0;
+	int ok = mem && FreeImage_SaveToMemory(fif, dib, mem, flags) && FreeImage_AcquireMemory(mem, &data, &size);
+	if (ok) {
+		buf_add(out, data, size);
+	}
+	if (mem) {
+		FreeImage_CloseMemory(mem);
+	}
+	return ok;
+}
+
+/* every chunk of this type, whole, from a PNG-style stream after its signature */
+static void copy_chunks(Buf *out, const Buf *stream, const char *type) {
+	size_t pos = 8;
+	while (pos + 12 <= stream->size) {
+		const DWORD length = ((DWORD)stream->data[pos] << 24) | ((DWORD)stream->data[pos + 1] << 16) | ((DWORD)stream->data[pos + 2] << 8) | stream->data[pos + 3];
+		if (!memcmp(stream->data + pos + 4, type, 4)) {
+			buf_add(out, stream->data + pos, 12 + length);
+		}
+		pos += 12 + length;
+	}
+}
+
+/* a JNG as other writers make it: the JPEG data keeps its APP2 profile, iCCP and sRGB chunks optional */
+static int third_party_jng(Buf *out, int alpha, const Buf *iccp, int srgb, const void *app2, DWORD app2_size) {
+	FIBITMAP *img = FreeImage_Allocate(W, H, alpha ? 32 : 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb;
+	Buf jng, jpeg;
+	unsigned i;
+	int ok;
+	for (i = 0; i < FreeImage_GetPitch(img) * H; i++) {
+		FreeImage_GetBits(img)[i] = (BYTE)(i * 7 + 3);
+	}
+	rgb = FreeImage_ConvertTo24Bits(img);
+	FreeImage_CreateICCProfile(rgb, (void *)app2, (long)app2_size);
+	buf_init(&jng);
+	buf_init(&jpeg);
+	ok = save_bytes(FIF_JNG, img, 0, &jng) && save_bytes(FIF_JPEG, rgb, JPEG_QUALITYGOOD, &jpeg);
+	if (ok) {
+		static const BYTE signature[8] = { 139, 74, 78, 71, 13, 10, 26, 10 };
+		const BYTE intent = 0;
+		buf_add(out, signature, 8);
+		copy_chunks(out, &jng, "JHDR");
+		if (iccp) {
+			chunk(out, "iCCP", iccp->data, (DWORD)iccp->size);
+		}
+		if (srgb) {
+			chunk(out, "sRGB", &intent, 1);
+		}
+		chunk(out, "JDAT", jpeg.data, (DWORD)jpeg.size);
+		copy_chunks(out, &jng, "IDAT");
+		chunk(out, "IEND", NULL, 0);
+	}
+	buf_free(&jng);
+	buf_free(&jpeg);
+	FreeImage_Unload(img);
+	FreeImage_Unload(rgb);
+	return ok;
+}
+
+static FIBITMAP *load_buf(FREE_IMAGE_FORMAT fif, const Buf *b, int flags) {
+	FIMEMORY *mem = FreeImage_OpenMemory(b->data, (DWORD)b->size);
+	FIBITMAP *dib = mem ? FreeImage_LoadFromMemory(fif, mem, flags) : NULL;
+	if (mem) {
+		FreeImage_CloseMemory(mem);
+	}
+	return dib;
+}
+
+/* a JNG's iCCP describes its JPEG data, ahead of the JPEG's own APP2 profile; an MNG's global iCCP reaches a JNG frame */
+static void test_jng_profiles(void) {
+	DWORD adobe_size = 0, pro_size = 0, grey_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *pro = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &pro_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	static const struct { const char *what; int alpha; int iccp; int flags; int want; } cases[] = {
+		{ "APP2 only", 0, 0, 0, 1 },
+		{ "APP2 only, with alpha", 1, 0, 0, 1 },
+		{ "iCCP and APP2, with alpha", 1, 1, 0, 2 },
+		{ "iCCP and APP2, header only", 1, 1, FIF_LOAD_NOPIXELS, 2 },
+		{ "a grey iCCP in a colour JNG, and APP2", 0, 2, 0, 1 },
+	};
+	Buf iccp_adobe, iccp_grey;
+	unsigned i;
+	int bad = 0;
+
+	printf("JNG profiles\n");
+
+	buf_init(&iccp_adobe);
+	buf_init(&iccp_grey);
+	if (!iccp_payload(&iccp_adobe, adobe, adobe_size)) {
+		fail("no iCCP chunk to copy");
+		return;
+	}
+	/* a grey profile's payload, from a grey PNG */
+	{
+		FIBITMAP *g = FreeImage_Allocate(1, 1, 8, 0, 0, 0);
+		Buf png;
+		size_t pos = 8;
+		for (i = 0; i < 256; i++) {
+			FreeImage_GetPalette(g)[i].rgbRed = FreeImage_GetPalette(g)[i].rgbGreen = FreeImage_GetPalette(g)[i].rgbBlue = (BYTE)i;
+		}
+		FreeImage_CreateICCProfile(g, (void *)grey, (long)grey_size);
+		buf_init(&png);
+		save_bytes(FIF_PNG, g, 0, &png);
+		while (pos + 12 <= png.size) {
+			const DWORD length = ((DWORD)png.data[pos] << 24) | ((DWORD)png.data[pos + 1] << 16) | ((DWORD)png.data[pos + 2] << 8) | png.data[pos + 3];
+			if (!memcmp(png.data + pos + 4, "iCCP", 4)) {
+				buf_add(&iccp_grey, png.data + pos + 8, length);
+			}
+			pos += 12 + length;
+		}
+		buf_free(&png);
+		FreeImage_Unload(g);
+	}
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		Buf jng;
+		FIBITMAP *dib;
+		const void *want = (cases[i].want == 2) ? adobe : pro;
+		const DWORD want_size = (cases[i].want == 2) ? adobe_size : pro_size;
+		buf_init(&jng);
+		if (!third_party_jng(&jng, cases[i].alpha, (cases[i].iccp == 1) ? &iccp_adobe : (cases[i].iccp == 2) ? &iccp_grey : NULL, 0, pro, pro_size)) {
+			fail("%s: no JNG made", cases[i].what);
+			bad = 1;
+			buf_free(&jng);
+			continue;
+		}
+		dib = load_buf(FIF_JNG, &jng, cases[i].flags);
+		if (!dib || !same_profile(dib, want, want_size)) {
+			fail("%s: a %u-byte profile, want %s", cases[i].what, dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0, (cases[i].want == 2) ? "Adobe RGB" : "ProPhoto");
+			bad = 1;
+		} else if (!(cases[i].flags & FIF_LOAD_NOPIXELS) && (FreeImage_GetBPP(dib) != (cases[i].alpha ? 32u : 24u))) {
+			fail("%s: %u bits per pixel", cases[i].what, FreeImage_GetBPP(dib));
+			bad = 1;
+		}
+		if (dib) {
+			FreeImage_Unload(dib);
+		}
+		buf_free(&jng);
+	}
+	if (!bad) {
+		ok("a JNG's iCCP wins over the JPEG's APP2 profile, which stands otherwise, alpha and header-only included");
+	}
+
+	/* an MNG's global iCCP reaches a JNG frame that defines no colour space of its own */
+	bad = 0;
+	{
+		int srgb;
+		for (srgb = 0; srgb < 2; srgb++) {
+			Buf mng, jng;
+			const char *path;
+			FIMULTIBITMAP *mb;
+			int mode;
+			buf_init(&mng);
+			buf_init(&jng);
+			third_party_jng(&jng, 0, NULL, srgb, NULL, 0);
+			mng_signature(&mng);
+			mng_mhdr(&mng, W, H, 10, 1, 1, 0, 1 | (1 << 4));
+			chunk(&mng, "iCCP", iccp_adobe.data, (DWORD)iccp_adobe.size);
+			buf_add(&mng, jng.data + 8, jng.size - 8);
+			mng_mend(&mng);
+			path = write_file("mng_jng_iccp.mng", &mng);
+			for (mode = 0; mode < 2; mode++) {
+				mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, mode ? MNG_PLAYBACK : 0);
+				if (!mb || FreeImage_GetPageCount(mb) != 1) {
+					fail("JNG frame%s: %d pages", srgb ? " with sRGB" : "", mb ? FreeImage_GetPageCount(mb) : -1);
+					bad = 1;
+				} else {
+					FIBITMAP *dib = FreeImage_LockPage(mb, 0);
+					if (!dib || !same_profile(dib, srgb ? NULL : adobe, srgb ? 0 : adobe_size)) {
+						fail("JNG frame%s, %s: a %u-byte profile, want %s", srgb ? " with sRGB" : "", mode ? "playback" : "page",
+							dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0, srgb ? "none" : "the global Adobe RGB");
+						bad = 1;
+					}
+					if (dib) {
+						FreeImage_UnlockPage(mb, dib, FALSE);
+					}
+				}
+				if (mb) {
+					FreeImage_CloseMultiBitmap(mb, 0);
+				}
+			}
+			buf_free(&mng);
+			buf_free(&jng);
+		}
+	}
+	if (!bad) {
+		ok("a JNG frame takes the global iCCP, page and canvas, unless it has an sRGB chunk");
+	}
+	buf_free(&iccp_adobe);
+	buf_free(&iccp_grey);
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -966,6 +1163,7 @@ int main(void) {
 	test_alpha_compositing();
 	test_absurd_canvas();
 	test_color_description();
+	test_jng_profiles();
 
 	FreeImage_DeInitialise();
 

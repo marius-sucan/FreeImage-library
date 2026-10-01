@@ -243,6 +243,43 @@ static void files(const Bytes *press) {
     g18 = FreeImage_ConvertToICCProfile(grey, gp.data, gp.size, 0);
     round_trip("grey PNG", FIF_PNG, g18, PNG_DEFAULT, PNG_DEFAULT, 1);
 
+    /* JNG: an iCCP chunk next to JPEG data written without markers */
+    round_trip("Adobe RGB JNG", FIF_JNG, adobe, 0, 0, 0);
+    round_trip("grey JNG", FIF_JNG, g18, 0, 0, 0);
+    {
+        FIBITMAP *adobe32 = FreeImage_ConvertTo32Bits(adobe), *back;
+        const char *path = scratch("icc_jng.jng");
+        for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(adobe32, y); for (x = 0; x < 37; x++) p[4 * x + FI_RGBA_ALPHA] = (BYTE)(x * 7); }
+        FreeImage_CreateICCProfile(adobe32, a.data, a.size);
+        round_trip("Adobe RGB JNG with alpha", FIF_JNG, adobe32, 0, 0, 0);
+        /* header-only loads carry it */
+        FreeImage_Save(FIF_JNG, adobe32, path, 0);
+        back = FreeImage_Load(FIF_JNG, path, FIF_LOAD_NOPIXELS);
+        CHECK(back && FreeImage_GetICCProfile(back)->size == a.size && !memcmp(FreeImage_GetICCProfile(back)->data, a.data, a.size), "JNG header-only: the profile did not come back");
+        if (back) FreeImage_Unload(back);
+        /* a grey JNG cannot hold an RGB profile: left out, the save succeeds */
+        FreeImage_CreateICCProfile(grey, a.data, a.size);
+        CHECK(FreeImage_Save(FIF_JNG, grey, path, 0), "grey JNG with an RGB profile: not saved");
+        {
+            Bytes file = read_file(path);
+            size_t pos = 8;
+            int iccp = 0;
+            while (pos + 12 <= file.size) {
+                const DWORD length = ((DWORD)file.data[pos] << 24) | ((DWORD)file.data[pos + 1] << 16) | ((DWORD)file.data[pos + 2] << 8) | file.data[pos + 3];
+                if (!memcmp(file.data + pos + 4, "iCCP", 4)) iccp = 1;
+                pos += 12 + length;
+            }
+            CHECK(file.size && !iccp, "grey JNG with an RGB profile: an iCCP chunk was written");
+            free(file.data);
+        }
+        back = FreeImage_Load(FIF_JNG, path, 0);
+        CHECK(back && !FreeImage_GetICCProfile(back)->data, "grey JNG with an RGB profile: the profile came back");
+        if (back) FreeImage_Unload(back);
+        FreeImage_DestroyICCProfile(grey);
+        remove(path);
+        FreeImage_Unload(adobe32);
+    }
+
     /* a CMYK JPEG loaded as CMYK, then shown */
     {
         const char *path = scratch("icc_cmyk.jpg");
