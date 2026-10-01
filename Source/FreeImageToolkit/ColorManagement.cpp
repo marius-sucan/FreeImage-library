@@ -999,6 +999,8 @@ CreateTransform(bool same_buffer) {
 // the destination profile, or none for FreeImage's default space
 void ColorConverter::
 Tag(FIBITMAP *dib) const {
+	// before the source profile, which may be the image's own, is replaced
+	const bool converted = !IsIdentity();
 	if (m_destination.tag) {
 		AttachProfile(dib, m_destination.bytes, m_destination.size);
 	} else {
@@ -1009,6 +1011,10 @@ Tag(FIBITMAP *dib) const {
 		icc->flags |= FIICC_COLOR_IS_CMYK;
 	} else {
 		icc->flags &= ~FIICC_COLOR_IS_CMYK;
+	}
+	// the CICP tag describes the samples before the conversion
+	if (converted) {
+		FreeImage_SetMetadata(FIMD_CUSTOM, dib, "CICP", NULL);
 	}
 }
 

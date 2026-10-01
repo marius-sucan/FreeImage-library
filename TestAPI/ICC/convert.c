@@ -796,6 +796,51 @@ static void special_cases(const Bytes *adobe, const Bytes *press) {
     }
 }
 
+static void set_cicp(FIBITMAP *dib, BYTE primaries, BYTE transfer) {
+    BYTE value[4];
+    FITAG *tag = FreeImage_CreateTag();
+    value[0] = primaries; value[1] = transfer; value[2] = 0; value[3] = 1;
+    FreeImage_SetTagKey(tag, "CICP");
+    FreeImage_SetTagType(tag, FIDT_BYTE);
+    FreeImage_SetTagCount(tag, 4);
+    FreeImage_SetTagLength(tag, 4);
+    FreeImage_SetTagValue(tag, value);
+    FreeImage_SetMetadata(FIMD_CUSTOM, dib, "CICP", tag);
+    FreeImage_DeleteTag(tag);
+}
+
+static int has_cicp(FIBITMAP *dib) {
+    FITAG *tag = NULL;
+    return FreeImage_GetMetadata(FIMD_CUSTOM, dib, "CICP", &tag) && tag;
+}
+
+/* the CICP tag describes the samples: a conversion that changes them drops it, an identity keeps it */
+static void cicp_tag(const Bytes *adobe, const Bytes *p3, const Bytes *press) {
+    FIBITMAP *img = make_image(K_RGB16, 12, 8), *res;
+    set_cicp(img, 1, 8);
+    CHECK(FreeImage_ApplyICCProfile(img, NULL, 0, 0) && has_cicp(img), "CICP: dropped by an identity in place");
+    res = FreeImage_ConvertToICCProfile(img, NULL, 0, 0);
+    CHECK(res && has_cicp(res), "CICP: dropped by an identity copy");
+    if (res) FreeImage_Unload(res);
+    res = FreeImage_ConvertToICCProfile(img, p3->data, p3->size, 0);
+    CHECK(res && !has_cicp(res) && has_cicp(img), "CICP: kept by a conversion, or taken from its source");
+    if (res) FreeImage_Unload(res);
+    res = FreeImage_ConvertToCMYK(img, press->data, press->size, 0);
+    CHECK(res && !has_cicp(res), "CICP: kept by a CMYK conversion");
+    if (res) FreeImage_Unload(res);
+    FreeImage_CreateICCProfile(img, adobe->data, adobe->size);
+    CHECK(FreeImage_ApplyICCProfile(img, adobe->data, adobe->size, 0) && has_cicp(img), "CICP: dropped by the image's own profile");
+    CHECK(FreeImage_ApplyICCProfile(img, p3->data, p3->size, 0) && !has_cicp(img), "CICP: kept by a conversion in place");
+    /* the camera RAW case: the new profile is as long as the one it replaces */
+    {
+        Bytes linear = builtin(FICMS_PROFILE_LINEAR_SRGB), srgb = builtin(FICMS_PROFILE_SRGB);
+        FreeImage_CreateICCProfile(img, linear.data, linear.size);
+        set_cicp(img, 1, 8);
+        CHECK(linear.size == srgb.size && FreeImage_ApplyICCProfile(img, srgb.data, srgb.size, 0) && !has_cicp(img), "CICP: kept by a conversion in place to a profile of the same size");
+    }
+    FreeImage_Unload(img);
+}
+
 int main(int argc, char **argv) {
     Named tags[6], dsts[9];
     Bytes gray18, press, test3, test5;
@@ -845,6 +890,7 @@ int main(int argc, char **argv) {
     if (!digest_only) {
         views(&dsts[3].bytes);
         special_cases(&dsts[2].bytes, &press);
+        cicp_tag(&dsts[2].bytes, &dsts[3].bytes, &press);
     }
 
     free(gray18.data); free(press.data); free(test3.data); free(test5.data);
