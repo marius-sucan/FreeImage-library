@@ -671,6 +671,16 @@ RenderFrame(APNGinfo *info, int page, int flags) {
 			info->canvas_page = -1;		// do not hand out a half drawn canvas later
 			return NULL;
 		}
+		// FreeImage_ConvertTo32Bits() cannot take 16-bit grey: its high byte first
+		if(FreeImage_GetImageType(raw) == FIT_UINT16) {
+			FIBITMAP *grey = FreeImage_ConvertTo8Bits(raw);
+			FreeImage_Unload(raw);
+			raw = grey;
+			if(raw == NULL) {
+				info->canvas_page = -1;
+				return NULL;
+			}
+		}
 		FIBITMAP *frame32 = FreeImage_ConvertTo32Bits(raw);
 		FreeImage_Unload(raw);
 		if(frame32 == NULL) {

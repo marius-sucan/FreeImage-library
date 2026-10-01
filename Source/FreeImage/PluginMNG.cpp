@@ -1686,6 +1686,11 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 					WarnColour(info);
 				}
 				FIBITMAP *layer = converted ? converted : dib;
+				// FreeImage_ConvertTo32Bits() cannot take 16-bit grey: its high byte first
+				FIBITMAP *grey = (FreeImage_GetImageType(layer) == FIT_UINT16) ? FreeImage_ConvertTo8Bits(layer) : NULL;
+				if(grey) {
+					layer = grey;
+				}
 				FIBITMAP *frame32 = (FreeImage_GetBPP(layer) == 32 &&
 					FreeImage_GetImageType(layer) == FIT_BITMAP) ? layer : FreeImage_ConvertTo32Bits(layer);
 				if(frame32) {
@@ -1693,6 +1698,9 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 					if(frame32 != layer) {
 						FreeImage_Unload(frame32);
 					}
+				}
+				if(grey) {
+					FreeImage_Unload(grey);
 				}
 				if(converted) {
 					FreeImage_Unload(converted);

@@ -1551,6 +1551,90 @@ static void test_basi_samples(void) {
 	}
 }
 
+/* a 16-bit grey image of one value, tagged when profile is given */
+static FIBITMAP *grey16(unsigned width, unsigned height, WORD value, const void *profile, DWORD size) {
+	FIBITMAP *dib = FreeImage_AllocateT(FIT_UINT16, width, height, 16, 0, 0, 0);
+	unsigned x, y;
+	for (y = 0; y < height; y++) {
+		WORD *line = (WORD *)FreeImage_GetScanLine(dib, y);
+		for (x = 0; x < width; x++) {
+			line[x] = value;
+		}
+	}
+	if (profile) {
+		FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+	}
+	return dib;
+}
+
+/* a 16-bit grey layer is drawn by its high byte, after any conversion at 16 bits */
+static void test_grey16_layers(void) {
+	DWORD linear_size = 0;
+	const void *linear = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_GRAY, &linear_size);
+	FIBITMAP *a = grey16(W, H, 0x8080, NULL, 0), *b = grey16(8, 8, 0x4000, NULL, 0), *c = grey16(8, 8, 0x4000, linear, linear_size);
+	FIBITMAP *one = grey16(1, 1, 0x4000, linear, linear_size), *converted;
+	FIMULTIBITMAP *mb;
+	FIBITMAP *dib;
+	RGBQUAD got;
+	BYTE want_c = 0;
+	Buf mng;
+	int bad = 0;
+
+	printf("16-bit grey layers\n");
+
+	converted = FreeImage_ConvertToICCProfile(one, NULL, 0, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+	if (!converted || FreeImage_GetImageType(converted) != FIT_UINT16) {
+		fail("premise: linear grey does not convert to 16-bit grey");
+		bad = 1;
+	} else {
+		want_c = (BYTE)(((WORD *)FreeImage_GetScanLine(converted, 0))[0] >> 8);
+		if (want_c == 64) {
+			fail("premise: linear grey and sRGB grey give the same value");
+			bad = 1;
+		}
+	}
+	/* untagged 16x16, an untagged 8x8 at (0,8), a linear grey 8x8 at (8,8): the canvas is in grey sRGB */
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, 3, 3, 0, 0x03);
+	mng_png_with(&mng, a, NULL, NULL, 0);
+	mng_defi(&mng, 0, 0, 0, 0, 8);
+	mng_png_with(&mng, b, NULL, NULL, 0);
+	mng_defi(&mng, 0, 0, 0, 8, 8);
+	mng_png_with(&mng, c, NULL, NULL, 0);
+	mng_mend(&mng);
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_grey16.mng", &mng), FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	buf_free(&mng);
+	dib = (mb && !bad) ? FreeImage_LockPage(mb, 2) : NULL;
+	if (!bad && !dib) {
+		fail("the canvas did not load");
+		bad = 1;
+	} else if (!bad) {
+		if (!pixel_at(dib, 2, 2, &got) || got.rgbRed != 128 || got.rgbGreen != 128 || got.rgbBlue != 128 || got.rgbReserved != 255) {
+			fail("the 16x16 layer: (%u,%u,%u,%u), want (128,128,128,255)", got.rgbRed, got.rgbGreen, got.rgbBlue, got.rgbReserved);
+			bad = 1;
+		}
+		if (!pixel_at(dib, 2, 10, &got) || got.rgbRed != 64 || got.rgbGreen != 64 || got.rgbBlue != 64) {
+			fail("the untagged 8x8 layer: (%u,%u,%u), want (64,64,64)", got.rgbRed, got.rgbGreen, got.rgbBlue);
+			bad = 1;
+		}
+		if (!pixel_at(dib, 10, 10, &got) || got.rgbRed != want_c || got.rgbGreen != want_c || got.rgbBlue != want_c) {
+			fail("the linear grey 8x8 layer: (%u,%u,%u), want %u converted at 16 bits", got.rgbRed, got.rgbGreen, got.rgbBlue, want_c);
+			bad = 1;
+		}
+	}
+	if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	if (!bad) {
+		ok("16-bit grey layers drawn by their high byte, a linear grey one converted to grey sRGB first");
+	}
+	FreeImage_Unload(a);
+	FreeImage_Unload(b);
+	FreeImage_Unload(c);
+	FreeImage_Unload(one);
+	if (converted) FreeImage_Unload(converted);
+}
+
 /* the background colour is in the top-level colour space before BACK, converted to the canvas's; with none it is theirs */
 static void test_background_colour_space(void) {
 	static const BYTE srgb[1] = { 0 };
@@ -1932,6 +2016,7 @@ int main(void) {
 	test_canvas_colour_space();
 	test_basi_colour_space();
 	test_basi_samples();
+	test_grey16_layers();
 	test_background_colour_space();
 	test_unconvertible_canvas();
 	test_jng_profiles();

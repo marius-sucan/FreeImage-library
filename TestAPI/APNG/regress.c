@@ -626,6 +626,129 @@ static int has_cicp(FIBITMAP *dib, const BYTE cicp[4]) {
 		!memcmp(FreeImage_GetTagValue(tag), cicp, 4);
 }
 
+/* ---- APNG files built chunk by chunk ---- */
+
+typedef struct { BYTE *data; size_t size; } Bytes;
+
+static void bytes_add(Bytes *b, const void *p, size_t n) {
+	b->data = (BYTE *)realloc(b->data, b->size + n);
+	memcpy(b->data + b->size, p, n);
+	b->size += n;
+}
+
+static void put32(BYTE *p, DWORD v) {
+	p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v;
+}
+
+static void add_chunk(Bytes *b, const char *type, const void *data, DWORD length) {
+	BYTE head[8], tail[4];
+	DWORD crc = FreeImage_ZLibCRC32(0, (BYTE *)type, 4);
+	if (length) crc = FreeImage_ZLibCRC32(crc, (BYTE *)data, length);
+	put32(head, length);
+	memcpy(head + 4, type, 4);
+	put32(tail, crc);
+	bytes_add(b, head, 8);
+	if (length) bytes_add(b, data, length);
+	bytes_add(b, tail, 4);
+}
+
+/* a frame of 1/10 s, disposed of to nothing, its pixels replacing the canvas's */
+static void add_fctl(Bytes *b, DWORD seq, DWORD w, DWORD h, DWORD x, DWORD y) {
+	BYTE f[26];
+	put32(f, seq); put32(f + 4, w); put32(f + 8, h); put32(f + 12, x); put32(f + 16, y);
+	f[20] = 0; f[21] = 1; f[22] = 0; f[23] = 10;
+	f[24] = 0; f[25] = 0;
+	add_chunk(b, "fcTL", f, 26);
+}
+
+/* zlib data of w x h samples of one value, unfiltered: 16-bit grey, or 8-bit RGB when rgb */
+static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, int rgb, WORD value) {
+	const unsigned bytes = rgb ? 3 : 2;
+	const DWORD raw_size = h * (1 + bytes * w);
+	BYTE *raw = (BYTE *)malloc(raw_size);
+	DWORD n;
+	unsigned x, y;
+	for (y = 0; y < h; y++) {
+		BYTE *row = raw + y * (1 + bytes * w);
+		row[0] = 0;
+		for (x = 0; x < w; x++) {
+			if (rgb) {
+				row[1 + 3 * x] = (BYTE)value; row[2 + 3 * x] = (BYTE)(value >> 8); row[3 + 3 * x] = 0;
+			} else {
+				row[1 + 2 * x] = (BYTE)(value >> 8); row[2 + 2 * x] = (BYTE)value;
+			}
+		}
+	}
+	n = FreeImage_ZLibCompress(out, out_size, raw, raw_size);
+	free(raw);
+	return n;
+}
+
+static int write_bytes(const char *path, const Bytes *b) {
+	FILE *f = fopen(path, "wb");
+	int done = f && fwrite(b->data, 1, b->size, f) == b->size;
+	if (f) fclose(f);
+	return done;
+}
+
+/* a 16-bit grey animation: frame 0 16x16 of value0, frame 1 8x8 of value1 at (4,4) */
+static int grey16_animation(const char *path, WORD value0, WORD value1) {
+	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+	BYTE ihdr[13], actl[8], zdata[8192];
+	Bytes b = { NULL, 0 };
+	DWORD n;
+	int done;
+	bytes_add(&b, signature, 8);
+	put32(ihdr, 16); put32(ihdr + 4, 16);
+	ihdr[8] = 16; ihdr[9] = 0; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+	add_chunk(&b, "IHDR", ihdr, 13);
+	put32(actl, 2); put32(actl + 4, 0);
+	add_chunk(&b, "acTL", actl, 8);
+	add_fctl(&b, 0, 16, 16, 0, 0);
+	n = image_data(zdata, sizeof(zdata), 16, 16, 0, value0);
+	add_chunk(&b, "IDAT", zdata, n);
+	add_fctl(&b, 1, 8, 8, 4, 4);
+	put32(zdata, 2);
+	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 0, value1);
+	add_chunk(&b, "fdAT", zdata, n + 4);
+	add_chunk(&b, "IEND", NULL, 0);
+	done = write_bytes(path, &b);
+	free(b.data);
+	return done;
+}
+
+/* a 16-bit grey animation plays, each frame by its high byte */
+static void test_grey16_playback(void) {
+	const char *path = scratch("apng_grey16.png");
+	FIMULTIBITMAP *mb;
+	int page, bad = 0;
+
+	printf("\n=== a 16-bit grey animation plays\n");
+
+	if (!grey16_animation(path, 0x8080, 0x4000)) { fail("could not write %s", path); return; }
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	for (page = 0; page < 2; page++) {
+		FIBITMAP *dib = mb ? FreeImage_LockPage(mb, page) : NULL;
+		RGBQUAD under, over;
+		if (!dib) { fail("canvas %d did not load", page); bad++; continue; }
+		/* (1,1) and (6,6), counted from the top */
+		FreeImage_GetPixelColor(dib, 1, 14, &under);
+		FreeImage_GetPixelColor(dib, 6, 9, &over);
+		if (under.rgbRed != 128 || under.rgbGreen != 128 || under.rgbBlue != 128 || under.rgbReserved != 255) {
+			fail("canvas %d at (1,1): (%u,%u,%u,%u), want (128,128,128,255)", page, under.rgbRed, under.rgbGreen, under.rgbBlue, under.rgbReserved);
+			bad++;
+		}
+		if (page == 1 && (over.rgbRed != 64 || over.rgbGreen != 64 || over.rgbBlue != 64)) {
+			fail("canvas 1 at (6,6): (%u,%u,%u), want (64,64,64)", over.rgbRed, over.rgbGreen, over.rgbBlue);
+			bad++;
+		}
+		FreeImage_UnlockPage(mb, dib, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	if (!bad) ok("both canvases of a 16-bit grey APNG, 0x8080 as 128 and 0x4000 as 64");
+	remove(path);
+}
+
 /* the composited canvas carries the profile and CICP tag every frame carries */
 static void test_color_description(void) {
 	const char *path = scratch("apng_color.png");
@@ -1090,6 +1213,7 @@ int main(void) {
 	test_transparency();
 	test_header_only();
 	test_color_description();
+	test_grey16_playback();
 	test_profile_written();
 	test_mixed_profiles();
 	test_refusals();

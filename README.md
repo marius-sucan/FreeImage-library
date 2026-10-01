@@ -56,6 +56,7 @@ Fixes:
 - fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
 - fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag; MNG images in other colors than the first are converted to its colors;
 - fixed MNG solid-color images (BASI chunks) of 1 to 8 bits per sample showing black or transparent, and grey ones tinted;
+- fixed 16-bit greyscale APNG files failing to load with APNG_PLAYBACK, and such MNG images missing from MNG_PLAYBACK frames;
 - fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
 - fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
 - fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
