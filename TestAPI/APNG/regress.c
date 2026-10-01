@@ -637,9 +637,8 @@ static void test_color_description(void) {
 
 	printf("\n=== the playback canvas keeps the file's profile and CICP tag\n");
 
-	/* translucent, so the pages stay 32-bit and keep their profile on the way to the writer */
 	for (i = 0; i < 2; i++) {
-		frames[i] = make_frame(40, 30, i, i * 8, 4, -1);
+		frames[i] = make_frame(40, 30, i, i * 8, 4, 255);
 		FreeImage_CreateICCProfile(frames[i], (void *)adobe, (long)size);
 	}
 	if (!write_animation(path, frames, 2) || !insert_cicp(path, cicp)) { fail("could not write %s", path); goto out; }
@@ -664,6 +663,92 @@ static void test_color_description(void) {
 out:
 	for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
 	remove(path);
+}
+
+/* the iCCP chunk of a PNG file: 1 present, 0 absent, -1 unreadable */
+static int has_iccp_chunk(const char *path) {
+	FILE *f = fopen(path, "rb");
+	BYTE head[8];
+	int found = -1;
+	if (!f) return -1;
+	if (fseek(f, 8, SEEK_SET) == 0) {
+		found = 0;
+		while (fread(head, 1, 8, f) == 8) {
+			const unsigned long length = ((unsigned long)head[0] << 24) | ((unsigned long)head[1] << 16) | ((unsigned long)head[2] << 8) | head[3];
+			if (!memcmp(head + 4, "iCCP", 4)) { found = 1; break; }
+			if (!memcmp(head + 4, "IEND", 4) || fseek(f, (long)length + 4, SEEK_CUR) != 0) break;
+		}
+	}
+	fclose(f);
+	return found;
+}
+
+/* the writer keeps frame 0's profile whatever its pixel format, and writes no profile an RGBA PNG cannot hold */
+static void test_profile_written(void) {
+	const char *path = scratch("apng_profile.png");
+	DWORD adobe_size = 0, grey_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	static const char *kinds[4] = { "24-bit", "opaque 32-bit", "RGB16", "8-bit palette" };
+	int k, i, bad = 0;
+
+	printf("\n=== the first frame's profile reaches the file\n");
+
+	for (k = 0; k < 4; k++) {
+		FIBITMAP *frames[2];
+		FIMULTIBITMAP *mb;
+		for (i = 0; i < 2; i++) {
+			FIBITMAP *rgba = make_frame(32, 24, i, i * 8, 4, 255), *rgb = FreeImage_ConvertTo24Bits(rgba);
+			frames[i] = (k == 0) ? FreeImage_Clone(rgb) : (k == 1) ? FreeImage_Clone(rgba) :
+				(k == 2) ? FreeImage_ConvertToRGB16(rgb) : FreeImage_ColorQuantize(rgb, FIQ_WUQUANT);
+			FreeImage_Unload(rgba);
+			FreeImage_Unload(rgb);
+			FreeImage_CreateICCProfile(frames[i], (void *)adobe, (long)adobe_size);
+		}
+		if (!write_animation(path, frames, 2)) {
+			fail("%s: the animation was not written", kinds[k]); bad++;
+		} else if (has_iccp_chunk(path) != 1) {
+			fail("%s: no iCCP chunk", kinds[k]); bad++;
+		} else if ((mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0)) != NULL) {
+			for (i = 0; i < 2; i++) {
+				FIBITMAP *page = FreeImage_LockPage(mb, i);
+				if (!page || !has_profile(page, adobe, adobe_size)) { fail("%s: frame %d came back without Adobe RGB", kinds[k], i); bad++; }
+				if (page) FreeImage_UnlockPage(mb, page, FALSE);
+			}
+			FreeImage_CloseMultiBitmap(mb, 0);
+		} else {
+			fail("%s: the animation does not open", kinds[k]); bad++;
+		}
+		for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+		remove(path);
+	}
+	if (!bad) ok("24-bit, opaque 32-bit, RGB16 and palette animations keep the Adobe RGB profile");
+
+	/* a grey profile on RGBA frames: the 8-bit grey pages of an animation, and a tagged page saved alone */
+	bad = 0;
+	{
+		FIBITMAP *frames[2], *page;
+		LONG ms = 100;
+		for (i = 0; i < 2; i++) {
+			FIBITMAP *rgba = make_frame(32, 24, i, i * 8, 4, 255);
+			frames[i] = FreeImage_ConvertToGreyscale(rgba);
+			FreeImage_Unload(rgba);
+			FreeImage_CreateICCProfile(frames[i], (void *)grey, (long)grey_size);
+		}
+		if (!write_animation(path, frames, 2)) { fail("grey frames: the animation was not written"); bad++; }
+		else if (has_iccp_chunk(path) != 0) { fail("grey frames: an iCCP chunk the RGBA file cannot hold"); bad++; }
+		remove(path);
+		for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+
+		page = make_frame(32, 24, 0, -1, 0, 255);
+		FreeImage_CreateICCProfile(page, (void *)grey, (long)grey_size);
+		set_tag(page, "FrameTime", 0, FIDT_LONG, 4, &ms);
+		if (!FreeImage_Save(FIF_APNG, page, path, 0)) { fail("a tagged page with a grey profile: not saved"); bad++; }
+		else if (has_iccp_chunk(path) != 0) { fail("a tagged page with a grey profile: an iCCP chunk the RGBA file cannot hold"); bad++; }
+		remove(path);
+		FreeImage_Unload(page);
+	}
+	if (!bad) ok("a grey profile is left out of the RGBA file, and the save succeeds");
 }
 
 static void test_size(void) {
@@ -771,6 +856,7 @@ int main(void) {
 	test_transparency();
 	test_header_only();
 	test_color_description();
+	test_profile_written();
 	test_refusals();
 	test_size();
 

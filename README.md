@@ -55,6 +55,7 @@ Fixes:
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
 - fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
 - fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag;
+- fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;

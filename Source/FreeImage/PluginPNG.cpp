@@ -200,8 +200,8 @@ ReadBE32(const BYTE *p) {
 }
 
 // the checks libpng applies to an iCCP profile on read; png_set_iCCP does not apply them
-static BOOL
-IsEmbeddableProfile(const BYTE *profile, DWORD size, int color_type) {
+BOOL
+PNG_IsEmbeddableProfile(const BYTE *profile, DWORD size, BOOL color) {
 	if (!profile || (size < 132) || (ReadBE32(profile) != size) || ((profile[8] > 3) && (size & 3))) {
 		return FALSE;
 	}
@@ -209,7 +209,7 @@ IsEmbeddableProfile(const BYTE *profile, DWORD size, int color_type) {
 	if ((tag_count > (size - 132) / 12) || (ReadBE32(profile + 64) >= 0xFFFF) || (memcmp(profile + 36, "acsp", 4) != 0)) {
 		return FALSE;
 	}
-	if (memcmp(profile + 16, (color_type & PNG_COLOR_MASK_COLOR) ? "RGB " : "GRAY", 4) != 0) {
+	if (memcmp(profile + 16, color ? "RGB " : "GRAY", 4) != 0) {
 		return FALSE;
 	}
 	if ((memcmp(profile + 12, "abst", 4) == 0) || (memcmp(profile + 12, "link", 4) == 0)) {
@@ -1243,7 +1243,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 			FIICCPROFILE *iccProfile = FreeImage_GetICCProfile(dib);
 			if (iccProfile->size && iccProfile->data) {
-				if (IsEmbeddableProfile((const BYTE *)iccProfile->data, iccProfile->size, png_get_color_type(png_ptr, info_ptr))) {
+				if (PNG_IsEmbeddableProfile((const BYTE *)iccProfile->data, iccProfile->size, (png_get_color_type(png_ptr, info_ptr) & PNG_COLOR_MASK_COLOR) ? TRUE : FALSE)) {
 					// skip ICC profile check
 					png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
 					png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);

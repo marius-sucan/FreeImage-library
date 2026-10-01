@@ -848,8 +848,12 @@ CompressFrame(FIBITMAP *dib, int flags, BOOL with_metadata, std::vector<BYTE>& p
 		}
 		FIICCPROFILE *iccProfile = FreeImage_GetICCProfile(dib);
 		if(iccProfile->size && iccProfile->data) {
-			png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
-			png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
+			if(PNG_IsEmbeddableProfile((const BYTE *)iccProfile->data, iccProfile->size, TRUE)) {
+				png_set_option(png_ptr, PNG_SKIP_sRGB_CHECK_PROFILE, 1);
+				png_set_iCCP(png_ptr, info_ptr, "Embedded Profile", 0, (png_const_bytep)iccProfile->data, iccProfile->size);
+			} else {
+				FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile is invalid for this PNG and was left out");
+			}
 		}
 	}
 
@@ -1016,7 +1020,13 @@ static BOOL
 AddFrame(APNGinfo *info, FIBITMAP *dib, int flags, BOOL is_first) {
 	// one IHDR for all frames: always 8-bit RGBA
 	FIBITMAP *frame32 = FreeImage_ConvertTo32Bits(dib);
-	if(frame32 == NULL) {
+	if(frame32 != NULL) {
+		// the conversion keeps the samples' encoding but drops the profile, which frame 0 writes
+		const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+		if(is_first && icc->data && !FreeImage_GetICCProfile(frame32)->data) {
+			FreeImage_CreateICCProfile(frame32, icc->data, (long)icc->size);
+		}
+	} else {
 		FIBITMAP *standard = FreeImage_ConvertToStandardType(dib, TRUE);
 		if(standard != NULL) {
 			frame32 = FreeImage_ConvertTo32Bits(standard);
