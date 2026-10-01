@@ -92,6 +92,12 @@ from the plugin:
   preceding top-level gAMA and cHRM chunks", and either of those nullifies a
   preceding sRGB; an empty chunk nullifies only its own name. Seen through a
   gAMA of 1.0, which changes the pixels where it stands.
+- **BASI samples.** "When the sample_depth is less than sixteen, the least
+  significant bits are used": every colour type and depth PNG allows, filled
+  from the low bits, grey from the grey sample alone, a palette entry and its
+  alpha from the low bytes, an alpha of 0 making grey or RGB transparent and
+  any other opaque; the depths PNG does not allow are refused. The expected
+  values are written out in the test, worked from the spec's text.
 - **JNG profiles.** A JNG's iCCP describes its JPEG data and wins over an APP2
   profile inside it, which stands otherwise, through the alpha merge and
   header-only too; a grey iCCP in a colour JNG is left out. A JNG image in an
@@ -152,7 +158,9 @@ with alpha - empty, a 99-byte name, no NUL or no method, method 1, data that
 is not zlib, a cut stream, a lying size field, 9 MB of zeros, a grey profile
 in a colour JNG, bytes that are no profile, a bad one before a good one -
 loaded standalone and as an MNG frame, without a profile; and each of them as
-an MNG's global iCCP ahead of BACK and a BASI fill, and as the fill's own.
+an MNG's global iCCP ahead of BACK and a BASI fill, and as the fill's own;
+and BASI chunks of 8 to 30 bytes in every colour type and sample depth, PNG's
+and others.
 
 `make asan-run` is the one that matters here. The plugin parses the container by
 hand - chunk headers, lengths, the extent of each embedded datastream, the

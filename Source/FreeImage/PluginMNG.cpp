@@ -1271,7 +1271,41 @@ HasImageData(const std::vector<BYTE>& raw) {
 	return FALSE;
 }
 
-// BASI without IDAT: fill with its 16-bit RGBA
+// the colour types and sample depths of PNG
+static BOOL
+IsPNGSampleDepth(BYTE colour_type, BYTE depth) {
+	switch(colour_type) {
+		case 0:
+			return (depth == 1) || (depth == 2) || (depth == 4) || (depth == 8) || (depth == 16);
+		case 3:
+			return (depth == 1) || (depth == 2) || (depth == 4) || (depth == 8);
+		case 2:
+		case 4:
+		case 6:
+			return (depth == 8) || (depth == 16);
+		default:
+			return FALSE;
+	}
+}
+
+// a BASI sample in 8 bits: its 16-bit field holds sample_depth bits, the least significant
+static BYTE
+BASISample(WORD sample, BYTE depth) {
+	switch(depth) {
+		case 16:
+			return (BYTE)(sample >> 8);
+		case 8:
+			return (BYTE)sample;
+		case 4:
+			return (BYTE)((sample & 0x0F) * 17);
+		case 2:
+			return (BYTE)((sample & 0x03) * 85);
+		default:
+			return (BYTE)((sample & 0x01) * 255);
+	}
+}
+
+// BASI without IDAT: fill with its colour and alpha samples (4.2.5)
 static FIBITMAP *
 CreateBASIFill(const MNGinfo *info, const std::vector<BYTE>& raw, const MNGFrame& frame, int flags) {
 	std::vector<MNGChunkRef> chunks;
@@ -1281,15 +1315,45 @@ CreateBASIFill(const MNGinfo *info, const std::vector<BYTE>& raw, const MNGFrame
 	const BYTE *payload = chunks[0].payload;
 	const DWORD length = chunks[0].length;
 
-	// omitted samples are 0; omitted alpha is opaque
-	BYTE red = 0, green = 0, blue = 0, alpha = 255;
-	if(length >= 19) {
-		red = (BYTE)(GetWORD(&payload[13]) >> 8);
-		green = (BYTE)(GetWORD(&payload[15]) >> 8);
-		blue = (BYTE)(GetWORD(&payload[17]) >> 8);
+	const BYTE depth = payload[8];
+	const BYTE colour_type = payload[9];
+	if(!IsPNGSampleDepth(colour_type, depth)) {
+		FreeImage_OutputMessageProc(s_format_id,
+			"MNG: a BASI image of colour type %u and sample depth %u", colour_type, depth);
+		return NULL;
 	}
-	if(length >= 21) {
-		alpha = (BYTE)(GetWORD(&payload[19]) >> 8);
+
+	// omitted samples are 0; omitted alpha is opaque
+	const BOOL has_alpha = (length >= 21) ? TRUE : FALSE;
+	const WORD r = (length >= 19) ? GetWORD(&payload[13]) : 0;
+	const WORD g = (length >= 19) ? GetWORD(&payload[15]) : 0;
+	const WORD b = (length >= 19) ? GetWORD(&payload[17]) : 0;
+	const WORD a = has_alpha ? GetWORD(&payload[19]) : 0;
+
+	BYTE red, green, blue, alpha = 255;
+	if(colour_type == 3) {
+		// palette entry 0 and its tRNS entry, from the low bytes
+		red = (BYTE)r;
+		green = (BYTE)g;
+		blue = (BYTE)b;
+		if(has_alpha && (a < 255)) {
+			alpha = (BYTE)a;
+		}
+	} else if((colour_type == 0) || (colour_type == 4)) {
+		// grey: green and blue are ignored
+		red = green = blue = BASISample(r, depth);
+	} else {
+		red = BASISample(r, depth);
+		green = BASISample(g, depth);
+		blue = BASISample(b, depth);
+	}
+	if((colour_type == 4) || (colour_type == 6)) {
+		if(has_alpha) {
+			alpha = BASISample(a, depth);
+		}
+	} else if((colour_type != 3) && has_alpha && (a == 0)) {
+		// no alpha channel: an alpha of 0 makes the colour transparent, any other is opaque
+		alpha = 0;
 	}
 
 	const BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;

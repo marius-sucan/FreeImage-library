@@ -1455,6 +1455,102 @@ static void test_basi_colour_space(void) {
 	}
 }
 
+/* a BASI datastream filled with these samples: length counts the BASI fields present (13 to 22) */
+static void basi_chunk(Buf *mng, BYTE colour_type, BYTE depth, WORD r, WORD g, WORD b, WORD a, int length, BYTE viewable) {
+	Buf basi;
+	buf_init(&basi);
+	buf_u32(&basi, W);
+	buf_u32(&basi, H);
+	buf_byte(&basi, depth);
+	buf_byte(&basi, colour_type);
+	buf_byte(&basi, 0);
+	buf_byte(&basi, 0);
+	buf_byte(&basi, 0);
+	if (length >= 19) {
+		buf_u16(&basi, r);
+		buf_u16(&basi, g);
+		buf_u16(&basi, b);
+	}
+	if (length >= 21) {
+		buf_u16(&basi, a);
+	}
+	if (length >= 22) {
+		buf_byte(&basi, viewable);
+	}
+	chunk_buf(mng, "BASI", &basi);
+	chunk(mng, "IEND", NULL, 0);
+}
+
+/* a BASI fill: sample_depth bits in each 16-bit field, read by colour type (4.2.5) */
+static void test_basi_samples(void) {
+	static const struct { const char *what; BYTE type, depth; WORD r, g, b, a; BYTE want[4]; } cases[] = {
+		{ "grey, 1 bit", 0, 1, 1, 7, 7, 1, { 255, 255, 255, 255 } },
+		{ "grey, 2 bits", 0, 2, 2, 7, 7, 1, { 170, 170, 170, 255 } },
+		{ "grey, 4 bits", 0, 4, 9, 7, 7, 1, { 153, 153, 153, 255 } },
+		{ "grey, 8 bits", 0, 8, 200, 7, 7, 1, { 200, 200, 200, 255 } },
+		{ "grey, 16 bits", 0, 16, 0xC8C8, 7, 7, 0xFFFF, { 200, 200, 200, 255 } },
+		{ "grey, alpha 0", 0, 8, 200, 7, 7, 0, { 200, 200, 200, 0 } },
+		{ "RGB, 8 bits", 2, 8, 255, 0, 0, 255, { 255, 0, 0, 255 } },
+		{ "RGB, 16 bits", 2, 16, 0xC8C8, 0x3232, 0x3232, 0xFFFF, { 200, 50, 50, 255 } },
+		{ "RGB, alpha 0", 2, 8, 255, 0, 0, 0, { 255, 0, 0, 0 } },
+		{ "RGB, alpha 5", 2, 8, 255, 0, 0, 5, { 255, 0, 0, 255 } },
+		{ "indexed, 1 bit", 3, 1, 255, 255, 255, 255, { 255, 255, 255, 255 } },
+		{ "indexed, 8 bits, alpha 128", 3, 8, 10, 20, 30, 128, { 10, 20, 30, 128 } },
+		{ "indexed, 4 bits, wide samples", 3, 4, 0x0164, 0x0132, 0x0110, 0x0100, { 100, 50, 16, 255 } },
+		{ "grey and alpha, 8 bits", 4, 8, 100, 9, 9, 64, { 100, 100, 100, 64 } },
+		{ "grey and alpha, 16 bits", 4, 16, 0x6464, 9, 9, 0x4040, { 100, 100, 100, 64 } },
+		{ "RGBA, 8 bits", 6, 8, 255, 0, 0, 64, { 255, 0, 0, 64 } },
+		{ "RGBA, 16 bits", 6, 16, 65535, 0, 0, 16384, { 255, 0, 0, 64 } }
+	};
+	/* colour type, sample depth: not PNG's */
+	static const BYTE invalid[7][2] = { { 2, 4 }, { 3, 16 }, { 4, 1 }, { 7, 8 }, { 0, 0 }, { 0, 3 }, { 6, 32 } };
+	int i, bad = 0;
+
+	printf("the samples of a BASI fill\n");
+
+	for (i = 0; i < (int)(sizeof(cases) / sizeof(cases[0])) + 7; i++) {
+		const int valid = i < (int)(sizeof(cases) / sizeof(cases[0]));
+		FIMULTIBITMAP *mb;
+		FIBITMAP *dib;
+		RGBQUAD got;
+		Buf mng;
+
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 1, 1, 0, 0x07);
+		if (valid) {
+			basi_chunk(&mng, cases[i].type, cases[i].depth, cases[i].r, cases[i].g, cases[i].b, cases[i].a, 22, 1);
+		} else {
+			const int k = i - (int)(sizeof(cases) / sizeof(cases[0]));
+			basi_chunk(&mng, invalid[k][0], invalid[k][1], 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 22, 1);
+		}
+		mng_mend(&mng);
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_basi_samples.mng", &mng), FALSE, TRUE, FALSE, 0);
+		buf_free(&mng);
+		dib = mb ? FreeImage_LockPage(mb, 0) : NULL;
+		if (!valid) {
+			if (dib) {
+				fail("colour type %u, sample depth %u: a fill came out", invalid[i - (int)(sizeof(cases) / sizeof(cases[0]))][0],
+					 invalid[i - (int)(sizeof(cases) / sizeof(cases[0]))][1]);
+				bad = 1;
+			}
+		} else if (!dib || !pixel_at(dib, 0, 0, &got)) {
+			fail("%s: no fill", cases[i].what);
+			bad = 1;
+		} else if (got.rgbRed != cases[i].want[0] || got.rgbGreen != cases[i].want[1] || got.rgbBlue != cases[i].want[2]
+				   || got.rgbReserved != cases[i].want[3]) {
+			fail("%s: (%u,%u,%u,%u), want (%u,%u,%u,%u)", cases[i].what, got.rgbRed, got.rgbGreen, got.rgbBlue, got.rgbReserved,
+				 cases[i].want[0], cases[i].want[1], cases[i].want[2], cases[i].want[3]);
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) {
+		ok("every PNG colour type and depth filled from its low sample bits, grey from the grey sample, palette from low bytes; others refused");
+	}
+}
+
 /* the background colour is in the top-level colour space before BACK, converted to the canvas's; with none it is theirs */
 static void test_background_colour_space(void) {
 	static const BYTE srgb[1] = { 0 };
@@ -1835,6 +1931,7 @@ int main(void) {
 	test_nullified_colour_chunks();
 	test_canvas_colour_space();
 	test_basi_colour_space();
+	test_basi_samples();
 	test_background_colour_space();
 	test_unconvertible_canvas();
 	test_jng_profiles();

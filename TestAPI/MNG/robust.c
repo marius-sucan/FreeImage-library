@@ -639,6 +639,44 @@ out:
 	free(zeros);
 }
 
+/* BASI chunks of every length, with colour types and sample depths PNG has and has not */
+static void test_basi_fields(void) {
+	static const BYTE types[7] = { 0, 2, 3, 4, 6, 7, 255 };
+	static const BYTE depths[6] = { 0, 1, 3, 8, 16, 32 };
+	static const DWORD lengths[8] = { 8, 12, 13, 15, 19, 21, 22, 30 };
+	int l, t, d;
+
+	printf("BASI chunks of every length, type and depth\n");
+
+	for (l = 0; l < 8; l++) {
+		char what[64];
+		Buf mng;
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, W, H, 10, 0, 0, 0, 0x07);
+		for (t = 0; t < 7; t++) {
+			for (d = 0; d < 6; d++) {
+				BYTE body[30];
+				memset(body, 0xA5, sizeof(body));
+				body[0] = body[1] = body[2] = 0;
+				body[3] = W;
+				body[4] = body[5] = body[6] = 0;
+				body[7] = H;
+				body[8] = depths[d];
+				body[9] = types[t];
+				body[10] = body[11] = body[12] = 0;
+				body[21] = 1;
+				chunk(&mng, "BASI", body, lengths[l]);
+				chunk(&mng, "IEND", NULL, 0);
+			}
+		}
+		mng_mend(&mng);
+		snprintf(what, sizeof(what), "42 BASI chunks of %u bytes", (unsigned)lengths[l]);
+		survive(write_file("mng_basi_fields.mng", &mng), what);
+		buf_free(&mng);
+	}
+}
+
 /* --------------------------------------------------------------------- */
 
 int main(void) {
@@ -657,6 +695,7 @@ int main(void) {
 	test_off_canvas();
 	test_garbage();
 	test_jng_iccp();
+	test_basi_fields();
 
 	FreeImage_DeInitialise();
 
