@@ -343,6 +343,14 @@ static void make_fixtures(void) {
         add("MNG playback", FIF_MNG, MNG_PLAYBACK, 2, scratch("dsp_anim.mng"));
     } else fail("MNG: fixture not saved");
     FreeImage_Unload(pages[1]);
+    /* translucent pages stay 32-bit on their way to the APNG writer, which keeps their profile then */
+    pages[0] = FreeImage_ConvertToICCProfile(rgba, adobe.data, adobe.size, 0);
+    pages[1] = FreeImage_ConvertToICCProfile(pro, adobe.data, adobe.size, 0);
+    if (save_pages(FIF_APNG, scratch("dsp_anim32.apng"), pages, 2)) {
+        add("Adobe RGB APNG frames", FIF_APNG, 0, 2, scratch("dsp_anim32.apng"));
+        add("Adobe RGB APNG playback", FIF_APNG, APNG_PLAYBACK, 2, scratch("dsp_anim32.apng"));
+    } else fail("Adobe RGB APNG: fixture not saved");
+    FreeImage_Unload(pages[0]); FreeImage_Unload(pages[1]);
     {
         FIBITMAP *small = FreeImage_Rescale(pro, 32, 32, FILTER_BOX);
         FreeImage_CreateICCProfile(small, prophoto.data, prophoto.size);
@@ -716,6 +724,18 @@ static void flag_rules(void) {
             a = FreeImage_Load(c->fif, c->path, c->flags | FIF_LOAD_DISPLAY_ICC);
             CHECK(a && !(FreeImage_GetICCProfile(a)->flags & FIICC_COLOR_IS_CMYK) && FreeImage_GetColorType(a) == FIC_RGB &&
                 (FreeImage_GetBPP(a) == 24 || FreeImage_GetImageType(a) == FIT_RGB16), "%s: RGB with the flag", c->name);
+            if (a) FreeImage_Unload(a);
+        }
+    }
+    /* a playback canvas is converted from its frames' profile, not taken as sRGB */
+    {
+        const char *names[2] = { "Adobe RGB APNG playback", "MNG playback" };
+        Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
+        int k;
+        for (k = 0; k < 2; k++) {
+            if (!(c = find(names[k]))) continue;
+            a = load(c, 1, c->flags, BY_PAGE_FILE);
+            CHECK(a && same_bytes(&adobe, FreeImage_GetICCProfile(a)->data, FreeImage_GetICCProfile(a)->size), "%s: the canvas has no Adobe RGB profile", c->name);
             if (a) FreeImage_Unload(a);
         }
     }

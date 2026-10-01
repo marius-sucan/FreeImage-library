@@ -1472,6 +1472,20 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 	return FreeImage_Clone(info->canvas);
 }
 
+// the canvas takes the profile and CICP tag of the page's own image; images may differ
+static void
+DescribeCanvas(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flags, FIBITMAP *canvas) {
+	try {
+		FIBITMAP *description = DecodeFrame(io, handle, info, page, flags | FIF_LOAD_NOPIXELS);
+		if(description) {
+			CopyColorDescription(canvas, description);
+			FreeImage_Unload(description);
+		}
+	} catch(std::bad_alloc&) {
+		// no description then
+	}
+}
+
 // ==========================================================
 // Animation metadata
 // ==========================================================
@@ -1898,6 +1912,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 							 : DecodeFrame(io, handle, info, page, flags);
 	if(!dib) {
 		return NULL;
+	}
+	if(playback) {
+		DescribeCanvas(io, handle, info, page, flags, dib);
 	}
 
 	SetFrameMetadata(dib, info, page);

@@ -488,6 +488,12 @@ The CICP tag's 4 code points; FALSE without the tag
 */
 bool GetCICPMetadata(FIBITMAP *dib, BYTE cicp[4]);
 
+/**
+Copy src's RGB ICC profile and CICP tag to dst, an RGB image made of src's samples
+@see See definition in MustTonemap.cpp
+*/
+void CopyColorDescription(FIBITMAP *dst, FIBITMAP *src);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

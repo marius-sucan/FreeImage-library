@@ -99,6 +99,8 @@ struct APNGinfo {
 	FIBITMAP *canvas;
 	FIBITMAP *previous_canvas;
 	int canvas_page;				//! the frame `canvas` shows, -1 when there is none
+	FIBITMAP *description;			//! frame 0's header: the profile and CICP tag every frame has
+	BOOL described;					//! description was looked for
 
 	// ---------- writing ----------
 
@@ -112,7 +114,7 @@ struct APNGinfo {
 	FIBITMAP *out_previous;			//! previous full frame; NULL = do not diff
 
 	APNGinfo() : read(FALSE), canvas_width(0), canvas_height(0), num_plays(0), animated(FALSE),
-		canvas(NULL), previous_canvas(NULL), canvas_page(-1),
+		canvas(NULL), previous_canvas(NULL), canvas_page(-1), description(NULL), described(FALSE),
 		pending(NULL), pending_flags(0), out_pages(0), out_width(0), out_height(0), out_plays(0),
 		out_previous(NULL) {
 		memset(ihdr, 0, sizeof(ihdr));
@@ -121,6 +123,7 @@ struct APNGinfo {
 	~APNGinfo() {
 		if(canvas) FreeImage_Unload(canvas);
 		if(previous_canvas) FreeImage_Unload(previous_canvas);
+		if(description) FreeImage_Unload(description);
 		if(pending) FreeImage_Unload(pending);
 		if(out_previous) FreeImage_Unload(out_previous);
 	}
@@ -696,6 +699,16 @@ RenderFrame(APNGinfo *info, int page, int flags) {
 	}
 
 	return FreeImage_Clone(info->canvas);
+}
+
+// every frame is decoded with the same ancillary chunks, so frame 0 describes the canvas
+static void
+DescribeCanvas(APNGinfo *info, FIBITMAP *canvas, int flags) {
+	if(!info->described) {
+		info->described = TRUE;
+		info->description = DecodeFrame(info, 0, (flags & ~APNG_PLAYBACK) | FIF_LOAD_NOPIXELS);
+	}
+	CopyColorDescription(canvas, info->description);
 }
 
 static BOOL
@@ -1374,6 +1387,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			dib = header_only ?
 				FreeImage_AllocateHeader(TRUE, info->canvas_width, info->canvas_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK) :
 				RenderFrame(info, page, flags);
+			if(dib) {
+				DescribeCanvas(info, dib, flags);
+			}
 		} else {
 			dib = DecodeFrame(info, page, flags & ~APNG_PLAYBACK);
 		}

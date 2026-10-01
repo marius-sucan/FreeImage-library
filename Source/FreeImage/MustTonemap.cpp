@@ -157,6 +157,22 @@ GetCICPMetadata(FIBITMAP *dib, BYTE cicp[4]) {
 	return true;
 }
 
+void
+CopyColorDescription(FIBITMAP *dst, FIBITMAP *src) {
+	if (!dst || !src) {
+		return;
+	}
+	// a grey profile cannot describe RGB samples
+	const FIICCPROFILE *icc = FreeImage_GetICCProfile(src);
+	if (icc->data && (icc->size >= 128) && (memcmp((const BYTE *)icc->data + 16, "RGB ", 4) == 0)) {
+		FreeImage_CreateICCProfile(dst, icc->data, (long)icc->size);
+	}
+	BYTE cicp[4];
+	if (GetCICPMetadata(src, cicp)) {
+		SetCICPMetadata(dst, cicp[0], cicp[1], cicp[2], cicp[3] ? TRUE : FALSE);
+	}
+}
+
 static Transfer
 TransferOfCode(BYTE transfer) {
 	switch (transfer) {

@@ -589,6 +589,83 @@ out:
 	remove(path);
 }
 
+/* a cICP chunk after IHDR; FALSE when the file is not a PNG */
+static int insert_cicp(const char *path, const BYTE cicp[4]) {
+	FILE *f = fopen(path, "rb");
+	BYTE *data, chunk[16];
+	long size;
+	DWORD crc;
+	int done = 0;
+	if (!f) return 0;
+	fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET);
+	data = (BYTE *)malloc(size);
+	if (data && fread(data, 1, size, f) == (size_t)size && size > 33 && !memcmp(data + 12, "IHDR", 4)) {
+		chunk[0] = 0; chunk[1] = 0; chunk[2] = 0; chunk[3] = 4;
+		memcpy(chunk + 4, "cICP", 4);
+		memcpy(chunk + 8, cicp, 4);
+		crc = FreeImage_ZLibCRC32(0, chunk + 4, 8);
+		chunk[12] = (BYTE)(crc >> 24); chunk[13] = (BYTE)(crc >> 16); chunk[14] = (BYTE)(crc >> 8); chunk[15] = (BYTE)crc;
+		fclose(f);
+		f = fopen(path, "wb");
+		/* signature + IHDR is 33 bytes */
+		done = f && fwrite(data, 1, 33, f) == 33 && fwrite(chunk, 1, 16, f) == 16 && fwrite(data + 33, 1, size - 33, f) == (size_t)(size - 33);
+	}
+	if (f) fclose(f);
+	free(data);
+	return done;
+}
+
+static int has_profile(FIBITMAP *dib, const void *profile, DWORD size) {
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	return icc->data && icc->size == size && !memcmp(icc->data, profile, size);
+}
+
+static int has_cicp(FIBITMAP *dib, const BYTE cicp[4]) {
+	FITAG *tag = NULL;
+	return FreeImage_GetMetadata(FIMD_CUSTOM, dib, "CICP", &tag) && tag && FreeImage_GetTagCount(tag) == 4 &&
+		!memcmp(FreeImage_GetTagValue(tag), cicp, 4);
+}
+
+/* the composited canvas carries the profile and CICP tag every frame carries */
+static void test_color_description(void) {
+	const char *path = scratch("apng_color.png");
+	const BYTE cicp[4] = { 12, 13, 0, 1 };	/* Display P3 primaries, sRGB curve */
+	DWORD size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &size);
+	FIBITMAP *frames[2];
+	int i, flags;
+
+	printf("\n=== the playback canvas keeps the file's profile and CICP tag\n");
+
+	/* translucent, so the pages stay 32-bit and keep their profile on the way to the writer */
+	for (i = 0; i < 2; i++) {
+		frames[i] = make_frame(40, 30, i, i * 8, 4, -1);
+		FreeImage_CreateICCProfile(frames[i], (void *)adobe, (long)size);
+	}
+	if (!write_animation(path, frames, 2) || !insert_cicp(path, cicp)) { fail("could not write %s", path); goto out; }
+
+	for (flags = 0; flags < 2; flags++) {
+		const int load = APNG_PLAYBACK | (flags ? FIF_LOAD_NOPIXELS : 0);
+		const char *what = flags ? "header-only canvas" : "canvas";
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, load);
+		int bad = 0;
+		if (!mb) { fail("cannot reopen %s", path); goto out; }
+		for (i = 1; i >= 0; i--) {
+			FIBITMAP *page = FreeImage_LockPage(mb, i);
+			if (!page) { fail("%s %d did not load", what, i); bad++; continue; }
+			if (!has_profile(page, adobe, size)) { fail("%s %d: a %u-byte profile, not Adobe RGB", what, i, (unsigned)FreeImage_GetICCProfile(page)->size); bad++; }
+			if (!has_cicp(page, cicp)) { fail("%s %d: no CICP tag 12/13/0/1", what, i); bad++; }
+			FreeImage_UnlockPage(mb, page, FALSE);
+		}
+		if (!bad) ok("every %s carries the Adobe RGB profile and the CICP tag", what);
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+
+out:
+	for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+	remove(path);
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -693,6 +770,7 @@ int main(void) {
 	test_mixed_depths();
 	test_transparency();
 	test_header_only();
+	test_color_description();
 	test_refusals();
 	test_size();
 

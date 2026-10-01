@@ -70,6 +70,9 @@ from the plugin:
 - **A canvas the file cannot justify.** MHDR may ask for 65535x65535 next to a
   single 16x16 image; composing that is seventeen gigabytes, so it is refused,
   and the images stay readable without `MNG_PLAYBACK`.
+- **The canvas's colors.** A composed page carries the ICC profile and CICP
+  tag of its own image: the global iCCP, or the image's own, never a grey one
+  on the RGBA canvas; read forwards and backwards, with pixels and without.
 
 ## regress
 

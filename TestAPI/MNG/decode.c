@@ -812,6 +812,143 @@ static void test_absurd_canvas(void) {
 
 /* --------------------------------------------------------------------- */
 
+/* a PNG of dib minus its signature, with a cICP chunk after IHDR when cicp is given */
+static int mng_png(Buf *out, FIBITMAP *dib, const BYTE *cicp) {
+	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+	BYTE *png = NULL;
+	DWORD size = 0;
+	int ok = mem && FreeImage_SaveToMemory(FIF_PNG, dib, mem, 0) && FreeImage_AcquireMemory(mem, &png, &size) && size > 33;
+	if (ok) {
+		buf_add(out, png + 8, 25);	/* IHDR */
+		if (cicp) {
+			chunk(out, "cICP", cicp, 4);
+		}
+		buf_add(out, png + 33, size - 33);
+	}
+	if (mem) {
+		FreeImage_CloseMemory(mem);
+	}
+	return ok;
+}
+
+/* the payload of a PNG's iCCP chunk, as FreeImage writes it for this profile */
+static int iccp_payload(Buf *out, const void *profile, DWORD profile_size) {
+	FIBITMAP *dib = FreeImage_Allocate(1, 1, 24, 0, 0, 0);
+	Buf png;
+	size_t pos = 0;
+	int found = 0;
+	buf_init(&png);
+	FreeImage_CreateICCProfile(dib, (void *)profile, (long)profile_size);
+	if (mng_png(&png, dib, NULL)) {
+		while (pos + 12 <= png.size && !found) {
+			const DWORD length = ((DWORD)png.data[pos] << 24) | ((DWORD)png.data[pos + 1] << 16) | ((DWORD)png.data[pos + 2] << 8) | png.data[pos + 3];
+			if (!memcmp(png.data + pos + 4, "iCCP", 4)) {
+				buf_add(out, png.data + pos + 8, length);
+				found = 1;
+			}
+			pos += 12 + length;
+		}
+	}
+	buf_free(&png);
+	FreeImage_Unload(dib);
+	return found;
+}
+
+static int same_profile(FIBITMAP *dib, const void *profile, DWORD size) {
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	if (!profile) {
+		return icc->data == NULL;
+	}
+	return icc->data && icc->size == size && !memcmp(icc->data, profile, size);
+}
+
+static int same_cicp(FIBITMAP *dib, const BYTE *cicp) {
+	FITAG *tag = NULL;
+	if (!FreeImage_GetMetadata(FIMD_CUSTOM, dib, "CICP", &tag) || !tag) {
+		return cicp == NULL;
+	}
+	return cicp && FreeImage_GetTagCount(tag) == 4 && !memcmp(FreeImage_GetTagValue(tag), cicp, 4);
+}
+
+/* the canvas carries the profile and CICP tag of the page's own image: global, local, grey left out */
+static void test_color_description(void) {
+	const BYTE cicp[4] = { 9, 16, 0, 1 };	/* BT.2020, PQ */
+	DWORD adobe_size = 0, p3_size = 0, grey_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+	const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &grey_size);
+	const void *want_profile[4];
+	DWORD want_size[4];
+	const BYTE *want_cicp[4] = { NULL, NULL, cicp, NULL };
+	FIBITMAP *rgb = FreeImage_Allocate(W, H, 24, 0, 0, 0), *mono = FreeImage_Allocate(W, H, 8, 0, 0, 0);
+	Buf mng, iccp;
+	const char *path;
+	int i, mode, ok_all = 1;
+
+	printf("the color description of the playback canvas\n");
+
+	want_profile[0] = adobe; want_size[0] = adobe_size;	/* the global iCCP */
+	want_profile[1] = p3; want_size[1] = p3_size;		/* its own iCCP */
+	want_profile[2] = adobe; want_size[2] = adobe_size;	/* the global iCCP and its own cICP */
+	want_profile[3] = NULL; want_size[3] = 0;			/* a grey profile cannot describe the RGBA canvas */
+	for (i = 0; i < 256; i++) {
+		FreeImage_GetPalette(mono)[i].rgbRed = FreeImage_GetPalette(mono)[i].rgbGreen = FreeImage_GetPalette(mono)[i].rgbBlue = (BYTE)i;
+	}
+
+	buf_init(&mng);
+	buf_init(&iccp);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, 4, 4, 0, 1);
+	if (!iccp_payload(&iccp, adobe, adobe_size)) {
+		fail("no iCCP chunk to copy");
+		goto out;
+	}
+	chunk_buf(&mng, "iCCP", &iccp);
+	mng_png(&mng, rgb, NULL);
+	FreeImage_CreateICCProfile(rgb, (void *)p3, (long)p3_size);
+	mng_png(&mng, rgb, NULL);
+	FreeImage_DestroyICCProfile(rgb);
+	mng_png(&mng, rgb, cicp);
+	FreeImage_CreateICCProfile(mono, (void *)grey, (long)grey_size);
+	mng_png(&mng, mono, NULL);
+	mng_mend(&mng);
+	path = write_file("mng_color.mng", &mng);
+
+	for (mode = 0; mode < 2; mode++) {
+		const int flags = MNG_PLAYBACK | (mode ? FIF_LOAD_NOPIXELS : 0);
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, flags);
+		if (!mb || FreeImage_GetPageCount(mb) != 4) {
+			fail("%s: %d pages, expected 4", mode ? "header only" : "pixels", mb ? FreeImage_GetPageCount(mb) : -1);
+			ok_all = 0;
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+			continue;
+		}
+		/* backwards too: each page is described by its own image, not the last one drawn */
+		for (i = 3; i >= -3; i--) {
+			const int page = (i < 0) ? -i : i;
+			FIBITMAP *dib = FreeImage_LockPage(mb, page);
+			if (!dib) { fail("page %d could not be locked", page); ok_all = 0; continue; }
+			if (!same_profile(dib, want_profile[page], want_size[page])) {
+				fail("%s canvas %d: a %u-byte profile", mode ? "header-only" : "the", page, (unsigned)FreeImage_GetICCProfile(dib)->size);
+				ok_all = 0;
+			}
+			if (!same_cicp(dib, want_cicp[page])) {
+				fail("%s canvas %d: the CICP tag", mode ? "header-only" : "the", page);
+				ok_all = 0;
+			}
+			FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (ok_all) {
+		ok("each canvas carries its image's RGB profile, global or its own, and its CICP tag, with pixels or without");
+	}
+out:
+	buf_free(&mng);
+	FreeImage_Unload(rgb);
+	FreeImage_Unload(mono);
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -828,6 +965,7 @@ int main(void) {
 	test_single_load();
 	test_alpha_compositing();
 	test_absurd_canvas();
+	test_color_description();
 
 	FreeImage_DeInitialise();
 
