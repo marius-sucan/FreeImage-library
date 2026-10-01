@@ -661,9 +661,8 @@ static void add_fctl(Bytes *b, DWORD seq, DWORD w, DWORD h, DWORD x, DWORD y) {
 	add_chunk(b, "fcTL", f, 26);
 }
 
-/* zlib data of w x h samples of one value, unfiltered: 16-bit grey, or 8-bit RGB when rgb */
-static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, int rgb, WORD value) {
-	const unsigned bytes = rgb ? 3 : 2;
+/* zlib data of w x h pixels of one value, unfiltered: bytes 1 an 8-bit index, 2 16-bit grey, 3 RGB (low, high byte, 0) */
+static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, unsigned bytes, WORD value) {
 	const DWORD raw_size = h * (1 + bytes * w);
 	BYTE *raw = (BYTE *)malloc(raw_size);
 	DWORD n;
@@ -672,10 +671,12 @@ static DWORD image_data(BYTE *out, DWORD out_size, unsigned w, unsigned h, int r
 		BYTE *row = raw + y * (1 + bytes * w);
 		row[0] = 0;
 		for (x = 0; x < w; x++) {
-			if (rgb) {
+			if (bytes == 3) {
 				row[1 + 3 * x] = (BYTE)value; row[2 + 3 * x] = (BYTE)(value >> 8); row[3 + 3 * x] = 0;
-			} else {
+			} else if (bytes == 2) {
 				row[1 + 2 * x] = (BYTE)(value >> 8); row[2 + 2 * x] = (BYTE)value;
+			} else {
+				row[1 + x] = (BYTE)value;
 			}
 		}
 	}
@@ -705,11 +706,11 @@ static int grey16_animation(const char *path, WORD value0, WORD value1) {
 	put32(actl, 2); put32(actl + 4, 0);
 	add_chunk(&b, "acTL", actl, 8);
 	add_fctl(&b, 0, 16, 16, 0, 0);
-	n = image_data(zdata, sizeof(zdata), 16, 16, 0, value0);
+	n = image_data(zdata, sizeof(zdata), 16, 16, 2, value0);
 	add_chunk(&b, "IDAT", zdata, n);
 	add_fctl(&b, 1, 8, 8, 4, 4);
 	put32(zdata, 2);
-	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 0, value1);
+	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 2, value1);
 	add_chunk(&b, "fdAT", zdata, n + 4);
 	add_chunk(&b, "IEND", NULL, 0);
 	done = write_bytes(path, &b);
@@ -746,6 +747,123 @@ static void test_grey16_playback(void) {
 	}
 	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
 	if (!bad) ok("both canvases of a 16-bit grey APNG, 0x8080 as 128 and 0x4000 as 64");
+	remove(path);
+}
+
+/* an RGB animation of two frames with an Adobe RGB iCCP before or after the first IDAT, and a tEXt after it */
+static int trailing_animation(const char *path, int iccp_after) {
+	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+	static const char text[] = "Comment\0after";
+	DWORD adobe_size = 0;
+	const BYTE *adobe = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	BYTE ihdr[13], actl[8], zdata[8192], iccp[2048];
+	Bytes b = { NULL, 0 };
+	DWORD n, iccp_size;
+	int done;
+	memcpy(iccp, "p\0\0", 3);
+	iccp_size = 3 + FreeImage_ZLibCompress(iccp + 3, sizeof(iccp) - 3, (BYTE *)adobe, adobe_size);
+	bytes_add(&b, signature, 8);
+	put32(ihdr, 16); put32(ihdr + 4, 16);
+	ihdr[8] = 8; ihdr[9] = 2; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+	add_chunk(&b, "IHDR", ihdr, 13);
+	if (!iccp_after) add_chunk(&b, "iCCP", iccp, iccp_size);
+	put32(actl, 2); put32(actl + 4, 0);
+	add_chunk(&b, "acTL", actl, 8);
+	add_fctl(&b, 0, 16, 16, 0, 0);
+	n = image_data(zdata, sizeof(zdata), 16, 16, 3, 0x40C0);
+	add_chunk(&b, "IDAT", zdata, n);
+	if (iccp_after) add_chunk(&b, "iCCP", iccp, iccp_size);
+	add_chunk(&b, "tEXt", text, sizeof(text) - 1);
+	add_fctl(&b, 1, 8, 8, 4, 4);
+	put32(zdata, 2);
+	n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 3, 0x8020);
+	add_chunk(&b, "fdAT", zdata, n + 4);
+	add_chunk(&b, "IEND", NULL, 0);
+	done = write_bytes(path, &b);
+	free(b.data);
+	return done;
+}
+
+static int has_comment(FIBITMAP *dib) {
+	FITAG *tag = NULL;
+	return FreeImage_GetMetadata(FIMD_COMMENTS, dib, "Comment", &tag) && tag && FreeImage_GetTagLength(tag) >= 5 &&
+		!memcmp(FreeImage_GetTagValue(tag), "after", 5);
+}
+
+/* a frame inherits the chunks before the first IDAT; one after it is out of place, as in a PNG, a tEXt still read */
+static void test_trailing_chunks(void) {
+	const char *path = scratch("apng_trailing.png");
+	DWORD adobe_size = 0;
+	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+	int after, page, bad = 0;
+
+	printf("\n=== chunks after the first IDAT\n");
+
+	for (after = 0; after < 2; after++) {
+		FIMULTIBITMAP *mb;
+		FIBITMAP *still;
+		if (!trailing_animation(path, after)) { fail("could not write %s", path); return; }
+		still = FreeImage_Load(FIF_PNG, path, 0);
+		if (!still || (has_profile(still, adobe, adobe_size) ? 1 : 0) != !after) {
+			fail("premise: the PNG plugin %s the iCCP %s IDAT", after ? "takes" : "drops", after ? "after" : "before");
+			bad++;
+		}
+		if (still) FreeImage_Unload(still);
+		mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
+		for (page = 0; page < 2; page++) {
+			FIBITMAP *dib = mb ? FreeImage_LockPage(mb, page) : NULL;
+			if (!dib) { fail("frame %d did not load", page); bad++; continue; }
+			if ((has_profile(dib, adobe, adobe_size) ? 1 : 0) != !after) {
+				fail("iCCP %s IDAT: frame %d %s the profile", after ? "after" : "before", page, after ? "has" : "lacks");
+				bad++;
+			}
+			if (!has_comment(dib)) {
+				fail("iCCP %s IDAT: frame %d lost the tEXt after IDAT", after ? "after" : "before", page);
+				bad++;
+			}
+			FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	/* a PLTE after IDAT, which the PNG plugin refuses, is still the palette every frame needs */
+	{
+		static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+		static const BYTE palette[6] = { 0, 0, 0, 200, 50, 50 };
+		BYTE ihdr[13], actl[8], zdata[4096];
+		Bytes b = { NULL, 0 };
+		FIMULTIBITMAP *mb;
+		DWORD n;
+		bytes_add(&b, signature, 8);
+		put32(ihdr, 16); put32(ihdr + 4, 16);
+		ihdr[8] = 8; ihdr[9] = 3; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+		add_chunk(&b, "IHDR", ihdr, 13);
+		put32(actl, 2); put32(actl + 4, 0);
+		add_chunk(&b, "acTL", actl, 8);
+		add_fctl(&b, 0, 16, 16, 0, 0);
+		n = image_data(zdata, sizeof(zdata), 16, 16, 1, 1);
+		add_chunk(&b, "IDAT", zdata, n);
+		add_chunk(&b, "PLTE", palette, 6);
+		add_fctl(&b, 1, 8, 8, 4, 4);
+		put32(zdata, 2);
+		n = image_data(zdata + 4, sizeof(zdata) - 4, 8, 8, 1, 1);
+		add_chunk(&b, "fdAT", zdata, n + 4);
+		add_chunk(&b, "IEND", NULL, 0);
+		if (!write_bytes(path, &b)) { fail("could not write %s", path); bad++; }
+		free(b.data);
+		mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, 0);
+		for (page = 0; page < 2; page++) {
+			FIBITMAP *dib = mb ? FreeImage_LockPage(mb, page) : NULL;
+			const RGBQUAD *pal = dib ? FreeImage_GetPalette(dib) : NULL;
+			BYTE index = 0;
+			if (!pal || !FreeImage_GetPixelIndex(dib, 0, 0, &index) || pal[index].rgbRed != 200 || pal[index].rgbGreen != 50 || pal[index].rgbBlue != 50) {
+				fail("PLTE after IDAT: frame %d did not load in its palette", page);
+				bad++;
+			}
+			if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) ok("an iCCP before IDAT reaches every frame, one after it none, as in a PNG; a tEXt after IDAT and a misplaced PLTE still do");
 	remove(path);
 }
 
@@ -1214,6 +1332,7 @@ int main(void) {
 	test_header_only();
 	test_color_description();
 	test_grey16_playback();
+	test_trailing_chunks();
 	test_profile_written();
 	test_mixed_profiles();
 	test_refusals();

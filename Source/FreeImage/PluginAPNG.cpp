@@ -90,7 +90,8 @@ struct APNGinfo {
 	BYTE ihdr[13];					//! IHDR payload, reused with each frame's size
 	DWORD canvas_width;
 	DWORD canvas_height;
-	std::vector<BYTE> ancillary;	//! PLTE + ancillary chunks, replayed into every frame
+	std::vector<BYTE> ancillary;	//! PLTE + ancillary chunks before the first IDAT, replayed ahead of every frame's data
+	std::vector<BYTE> trailing;		//! ancillary chunks after it, replayed after every frame's data
 	std::vector<APNGFrame> frames;
 	DWORD num_plays;				//! 0 means loop forever
 	BOOL animated;					//! FALSE for a plain PNG
@@ -451,12 +452,13 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 			break;
 
 		} else if((memcmp(type, "PLTE", 4) == 0) || ((type[0] & 0x20) != 0)) {
-			// PLTE and ancillary chunks are replayed ahead of every frame
-			const size_t start = info->ancillary.size();
-			info->ancillary.insert(info->ancillary.end(), header, header + 8);
-			if(!ReadBytes(io, handle, info->ancillary, length + 4)) {
+			// a frame inherits the chunks before the first IDAT; later ones keep their place after its data
+			std::vector<BYTE>& chunks = (seen_idat && (memcmp(type, "PLTE", 4) != 0)) ? info->trailing : info->ancillary;
+			const size_t start = chunks.size();
+			chunks.insert(chunks.end(), header, header + 8);
+			if(!ReadBytes(io, handle, chunks, length + 4)) {
 				// truncated chunk: keep what came before it
-				info->ancillary.resize(start);
+				chunks.resize(start);
 				break;
 			}
 			continue;	// CRC already read
@@ -529,7 +531,7 @@ DecodeFrame(APNGinfo *info, int page, int flags) {
 
 	std::vector<BYTE> png;
 	try {
-		png.reserve(8 + 25 + info->ancillary.size() + frame.data.size() + 12 * idat_count + 12);
+		png.reserve(8 + 25 + info->ancillary.size() + frame.data.size() + 12 * idat_count + info->trailing.size() + 12);
 	} catch(std::exception&) {
 		return NULL;
 	}
@@ -549,6 +551,7 @@ DecodeFrame(APNGinfo *info, int page, int flags) {
 		AppendChunk(png, "IDAT", &frame.data[done], piece);
 		done += piece;
 	}
+	png.insert(png.end(), info->trailing.begin(), info->trailing.end());
 	AppendChunk(png, "IEND", NULL, 0);
 
 	FIMEMORY *hmem = FreeImage_OpenMemory64(&png[0], (UINT64)png.size());
