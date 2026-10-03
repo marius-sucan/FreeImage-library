@@ -1137,7 +1137,7 @@ FreeImage_MustTonemap(hImage, FIF:="") {
 ;  4 = FITM_UNSCALED ; samples of fewer bits than the image type holds, loaded with J2K_UNSCALED: load the file without it to correct it
 ;
 ; The tone mapping operators take linear light: FreeImage_ConvertToLinear() gives it.
-   Return DllCall(getFIMfunc("MustTonemapU"), "UPtr", hImage, "Int", FIF, "Int")
+   Return DllCall(getFIMfunc("MustTonemap"), "UPtr", hImage, "Int", FIF, "Int")
 }
 
 FreeImage_ConvertToLinear(hImage, flags:=0) {
@@ -2278,4 +2278,3 @@ ConvertPBITMAPtoFIM(pBitmap, doLowerbits:=0) {
   }
   Return hFIFimgA
 }
-
