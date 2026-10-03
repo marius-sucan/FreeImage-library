@@ -48,36 +48,6 @@ enum Transfer {
 	TRANSFER_PQ				// SMPTE ST 2084, absolute luminance up to 10000 cd/m2
 };
 
-// the file's format, looked up only when the verdict depends on it
-class SourceFormat {
-public:
-	SourceFormat(const char *name, const wchar_t *wide_name) : m_name(name), m_wide_name(wide_name), m_fif(FIF_UNKNOWN), m_known(false) {
-	}
-	FREE_IMAGE_FORMAT Get() {
-		if (!m_known) {
-			m_known = true;
-			if (m_name && *m_name) {
-				m_fif = FreeImage_GetFileType(m_name, 0);
-				if (m_fif == FIF_UNKNOWN) {
-					m_fif = FreeImage_GetFIFFromFilename(m_name);
-				}
-			} else if (m_wide_name && *m_wide_name) {
-				m_fif = FreeImage_GetFileTypeU(m_wide_name, 0);
-				if (m_fif == FIF_UNKNOWN) {
-					m_fif = FreeImage_GetFIFFromFilenameU(m_wide_name);
-				}
-			}
-		}
-		return m_fif;
-	}
-
-private:
-	const char *m_name;
-	const wchar_t *m_wide_name;
-	FREE_IMAGE_FORMAT m_fif;
-	bool m_known;
-};
-
 struct Samples16 {
 	WORD brightest;		// the largest color sample
 	bool widened;		// every sample is an 8-bit value widened to 16 bits
@@ -375,7 +345,7 @@ ScanFloat(FIBITMAP *dib, SamplesFloat &samples) {
 // ----------------------------------------------------------
 
 static int
-VerdictOf16(FIBITMAP *dib, SourceFormat &source) {
+VerdictOf16(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt) {
 	// CMYK is converted, not tone mapped
 	if (FreeImage_GetColorType(dib) == FIC_CMYK) {
 		return FITM_NONE;
@@ -413,19 +383,20 @@ VerdictOf16(FIBITMAP *dib, SourceFormat &source) {
 		default:
 			break;
 	}
+
 	// LibRaw decodes camera RAW to linear samples; widened 8-bit ones are a preview
-	if (!widened && (source.Get() == FIF_RAW)) {
+	if (!widened && (sourceFmt == FIF_RAW)) {
 		return FITM_OPTIONAL;
 	}
 	return FITM_NONE;
 }
 
 static int
-VerdictOfFloat(FIBITMAP *dib, SourceFormat &source) {
+VerdictOfFloat(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt) {
 	if (TransferOf(dib) == TRANSFER_PQ) {
 		return FITM_PQ;
 	}
-	switch (source.Get()) {
+	switch (sourceFmt) {
 		case FIF_HDR:
 		case FIF_EXR:
 		case FIF_PFM:
@@ -456,7 +427,7 @@ VerdictOfFloat(FIBITMAP *dib, SourceFormat &source) {
 }
 
 static int
-MustTonemap(FIBITMAP *dib, SourceFormat &source) {
+MustTonemap(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt) {
 	if (!dib) {
 		return FITM_ERROR;
 	}
@@ -469,9 +440,9 @@ MustTonemap(FIBITMAP *dib, SourceFormat &source) {
 		case FIT_UINT16:
 		case FIT_RGB16:
 		case FIT_RGBA16:
-			return VerdictOf16(dib, source);
+			return VerdictOf16(dib, sourceFmt);
 		case FIT_FLOAT:
-			return VerdictOfFloat(dib, source);
+			return VerdictOfFloat(dib, sourceFmt);
 		case FIT_RGBF:
 		case FIT_RGBAF:
 			// light, which only the tone mapping operators turn into a standard bitmap
@@ -498,20 +469,10 @@ color type, the colors the file describes (the "CICP" tag of AVIF, HEIF, PNG and
 or the ICC profile's cicp tag and tone curve), the format of the file and, for 16-bit and grey float
 images, statistics of a sample of the pixels. A header-only bitmap gets a verdict without statistics.
 @param dib Image to look at
-@param filename The file the image comes from, or NULL; read only for the formats of 16-bit and grey float images
+@param sourceFmt FREE_IMAGE_FORMAT format enumation
 @return Returns FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3) or FITM_UNSCALED (4), and FITM_ERROR (-1) for a NULL or unknown bitmap
 */
 int DLL_CALLCONV
-FreeImage_MustTonemap(FIBITMAP *dib, const char *filename) {
-	SourceFormat source(filename, NULL);
-	return MustTonemap(dib, source);
-}
-
-/**
-@see FreeImage_MustTonemap; the file name is not read where FreeImage_GetFileTypeU() does not read Unicode file names
-*/
-int DLL_CALLCONV
-FreeImage_MustTonemapU(FIBITMAP *dib, const wchar_t *filename) {
-	SourceFormat source(NULL, filename);
-	return MustTonemap(dib, source);
+FreeImage_MustTonemap(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt) {
+	return MustTonemap(dib, sourceFmt);
 }
