@@ -1126,7 +1126,7 @@ FreeImage_TmoFattal02(hImage, colorSaturation:=0.5, attenuation:=0.85) {
    Return DllCall(getFIMfunc("TmoFattal02"), "UPtr", hImage, "Double", colorSaturation, "Double", attenuation, "UPtr")
 }
 
-FreeImage_MustTonemap(hImage, FIF:="") {
+FreeImage_MustTonemap(hImage, FIF) {
 ; Whether the image needs tone mapping to be displayed.
 ; FIF is the format type [ FREE_IMAGE_FORMAT ] returned by FreeImage_GetFileType().
 ; -1 = FITM_ERROR    ; no image, or an unknown image type
