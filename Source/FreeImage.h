@@ -1108,7 +1108,7 @@ DLL_API FIBITMAP *DLL_CALLCONV FreeImage_TmoReinhard05Ex(FIBITMAP *src, double i
 
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_TmoFattal02(FIBITMAP *src, double color_saturation FI_DEFAULT(0.5), double attenuation FI_DEFAULT(0.85));
 
-DLL_API int DLL_CALLCONV FreeImage_MustTonemap(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt);
+DLL_API int DLL_CALLCONV FreeImage_MustTonemap(FIBITMAP *dib, FREE_IMAGE_FORMAT sourceFmt FI_DEFAULT(FIF_UNKNOWN));
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_ConvertToLinear(FIBITMAP *dib, int flags FI_DEFAULT(0));
 
 // ZLib interface -----------------------------------------------------------

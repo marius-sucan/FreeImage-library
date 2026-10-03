@@ -469,7 +469,7 @@ color type, the colors the file describes (the "CICP" tag of AVIF, HEIF, PNG and
 or the ICC profile's cicp tag and tone curve), the format of the file and, for 16-bit and grey float
 images, statistics of a sample of the pixels. A header-only bitmap gets a verdict without statistics.
 @param dib Image to look at
-@param sourceFmt FREE_IMAGE_FORMAT format enumation
+@param sourceFmt FREE_IMAGE_FORMAT format enumeration
 @return Returns FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3) or FITM_UNSCALED (4), and FITM_ERROR (-1) for a NULL or unknown bitmap
 */
 int DLL_CALLCONV
