@@ -8,28 +8,24 @@
 ; Change log:
 ; =============================
 ;
-; 1 October 2026 - v2.03
-; - the APNG_LINEAR_BLEND flag of FreeImage_OpenMultiBitmap(): animated PNG frames blended in linear light
+; 1 October 2026 - v2.00
+; - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64():
+;   memory streams of 4 GB and more, and positions past 2 GB
 ;
-; 30 September 2026 - v2.02
-; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
-; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
-; - the J2K_UNSCALED and JP2_UNSCALED load flags
-;
-; 29 September 2026 - v2.01
 ; - added the color management functions (ICC profiles, Little CMS): FreeImage_ConvertToICCProfile(), FreeImage_ApplyICCProfile(),
 ;   FreeImage_ConvertToCMYK(), FreeImage_ConvertCMYKToRGB(), FreeImage_SoftProof(), FreeImage_GetBuiltInICCProfile(),
 ;   FreeImage_GetICCProfileDescription(), FreeImage_GetICCProfileColorSpace() and FreeImage_GetICCProfileData()
 ;
-; - added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64():
-;   memory streams of 4 GB and more, and positions past 2 GB
-;
 ; - added the FIF_LOAD_DISPLAY_ICC load flag, FreeImage_SetDisplayICCProfile() and FreeImage_GetDisplayICCProfile():
 ;   images loaded in the display's colors
-;
-; 22 September 2026 - v2.00
+; - APNG_LINEAR_BLEND flag for FreeImage_OpenMultiBitmap(): animated PNG frames blended in linear light
+; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
+; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
+; - the J2K_UNSCALED and JP2_UNSCALED load flags
+
 ; - implemented all the remaining functions, except the ANSI variants
-; - FreeImage_OpenMultiBitmap() takes Unicode paths; added FreeImage_GetFrameDelays() and the *PageEx() functions
+; - FreeImage_OpenMultiBitmap() takes Unicode paths
+; - added FreeImage_GetFrameDelays()
 ; - AVIF, HEIF and APNG in FreeImage_GetFileType()
 ;
 ; 10 January 2025 - v1.91
@@ -193,7 +189,7 @@ FreeImage_GetVersion() {
 }
 
 FreeImage_GetLibVersion() {
-   Return 2.01 ; mardi 29 septembre 2026
+   Return 2.00 ; 1st of October 2026
 }
 
 FreeImage_GetCopyrightMessage() {
@@ -295,7 +291,6 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ;
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
-; J2K_UNSCALED = 1, JP2_UNSCALED = 1; keep samples of 1 to 7 and 9 to 15 bits as the file holds them, not spread over 8 or 16 bits; tagged "UnscaledBits"
 ; JPEG_DEFAULT = 0; fast DCT, as JPEG_FAST; add size << 16 to decode at 1/2, 1/4 or 1/8, the smallest keeping the longest side >= size
 ; JPEG_FAST = 0x0001; fast DCT: faster, a little less accurate; the default anyway, unless JPEG_ACCURATE is given
 ; JPEG_ACCURATE = 0x0002; accurate DCT and upsampling: the best quality, a little slower
@@ -315,6 +310,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; RAW_UNPROCESSED = 8; the raw sensor data, not demosaiced, as FIT_UINT16
 ; TARGA_LOAD_RGB888 = 1; load 16-bit (RGB555) and 32-bit TGA files as 24-bit RGB, dropping the alpha
 ; TIFF_CMYK = 0x0001; keep a CMYK TIFF as CMYK, not converted to RGB
+; J2K_UNSCALED = 1, JP2_UNSCALED = 1; keep samples of 1 to 7 and 9 to 15 bits as the file holds them, not spread over 8 or 16 bits; tagged "UnscaledBits"
 
    If !ImgPath
       Return
@@ -1053,12 +1049,12 @@ FreeImage_ConvertToGreyscale(hImage) {
 }
 
 FreeImage_ColorQuantize(hImage, quantizeAlgo:=0) {
-   ; hImage - input must be a 24 or a 32 bits image
-   ; quantizeAlgo:
-      ; 0 = FIQ_WUQUANT  - Xiaolin Wu color quantization algorithm
-      ; 1 = FIQ_NNQUANT  - NeuQuant neural-net quantization algorithm by Anthony Dekker (24-bit only)
-      ; 2 = FIQ_LFPQUANT - Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
-   ; the function returns an 8 bit image
+; hImage - input must be a 24 or a 32 bits image
+; quantizeAlgo:
+   ; 0 = FIQ_WUQUANT  - Xiaolin Wu color quantization algorithm
+   ; 1 = FIQ_NNQUANT  - NeuQuant neural-net quantization algorithm by Anthony Dekker (24-bit only)
+   ; 2 = FIQ_LFPQUANT - Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+; the function returns an 8 bit image
    Return DllCall(getFIMfunc("ColorQuantize"), "UPtr", hImage, "Int", quantizeAlgo, "UPtr")
 }
 
@@ -1075,30 +1071,30 @@ FreeImage_Threshold(hImage, TT:=0) { ; TT: 0 - 255
 }
 
 FreeImage_Dither(hImage, ditherAlgo:=0) {
-   ; ditherAlgo parameter: dithering method
-   ; FID_FS           = 0   // Floyd & Steinberg error diffusion
-   ; FID_BAYER4x4     = 1   // Bayer ordered dispersed dot dithering (order 2 dithering matrix)
-   ; FID_BAYER8x8     = 2   // Bayer ordered dispersed dot dithering (order 3 dithering matrix)
-   ; FID_CLUSTER6x6   = 3   // Ordered clustered dot dithering (order 3 - 6x6 matrix)
-   ; FID_CLUSTER8x8   = 4   // Ordered clustered dot dithering (order 4 - 8x8 matrix)
-   ; FID_CLUSTER16x16 = 5   // Ordered clustered dot dithering (order 8 - 16x16 matrix)
-   ; FID_BAYER16x16   = 6   // Bayer ordered dispersed dot dithering (order 4 dithering matrix)
-   ; it returns an 1-bit image
+; ditherAlgo parameter: dithering method
+; FID_FS           = 0   // Floyd & Steinberg error diffusion
+; FID_BAYER4x4     = 1   // Bayer ordered dispersed dot dithering (order 2 dithering matrix)
+; FID_BAYER8x8     = 2   // Bayer ordered dispersed dot dithering (order 3 dithering matrix)
+; FID_CLUSTER6x6   = 3   // Ordered clustered dot dithering (order 3 - 6x6 matrix)
+; FID_CLUSTER8x8   = 4   // Ordered clustered dot dithering (order 4 - 8x8 matrix)
+; FID_CLUSTER16x16 = 5   // Ordered clustered dot dithering (order 8 - 16x16 matrix)
+; FID_BAYER16x16   = 6   // Bayer ordered dispersed dot dithering (order 4 dithering matrix)
+; it returns an 1-bit image
 
    Return DllCall(getFIMfunc("Dither"), "UPtr", hImage, "Int", ditherAlgo, "UPtr")
 }
 
 FreeImage_ToneMapping(hImage, algo:=0, p1:=0, p2:=0) {
-   ; Converts a High Dynamic Range image (48-bit RGB or 96-bit RGBF) to a 24-bit RGB image, suitable for display.
-   ; function required to properly display HDR and RAW images
+; Converts a High Dynamic Range image (48-bit RGB or 96-bit RGBF) to a 24-bit RGB image, suitable for display.
+; function required to properly display HDR and RAW images
 
-   ; algo parameter and p1/p2 intervals and meaning 
-   ; 0 = FITMO_DRAGO03    ; Adaptive logarithmic mapping (F. Drago, 2003)
-         ; p1 = gamma [0.0, 9.9]; p2 = exposure [-8, 8]
-   ; 1 = FITMO_REINHARD05 ; Dynamic range reduction inspired by photoreceptor physiology (E. Reinhard, 2005)
-         ; p1 = intensity [-8, 8]; p2 = contrast [0.3, 1.0]
-   ; 2 = FITMO_FATTAL02   ; Gradient domain High Dynamic Range compression (R. Fattal, 2002)
-         ; p1 = saturation [0.4, 0.6]; p2 = attenuation [0.8, 0.9]
+; algo parameter and p1/p2 intervals and meaning 
+; 0 = FITMO_DRAGO03    ; Adaptive logarithmic mapping (F. Drago, 2003)
+      ; p1 = gamma [0.0, 9.9]; p2 = exposure [-8, 8]
+; 1 = FITMO_REINHARD05 ; Dynamic range reduction inspired by photoreceptor physiology (E. Reinhard, 2005)
+      ; p1 = intensity [-8, 8]; p2 = contrast [0.3, 1.0]
+; 2 = FITMO_FATTAL02   ; Gradient domain High Dynamic Range compression (R. Fattal, 2002)
+      ; p1 = saturation [0.4, 0.6]; p2 = attenuation [0.8, 0.9]
 
    Return DllCall(getFIMfunc("ToneMapping"), "UPtr", hImage, "Int", algo, "Double", p1, "Double", p2, "UPtr")
 }
@@ -1133,18 +1129,20 @@ FreeImage_TmoFattal02(hImage, colorSaturation:=0.5, attenuation:=0.85) {
 FreeImage_MustTonemap(hImage, ImgPath:="") {
 ; Whether the image needs tone mapping to be displayed; ImgPath, the file it comes from, gives the format of 16-bit and grey float images
 ; -1 = FITM_ERROR    ; no image, or an unknown image type
-;  0 = FITM_NONE     ; FreeImage_ConvertTo(hImage, "24Bits") or "32Bits" shows it as intended, FreeImage_ConvertToStandardType() the scalar types
+;  0 = FITM_NONE     ; tone mapping is not required
 ;  1 = FITM_OPTIONAL ; linear light within the display's range, or an uncertain encoding: shown as it is, it may look dark or flat
-;  2 = FITM_REQUIRED ; HDR or floating-point RGB: FreeImage_ToneMapping()
-;  3 = FITM_PQ       ; a PQ image (SMPTE ST 2084): FreeImage_ConvertToLinear() undoes its curve, then FreeImage_ToneMapping()
-;  4 = FITM_UNSCALED ; samples of fewer bits than the image type holds, loaded with J2K_UNSCALED: load the file without it
-; The tone mapping operators take linear light: FreeImage_ConvertToLinear() gives it, whatever the code.
+;  2 = FITM_REQUIRED ; HDR or floating-point RGB: use FreeImage_ToneMapping() to display it
+;  3 = FITM_PQ       ; a PQ image (SMPTE ST 2084): use FreeImage_ConvertToLinear() to undo its curve, then FreeImage_ToneMapping()
+;  4 = FITM_UNSCALED ; samples of fewer bits than the image type holds, loaded with J2K_UNSCALED: load the file without it to correct it
+;
+; The tone mapping operators take linear light: FreeImage_ConvertToLinear() gives it.
    Return DllCall(getFIMfunc("MustTonemapU"), "UPtr", hImage, "WStr", ImgPath, "Int")
 }
 
 FreeImage_ConvertToLinear(hImage, flags:=0) {
-; Returns an RGBF image (RGBAF with alpha) in linear light, 1.0 = SDR reference white, 203 cd/m2; feed it to FreeImage_ToneMapping().
-; The curve undone: the CICP tag's (PQ, HLG, sRGB, BT.709...), else the ICC profile's, else sRGB; floating-point images stay as they are.
+; Returns an RGBF image (RGBAF with alpha) in linear light, 1.0 = SDR reference white, 203 cd/m2.
+; To display the image, feed it to FreeImage_ToneMapping().
+; The type of curves undone: the CICP tag's (PQ, HLG, sRGB, BT.709...), else the ICC profile's, else sRGB; floating-point images stay as they are.
 ; flags: FI_LINEAR_SRGB_PRIMARIES = 0x01; convert the colors to sRGB's primaries, e.g. BT.2020 ones; otherwise they keep the image's.
 ; Accepts standard bitmaps, UINT16, RGB16, RGBA16, FLOAT, RGBF and RGBAF images; returns 0 for the others.
    Return DllCall(getFIMfunc("ConvertToLinear"), "UPtr", hImage, "Int", flags, "UPtr")
@@ -1400,7 +1398,6 @@ FreeImage_CloseMultiBitmap(hFIMULTIBITMAP, flags:=0) {
 ; WEBP_LOSSLESS = 0x100; lossless
 ;
 ; Returns FALSE when the changes could not be written; the file is then left as it was.
-
    If (hFIMULTIBITMAP="")
       Return
 
