@@ -22,8 +22,8 @@ Fixes:
 
 - applied fixes found in the Fedora F39 repository for: CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997 found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39 ;
 - fixed buffer overflows in PluginICO.cpp, PSDParser.cpp, PluginTIFF.cpp (with the aforementioned patches)
-- fixed jxr encoder to be able to handle images over 1300 mgpx;
-- fixed bmp decoder/encoder to be able to handle images over 1300 mgpx;
+- fixed JXR encoder to be able to handle images over 1300 mgpx;
+- fixed BMP decoder/encoder to be able to handle images over 1300 mgpx;
 - fixed behavior with extreme values of the tone-mapping algorithms; 
 - fixed out of bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
 - fixed integer wrap around and segmentation fault in Exif.cpp;
@@ -44,39 +44,20 @@ Fixes:
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed bugs related to CMYK support in TIFF and JPG files;
-- fixed PNG files with both an ICC profile and a gAMA chunk being gamma-corrected on load, which left them with a profile that no longer described their pixels; the profile wins over gAMA, as the PNG specification asks;
-- fixed PNG files with both a cICP and a gAMA chunk being gamma-corrected on load; cICP wins over gAMA, as PNG 3 asks;
-- fixed JPEG 2000 (JP2) files losing their ICC profile on load and on save;
-- fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535: they looked black, and saved again they stayed black in every other program. Their samples are spread over 8 or 16 bits, rounded, as PNM, HEIF and AVIF do; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. The load flags J2K_UNSCALED and JP2_UNSCALED keep the file's values instead, tagged "UnscaledBits";
+- fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. Added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
-- fixed camera RAW images carrying the file's own ICC profile, which describes the camera or the preview, not the decoded image; the 16-bit output carries a linear sRGB profile (linear grey for monochrome), and a JPEG preview keeps its own;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
-- fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when turned;
-- fixed camera JPEGs shot in Adobe RGB loading without a profile: their Exif says so instead (ColorSpace 2, or uncalibrated with the interoperability index R03), and they get FreeImage's Adobe RGB profile;
-- fixed APNG and MNG frames composed with APNG_PLAYBACK or MNG_PLAYBACK losing the file's ICC profile and CICP tag; MNG images in other colors than the first are converted to its colors;
-- fixed MNG solid-color images (BASI chunks) of 1 to 8 bits per sample showing black or transparent, and grey ones tinted;
-- fixed 16-bit greyscale APNG files failing to load with APNG_PLAYBACK, and such MNG images missing from MNG_PLAYBACK frames;
-- fixed APNG saves losing the first frame's ICC profile unless it was 32-bit, and writing grey or broken profiles the file cannot hold;
-- fixed APNG and animated WebP saves giving frames whose ICC profile differs from the first frame's the wrong colors: they are converted to it;
-- APNG saves without an ICC profile now say they are sRGB, with sRGB, gAMA and cHRM chunks;
-- fixed color conversions crashing in Little CMS when memory runs out, or returning images without the ICC profile their pixels are in;
-- fixed JNG files losing their ICC profile on save and on load; a JNG image in an MNG file takes the file's global profile;
-- fixed JPEG XR saves of images with a page number, rating or title tag crashing, or writing a file that cannot be opened;
+- fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
 - fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
-- fixed JPEG XR files too small to hold the image they declare allocating it and taking seconds to load;
 - fixed JPEG XR images stored rotated by 90 degrees failing to load;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
-- fixed a PNG save compressing the rest of the image after a write failed, and leaking its palette and row buffer when libpng stopped with an error;
-- fixed PNG saves failing on an ICC profile that the PNG cannot hold, such as a CMYK profile or a grey one on a colour image; the profile is left out;
 - fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it;
-- fixed JNG saves of 4 GB or more writing no image data, or nothing at all, and returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load;
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing such files is now much faster;
-- fixed APNG, MNG and animated WebP saves returning TRUE when the file could not be finished, which could replace a document with an empty file;
 - and many other fixes
 
 Changes:
@@ -85,14 +66,14 @@ Changes:
 - FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - FreeImage_Rescale() can now resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter;
-- FreeImage_Rescale() is now faster for 8-bit greyscale, 24-bit and 32-bit images and has a lower peak memory usage, the kernels utilize SSE2 and AVX2 instructions;
+- FreeImage_Rescale() is now faster for 8-bit greyscale, 24-bit and 32-bit images and has a lower peak memory usage, the kernels utilize SSE2 and AVX2 instructions when available;
 - multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
 - added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbour resampling, the fastest filter;
 - a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
 - FreeImage_AppendPage(), FreeImage_InsertPage(), FreeImage_DeletePage() and FreeImage_UnlockPage() now return TRUE or FALSE; FreeImage_CloseMultiBitmap() returns FALSE only when the file could not be written;
 - FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
-- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
+- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - added FreeImage_RescaleRawBits();
 - added full support for animated WebP files and example file; save WebP animations implemented as well;
 - added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
@@ -101,11 +82,11 @@ Changes:
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
-- added FIF_LOAD_DISPLAY_ICC: images load in the screen's colors, CMYK JPEG, TIFF and PSD files included;
-- added APNG_LINEAR_BLEND: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
+- added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
+- added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - the PNG, APNG, AVIF and HEIF loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
-- added FreeImage_MustTonemap() and FreeImage_MustTonemapU(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. The verdict follows the pixel type, the color type, the CICP tag or the ICC profile (its cicp tag, else its tone curve, measured through Little CMS), the format of the file and, for 16-bit and grey float images, a sample of the pixels: samples tagged "UnscaledBits" give FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); HLG, made for SDR screens too, needs none; floating-point RGB always needs it; grey float images from EXR, HDR, PFM, JPEG XR and PSD files need it, others when more than 1 sample in 10000 is above white; the scalar types need none, FreeImage_ConvertToStandardType() shows them. A header-only bitmap gets a verdict without the pixel sample. The file name is read only for 16-bit and grey float images;
-- added FreeImage_ConvertToLinear(): an image in linear light, the input the tone mapping operators expect, as FIT_RGBF, or FIT_RGBAF with its alpha. The curve undone is the one the CICP tag names (PQ, HLG, sRGB, BT.709 and the other curves of ITU-T H.273), else the ICC profile's cicp tag or tone curves, else sRGB for 8- and 16-bit images; floating-point images without either stay as they are. 1.0 is SDR reference white, 203 cd/m2 (ITU-R BT.2408): PQ reaches 49; HLG gets the display step of BT.2100 for a 1000 cd/m2 display. FI_LINEAR_SRGB_PRIMARIES converts the colors to sRGB's primaries (from BT.2020, Display P3, a matrix-shaper profile's colorants...), through a matrix that keeps light above white; otherwise the result keeps the image's primaries, named by its CICP tag, or carries a linear copy of its matrix-shaper profile. A profile made of LUTs only is converted to linear sRGB by FreeImage_ConvertToICCProfile(). Samples tagged "UnscaledBits" are read in their own precision; CMYK is converted to RGB first;
+- added FreeImage_MustTonemap() and FreeImage_MustTonemapU(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. Bitmaps tagged "UnscaledBits" return FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); Floating-point RGB bitmaps always return FITM_REQUIRED;
+- added FreeImage_ConvertToLinear();
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
@@ -132,8 +113,8 @@ Color management:
 - flags: FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION; FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
 - results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey. FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
 - to display an image: load it with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF and PSD files with JPEG_CMYK, TIFF_CMYK or PSD_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
-- FIF_LOAD_DISPLAY_ICC converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as 24- or 48-bit RGB; grey images stay grey; float images are not changed. A profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
-- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent FIF_LOAD_DISPLAY_ICC converts to, for example the profile of the monitor showing the image, or with NULL detects the screen's again; FreeImage_GetDisplayICCProfile() returns it;
+- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF and PSD files come back as 24- or 48-bit RGB; grey images stay grey; float images are not changed. A profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
+- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use the image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
 
 Bugs or limitations identified:
 - AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
