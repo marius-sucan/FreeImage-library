@@ -17,7 +17,8 @@ static int checks = 0;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { printf("  FAIL "); printf(__VA_ARGS__); printf("\n"); failures++; } } while (0)
 
 static void expect(FIBITMAP *dib, const char *file, int want, const char *what) {
-    int got = FreeImage_MustTonemap(dib, file);
+    FREE_IMAGE_FORMAT fif = (file && *file) ? FreeImage_GetFIFFromFilename(file) : FIF_UNKNOWN;
+    int got = FreeImage_MustTonemap(dib, fif);
     CHECK(got == want, "%s: %d, expected %d", what, got, want);
 }
 
@@ -231,7 +232,6 @@ static void test_types(void) {
     unsigned i;
     printf("image types\n");
     expect(NULL, NULL, FITM_ERROR, "NULL");
-    CHECK(FreeImage_MustTonemapU(NULL, NULL) == FITM_ERROR, "NULL through the U entry");
     for (i = 0; i < sizeof(bpps) / sizeof(bpps[0]); i++) {
         dib = FreeImage_Allocate(16, 16, bpps[i], 0, 0, 0);
         expect(dib, "x.hdr", FITM_NONE, "a standard bitmap");
@@ -264,7 +264,6 @@ static void test_sixteen(void) {
     expect(dib, "x.png", FITM_NONE, "RGB16 named .png");
     expect(dib, "x.tif", FITM_NONE, "RGB16 named .tif");
     expect(dib, "x.cr2", FITM_OPTIONAL, "RGB16 named .cr2: LibRaw's linear output");
-    CHECK(FreeImage_MustTonemapU(dib, NULL) == FITM_NONE, "RGB16 through the U entry");
     FreeImage_Unload(dib);
 
     dib = make16(FIT_RGBA16, 300, 200, FULL);
@@ -350,7 +349,6 @@ static void test_cicp_tag(void) {
         set_cicp(dib, 9, cases[i].transfer, 9, 1);
         snprintf(what, sizeof(what), "RGB16 tagged %s", cases[i].what);
         expect(dib, NULL, cases[i].want, what);
-        if (cases[i].transfer == 16) CHECK(FreeImage_MustTonemapU(dib, L"x.png") == FITM_PQ, "PQ through the U entry");
         FreeImage_Unload(dib);
     }
     /* PQ values someone turned into floating point are still PQ */
@@ -676,7 +674,7 @@ static void check_curve(BYTE transfer, double (*ref)(double), const char *what) 
         }
         CHECK(bad == 0, "%s: %u samples off the curve", what, bad);
         CHECK(cicp_transfer(lin, cicp) == 8 && cicp[0] == 1, "%s: the result's CICP tag", what);
-        CHECK(FreeImage_MustTonemap(lin, NULL) == FITM_REQUIRED, "%s: the result is not classified as light", what);
+        CHECK(FreeImage_MustTonemap(lin, FIF_UNKNOWN) == FITM_REQUIRED, "%s: the result is not classified as light", what);
         FreeImage_Unload(lin);
     }
     FreeImage_Unload(dib);
@@ -963,7 +961,7 @@ static void test_linear(void) {
             FIBITMAP *tm_lin = NULL, *tm_raw = NULL;
             float peak = 0;
             unsigned y, w = FreeImage_GetWidth(dib), h = FreeImage_GetHeight(dib);
-            CHECK(FreeImage_MustTonemap(dib, path) == FITM_PQ, "seine_hdr_rec2020.avif: not PQ");
+            CHECK(FreeImage_MustTonemap(dib, FIF_AVIF) == FITM_PQ, "seine_hdr_rec2020.avif: not PQ");
             lin = linear_of(dib, FI_LINEAR_SRGB_PRIMARIES, "seine_hdr_rec2020.avif");
             if (lin) {
                 for (y = 0; y < h; y++) for (i = 0; i < w * 3; i++) {
@@ -971,7 +969,7 @@ static void test_linear(void) {
                     if (v > peak) peak = v;
                 }
                 CHECK(peak > 1, "seine_hdr_rec2020.avif: nothing above SDR white, peak %.2f", peak);
-                CHECK(FreeImage_MustTonemap(lin, path) == FITM_REQUIRED, "seine_hdr_rec2020.avif, linear: not 2");
+                CHECK(FreeImage_MustTonemap(lin, FIF_AVIF) == FITM_REQUIRED, "seine_hdr_rec2020.avif, linear: not 2");
                 tm_lin = FreeImage_ToneMapping(lin, FITMO_REINHARD05, 0, 0);
                 tm_raw = FreeImage_ToneMapping(dib, FITMO_REINHARD05, 0, 0);
                 CHECK(tm_lin && tm_raw, "seine_hdr_rec2020.avif: not tone mapped");

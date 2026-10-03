@@ -1,6 +1,6 @@
 # Tone mapping advice test
 
-`musttonemap.c` covers `FreeImage_MustTonemap()` and `FreeImage_MustTonemapU()`
+`musttonemap.c` covers `FreeImage_MustTonemap()`
 (`Source/FreeImage/MustTonemap.cpp`), `FreeImage_ConvertToLinear()`
 (`Source/FreeImage/ConversionLinear.cpp`) and the `CICP` tag the PNG, AVIF, HEIF and RAW loaders attach.
 It prints a report and exits non-zero on failure.
@@ -23,8 +23,6 @@ Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run
 
-On Linux the `U` entry point classifies from the bitmap alone, since `FreeImage_GetFileTypeU()`
-reads no Unicode file names there; the file-based checks use the ANSI entry point.
 
 The test was checked with planted bugs, each caught: cICP no longer outranking gAMA, no confirming
 pass after the sample grid, PQ read as a display curve, widened 8-bit samples never detected, the RAW

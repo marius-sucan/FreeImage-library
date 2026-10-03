@@ -133,7 +133,7 @@ static void test_file(FREE_IMAGE_FORMAT fif, int ncomps, int prec, int sgnd) {
         CHECK(same_samples(dib, ncomps, prec, 1), "%s: the samples are not spread over %d bits", what, (prec <= 8) ? 8 : 16);
         CHECK(tag_byte(dib, "SignificantBits") == (odd ? prec : -1), "%s: SignificantBits %d", what, tag_byte(dib, "SignificantBits"));
         CHECK(tag_byte(dib, "UnscaledBits") == -1, "%s: an UnscaledBits tag", what);
-        CHECK(FreeImage_MustTonemap(dib, path) == FITM_NONE, "%s: verdict %d", what, FreeImage_MustTonemap(dib, path));
+        CHECK(FreeImage_MustTonemap(dib, fif) == FITM_NONE, "%s: verdict %d", what, FreeImage_MustTonemap(dib, fif));
         if (odd && ncomps == 3 && prec > 8) {
             /* saved again (lossless) it reloads as it was, a 16-bit file */
             char again[512];
@@ -154,7 +154,7 @@ static void test_file(FREE_IMAGE_FORMAT fif, int ncomps, int prec, int sgnd) {
         CHECK(same_samples(dib, ncomps, prec, 0), "%s, unscaled: the samples are not the file's", what);
         CHECK(tag_byte(dib, "UnscaledBits") == (odd ? prec : -1), "%s, unscaled: UnscaledBits %d", what, tag_byte(dib, "UnscaledBits"));
         CHECK(tag_byte(dib, "SignificantBits") == -1, "%s, unscaled: a SignificantBits tag", what);
-        CHECK(FreeImage_MustTonemap(dib, NULL) == (odd ? FITM_UNSCALED : FITM_NONE), "%s, unscaled: verdict %d", what, FreeImage_MustTonemap(dib, NULL));
+        CHECK(FreeImage_MustTonemap(dib, fif) == (odd ? FITM_UNSCALED : FITM_NONE), "%s, unscaled: verdict %d", what, FreeImage_MustTonemap(dib, fif));
         FreeImage_Unload(dib);
     }
 
@@ -164,7 +164,7 @@ static void test_file(FREE_IMAGE_FORMAT fif, int ncomps, int prec, int sgnd) {
     FreeImage_Unload(dib);
     dib = FreeImage_Load(fif, path, FIF_LOAD_NOPIXELS | raw_flag);
     CHECK(dib && tag_byte(dib, "UnscaledBits") == (odd ? prec : -1) && tag_byte(dib, "SignificantBits") == -1, "%s, header only, unscaled: the tags", what);
-    if (dib) CHECK(FreeImage_MustTonemap(dib, NULL) == (odd ? FITM_UNSCALED : FITM_NONE), "%s, header only, unscaled: verdict", what);
+    if (dib) CHECK(FreeImage_MustTonemap(dib, fif) == (odd ? FITM_UNSCALED : FITM_NONE), "%s, header only, unscaled: verdict", what);
     FreeImage_Unload(dib);
 
     remove(path);

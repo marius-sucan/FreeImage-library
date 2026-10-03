@@ -732,7 +732,7 @@ static void flag_rules(void) {
         FITAG *tag_a = NULL, *tag_b = NULL;
         a = FreeImage_Load(FIF_RAW, c->path, FIF_LOAD_DISPLAY_ICC);
         b = FreeImage_Load(FIF_RAW, c->path, 0);
-        CHECK(a && b && FreeImage_MustTonemap(b, NULL) == FITM_OPTIONAL && FreeImage_MustTonemap(a, NULL) == FITM_NONE &&
+        CHECK(a && b && FreeImage_MustTonemap(b, FIF_UNKNOWN) == FITM_OPTIONAL && FreeImage_MustTonemap(a, FIF_UNKNOWN) == FITM_NONE &&
             FreeImage_GetMetadata(FIMD_CUSTOM, b, "CICP", &tag_b) && !FreeImage_GetMetadata(FIMD_CUSTOM, a, "CICP", &tag_a) &&
             pixel_digest(a) != pixel_digest(b), "DNG: the flag left the 16-bit output linear");
         if (a) FreeImage_Unload(a);
