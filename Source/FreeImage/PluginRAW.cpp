@@ -428,8 +428,6 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 		}
 		// (-W) Don't use automatic increase of brightness by histogram
 		RawProcessor->imgdata.params.no_auto_bright = 1;
-		// (-a) Use automatic white balance obtained after averaging over the entire image
-		RawProcessor->imgdata.params.use_auto_wb = 1;
 		// (-q 3) Adaptive homogeneity-directed demosaicing algorithm (AHD)
 		RawProcessor->imgdata.params.user_qual = 3;
 
