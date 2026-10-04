@@ -47,6 +47,8 @@ CXXFLAGS ?= -std=c++0x -O3 -fPIC -fexceptions -fvisibility=hidden -Wno-ctor-dtor
 CXXFLAGS += -D__ANSI__
 # libwebp
 CXXFLAGS += -DWEBP_EXTERN=extern
+# LibRaw: a cut thumbnail or raw image reads as zeros, not as uninitialised memory
+CXXFLAGS += -DLIBRAW_CALLOC_RAWSTORE
 # OpenMP
 CXXFLAGS += $(OPENMP_CFLAGS)
 CXXFLAGS += $(INCLUDE)

@@ -29,7 +29,7 @@ MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)
 MODULES := $(MODULES:.cc=.o)
 CFLAGS = $(COMPILERFLAGS) $(INCLUDE)
-CPPFLAGS = $(COMPILERFLAGS)  -Wno-ctor-dtor-privacy $(INCLUDE)
+CPPFLAGS = $(COMPILERFLAGS)  -Wno-ctor-dtor-privacy -DLIBRAW_CALLOC_RAWSTORE $(INCLUDE)
 
 TARGET  = freeimage
 STATICLIB = lib$(TARGET).a

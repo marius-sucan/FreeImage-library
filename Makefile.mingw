@@ -63,7 +63,7 @@ LIBRARIES += -lpthread
 # WIN32_LEAN_AND_MEAN: LibJXR's guiddef.h, on the include path, hides the one the COM headers need
 # __MINGW64_TOOLCHAIN__: LibJXR takes _byteswap_ulong from <stdlib.h>
 WIN32_CFLAGS = -DWINVER=0x0500 $(LIB_TYPE_FLAGS) -DOPJ_STATIC -DMUTEX_win32 -DAVIF_CODEC_DAV1D=1 -DWEBP_EXTERN=extern -DWIN32_LEAN_AND_MEAN -D__MINGW64_TOOLCHAIN__
-WIN32_CXXFLAGS = $(WIN32_CFLAGS) -DLIBRAW_NODLL
+WIN32_CXXFLAGS = $(WIN32_CFLAGS) -DLIBRAW_NODLL -DLIBRAW_CALLOC_RAWSTORE
 
 # Workaround for LibRawLite, which does not include C++ header
 # file stdexcept, which is casually included with MSVC but not

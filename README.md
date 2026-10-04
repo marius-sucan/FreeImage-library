@@ -49,6 +49,7 @@ Fixes:
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed Leaf and Mamiya MOS RAW files misreading their white balance and colour matrix;
+- fixed RAW files cut short showing uninitialised memory in their preview;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
 - fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
