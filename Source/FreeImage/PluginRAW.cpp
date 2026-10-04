@@ -46,14 +46,29 @@ private:
 	INT64 _start;
 	INT64 _eof;
 	INT64 _fsize;
+	// LibRaw's bit readers take a byte per call: they read from here, not from the handle
+	BYTE _buffer[4096];
+	// the stream position of _buffer[0]; the handle is at _bufpos + _buflen
+	INT64 _bufpos;
+	unsigned _buflen;
+	unsigned _bufcur;
+
+	// refill the consumed buffer: FALSE at the end of the stream
+	BOOL fill() {
+		_bufpos += _buflen;
+		_bufcur = 0;
+		_buflen = _io->read_proc(_buffer, 1, (unsigned)sizeof(_buffer), _handle);
+		return (_buflen > 0) ? TRUE : FALSE;
+	}
 
 public:
-	LibRaw_freeimage_datastream(FreeImageIO *io, fi_handle handle) : _io(io), _handle(handle) {
+	LibRaw_freeimage_datastream(FreeImageIO *io, fi_handle handle) : _io(io), _handle(handle), _buflen(0), _bufcur(0) {
 		_start = io->tell_proc(handle);
 		io->seek_proc(handle, 0, SEEK_END);
 		_eof = io->tell_proc(handle);
 		_fsize = _eof - _start;
 		io->seek_proc(handle, _start, SEEK_SET);
+		_bufpos = _start;
 	}
 
 	~LibRaw_freeimage_datastream() {
@@ -67,7 +82,33 @@ public:
 		if(size == 0) {
 			return 0;
 		}
-		return (int)(FreeImage_ReadBytes(_io, _handle, buffer, size * count) / size);
+		BYTE *dst = (BYTE*)buffer;
+		const size_t total = size * count;
+		size_t done = 0;
+		while(done < total) {
+			if(_bufcur == _buflen) {
+				// a large read skips the buffer
+				if(total - done >= sizeof(_buffer)) {
+					_bufpos += _buflen;
+					_buflen = _bufcur = 0;
+					const size_t got = FreeImage_ReadBytes(_io, _handle, dst + done, total - done);
+					_bufpos += got;
+					done += got;
+					break;
+				}
+				if(!fill()) {
+					break;
+				}
+			}
+			size_t n = _buflen - _bufcur;
+			if(n > total - done) {
+				n = total - done;
+			}
+			memcpy(dst + done, _buffer + _bufcur, n);
+			_bufcur += (unsigned)n;
+			done += n;
+		}
+		return (int)(done / size);
 	}
 
 	// LibRaw offsets are relative to where the stream started
@@ -83,7 +124,7 @@ public:
 				break;
 			case SEEK_CUR:
 			default:
-				base = _io->tell_proc(_handle);
+				base = _bufpos + _bufcur;
 				break;
 		}
 		// an offset from the file may not fit past the base
@@ -94,34 +135,45 @@ public:
 		if(target < _start) {
 			return -1;
 		}
+		// within the buffer, nothing is read again
+		if((target >= _bufpos) && (target <= _bufpos + _buflen)) {
+			_bufcur = (unsigned)(target - _bufpos);
+			return 0;
+		}
 
-		return _io->seek_proc(_handle, target, SEEK_SET);
+		const int result = _io->seek_proc(_handle, target, SEEK_SET);
+		if(result == 0) {
+			_bufpos = target;
+			_buflen = _bufcur = 0;
+		}
+		return result;
 	}
 
     INT64 tell() {
-        return _io->tell_proc(_handle) - _start;
+        return _bufpos + _bufcur - _start;
     }
 	
 	INT64 size() {
 		return _fsize;
 	}
 
-	// 0..255 or -1 at EOF, via an unsigned char (not an int)
+	// 0..255, or -1 at EOF
     int get_char() { 
-		unsigned char c = 0;
-		if (!_io->read_proc(&c, 1, 1, _handle)) {
+		if((_bufcur == _buflen) && !fill()) {
 			return -1;
 		}
-		return c;
+		return _buffer[_bufcur++];
    }
 	
 	char* gets(char *buffer, int length) { 
 		memset(buffer, 0, length);
 		for(int i = 0; i < length; i++) {
-			if (!_io->read_proc(&buffer[i], 1, 1, _handle)) {
+			const int c = get_char();
+			if (c < 0) {
 				return NULL;
 			}
-			if (buffer[i] == 0x0A) {
+			buffer[i] = (char)c;
+			if (c == 0x0A) {
 				break;
 			}
 		}
@@ -133,7 +185,9 @@ public:
 		char element = 0;
 		bool bDone = false;
 		do {
-			if(_io->read_proc(&element, 1, 1, _handle) == 1) {
+			const int c = get_char();
+			if(c >= 0) {
+				element = (char)c;
 				switch(element) {
 					case '0':
 					case '\n':
@@ -154,7 +208,7 @@ public:
 	}
 
 	int eof() { 
-        return (_io->tell_proc(_handle) >= _eof);
+        return (_bufpos + _bufcur >= _eof);
     }
 };
 

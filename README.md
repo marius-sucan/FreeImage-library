@@ -58,6 +58,7 @@ Fixes:
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing such files is now much faster;
+- fixed camera RAW files being read one byte per callback; they now load faster;
 - and many other fixes
 
 Changes:
