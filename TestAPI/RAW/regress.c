@@ -643,6 +643,29 @@ static void test_preview_profile(void) {
 	free(dng);
 }
 
+/* --- Leaf metadata: numbers LibRaw reads as text, through scanf_one --------- */
+static void test_leaf_text(void) {
+	static const struct { const char *name; int flags; } P[] = {
+		{ "default16", 0            },
+		{ "display8",  RAW_DISPLAY  },
+		{ "halfsize",  RAW_HALFSIZE },
+	};
+	int p;
+	printf("-- a Leaf NeutObj_neutrals record gives the white balance of the same AsShotNeutral\n");
+	for (p = 0; p < (int)(sizeof(P) / sizeof(P[0])); p++) {
+		FIBITMAP *leaf = FreeImage_Load(FIF_RAW, "data/fi_raw_leaf.dng", P[p].flags);
+		FIBITMAP *asn = FreeImage_Load(FIF_RAW, "data/fi_raw_leaf_asn.dng", P[p].flags);
+		if (!leaf || !asn)
+			fail("data/fi_raw_leaf.dng", P[p].name, "load failed");
+		else if (digest(leaf) != digest(asn))
+			fail("data/fi_raw_leaf.dng", P[p].name, "decoded unlike fi_raw_leaf_asn.dng");
+		else
+			printf("  ok   %-30s %s\n", "data/fi_raw_leaf.dng", P[p].name);
+		if (leaf) FreeImage_Unload(leaf);
+		if (asn) FreeImage_Unload(asn);
+	}
+}
+
 /* --- the plugin is read-only ---------------------------------------------- */
 static void test_readonly(void) {
 	FIBITMAP *dib;
@@ -710,6 +733,7 @@ int main(void) {
 	test_icc();
 	test_preview_profile();
 	test_bayer();
+	test_leaf_text();
 	test_readonly();
 	printf("%s: %d failure(s)\n", failures ? "FAILED" : "PASSED", failures);
 	FreeImage_DeInitialise();

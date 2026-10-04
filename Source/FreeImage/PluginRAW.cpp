@@ -180,31 +180,19 @@ public:
 		return buffer;
 	}
 
+	// as fscanf: white space before the value is skipped; white space, a null or the end of the stream ends it
 	int scanf_one(const char *fmt, void* val) {
 		std::string buffer;
-		char element = 0;
-		bool bDone = false;
-		do {
-			const int c = get_char();
-			if(c >= 0) {
-				element = (char)c;
-				switch(element) {
-					case '0':
-					case '\n':
-					case ' ':
-					case '\t':
-						bDone = true;
-						break;
-					default:
-						break;
-				}
-				buffer.append(&element, 1);
-			} else {
-				return 0;
-			}
-		} while(!bDone);
+		int c = get_char();
+		while((c > 0) && isspace(c)) {
+			c = get_char();
+		}
+		while((c > 0) && !isspace(c)) {
+			buffer.append(1, (char)c);
+			c = get_char();
+		}
 
-		return sscanf(buffer.c_str(), fmt, val);
+		return buffer.empty() ? 0 : sscanf(buffer.c_str(), fmt, val);
 	}
 
 	int eof() { 

@@ -183,11 +183,13 @@ def preview_rgb(width, height):
 
 
 def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
-             prev_w=0, prev_h=0, crop=(0, 0, 0, 0), icc=False, orientation=0):
+             prev_w=0, prev_h=0, crop=(0, 0, 0, 0), icc=False, orientation=0,
+             extra=()):
     """Assemble a DNG.  crop is (left, top, right, bottom): the margins the
     ActiveArea tag hides, so the post-processed image comes out smaller than
     the CFA field and a mishandled margin is visible.  orientation is the
-    TIFF Orientation tag, which LibRaw applies to the processed image."""
+    TIFF Orientation tag, which LibRaw applies to the processed image.  extra
+    holds more IFD0 tags, as (tag, type, values)."""
     left, top, right, bottom = crop
     act_w = raw_w - left - right
     act_h = raw_h - top - bottom
@@ -216,6 +218,8 @@ def make_dng(raw_w, raw_h, pattern, cfa_bytes, model,
     ifd0.set(50778, SHORT, [21])                # CalibrationIlluminant1: D65
     if icc:
         ifd0.set(34675, UNDEFINED, icc_profile())   # InterColorProfile
+    for tag, typ, values in extra:
+        ifd0.set(tag, typ, values)
 
     sub = Ifd()
     sub.set(254, LONG, [0])                     # NewSubfileType: full res
@@ -333,6 +337,17 @@ def make_mono_dng(raw_w, raw_h, model, prev_w, prev_h, orientation=0):
     return header + body
 
 
+def leaf_neutrals():
+    """Leaf metadata (tag 34310) holding one PKTS record, NeutObj_neutrals:
+    four numbers LibRaw reads as text, through the stream's scanf_one, and
+    turns into the camera white balance 10240/12288, 1, 10240/8192."""
+    text = b"10240 12288 10240 8192\0"
+    record = struct.pack("<II", 0x504b5453, 0)  # 'PKTS' as LibRaw's get4() reads it here
+    record += b"NeutObj_neutrals".ljust(40, b"\0")
+    record += struct.pack("<I", len(text)) + text
+    return list(record + struct.pack("<I", 0))
+
+
 RGGB = [0, 1, 1, 2]
 BGGR = [2, 1, 1, 0]
 
@@ -380,6 +395,15 @@ def main():
                   make_mono_dng(w, h, "Synth Mono", 48, 32)))
     files.append(("fi_raw_mono_rot270.dng",
                   make_mono_dng(w, h, "Synth Mono", 48, 32, orientation=8)))
+
+    # a white balance read as Leaf text, and the same one as an AsShotNeutral
+    files.append(("fi_raw_leaf.dng",
+                  make_dng(w, h, RGGB, bayer(w, h, RGGB), "Synth Leaf",
+                           extra=[(34310, UNDEFINED, leaf_neutrals())])))
+    files.append(("fi_raw_leaf_asn.dng",
+                  make_dng(w, h, RGGB, bayer(w, h, RGGB), "Synth Leaf",
+                           extra=[(50728, RATIONAL, [(12288, 10240), (10240, 10240),
+                                                     (8192, 10240)])])))
 
     for name, data in files:
         path = os.path.join(out, name)

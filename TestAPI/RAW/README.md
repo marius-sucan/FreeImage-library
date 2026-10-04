@@ -8,8 +8,8 @@ run again at the next one.
 
 | test | what it covers |
 |---|---|
-| `decode` | Loads the eight files of `data/` through all six of the plugin's paths - the default 16-bit load, `RAW_DISPLAY`, `RAW_PREVIEW`, `RAW_UNPROCESSED`, `RAW_HALFSIZE` and `FIF_LOAD_NOPIXELS` - and checks geometry, depth, decoded pixels, the ICC profile and the `Raw.*` metadata against a recorded table. Plus format detection for each. |
-| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the same again from a stream that starts at a non-zero offset, which is the bug described below; the relations between paths (half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); a header-only load of every path matching that path's full load in size, type, depth, profile and `Raw.*` keys, and carrying no pixels; a turned camera turning the processed image, not the CFA field; a bitmap preview turning like the image, pixel for pixel against the same file unturned; a monochrome file loading as greyscale (`FIT_UINT16`, 8-bit with `RAW_DISPLAY`); `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the colour profiles: linear sRGB or grey on the 16-bit output, none at 8 bits, the file's own on the preview and the sensor data, a JPEG preview's own ahead of it (`fi_raw_rggb.dng` with its preview turned into a JPEG in memory); the Bayer pattern; and that RAW is read-only. |
+| `decode` | Loads eight files of `data/` through all six of the plugin's paths - the default 16-bit load, `RAW_DISPLAY`, `RAW_PREVIEW`, `RAW_UNPROCESSED`, `RAW_HALFSIZE` and `FIF_LOAD_NOPIXELS` - and checks geometry, depth, decoded pixels, the ICC profile and the `Raw.*` metadata against a recorded table. Plus format detection for each. |
+| `regress` | The plugin rather than the decoder: every path loaded from a file *and* from a memory stream, required to agree exactly; the same again from a stream that starts at a non-zero offset, which is the bug described below; the relations between paths (half size is half, `RAW_DISPLAY` is the 16-bit image at 8 bits); a header-only load of every path matching that path's full load in size, type, depth, profile and `Raw.*` keys, and carrying no pixels; a turned camera turning the processed image, not the CFA field; a bitmap preview turning like the image, pixel for pixel against the same file unturned; a monochrome file loading as greyscale (`FIT_UINT16`, 8-bit with `RAW_DISPLAY`); `RAW_PREVIEW` using an embedded preview where there is one and falling back to a decode where there is not; the active-area margin and the `Raw.Frame.*` keys that describe it; the colour profiles: linear sRGB or grey on the 16-bit output, none at 8 bits, the file's own on the preview and the sensor data, a JPEG preview's own ahead of it (`fi_raw_rggb.dng` with its preview turned into a JPEG in memory); the Bayer pattern; a Leaf `NeutObj_neutrals` record, four numbers LibRaw reads as text through the stream's `scanf_one`, giving the white balance of the same `AsShotNeutral`; and that RAW is read-only. |
 | `robust` | Truncated prefixes, junk appended, single-byte corruptions, 32-bit words set to `0xFFFFFFFF`, 64-byte regions wiped, and a dense sweep over the first kilobyte where the TIFF header and both IFDs live, loaded in full and header-only on every path - 43850 damaged inputs across six of the files, plus degenerate buffers. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
 
 ## Running
@@ -35,8 +35,8 @@ the oracle. Its values were recorded from LibRaw 0.21.1 and 0.22.2 reproduces
 every one of them; the rows of the turned and monochrome files were recorded with 0.22.2.
 `./decode --record` reprints it when a change is deliberate.
 
-The eight files are small uncompressed DNGs - a preview image in IFD0 and an
-uncompressed CFA field in a SubIFD (a monochrome field for the last two), which is the layout LibRaw takes apart with
+The ten files are small uncompressed DNGs - a preview image in IFD0 and an
+uncompressed CFA field in a SubIFD (a monochrome field for the two `_mono` ones), which is the layout LibRaw takes apart with
 its TIFF parser. A DNG carries TIFF magic and no RAW-specific signature, so
 `Validate()` cannot shortcut and has to open the file through
 `LibRaw_freeimage_datastream`, which is the FreeImage code worth exercising.
@@ -61,7 +61,11 @@ Between them they cover:
   which LibRaw decodes to one color, and a greyscale preview, which LibRaw hands
   over as one byte per pixel. `RAW_HALFSIZE` leaves it at full size, as LibRaw
   halves only Bayer data;
-- `fi_raw_mono_rot270.dng` - the same shot, Orientation 8.
+- `fi_raw_mono_rot270.dng` - the same shot, Orientation 8;
+- `fi_raw_leaf.dng` - Leaf metadata (tag 34310) holding one record,
+  `NeutObj_neutrals` `10240 12288 10240 8192`: the camera white balance, as
+  numbers LibRaw reads as text;
+- `fi_raw_leaf_asn.dng` - the same white balance as a DNG `AsShotNeutral`.
 
 They are deliberately tiny. The decoders that 0.22 adds - Panasonic encoding 8,
 Sony YCC, OM System 14-bit - need real files from those cameras, which are tens
