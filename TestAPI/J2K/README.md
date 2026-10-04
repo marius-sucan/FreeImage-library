@@ -9,7 +9,7 @@ at the next upgrade.
 | test | what it covers |
 |---|---|
 | `regress` | Round-trips 6 pixel formats x 14 sizes (1x1 to 257x129) x 4 rates x both containers through memory streams, 684 in all, plus a file round-trip per format. Prints size + checksum per output and asserts that every save and reload works and that rate 1 (lossless) reloads pixel-exact. Encoded checksums change legitimately when the encoder changes; the FAIL lines and the tally are the assertions. |
-| `robust` | Truncated prefixes, junk appended, single-bit corruptions, wiped header regions, empty buffers: may load or be refused, must never crash. Also header-only loads (`FIF_LOAD_NOPIXELS`) and loads/saves through a `FreeImageIO` handle that does not start at offset 0. Run under ASan. |
+| `robust` | Truncated prefixes, junk appended, single-bit corruptions, wiped header regions, empty buffers: may load or be refused, must never crash. Also header-only loads (`FIF_LOAD_NOPIXELS`) and loads/saves through a `FreeImageIO` handle that does not start at offset 0, or cannot seek to its end. Run under ASan. |
 | `tiles` | An image whose code could pass the 4 GB OpenJPEG holds in a tile is encoded in tiles, and a JP2 file stops at 4 GB, its box length being 32-bit. Linked against `J2KHelper` and `PluginJP2` rebuilt with small limits: every image is tiled, in tiles of 256, and a JP2 may not pass 1 MB. 6 pixel formats at 600 x 300 must be saved in tiles and reload exactly (rate 1) or at their size (16:1); 1.5 MB of noise saves as J2K, and as JP2 returns FALSE and leaves no file. |
 | `precision` | Samples of 1, 4, 5, 7, 9, 10, 12 and 15 bits (8 and 16 as controls), 1, 3 and 4 components, unsigned and signed, J2K and JP2, encoded losslessly by OpenJPEG itself, since FreeImage writes 8 and 16 bits only. Every sample must load spread over 8 or 16 bits by the rounded rule, or as the file holds it with `J2K_UNSCALED` / `JP2_UNSCALED`; the `SignificantBits` or `UnscaledBits` tag, never both, header-only loads too; `FreeImage_MustTonemap` 0 or 4; a scaled 12-bit image saved again losslessly reloads as it was. |
 | `profiles` | The ICC profile of a JP2 colr box, written by OpenJPEG itself: Adobe RGB at 8 and 12 bits, grey, each on the bitmap and on a header-only load; an enumerated sRGB or CIELab colour space and a J2K codestream carry none; `FreeImage_FIFSupportsICCProfiles` is TRUE for JP2 only. Saved by FreeImage: Adobe RGB and Display P3 at 8 and 16 bits, with alpha, grey at 8 and 16 bits come back in colr method 2; a profile of the other colour, LUT-based ones (into PCS Lab and into PCS XYZ) and J2K codestreams are left out. |
@@ -31,7 +31,7 @@ Scratch files are written to `$J2K_TEST_TMP`, or the current directory.
 - `regress` - `684 round-trips, 0 failures`, with `exact` on every rate-1 line.
 - `robust` - `0 failures`; truncated prefixes are all refused (OpenJPEG's strict
   mode: a partial codestream is an error, not a partial image) while the junk-
-  appended copies decode exactly, and both offset tests say `ok`.
+  appended copies decode exactly, and the handle tests say `ok`.
 - `tiles` - `0 failure(s)`.
 - `precision` - `677 checks, 0 failures`. It was checked with three planted bugs, each
   caught: samples never spread, the two tags swapped, truncated instead of rounded.

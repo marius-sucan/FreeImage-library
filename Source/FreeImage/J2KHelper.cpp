@@ -28,10 +28,19 @@
 // --------------------------------------------------------------------------
 
 static OPJ_UINT64 
-_LengthProc(J2KFIO_t *fio) {
-	// length from the stream start; OpenJPEG needs it when Psot is 0
-	fio->io->seek_proc(fio->handle, 0, SEEK_END);
-	const INT64 end_pos = fio->io->tell_proc(fio->handle);
+_LengthProc(J2KFIO_t *fio, BOOL bRead) {
+	// length from the stream start; OpenJPEG needs it when Psot is 0, and asserts when it reads past it
+	INT64 end_pos = fio->start;
+	if(fio->io->seek_proc(fio->handle, 0, SEEK_END) == 0) {
+		end_pos = fio->io->tell_proc(fio->handle);
+	} else if(bRead && (fio->io->seek_proc(fio->handle, fio->start, SEEK_SET) == 0)) {
+		// a handle that cannot seek to its end is read to it
+		BYTE buffer[4096];
+		unsigned got;
+		while((got = fio->io->read_proc(buffer, 1, (unsigned)sizeof(buffer), fio->handle)) > 0) {
+			end_pos += got;
+		}
+	}
 	fio->io->seek_proc(fio->handle, fio->start, SEEK_SET);
 	return (end_pos > fio->start) ? (OPJ_UINT64)(end_pos - fio->start) : 0;
 }
@@ -90,11 +99,17 @@ opj_freeimage_stream_create(FreeImageIO *io, fi_handle handle, BOOL bRead) {
 		const INT64 start = io->tell_proc(handle);
 		fio->start = (start > 0) ? start : 0;
 		fio->eof = FALSE;
+		fio->length = _LengthProc(fio, bRead);
+		// with no length to give OpenJPEG, it would assert past the first byte
+		if(bRead && !fio->length) {
+			free(fio);
+			return NULL;
+		}
 
 		opj_stream_t *l_stream = opj_stream_create(OPJ_J2K_STREAM_CHUNK_SIZE, bRead ? OPJ_TRUE : OPJ_FALSE);
 		if (l_stream) {
 			opj_stream_set_user_data(l_stream, fio, NULL);
-			opj_stream_set_user_data_length(l_stream, _LengthProc(fio));
+			opj_stream_set_user_data_length(l_stream, fio->length);
 			opj_stream_set_read_function(l_stream, _ReadProc);
 			opj_stream_set_write_function(l_stream, _WriteProc);
 			opj_stream_set_skip_function(l_stream, _SkipProc);
@@ -139,7 +154,7 @@ opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FORMAT
 			if(info) {
 				const OPJ_UINT64 tiles = (OPJ_UINT64)info->tw * info->th;
 				if(tiles) {
-					threads = _LengthProc(fio) / tiles / 2048;
+					threads = fio->length / tiles / 2048;
 				}
 				opj_destroy_cstr_info(&info);
 			}

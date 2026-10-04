@@ -67,6 +67,8 @@ static int DLL_CALLCONV mb_seek(fi_handle h, INT64 o, int w) {
     if (np < 0) return -1; m->pos = (long)np; return 0;
 }
 static INT64 DLL_CALLCONV mb_tell(fi_handle h) { return ((membuf*)h)->pos; }
+/* a handle that cannot seek to its end */
+static int DLL_CALLCONV mb_seek_noend(fi_handle h, INT64 o, int w) { return (w == SEEK_END) ? -1 : mb_seek(h, o, w); }
 
 static void check(int ok, const char *what) {
     printf("%-58s %s\n", what, ok ? "ok" : "FAIL");
@@ -143,6 +145,15 @@ static void geometry_tests(FREE_IMAGE_FORMAT fif, FIBITMAP *d, BYTE *buf, DWORD 
     snprintf(what, sizeof(what), "%s load from a handle at offset 1000 decodes exactly", name);
     check(same(d, b), what);
     if (b) FreeImage_Unload(b);
+
+    /* the same from a handle that cannot seek to its end */
+    io.seek_proc = mb_seek_noend;
+    m.pos = 1000;
+    b = FreeImage_LoadFromHandle(fif, &io, (fi_handle)&m, 0);
+    snprintf(what, sizeof(what), "%s load from a handle without SEEK_END decodes exactly", name);
+    check(same(d, b), what);
+    if (b) FreeImage_Unload(b);
+    io.seek_proc = mb_seek;
     free(m.p);
 
     /* save and load at offset 777 */

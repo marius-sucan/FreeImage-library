@@ -14,6 +14,7 @@ typedef struct tagJ2KFIO_t {
 	opj_stream_t *stream;	//! OpenJPEG stream
 	INT64 start;			//! handle position when the stream was created
 	BOOL eof;				//! OpenJPEG asked for bytes past the end of the file
+	OPJ_UINT64 length;		//! bytes from start to the end of the stream
 } J2KFIO_t;
 
 /**
