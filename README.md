@@ -45,11 +45,8 @@ Fixes:
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed bugs related to CMYK support in TIFF and JPG files;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. Added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
-- fixed JPEG 2000 files loaded from a handle that cannot seek to its end aborting the program;
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
-- fixed Leaf and Mamiya MOS RAW files misreading their white balance and colour matrix;
-- fixed RAW files cut short showing uninitialised memory in their preview;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
 - fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
@@ -61,7 +58,6 @@ Fixes:
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing such files is now much faster;
-- fixed camera RAW files being read one byte per callback; they now load faster;
 - and many other fixes
 
 Changes:
