@@ -2041,6 +2041,11 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
 			// float images hold scene light for the tone mappers; the other types hold no colors
 			return true;
 	}
+	// so do PQ images, up to 10000 cd/m2: converted as display samples they would be clipped, and lose
+	// the CICP tag FreeImage_MustTonemap and FreeImage_ConvertToLinear read them by
+	if (IsPQEncoded(dib)) {
+		return true;
+	}
 	Pixels px;
 	if (AnalysePixels(dib, px)) {
 		return true;

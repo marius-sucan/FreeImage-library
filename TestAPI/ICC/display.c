@@ -584,6 +584,23 @@ static void check_display(const Display *d) {
     printf("%-22s %d loads compared\n", d->name, compared);
 }
 
+/* a PQ image keeps its pixels and its CICP tag on every display: converted as display samples it would be
+   clipped, and FreeImage_MustTonemap() would no longer know it for PQ */
+static void pq_untouched(const Display *d) {
+    const char *path = "../AVIF/data/seine_hdr_rec2020.avif";
+    FIBITMAP *plain = FreeImage_Load(FIF_AVIF, path, 0);
+    FIBITMAP *flag = FreeImage_Load(FIF_AVIF, path, FIF_LOAD_DISPLAY_ICC);
+    FITAG *tag = NULL;
+    CHECK(plain && flag, "%s, PQ AVIF: not loaded", d->name);
+    if (plain && flag) {
+        CHECK(pixel_digest(plain) == pixel_digest(flag), "%s, PQ AVIF: converted", d->name);
+        CHECK(FreeImage_GetMetadata(FIMD_CUSTOM, flag, "CICP", &tag) && tag, "%s, PQ AVIF: the CICP tag is gone", d->name);
+        CHECK(FreeImage_MustTonemap(flag, FIF_AVIF) == FITM_PQ, "%s, PQ AVIF: not FITM_PQ", d->name);
+    }
+    if (flag) FreeImage_Unload(flag);
+    if (plain) FreeImage_Unload(plain);
+}
+
 /* on an sRGB display, images tagged sRGB or grey in all but name keep their pixels; they carry FreeImage's profile */
 static void twins_untouched(const Display *d) {
     const char *names[4] = { "sRGB twin JPEG", "sRGB twin RGB16 PNG", "grey twin PNG", "grey twin UINT16 PNG" };
@@ -1135,6 +1152,7 @@ int main(int argc, char **argv) {
             }
             check_grey_companion(&d);
             check_display(&d);
+            pq_untouched(&d);
             reload_is_identity(&d);
             free_display(&d);
         }
@@ -1147,6 +1165,7 @@ int main(int argc, char **argv) {
             CHECK(same_bytes(&auto_d.rgb, srgb.data, srgb.size), "detected: not sRGB");
             twins_untouched(&auto_d);
             check_display(&auto_d);
+            pq_untouched(&auto_d);
             free_display(&auto_d);
         }
     }

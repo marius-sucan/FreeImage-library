@@ -237,8 +237,9 @@ TransferOfResponse(cmsContext context, cmsHPROFILE profile) {
 	return (exponent <= 3.2) ? TRANSFER_DISPLAY : TRANSFER_STEEP;
 }
 
+// the cicp tag, then, when measure is set, the tone curve
 static Transfer
-TransferOfProfile(const void *data, DWORD size) {
+TransferOfProfile(const void *data, DWORD size, bool measure) {
 	Transfer transfer = TRANSFER_UNKNOWN;
 	cmsContext context = cmsCreateContext(NULL, NULL);
 	if (!context) {
@@ -251,7 +252,7 @@ TransferOfProfile(const void *data, DWORD size) {
 		if (cicp) {
 			transfer = TransferOfCode(cicp->TransferCharacteristics);
 		}
-		if (transfer == TRANSFER_UNKNOWN) {
+		if ((transfer == TRANSFER_UNKNOWN) && measure) {
 			transfer = TransferOfResponse(context, profile);
 		}
 		cmsCloseProfile(profile);
@@ -262,7 +263,7 @@ TransferOfProfile(const void *data, DWORD size) {
 
 // the file's code points first, which PNG ranks above iCCP; then the ICC profile
 static Transfer
-TransferOf(FIBITMAP *dib) {
+TransferOf(FIBITMAP *dib, bool measure = true) {
 	BYTE cicp[4];
 	if (GetCICPMetadata(dib, cicp)) {
 		const Transfer transfer = TransferOfCode(cicp[1]);
@@ -272,9 +273,15 @@ TransferOf(FIBITMAP *dib) {
 	}
 	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
 	if (icc && icc->data && (icc->size >= 132) && ((icc->flags & FIICC_COLOR_IS_CMYK) == 0)) {
-		return TransferOfProfile(icc->data, (DWORD)icc->size);
+		return TransferOfProfile(icc->data, (DWORD)icc->size, measure);
 	}
 	return TRANSFER_UNKNOWN;
+}
+
+// only code points say PQ: a measured tone curve never does, so it is not measured
+bool
+IsPQEncoded(FIBITMAP *dib) {
+	return dib && (TransferOf(dib, false) == TRANSFER_PQ);
 }
 
 // ----------------------------------------------------------

@@ -501,6 +501,12 @@ Copy src's RGB ICC profile and CICP tag to dst, an RGB image made of src's sampl
 */
 void CopyColorDescription(FIBITMAP *dst, FIBITMAP *src);
 
+/**
+TRUE when the code points of the image - its CICP tag, else its ICC profile's cicp tag - say PQ (SMPTE ST 2084)
+@see See definition in MustTonemap.cpp
+*/
+bool IsPQEncoded(FIBITMAP *dib);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions
