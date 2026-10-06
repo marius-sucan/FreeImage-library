@@ -2027,9 +2027,10 @@ GetDisplayCache() {
 //   Loading for the display
 // ----------------------------------------------------------
 
-// dib in the display's colors, in place or as a replacement; false when a needed replacement could not be made
+// dib in the display's colors, in place or as a replacement; false when a needed replacement could not be
+// made, or, with in_place, would be needed
 static bool
-ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
+ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement, bool in_place) {
 	*replacement = NULL;
 	switch (FreeImage_GetImageType(dib)) {
 		case FIT_BITMAP:
@@ -2054,6 +2055,9 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
 	const std::vector<BYTE> &target = grey ? display.grey : display.rgb;
 	// CMYK becomes RGB; 555/565 cannot hold the display's colors
 	const bool convert = (px.layout == LAYOUT_CMYK8) || (px.layout == LAYOUT_CMYK16) || (px.layout == LAYOUT_555) || (px.layout == LAYOUT_565);
+	if (convert && in_place) {
+		return false;
+	}
 	if (target.empty()) {
 		return !convert;
 	}
@@ -2084,6 +2088,21 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement) {
 	}
 	// a failed in-place conversion leaves the image as it was loaded
 	return !convert;
+}
+
+// dib's thumbnail in the display's colors; dropped when it cannot be converted
+static void
+ThumbnailToDisplay(const DisplayState &display, FIBITMAP *dib) {
+	FIBITMAP *thumbnail = FreeImage_GetThumbnail(dib);
+	if (thumbnail) {
+		FIBITMAP *converted = NULL;
+		if (!ToDisplay(display, thumbnail, &converted, false)) {
+			FreeImage_SetThumbnail(dib, NULL);
+		} else if (converted) {
+			FreeImage_SetThumbnail(dib, converted);
+			FreeImage_Unload(converted);
+		}
+	}
 }
 
 } // namespace
@@ -2242,6 +2261,27 @@ FreeImage_GetDisplayICCProfile(void *buffer, DWORD size) {
 	}
 }
 
+// what FIF_LOAD_DISPLAY_ICC does to an image it loads, done in place to one loaded without it:
+// to tone map linear light before it gets the display's colors
+BOOL DLL_CALLCONV
+FreeImage_ApplyDisplayICCProfile(FIBITMAP *dib) {
+	if (!FreeImage_HasPixels(dib)) {
+		return FALSE;
+	}
+	try {
+		const std::shared_ptr<const DisplayState> display = GetDisplayCache().Current();
+		FIBITMAP *replacement = NULL;
+		if (!ToDisplay(*display, dib, &replacement, true)) {
+			return FALSE;
+		}
+		ThumbnailToDisplay(*display, dib);
+		return TRUE;
+	} catch (std::bad_alloc &) {
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
+		return FALSE;
+	}
+}
+
 // ==========================================================
 //   FIF_LOAD_DISPLAY_ICC
 // ==========================================================
@@ -2280,7 +2320,7 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 	try {
 		const std::shared_ptr<const DisplayState> display = GetDisplayCache().Current();
 		FIBITMAP *replacement = NULL;
-		if (!ToDisplay(*display, dib, &replacement)) {
+		if (!ToDisplay(*display, dib, &replacement, false)) {
 			FreeImage_Unload(dib);
 			return NULL;
 		}
@@ -2290,16 +2330,7 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 			FreeImage_Unload(dib);
 			dib = replacement;
 		}
-		FIBITMAP *thumbnail = FreeImage_GetThumbnail(dib);
-		if (thumbnail) {
-			FIBITMAP *converted = NULL;
-			if (!ToDisplay(*display, thumbnail, &converted)) {
-				FreeImage_SetThumbnail(dib, NULL);
-			} else if (converted) {
-				FreeImage_SetThumbnail(dib, converted);
-				FreeImage_Unload(converted);
-			}
-		}
+		ThumbnailToDisplay(*display, dib);
 		return dib;
 	} catch (std::bad_alloc &) {
 		FreeImage_OutputMessageProc(fif, FI_MSG_ERROR_MEMORY);

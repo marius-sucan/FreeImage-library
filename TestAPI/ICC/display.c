@@ -584,6 +584,35 @@ static void check_display(const Display *d) {
     printf("%-22s %d loads compared\n", d->name, compared);
 }
 
+/* FreeImage_ApplyDisplayICCProfile: an image loaded without the flag, converted in place, is the image the flag
+   loads, thumbnail included; CMYK and 555/565 images, which need a new bitmap, are refused and left as they are */
+static void apply_later(const Display *d) {
+    int i, page, compared = 0, refused = 0;
+    for (i = 0; i < fixture_count; i++) {
+        const Fixture *f = &fixtures[i];
+        if (f->fif == FIF_RAW && (f->flags & RAW_UNPROCESSED)) continue;
+        for (page = 0; page < f->pages; page++) {
+            const int how = page ? BY_PAGE_FILE : BY_FILE;
+            FIBITMAP *mine = load(f, page, base_flags(f), how), *flag = load(f, page, f->flags | FIF_LOAD_DISPLAY_ICC, how);
+            if (!mine || !flag) {
+                fail("%s, %s page %d: not loaded", d->name, f->name, page);
+            } else if (is_cmyk(mine) || (FreeImage_GetImageType(mine) == FIT_BITMAP && FreeImage_GetBPP(mine) == 16)) {
+                const unsigned long long before = digest(mine);
+                CHECK(!FreeImage_ApplyDisplayICCProfile(mine) && digest(mine) == before, "%s, %s page %d: not refused untouched", d->name, f->name, page);
+                refused++;
+            } else {
+                CHECK(FreeImage_ApplyDisplayICCProfile(mine), "%s, %s page %d: refused", d->name, f->name, page);
+                CHECK(digest(mine) == digest(flag), "%s, %s page %d: differs from the load with the flag", d->name, f->name, page);
+                CHECK(thumb_digest(mine) == thumb_digest(flag), "%s, %s page %d: thumbnail", d->name, f->name, page);
+                compared++;
+            }
+            if (mine) FreeImage_Unload(mine);
+            if (flag) FreeImage_Unload(flag);
+        }
+    }
+    printf("%-22s %d conversions compared with the flag, %d refused\n", d->name, compared, refused);
+}
+
 /* a PQ image keeps its pixels and its CICP tag on every display: converted as display samples it would be
    clipped, and FreeImage_MustTonemap() would no longer know it for PQ */
 static void pq_untouched(const Display *d) {
@@ -596,6 +625,8 @@ static void pq_untouched(const Display *d) {
         CHECK(pixel_digest(plain) == pixel_digest(flag), "%s, PQ AVIF: converted", d->name);
         CHECK(FreeImage_GetMetadata(FIMD_CUSTOM, flag, "CICP", &tag) && tag, "%s, PQ AVIF: the CICP tag is gone", d->name);
         CHECK(FreeImage_MustTonemap(flag, FIF_AVIF) == FITM_PQ, "%s, PQ AVIF: not FITM_PQ", d->name);
+        CHECK(FreeImage_ApplyDisplayICCProfile(plain) && pixel_digest(plain) == pixel_digest(flag) && FreeImage_MustTonemap(plain, FIF_AVIF) == FITM_PQ,
+              "%s, PQ AVIF: converted by FreeImage_ApplyDisplayICCProfile", d->name);
     }
     if (flag) FreeImage_Unload(flag);
     if (plain) FreeImage_Unload(plain);
@@ -707,7 +738,16 @@ static void header_only(void) {
             if (a) FreeImage_Unload(a);
             if (b) FreeImage_Unload(b);
         }
+        {
+            FIBITMAP *a = FreeImage_Load(f->fif, f->path, f->flags | FIF_LOAD_NOPIXELS);
+            if (a) {
+                const unsigned long long before = head_digest(a);
+                CHECK(!FreeImage_ApplyDisplayICCProfile(a) && head_digest(a) == before, "%s: FreeImage_ApplyDisplayICCProfile takes a header-only bitmap", f->name);
+                FreeImage_Unload(a);
+            }
+        }
     }
+    CHECK(!FreeImage_ApplyDisplayICCProfile(NULL), "FreeImage_ApplyDisplayICCProfile takes NULL");
     printf("header-only            %d loads unchanged\n", same);
 }
 
@@ -1152,6 +1192,7 @@ int main(int argc, char **argv) {
             }
             check_grey_companion(&d);
             check_display(&d);
+            apply_later(&d);
             pq_untouched(&d);
             reload_is_identity(&d);
             free_display(&d);
@@ -1165,6 +1206,7 @@ int main(int argc, char **argv) {
             CHECK(same_bytes(&auto_d.rgb, srgb.data, srgb.size), "detected: not sRGB");
             twins_untouched(&auto_d);
             check_display(&auto_d);
+            apply_later(&auto_d);
             pq_untouched(&auto_d);
             free_display(&auto_d);
         }

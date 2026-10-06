@@ -1237,6 +1237,7 @@ DLL_API unsigned DLL_CALLCONV FreeImage_GetICCProfileDescription(const void *pro
 DLL_API DWORD DLL_CALLCONV FreeImage_GetICCProfileColorSpace(const void *profile, DWORD size);
 DLL_API BOOL DLL_CALLCONV FreeImage_SetDisplayICCProfile(const void *profile FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0), int flags FI_DEFAULT(FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION));
 DLL_API DWORD DLL_CALLCONV FreeImage_GetDisplayICCProfile(void *buffer FI_DEFAULT(NULL), DWORD size FI_DEFAULT(0));
+DLL_API BOOL DLL_CALLCONV FreeImage_ApplyDisplayICCProfile(FIBITMAP *dib);
 
 // miscellaneous algorithms
 DLL_API FIBITMAP *DLL_CALLCONV FreeImage_MultigridPoissonSolver(FIBITMAP *Laplacian, int ncycle FI_DEFAULT(3));
