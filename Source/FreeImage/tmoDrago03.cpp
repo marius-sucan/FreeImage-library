@@ -310,6 +310,7 @@ FreeImage_TmoDrago03(FIBITMAP *src, double gamma, double exposure) {
 
 	// copy metadata from src to dst
 	FreeImage_CloneMetadata(dst, src);
+	DescribeToneMapped(dst);
 	
 	return dst;
 }

@@ -502,6 +502,13 @@ Copy src's RGB ICC profile and CICP tag to dst, an RGB image made of src's sampl
 void CopyColorDescription(FIBITMAP *dst, FIBITMAP *src);
 
 /**
+Describe the output of a tone mapping operator, display samples in the primaries of its input: the CICP tag
+copied from the input keeps its primaries and takes sRGB's transfer characteristics
+@see See definition in MustTonemap.cpp
+*/
+void DescribeToneMapped(FIBITMAP *dib);
+
+/**
 TRUE when the code points of the image - its CICP tag, else its ICC profile's cicp tag - say PQ (SMPTE ST 2084)
 @see See definition in MustTonemap.cpp
 */

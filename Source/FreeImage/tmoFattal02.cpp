@@ -705,6 +705,7 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 
 		// copy metadata from src to dst
 		FreeImage_CloneMetadata(dst, dib);
+		DescribeToneMapped(dst);
 		
 		return dst;
 

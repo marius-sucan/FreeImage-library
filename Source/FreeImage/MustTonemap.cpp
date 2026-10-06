@@ -143,6 +143,15 @@ CopyColorDescription(FIBITMAP *dst, FIBITMAP *src) {
 	}
 }
 
+void
+DescribeToneMapped(FIBITMAP *dib) {
+	BYTE cicp[4];
+	if (GetCICPMetadata(dib, cicp)) {
+		// transfer 13: sRGB, as display samples are read; matrix 0: RGB
+		SetCICPMetadata(dib, cicp[0], 13, 0, TRUE);
+	}
+}
+
 static Transfer
 TransferOfCode(BYTE transfer) {
 	switch (transfer) {

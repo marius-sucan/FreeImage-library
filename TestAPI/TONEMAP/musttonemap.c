@@ -993,6 +993,84 @@ static void test_linear(void) {
     }
 }
 
+/* ----------------------------------------------------------------------------------------------
+   the tone mapping operators' output: display samples, in the primaries of the light they were given
+   ---------------------------------------------------------------------------------------------- */
+
+/* the output's samples read through the sRGB curve, which FreeImage_ConvertToLinear takes from its tag */
+static void check_display_samples(FIBITMAP *dst, const char *what) {
+    FIBITMAP *lin = linear_of(dst, 0, what);
+    unsigned x, bad = 0, w = FreeImage_GetWidth(dst);
+    if (!lin) return;
+    for (x = 0; x < w; x++) {
+        RGBQUAD q;
+        FreeImage_GetPixelColor(dst, x, 0, &q);
+        if (!near(out(lin, x, 0), ref_srgb(q.rgbRed / 255.0), 1e-4) || !near(out(lin, x, 1), ref_srgb(q.rgbGreen / 255.0), 1e-4) ||
+            !near(out(lin, x, 2), ref_srgb(q.rgbBlue / 255.0), 1e-4)) bad++;
+    }
+    CHECK(bad == 0, "%s: %u of %u pixels not read as sRGB samples", what, bad, w);
+    FreeImage_Unload(lin);
+}
+
+static void test_tonemapped(void) {
+    static const struct { FREE_IMAGE_TMO op; const char *name; } ops[] = {
+        { FITMO_DRAGO03, "Drago03" }, { FITMO_REINHARD05, "Reinhard05" }, { FITMO_FATTAL02, "Fattal02" } };
+    static const BYTE primaries[2] = { 1, 9 };
+    unsigned i, p;
+    char what[128];
+    printf("tone mapped images\n");
+    for (i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+        FIBITMAP *light, *dst;
+        BYTE cicp[4];
+
+        light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+        dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
+        CHECK(dst && cicp_transfer(dst, cicp) == -1, "%s, untagged light: the output has a CICP tag", ops[i].name);
+        FreeImage_Unload(dst);
+        FreeImage_Unload(light);
+
+        for (p = 0; p < 2; p++) {
+            light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+            set_cicp(light, primaries[p], 8, 0, 1);
+            dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
+            snprintf(what, sizeof(what), "%s, linear light in primaries %d", ops[i].name, primaries[p]);
+            CHECK(dst != NULL, "%s: not tone mapped", what);
+            if (dst) {
+                CHECK(cicp_transfer(dst, cicp) == 13 && cicp[0] == primaries[p] && cicp[2] == 0 && cicp[3] == 1,
+                      "%s: the output's CICP tag is %d/%d/%d/%d", what, cicp[0], cicp[1], cicp[2], cicp[3]);
+                CHECK(cicp_transfer(light, cicp) == 8, "%s: the input's tag changed", what);
+                check_display_samples(dst, what);
+                FreeImage_Unload(dst);
+            }
+            FreeImage_Unload(light);
+        }
+
+        /* 16-bit linear light, as camera RAW decodes */
+        light = make16(FIT_RGB16, 64, 48, FULL);
+        set_cicp(light, 1, 8, 0, 1);
+        dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
+        snprintf(what, sizeof(what), "%s, RGB16 linear light", ops[i].name);
+        CHECK(dst && cicp_transfer(dst, cicp) == 13 && cicp[0] == 1, "%s: the output is not described as display samples", what);
+        if (dst) check_display_samples(dst, what);
+        FreeImage_Unload(dst);
+        FreeImage_Unload(light);
+    }
+
+    {
+        const char *path = "../../HDR-tests/canon_eos_70d_02.cr2";
+        FIBITMAP *dib = FreeImage_Load(FIF_RAW, path, RAW_DEFAULT | RAW_HALFSIZE), *dst;
+        if (dib) {
+            BYTE cicp[4];
+            dst = FreeImage_ToneMapping(dib, FITMO_REINHARD05, 0, 0);
+            CHECK(dst && cicp_transfer(dst, cicp) == 13 && cicp[0] == 1, "CR2 at 16 bits, tone mapped: the output is not described as display samples");
+            FreeImage_Unload(dst);
+            FreeImage_Unload(dib);
+        } else {
+            printf("  skipped, not found: %s\n", path);
+        }
+    }
+}
+
 int main(void) {
     FreeImage_Initialise(FALSE);
     test_types();
@@ -1004,6 +1082,7 @@ int main(void) {
     test_png();
     test_files();
     test_linear();
+    test_tonemapped();
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;
