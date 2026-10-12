@@ -1202,7 +1202,8 @@ GetConverterStride(const PKPixelFormatGUID &in_guid_format, const PKPixelFormatG
 	// 64-bit: a wide image overflows a 32-bit stride
 	const size_t cbStrideFrom = (size_t)((pPIFrom.cbitUnit + 7) >> 3) * (size_t)width;
 	const size_t cbStrideTo = (size_t)((pPITo.cbitUnit + 7) >> 3) * (size_t)width;
-	const size_t cbStrideMax = MAX(cbStrideFrom, cbStrideTo);
+	// jxrlib counts rows in units of up to 4 bytes, rounding a stride down to them
+	const size_t cbStrideMax = (MAX(cbStrideFrom, cbStrideTo) + 3) & ~(size_t)3;
 	*cbStride = (unsigned)cbStrideMax;
 
 	// the codec passes a stride as U32
