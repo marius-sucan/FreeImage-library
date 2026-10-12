@@ -4,7 +4,7 @@
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
-TESTS   = regress edge narrowio meta tags robust orient bigfile
+TESTS   = regress edge narrowio meta tags robust orient convert bigfile
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
@@ -25,7 +25,7 @@ asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
 run: all
-	@for t in regress edge narrowio meta tags robust orient; do \
+	@for t in regress edge narrowio meta tags robust orient convert; do \
 	  echo "=== $$t ==="; ./$$t || echo "  ^ FAILED"; done
 
 bigfile-run: bigfile

@@ -812,9 +812,12 @@ ERR RGB64Fixed_RGB96Float(PKFormatConverter* pFC, const PKRect* pRect, U8* pb, U
 
         for (x = iWidth - 1; x >= 0; x--)
         {
-            pfltDstPixel[3*x] = piSrcPixel[4*x] * fltCvtFactor;
-            pfltDstPixel[3*x+1] = piSrcPixel[4*x+1] * fltCvtFactor;
-            pfltDstPixel[3*x+2] = piSrcPixel[4*x+2] * fltCvtFactor;
+            // FreeImage: the pixel is read whole before its floats overwrite it
+            I16 f[3];
+            memcpy(f, piSrcPixel + 4*x, sizeof(f));
+            pfltDstPixel[3*x] = f[0] * fltCvtFactor;
+            pfltDstPixel[3*x+1] = f[1] * fltCvtFactor;
+            pfltDstPixel[3*x+2] = f[2] * fltCvtFactor;
         }
     }
     
@@ -1073,9 +1076,12 @@ ERR RGB64Half_RGB96Float(PKFormatConverter* pFC, const PKRect* pRect, U8* pb, U3
 
         for (x = iWidth - 1; x >= 0; x--)
         {
-            pfltDstPixel[3*x] = Convert_Half_To_Float(piSrcPixel[4*x]);
-            pfltDstPixel[3*x+1] = Convert_Half_To_Float(piSrcPixel[4*x+1]);
-            pfltDstPixel[3*x+2] = Convert_Half_To_Float(piSrcPixel[4*x+2]);
+            // FreeImage: the pixel is read whole before its floats overwrite it
+            U16 h[3];
+            memcpy(h, piSrcPixel + 4*x, sizeof(h));
+            pfltDstPixel[3*x] = Convert_Half_To_Float(h[0]);
+            pfltDstPixel[3*x+1] = Convert_Half_To_Float(h[1]);
+            pfltDstPixel[3*x+2] = Convert_Half_To_Float(h[2]);
         }
     }
     
