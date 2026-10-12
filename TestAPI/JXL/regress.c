@@ -299,16 +299,21 @@ static void test_animation(void) {
         {28, 30, 10, 10, 30, 0, 0}, {64, 48, 0, 0, 20, 2, 0}, {16, 12, 50, 40, 10, 1, 0},
     };
     const unsigned n = sizeof(fr) / sizeof(fr[0]), cw = 64, ch = 48;
+    /* ProPhoto stays an ICC profile in libjxl, so the lossy frames blend outside the original colours */
+    static const char *pass[3] = { "lossless", "lossy", "lossy ProPhoto" };
+    DWORD pro_size;
+    const void *pro = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &pro_size);
     FIMULTIBITMAP *m;
     Px *canvas = calloc(cw * ch, sizeof(Px)), *saved = calloc(cw * ch, sizeof(Px));
     unsigned i, x, y;
-    int flags[2] = { JXL_LOSSLESS, 0 }, f;
+    int flags[3] = { JXL_LOSSLESS, 0, 0 }, f;
 
-    for (f = 0; f < 2; f++) {
+    for (f = 0; f < 3; f++) {
         m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_anim.jxl"), TRUE, FALSE, TRUE, 0);
         for (i = 0; i < n; i++) {
             FIBITMAP *d = pattern(FIT_BITMAP, 32, fr[i].w, fr[i].h, 60 + (int)i);
             set_anim(d, fr[i].x, fr[i].y, fr[i].ms, fr[i].disposal, fr[i].blend, cw, ch, 2);
+            if (f == 2) FreeImage_CreateICCProfile(d, (void *)pro, (long)pro_size);
             CHECK(FreeImage_AppendPage(m, d), "AppendPage %u", i);
             FreeImage_Unload(d);
         }
@@ -323,7 +328,7 @@ static void test_animation(void) {
             double worst = 0, se = 0;
             memcpy(saved, canvas, cw * ch * sizeof(Px));
             composite(canvas, cw, ch, frame, fr[i].x, fr[i].y, fr[i].blend == 0);
-            if (!page) { CHECK(0, "page %u not locked", i); FreeImage_Unload(frame); continue; }
+            if (!page) { CHECK(0, "animation %s page %u not locked", pass[f], i); FreeImage_Unload(frame); continue; }
             CHECK(FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch && FreeImage_GetBPP(page) == 32, "page %u: not the 32-bit canvas", i);
             for (y = 0; y < ch; y++) for (x = 0; x < cw; x++) {
                 const Px *p = &canvas[y * cw + x];
@@ -340,8 +345,10 @@ static void test_animation(void) {
             if (f == 0)
                 CHECK(worst <= 1.01 / 255, "animation lossless page %u: off by %.4f from GIF/APNG compositing", i, worst);
             else
-                CHECK(sqrt(se / (4.0 * cw * ch)) < 0.02, "animation lossy page %u: RMS %.4f from GIF/APNG compositing", i, sqrt(se / (4.0 * cw * ch)));
-            if (getenv("JXL_TEST_VERBOSE")) printf("    %s page %u: worst %.4f RMS %.4f\n", f ? "lossy" : "lossless", i, worst, sqrt(se / (4.0 * cw * ch)));
+                CHECK(sqrt(se / (4.0 * cw * ch)) < 0.02, "animation %s page %u: RMS %.4f from GIF/APNG compositing", pass[f], i, sqrt(se / (4.0 * cw * ch)));
+            if (f == 2)
+                CHECK(FreeImage_GetICCProfile(page)->size == (long)pro_size && !memcmp(FreeImage_GetICCProfile(page)->data, pro, pro_size), "page %u: not the ProPhoto profile", i);
+            if (getenv("JXL_TEST_VERBOSE")) printf("    %s page %u: worst %.4f RMS %.4f\n", pass[f], i, worst, sqrt(se / (4.0 * cw * ch)));
             CHECK(anim_tag(page, "FrameTime") == fr[i].ms && anim_tag(page, "Loop") == 2, "page %u: FrameTime %ld Loop %ld", i, anim_tag(page, "FrameTime"), anim_tag(page, "Loop"));
             FreeImage_UnlockPage(m, page, FALSE);
             FreeImage_Unload(frame);

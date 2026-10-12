@@ -89,12 +89,7 @@ class BlendingStage : public RenderPipelineStage {
       return;
     }
 
-    if (state_.metadata->m.xyb_encoded) {
-      if (!dec_state->output_encoding_info.color_encoding_is_original) {
-        initialized_ = JXL_FAILURE("Blending in unsupported color space");
-        return;
-      }
-    }
+    // FreeImage: XYB frames blend in the output colours, original or not (libjxl #4419)
 
     blending_info_.resize(ec_info.size() + 1);
     auto make_blending = [&](const BlendingInfo& info, PatchBlending* pb) {

@@ -42,6 +42,7 @@ static const Expected EXPECTED[] = {
     {"premultiplied.jxl",       1, 32, 24, FIT_RGBA16,  64,    0, "1 13",  0, 0,  -1, -1, 0x9a3603bce14dc441ULL},
     {"layers_still.jxl",        1, 40, 32, FIT_BITMAP,  32,    0, "1 13",  0, 0,  -1, -1, 0x46784bc773b3376cULL},
     {"brob_exif.jxl",           1, 20, 10, FIT_BITMAP,  24,    0, "1 13",  1, 0,  -1, -1, 0x0947e8c58d733f0cULL},
+    {"test-jxl.jxl",           22, 1170, 1455, FIT_BITMAP, 32, 524, NULL, 0, 0, 400,  0, 0},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
 
@@ -68,6 +69,14 @@ static const struct { const char *file; int page; FREE_IMAGE_TYPE type; unsigned
     {"meta_lossy.jxl",        0, FIT_BITMAP, 24, 0, 0, 0, "meta_lossless.jxl", 34},
 };
 #define NLOSSY (sizeof(LOSSY) / sizeof(LOSSY[0]))
+
+/* test-jxl.jxl: XYB with an ICC profile, opaque frames at the top left, each blended over the page before */
+static const unsigned FRAMES[][2] = {
+    {1170, 1455}, {964, 1350}, {1170, 1455}, {540, 810}, {875, 1332}, {1170, 1080}, {1024, 1455}, {1133, 1455},
+    {1133, 1455}, {665, 1000}, {874, 1315}, {1024, 1455}, {512, 768}, {1170, 1455}, {1170, 1455}, {933, 1455},
+    {1062, 1118}, {1170, 1080}, {640, 958}, {682, 1024}, {827, 1330}, {723, 1280},
+};
+#define NFRAMES (sizeof(FRAMES) / sizeof(FRAMES[0]))
 
 static int g_record = 0;
 static int g_failures = 0;
@@ -287,6 +296,37 @@ int main(int argc, char **argv) {
         d = load_page("rgb12_lossless.jxl", 0, JXL_PLAYBACK);
         if (!d || FreeImage_GetImageType(d) != FIT_RGB16) fail("rgb12_lossless.jxl", "JXL_PLAYBACK changed a still image");
         if (d) FreeImage_Unload(d);
+    }
+
+    /* every page of test-jxl.jxl: opaque, and the page before outside its frame */
+    {
+        FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, path("test-jxl.jxl"), FALSE, TRUE, TRUE, 0);
+        FIBITMAP *prev = NULL;
+        int bad = 0;
+        for (i = 0; m && i < NFRAMES; i++) {
+            FIBITMAP *d = FreeImage_LockPage(m, (int)i);
+            unsigned x, y, w = FRAMES[0][0], h = FRAMES[0][1];
+            int ok = d && FreeImage_GetWidth(d) == w && FreeImage_GetHeight(d) == h && FreeImage_GetBPP(d) == 32;
+            for (y = 0; ok && y < h; y++) {
+                const BYTE *row = FreeImage_GetScanLine(d, h - 1 - y);
+                const BYTE *old = prev ? FreeImage_GetScanLine(prev, h - 1 - y) : NULL;
+                for (x = 0; ok && x < w; x++)
+                    if (row[4 * x + FI_RGBA_ALPHA] != 255 || (old && (x >= FRAMES[i][0] || y >= FRAMES[i][1]) && memcmp(row + 4 * x, old + 4 * x, 4))) ok = 0;
+            }
+            if (!ok) {
+                char what[96];
+                snprintf(what, sizeof(what), "page %u is not opaque, or not the page before outside its frame", i);
+                fail("test-jxl.jxl", what);
+                bad = 1;
+            }
+            if (prev) FreeImage_Unload(prev);
+            prev = d ? FreeImage_Clone(d) : NULL;
+            if (d) FreeImage_UnlockPage(m, d, FALSE);
+        }
+        if (prev) FreeImage_Unload(prev);
+        if (m) FreeImage_CloseMultiBitmap(m, 0);
+        if (!m) fail("test-jxl.jxl", "open failed");
+        else if (!bad) printf("ok   test-jxl.jxl: %u pages, each its frame over the page before\n", (unsigned)NFRAMES);
     }
 
     if (strcmp(FreeImage_GetFIFMimeType(FIF_JXL), "image/jxl") || FreeImage_GetFIFFromFilename("x.jxl") != FIF_JXL)

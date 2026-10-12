@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "FreeImage.h"
+#include "pattern.h"
 
 static const char *FILES[] = {
     "data/grey8_lossless.jxl",      /* modular, bare codestream          */
@@ -83,6 +84,25 @@ static unsigned get32be(const BYTE *p) {
     return ((unsigned)p[0] << 24) | ((unsigned)p[1] << 16) | ((unsigned)p[2] << 8) | (unsigned)p[3];
 }
 
+/* a lossy animation in ProPhoto, which libjxl keeps as ICC: its XYB frames blend outside the original colours */
+static const char *icc_animation(void) {
+    static char path[1024];
+    const char *dir = getenv("JXL_TEST_TMP");
+    DWORD size;
+    const void *pro = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &size);
+    FIMULTIBITMAP *m;
+    int i;
+    snprintf(path, sizeof(path), "%s/fi_jxl_icc_anim.jxl", (dir && *dir) ? dir : ".");
+    m = FreeImage_OpenMultiBitmap(FIF_JXL, path, TRUE, FALSE, TRUE, 0);
+    for (i = 0; m && i < 3; i++) {
+        FIBITMAP *d = pattern(FIT_BITMAP, 32, i == 1 ? 40 : 64, i == 1 ? 30 : 48, 90 + i);
+        FreeImage_CreateICCProfile(d, (void *)pro, (long)size);
+        FreeImage_AppendPage(m, d);
+        FreeImage_Unload(d);
+    }
+    return (m && FreeImage_CloseMultiBitmap(m, 0)) ? path : NULL;
+}
+
 /* every BMFF box size of a container rewritten to nonsense */
 static void maul_boxes(const BYTE *orig, long len) {
     static const unsigned BAD[] = { 0u, 1u, 7u, 8u, 0x7FFFFFFFu, 0xFFFFFFFFu };
@@ -123,10 +143,11 @@ int main(void) {
         printf("  ok degenerate buffers                     %ld cases\n", cases);
     }
 
-    for (f = 0; f < NFILES; f++) {
+    for (f = 0; f <= NFILES; f++) {
+        const char *file = (f < NFILES) ? FILES[f] : icc_animation();
         long len, i, before = cases;
-        BYTE *orig = slurp(FILES[f], &len), *copy;
-        if (!orig) { printf("  FAIL cannot read %s\n", FILES[f]); FreeImage_DeInitialise(); return 1; }
+        BYTE *orig = file ? slurp(file, &len) : NULL, *copy;
+        if (!orig) { printf("  FAIL cannot read %s\n", file ? file : "fi_jxl_icc_anim.jxl"); FreeImage_DeInitialise(); return 1; }
 
         /* every truncation of the headers, then coarsely */
         for (i = 1; i < len; i += (i < 256 ? 1 : 37)) try_load(orig, i);
@@ -159,7 +180,7 @@ int main(void) {
 
         maul_boxes(orig, len);
         free(orig);
-        printf("  ok %-38s %ld cases\n", FILES[f], cases - before);
+        printf("  ok %-38s %ld cases\n", f < NFILES ? FILES[f] : "fi_jxl_icc_anim.jxl", cases - before);
     }
 
     printf("\n%ld damaged inputs: %ld decoded, %ld refused, 0 crashed\n", cases, loaded, refused);
