@@ -250,6 +250,60 @@ static JXRInputConversion s_FreeImagePixelInfo[] = {
 };
 
 /**
+What is done to decoded rows, in place, before they reach the dib
+@see s_FreeImageRowLayouts
+*/
+typedef enum {
+	ROWS_AS_DECODED = 0,
+	ROWS_PADDED_8,			// RGB and a padding byte: the padding dropped
+	ROWS_CMYK_8,			// CMYK: BGR, as ConvertCMYKtoRGBA
+	ROWS_CMYK_16,			// CMYK: RGB16
+	ROWS_CMYKA_8,			// CMYK and alpha: BGRA
+	ROWS_CMYKA_16,			// CMYK and alpha: RGBA16
+	ROWS_PREMULTIPLIED_8,	// premultiplied alpha undone
+	ROWS_PREMULTIPLIED_16,
+	ROWS_PREMULTIPLIED_FLOAT
+} JXRRowLayout;
+
+/**
+Pixel formats decoded as they are and then given a layout of FreeImage's
+@see GetNativePixelFormat
+*/
+static const struct {
+	const PKPixelFormatGUID *in_guid_format;
+	const PKPixelFormatGUID *out_guid_format;	// the rows' layout once done
+	FREE_IMAGE_TYPE image_type;
+	unsigned bpp;
+	JXRRowLayout layout;
+} s_FreeImageRowLayouts[] = {
+	{ &GUID_PKPixelFormat32bppBGR, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_PADDED_8 },
+	{ &GUID_PKPixelFormat32bppRGB, &GUID_PKPixelFormat24bppRGB, FIT_BITMAP, 24, ROWS_PADDED_8 },
+	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_CMYK_8 },
+	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat48bppRGB, FIT_RGB16, 48, ROWS_CMYK_16 },
+	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_CMYKA_8 },
+	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_CMYKA_16 },
+	{ &GUID_PKPixelFormat32bppPBGRA, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8 },
+	{ &GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppRGBA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8 },
+	{ &GUID_PKPixelFormat64bppPRGBA, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_PREMULTIPLIED_16 },
+	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT }
+};
+
+/**
+Get what is done to rows decoded in a pixel format
+@param in_guid_format Decoded pixel format
+@return Returns ROWS_AS_DECODED for a format FreeImage holds as it is, or converted by jxrlib
+*/
+static JXRRowLayout
+GetRowLayout(const PKPixelFormatGUID &in_guid_format) {
+	for(size_t i = 0; i < sizeof(s_FreeImageRowLayouts) / sizeof(*s_FreeImageRowLayouts); i++) {
+		if(IsEqualGUID(in_guid_format, *s_FreeImageRowLayouts[i].in_guid_format)) {
+			return s_FreeImageRowLayouts[i].layout;
+		}
+	}
+	return ROWS_AS_DECODED;
+}
+
+/**
 Scan input pixelInfo specifications and return the equivalent FreeImage info for loading
 @param pixelInfo Image specifications
 @param out_guid_format (returned value) output pixel format
@@ -270,13 +324,14 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, PKPixelFormatGUID *out_guid_f
 	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
 		return WMP_errFail;
 	}
-	// 8-bit RGB with padding: 24-bit, the padding dropped while copying
-	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppBGR) || IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGB)) {
-		*out_guid_format = IsEqualGUID(guid_format, GUID_PKPixelFormat32bppBGR) ? GUID_PKPixelFormat24bppBGR : GUID_PKPixelFormat24bppRGB;
-		*image_type = FIT_BITMAP;
-		*bpp = 24;
-		*red_mask = *green_mask = *blue_mask = 0;
-		return WMP_errSuccess;
+	for(size_t i = 0; i < sizeof(s_FreeImageRowLayouts) / sizeof(*s_FreeImageRowLayouts); i++) {
+		if(IsEqualGUID(guid_format, *s_FreeImageRowLayouts[i].in_guid_format)) {
+			*out_guid_format = *s_FreeImageRowLayouts[i].out_guid_format;
+			*image_type = s_FreeImageRowLayouts[i].image_type;
+			*bpp = s_FreeImageRowLayouts[i].bpp;
+			*red_mask = *green_mask = *blue_mask = 0;
+			return WMP_errSuccess;
+		}
 	}
 
 	for(unsigned i = 0; i < s_FreeImagePixelInfoSize; i++) {
@@ -1168,6 +1223,119 @@ TurnRows(const BYTE *src_bits, size_t cbStride, unsigned y0, unsigned y1, FIBITM
 }
 
 /**
+CMYK samples, and alpha, to BGR(A) in place, as ConvertCMYKtoRGBA: (255 - C) * (255 - K) / 255
+@param row Row of pixels
+@param width Row width (in pixels)
+@param in_channels 4, or 5 with alpha
+@param out_channels 3, or 4 with alpha
+*/
+static void
+CMYKRow8(BYTE *row, unsigned width, unsigned in_channels, unsigned out_channels) {
+	for(unsigned x = 0; x < width; x++) {
+		const BYTE *src = row + (size_t)x * in_channels;
+		const unsigned k = 255 - src[3];
+		BYTE px[4];
+		px[0] = (BYTE)((255 - src[2]) * k / 255);
+		px[1] = (BYTE)((255 - src[1]) * k / 255);
+		px[2] = (BYTE)((255 - src[0]) * k / 255);
+		px[3] = (in_channels > 4) ? src[4] : 255;
+		memcpy(row + (size_t)x * out_channels, px, out_channels);
+	}
+}
+
+/**
+CMYK samples, and alpha, to RGB(A) in place, as ConvertCMYKtoRGBA: (65535 - C) * (65535 - K) / 65535
+@see CMYKRow8
+*/
+static void
+CMYKRow16(WORD *row, unsigned width, unsigned in_channels, unsigned out_channels) {
+	for(unsigned x = 0; x < width; x++) {
+		const WORD *src = row + (size_t)x * in_channels;
+		const unsigned k = 65535 - src[3];
+		WORD px[4];
+		px[0] = (WORD)((65535 - src[0]) * k / 65535);
+		px[1] = (WORD)((65535 - src[1]) * k / 65535);
+		px[2] = (WORD)((65535 - src[2]) * k / 65535);
+		px[3] = (in_channels > 4) ? src[4] : 65535;
+		memcpy(row + (size_t)x * out_channels, px, out_channels * sizeof(WORD));
+	}
+}
+
+/**
+Undo premultiplied alpha in a row of 8-bit pixels, alpha last
+*/
+static void
+UnpremultiplyRow8(BYTE *row, unsigned width) {
+	for(unsigned x = 0; x < width; x++, row += 4) {
+		const unsigned a = row[3];
+		if((a > 0) && (a < 255)) {
+			for(int c = 0; c < 3; c++) {
+				const unsigned v = ((unsigned)row[c] * 255u + a / 2) / a;
+				row[c] = (v > 255) ? 255 : (BYTE)v;
+			}
+		}
+	}
+}
+
+/**
+Undo premultiplied alpha in a row of 16-bit pixels, alpha last
+*/
+static void
+UnpremultiplyRow16(WORD *row, unsigned width) {
+	for(unsigned x = 0; x < width; x++, row += 4) {
+		const UINT64 a = row[3];
+		if((a > 0) && (a < 65535)) {
+			for(int c = 0; c < 3; c++) {
+				const UINT64 v = ((UINT64)row[c] * 65535u + a / 2) / a;
+				row[c] = (v > 65535) ? 65535 : (WORD)v;
+			}
+		}
+	}
+}
+
+/**
+Undo premultiplied alpha in a row of float pixels, alpha last
+*/
+static void
+UnpremultiplyRowFloat(float *row, unsigned width) {
+	for(unsigned x = 0; x < width; x++, row += 4) {
+		const float a = row[3];
+		if(a > 0) {
+			for(int c = 0; c < 3; c++) {
+				row[c] /= a;
+			}
+		}
+	}
+}
+
+/**
+Give a decoded row the layout of the dib's rows, in place
+@param row Row of pixels
+@param width Row width (in pixels)
+@param layout What the row needs
+*/
+static void
+TransformRow(BYTE *row, unsigned width, JXRRowLayout layout) {
+	switch(layout) {
+		case ROWS_PADDED_8:
+			for(unsigned x = 1; x < width; x++) {
+				row[3 * x] = row[4 * x];
+				row[3 * x + 1] = row[4 * x + 1];
+				row[3 * x + 2] = row[4 * x + 2];
+			}
+			break;
+		case ROWS_CMYK_8: CMYKRow8(row, width, 4, 3); break;
+		case ROWS_CMYKA_8: CMYKRow8(row, width, 5, 4); break;
+		case ROWS_CMYK_16: CMYKRow16((WORD*)row, width, 4, 3); break;
+		case ROWS_CMYKA_16: CMYKRow16((WORD*)row, width, 5, 4); break;
+		case ROWS_PREMULTIPLIED_8: UnpremultiplyRow8(row, width); break;
+		case ROWS_PREMULTIPLIED_16: UnpremultiplyRow16((WORD*)row, width); break;
+		case ROWS_PREMULTIPLIED_FLOAT: UnpremultiplyRowFloat((float*)row, width); break;
+		default: break;
+	}
+}
+
+/**
 Tell whether a codestream has windowing margins, which jxrlib crops off the top of its rows
 @param pWS Stream
 @param offset Codestream position
@@ -1232,11 +1400,11 @@ Swap red and blue of pixels decoded in the other color order
 static void
 SwapRedBlueAsNeeded(FIBITMAP *dib, const PKPixelFormatGUID &out_guid_format) {
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
-	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppRGB) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppRGB)) {
+	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppRGB) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppRGB) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppRGBA)) {
 		SwapRedBlue32(dib);
 	}
 #elif FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_RGB
-	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppBGR) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppBGR)) {
+	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppBGR) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppBGR) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppBGRA)) {
 		SwapRedBlue32(dib);
 	}
 #endif
@@ -1312,9 +1480,9 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
 		JXR_CHECK(error_code);
 
-		// 8-bit RGB with padding is decoded as it is, then squeezed to 24-bit here
-		const BOOL squeeze = IsEqualGUID(in_guid_format, GUID_PKPixelFormat32bppBGR) || IsEqualGUID(in_guid_format, GUID_PKPixelFormat32bppRGB);
-		const BOOL convert = !squeeze && !IsEqualGUID(out_guid_format, in_guid_format);
+		// a layout of FreeImage's is decoded as it is, its rows then transformed here
+		const JXRRowLayout layout = GetRowLayout(in_guid_format);
+		const BOOL convert = (layout == ROWS_AS_DECODED) && !IsEqualGUID(out_guid_format, in_guid_format);
 		if(convert) {
 			error_code = PKCodecFactory_CreateFormatConverter(&pConverter);
 			JXR_CHECK(error_code);
@@ -1351,14 +1519,9 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 				error_code = WMP_errFail;
 				JXR_CHECK(error_code);
 			}
-			if(squeeze) {
+			if(layout != ROWS_AS_DECODED) {
 				for(unsigned r = 0; r < rows; r++) {
-					BYTE *line = pb + (size_t)r * cbStride;
-					for(unsigned x = 1; x < width; x++) {
-						line[3 * x] = line[4 * x];
-						line[3 * x + 1] = line[4 * x + 1];
-						line[3 * x + 2] = line[4 * x + 2];
-					}
+					TransformRow(pb + (size_t)r * cbStride, width, layout);
 				}
 			}
 			if(turn) {
@@ -1471,20 +1634,32 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		error_code = ReadMetadata(pDecoder, dib);
 		JXR_CHECK(error_code);
 
+		PKPixelFormatGUID in_guid_format;
+		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
+		JXR_CHECK(error_code);
+		switch(GetRowLayout(in_guid_format)) {
+			case ROWS_CMYK_8:
+			case ROWS_CMYK_16:
+			case ROWS_CMYKA_8:
+			case ROWS_CMYKA_16:
+				// a CMYK profile does not describe the RGB pixels are loaded as
+				FreeImage_DestroyICCProfile(dib);
+				break;
+			default:
+				break;
+		}
+
 		if(header_only) {
 			// header only mode ...
-			
+
 			// free the decoder
 			pDecoder->Release(&pDecoder);
 			assert(pDecoder == NULL);
 
 			return dib;
 		}
-		
+
 		// copy pixels into the dib, perform pixel conversion if needed
-		PKPixelFormatGUID in_guid_format;
-		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
-		JXR_CHECK(error_code);
 		if((pDecoder->WMP.wmiI.oOrientation < O_RCW) && IsEqualGUID(guid_format, in_guid_format)) {
 			error_code = CopyPixels(pDecoder, guid_format, dib, width, height);
 		} else {

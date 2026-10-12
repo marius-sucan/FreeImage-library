@@ -1,8 +1,9 @@
 /* FreeImage 3 - JPEG XR pixel formats converted on load: data/ holds 8x140 lossless 64bppRGBHalf, 64bppRGBFixedPoint,
    32bppRGBE and 128bppRGBFloat (loaded as RGBF), 64bppRGBAHalf with planar alpha (RGBAF), each made by jxrlib from
    values exact in either, and 9x140, an odd width, 32bppRGB101010 (RGB16), 32bppBGR and 32bppRGB (24-bit, their
-   padding dropped); every container orientation must load the values the file was made from, and a header-only load
-   the same type and size */
+   padding dropped), 32bppRGBA, premultiplied 32bppPBGRA, 32bppPRGBA, 64bppPRGBA and 128bppPRGBAFloat (straight alpha),
+   and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped); every container
+   orientation must load the values the file was made from, and a header-only load the same type and size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,29 +17,48 @@ static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg
 static unsigned get16(const BYTE *p) { return p[0] | (p[1] << 8); }
 static unsigned get32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24); }
 
-/* channel c (R, G, B, A) of upright pixel (x, y) as made, y counted from the top */
+/* channel c (R, G, B, A) of upright pixel (x, y) as made, y counted from the top; alpha is channel 3, CMYK's alpha 4 */
 static double made(const char *name, unsigned x, unsigned y, unsigned c) {
-    const unsigned k = (3 * x + 5 * y + 17 * c) % 97;
+    const unsigned k = (3 * x + 5 * y + 17 * c) % 97, k3 = (3 * x + 5 * y + 17 * 3) % 97, k4 = (3 * x + 5 * y + 17 * 4) % 97;
     if (!strcmp(name, "rgb101010")) return (double)((k * 8) << 6);
     if (!strcmp(name, "bgr32") || !strcmp(name, "rgb32")) return 2.0 * k;
     /* mantissa 128 + k, exponent 130 + k(alpha) % 4 */
-    if (!strcmp(name, "rgbe")) return (128.0 + k) / 64.0 * (1 << ((3 * x + 5 * y + 17 * 3) % 97 % 4));
+    if (!strcmp(name, "rgbe")) return (128.0 + k) / 64.0 * (1 << (k3 % 4));
+    if (!strcmp(name, "rgba32")) return (c == 3) ? 64 + k3 : 2.0 * k;
+    if (!strcmp(name, "pbgra32") || !strcmp(name, "prgba32")) {
+        /* stored premultiplied, rounded; loaded as undone, rounded */
+        const unsigned a = 64 + k3, s = (2 * k * a + 127) / 255, u = (s * 255 + a / 2) / a;
+        return (c == 3) ? a : (u > 255 ? 255 : u);
+    }
+    if (!strcmp(name, "prgba64")) {
+        const unsigned long long a = 16384 + 256 * k3, s = (512ull * k * a + 32767) / 65535, u = (s * 65535 + a / 2) / a;
+        return (c == 3) ? (double)a : (double)(u > 65535 ? 65535 : u);
+    }
+    if (!strcmp(name, "prgbaf128")) {
+        const float a = 0.25f * (float)(1 + k3 % 4), s = (float)k / 32.0f * a;
+        return (c == 3) ? a : s / a;
+    }
+    /* (max - C,M,Y) * (max - K) / max */
+    if (!strcmp(name, "cmyk32") || !strcmp(name, "cmyka40")) return (c == 3) ? 64 + k4 : (255 - 2 * k) * (255 - k3) / 255;
+    if (!strcmp(name, "cmyk64") || !strcmp(name, "cmyka80")) return (c == 3) ? 16384 + 256 * k4 : (65535 - 512 * k) * (65535 - 256 * k3) / 65535;
     return k / 32.0;
 }
 
 /* channel c (R, G, B, A) of pixel x of a scanline */
 static double loaded(FIBITMAP *dib, const BYTE *line, unsigned x, unsigned c) {
-    static const int rgb[3] = { FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE };
+    static const int rgba[4] = { FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE, FI_RGBA_ALPHA };
     switch (FreeImage_GetImageType(dib)) {
         case FIT_RGB16: return ((const unsigned short *)line)[x * 3 + c];
+        case FIT_RGBA16: return ((const unsigned short *)line)[x * 4 + c];
         case FIT_RGBF: return ((const float *)line)[x * 3 + c];
         case FIT_RGBAF: return ((const float *)line)[x * 4 + c];
-        default: return line[x * 3 + rgb[c]];
+        default: return line[x * (FreeImage_GetBPP(dib) / 8) + rgba[c]];
     }
 }
 
 static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TYPE type, unsigned bpp) {
-    const unsigned h = 140, channels = (type == FIT_RGBAF) ? 4 : 3;
+    const unsigned h = 140, channels = (type == FIT_RGBAF || type == FIT_RGBA16 || bpp == 32) ? 4 : 3;
+    const int cmyk = (strstr(name, "cmyk") != NULL);
     char path[1024];
     BYTE *data = NULL, *orient = NULL;
     long size = 0;
@@ -75,6 +95,7 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
         H = (o < 4) ? h : w;
         CHECK(hdr && !FreeImage_HasPixels(hdr) && FreeImage_GetImageType(hdr) == type && FreeImage_GetBPP(hdr) == bpp && FreeImage_GetWidth(hdr) == W && FreeImage_GetHeight(hdr) == H,
               "%s orientation %d: header-only load not %ux%u %u-bit of type %d", name, o, W, H, bpp, (int)type);
+        if (cmyk) CHECK(hdr && FreeImage_GetICCProfile(hdr)->size == 0, "%s orientation %d: header-only load keeps the CMYK profile", name, o);
         FreeImage_Unload(hdr);
         CHECK(dib && FreeImage_GetImageType(dib) == type && FreeImage_GetBPP(dib) == bpp && FreeImage_GetWidth(dib) == W && FreeImage_GetHeight(dib) == H,
               "%s orientation %d: does not load as %ux%u %u-bit of type %d", name, o, W, H, bpp, (int)type);
@@ -97,6 +118,7 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
                 }
             }
             CHECK(bad == 0, "%s orientation %d: %u values not as made", name, o, bad);
+            if (cmyk) CHECK(FreeImage_GetICCProfile(dib)->size == 0, "%s orientation %d: keeps the CMYK profile", name, o);
         }
         FreeImage_Unload(dib);
     }
@@ -115,6 +137,15 @@ int main(int argc, char **argv) {
     formats(dir, "rgbf128", 8, FIT_RGBF, 96);
     formats(dir, "bgr32", 9, FIT_BITMAP, 24);
     formats(dir, "rgb32", 9, FIT_BITMAP, 24);
+    formats(dir, "rgba32", 9, FIT_BITMAP, 32);
+    formats(dir, "pbgra32", 9, FIT_BITMAP, 32);
+    formats(dir, "prgba32", 9, FIT_BITMAP, 32);
+    formats(dir, "prgba64", 9, FIT_RGBA16, 64);
+    formats(dir, "prgbaf128", 9, FIT_RGBAF, 128);
+    formats(dir, "cmyk32", 9, FIT_BITMAP, 24);
+    formats(dir, "cmyk64", 9, FIT_RGB16, 48);
+    formats(dir, "cmyka40", 9, FIT_BITMAP, 32);
+    formats(dir, "cmyka80", 9, FIT_RGBA16, 64);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;
