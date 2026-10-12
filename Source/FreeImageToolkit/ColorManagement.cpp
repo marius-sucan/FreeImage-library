@@ -2305,6 +2305,8 @@ DisplayICCLoadFlags(FREE_IMAGE_FORMAT fif, int flags) {
 			return (flags | PSD_CMYK) & ~PSD_LAB;
 		case FIF_JXL:
 			return flags | JXL_CMYK;
+		case FIF_JXR:
+			return flags | JXR_CMYK;
 		default:
 			return flags;
 	}

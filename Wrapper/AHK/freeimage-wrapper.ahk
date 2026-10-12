@@ -299,6 +299,7 @@ FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; JPEG_EXIFROTATE = 0x0008; turn the image upright as its Exif Orientation tag says
 ; JPEG_GREYSCALE = 0x0010; load as an 8-bit greyscale image
 ; JXL_CMYK = 0x0004; keep a CMYK JPEG XL as 32- or 64-bit CMYK, not converted to RGB; its alpha is dropped
+; JXR_CMYK = 0x0004; keep a CMYK JPEG XR as 32- or 64-bit CMYK, not converted to RGB; its alpha is dropped
 ; PCD_BASE = 1; the 768 x 512 image, as by default
 ; PCD_BASEDIV4 = 2; the 384 x 256 image
 ; PCD_BASEDIV16 = 3; the 192 x 128 image

@@ -781,6 +781,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define JXR_DEFAULT			0		//! save with quality 80 and no chroma subsampling (4:4:4)
 #define JXR_LOSSLESS		0x0064	//! save lossless
 #define JXR_PROGRESSIVE		0x2000	//! save as a progressive-JXR (use | to combine with other save flags)
+#define JXR_CMYK			0x0004	//! load CMYK images as CMYK, not converted to RGB
 #define AVIF_DEFAULT		0		//! apply clap/irot/imir; keep ICC, Exif, XMP (load only)
 #define AVIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
 #define HEIF_DEFAULT		0		//! primary image or first frame, transforms applied (load only)

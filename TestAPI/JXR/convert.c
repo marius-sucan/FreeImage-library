@@ -2,8 +2,9 @@
    32bppRGBE and 128bppRGBFloat (loaded as RGBF), 64bppRGBAHalf with planar alpha (RGBAF), each made by jxrlib from
    values exact in either, and 9x140, an odd width, 32bppRGB101010 (RGB16), 32bppBGR and 32bppRGB (24-bit, their
    padding dropped), 32bppRGBA, premultiplied 32bppPBGRA, 32bppPRGBA, 64bppPRGBA and 128bppPRGBAFloat (straight alpha),
-   and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped); every container
-   orientation must load the values the file was made from, and a header-only load the same type and size */
+   and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped; with JXR_CMYK their
+   CMYK samples, the alpha dropped, the profile kept and marked CMYK); every container orientation must load the values
+   the file was made from, and a header-only load the same type and size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,6 +45,14 @@ static double made(const char *name, unsigned x, unsigned y, unsigned c) {
     return k / 32.0;
 }
 
+/* sample c (C, M, Y, K) of upright pixel (x, y) as made, for a CMYK file loaded with JXR_CMYK */
+static double made_cmyk(const char *name, unsigned x, unsigned y, unsigned c) {
+    const unsigned k = (3 * x + 5 * y + 17 * c) % 97;
+    const int deep = (strstr(name, "64") != NULL) || (strstr(name, "80") != NULL);
+    if (c == 3) return deep ? 256.0 * k : k;
+    return deep ? 512.0 * k : 2.0 * k;
+}
+
 /* channel c (R, G, B, A) of pixel x of a scanline */
 static double loaded(FIBITMAP *dib, const BYTE *line, unsigned x, unsigned c) {
     static const int rgba[4] = { FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE, FI_RGBA_ALPHA };
@@ -56,9 +65,9 @@ static double loaded(FIBITMAP *dib, const BYTE *line, unsigned x, unsigned c) {
     }
 }
 
-static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TYPE type, unsigned bpp) {
+static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TYPE type, unsigned bpp, int flags) {
     const unsigned h = 140, channels = (type == FIT_RGBAF || type == FIT_RGBA16 || bpp == 32) ? 4 : 3;
-    const int cmyk = (strstr(name, "cmyk") != NULL);
+    const int cmyk = (strstr(name, "cmyk") != NULL), kept = cmyk && ((flags & JXR_CMYK) == JXR_CMYK);
     char path[1024];
     BYTE *data = NULL, *orient = NULL;
     long size = 0;
@@ -86,16 +95,18 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
         unsigned x, y, c, W, H, bad = 0;
         orient[8] = (BYTE)o;
         mem = FreeImage_OpenMemory(data, (DWORD)size);
-        dib = FreeImage_LoadFromMemory(FIF_JXR, mem, 0);
+        dib = FreeImage_LoadFromMemory(FIF_JXR, mem, flags);
         FreeImage_CloseMemory(mem);
         mem = FreeImage_OpenMemory(data, (DWORD)size);
-        hdr = FreeImage_LoadFromMemory(FIF_JXR, mem, FIF_LOAD_NOPIXELS);
+        hdr = FreeImage_LoadFromMemory(FIF_JXR, mem, flags | FIF_LOAD_NOPIXELS);
         FreeImage_CloseMemory(mem);
         W = (o < 4) ? w : h;
         H = (o < 4) ? h : w;
         CHECK(hdr && !FreeImage_HasPixels(hdr) && FreeImage_GetImageType(hdr) == type && FreeImage_GetBPP(hdr) == bpp && FreeImage_GetWidth(hdr) == W && FreeImage_GetHeight(hdr) == H,
               "%s orientation %d: header-only load not %ux%u %u-bit of type %d", name, o, W, H, bpp, (int)type);
-        if (cmyk) CHECK(hdr && FreeImage_GetICCProfile(hdr)->size == 0, "%s orientation %d: header-only load keeps the CMYK profile", name, o);
+        if (cmyk && !kept) CHECK(hdr && FreeImage_GetICCProfile(hdr)->size == 0, "%s orientation %d: header-only load keeps the CMYK profile", name, o);
+        if (kept) CHECK(hdr && FreeImage_GetICCProfile(hdr)->size == 132 && (FreeImage_GetICCProfile(hdr)->flags & FIICC_COLOR_IS_CMYK),
+                        "%s JXR_CMYK orientation %d: header-only load without its profile marked CMYK", name, o);
         FreeImage_Unload(hdr);
         CHECK(dib && FreeImage_GetImageType(dib) == type && FreeImage_GetBPP(dib) == bpp && FreeImage_GetWidth(dib) == W && FreeImage_GetHeight(dib) == H,
               "%s orientation %d: does not load as %ux%u %u-bit of type %d", name, o, W, H, bpp, (int)type);
@@ -113,12 +124,20 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
                         sy = (o == 4 || o == 5) ? h - 1 - x : x;
                     }
                     for (c = 0; c < channels; c++) {
-                        if (loaded(dib, line, x, c) != made(name, sx, sy, c)) bad++;
+                        if (kept) {
+                            /* CMYK samples in their own order */
+                            const double v = (bpp == 64) ? ((const unsigned short *)line)[x * 4 + c] : line[x * 4 + c];
+                            if (v != made_cmyk(name, sx, sy, c)) bad++;
+                        } else if (loaded(dib, line, x, c) != made(name, sx, sy, c)) {
+                            bad++;
+                        }
                     }
                 }
             }
             CHECK(bad == 0, "%s orientation %d: %u values not as made", name, o, bad);
-            if (cmyk) CHECK(FreeImage_GetICCProfile(dib)->size == 0, "%s orientation %d: keeps the CMYK profile", name, o);
+            if (cmyk && !kept) CHECK(FreeImage_GetICCProfile(dib)->size == 0, "%s orientation %d: keeps the CMYK profile", name, o);
+            if (kept) CHECK(FreeImage_GetICCProfile(dib)->size == 132 && (FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK),
+                            "%s JXR_CMYK orientation %d: without its profile marked CMYK", name, o);
         }
         FreeImage_Unload(dib);
     }
@@ -129,23 +148,27 @@ int main(int argc, char **argv) {
     const char *dir = (argc > 1) ? argv[1] : "data";
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(quiet);
-    formats(dir, "rgb64half", 8, FIT_RGBF, 96);
-    formats(dir, "rgb64fixed", 8, FIT_RGBF, 96);
-    formats(dir, "rgba64half", 8, FIT_RGBAF, 128);
-    formats(dir, "rgb101010", 9, FIT_RGB16, 48);
-    formats(dir, "rgbe", 8, FIT_RGBF, 96);
-    formats(dir, "rgbf128", 8, FIT_RGBF, 96);
-    formats(dir, "bgr32", 9, FIT_BITMAP, 24);
-    formats(dir, "rgb32", 9, FIT_BITMAP, 24);
-    formats(dir, "rgba32", 9, FIT_BITMAP, 32);
-    formats(dir, "pbgra32", 9, FIT_BITMAP, 32);
-    formats(dir, "prgba32", 9, FIT_BITMAP, 32);
-    formats(dir, "prgba64", 9, FIT_RGBA16, 64);
-    formats(dir, "prgbaf128", 9, FIT_RGBAF, 128);
-    formats(dir, "cmyk32", 9, FIT_BITMAP, 24);
-    formats(dir, "cmyk64", 9, FIT_RGB16, 48);
-    formats(dir, "cmyka40", 9, FIT_BITMAP, 32);
-    formats(dir, "cmyka80", 9, FIT_RGBA16, 64);
+    formats(dir, "rgb64half", 8, FIT_RGBF, 96, 0);
+    formats(dir, "rgb64fixed", 8, FIT_RGBF, 96, 0);
+    formats(dir, "rgba64half", 8, FIT_RGBAF, 128, 0);
+    formats(dir, "rgb101010", 9, FIT_RGB16, 48, 0);
+    formats(dir, "rgbe", 8, FIT_RGBF, 96, 0);
+    formats(dir, "rgbf128", 8, FIT_RGBF, 96, 0);
+    formats(dir, "bgr32", 9, FIT_BITMAP, 24, 0);
+    formats(dir, "rgb32", 9, FIT_BITMAP, 24, 0);
+    formats(dir, "rgba32", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "pbgra32", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "prgba32", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "prgba64", 9, FIT_RGBA16, 64, 0);
+    formats(dir, "prgbaf128", 9, FIT_RGBAF, 128, 0);
+    formats(dir, "cmyk32", 9, FIT_BITMAP, 24, 0);
+    formats(dir, "cmyk64", 9, FIT_RGB16, 48, 0);
+    formats(dir, "cmyka40", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "cmyka80", 9, FIT_RGBA16, 64, 0);
+    formats(dir, "cmyk32", 9, FIT_BITMAP, 32, JXR_CMYK);
+    formats(dir, "cmyk64", 9, FIT_RGBA16, 64, JXR_CMYK);
+    formats(dir, "cmyka40", 9, FIT_BITMAP, 32, JXR_CMYK);
+    formats(dir, "cmyka80", 9, FIT_RGBA16, 64, JXR_CMYK);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

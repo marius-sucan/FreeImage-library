@@ -260,10 +260,19 @@ typedef enum {
 	ROWS_CMYK_16,			// CMYK: RGB16
 	ROWS_CMYKA_8,			// CMYK and alpha: BGRA
 	ROWS_CMYKA_16,			// CMYK and alpha: RGBA16
+	ROWS_CMYKA_AS_CMYK_8,	// CMYK and alpha, with JXR_CMYK: the alpha dropped
+	ROWS_CMYKA_AS_CMYK_16,
 	ROWS_PREMULTIPLIED_8,	// premultiplied alpha undone
 	ROWS_PREMULTIPLIED_16,
 	ROWS_PREMULTIPLIED_FLOAT
 } JXRRowLayout;
+
+/** CMYK converted to RGB, or kept as CMYK with JXR_CMYK */
+typedef enum {
+	CMYK_NONE = 0,
+	CMYK_CONVERTED,
+	CMYK_KEPT
+} JXRCMYKUse;
 
 /**
 Pixel formats decoded as they are and then given a layout of FreeImage's
@@ -275,28 +284,51 @@ static const struct {
 	FREE_IMAGE_TYPE image_type;
 	unsigned bpp;
 	JXRRowLayout layout;
+	JXRCMYKUse cmyk;
 } s_FreeImageRowLayouts[] = {
-	{ &GUID_PKPixelFormat32bppBGR, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_PADDED_8 },
-	{ &GUID_PKPixelFormat32bppRGB, &GUID_PKPixelFormat24bppRGB, FIT_BITMAP, 24, ROWS_PADDED_8 },
-	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_CMYK_8 },
-	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat48bppRGB, FIT_RGB16, 48, ROWS_CMYK_16 },
-	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_CMYKA_8 },
-	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_CMYKA_16 },
-	{ &GUID_PKPixelFormat32bppPBGRA, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8 },
-	{ &GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppRGBA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8 },
-	{ &GUID_PKPixelFormat64bppPRGBA, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_PREMULTIPLIED_16 },
-	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT }
+	{ &GUID_PKPixelFormat32bppBGR, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_PADDED_8, CMYK_NONE },
+	{ &GUID_PKPixelFormat32bppRGB, &GUID_PKPixelFormat24bppRGB, FIT_BITMAP, 24, ROWS_PADDED_8, CMYK_NONE },
+	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_CMYK_8, CMYK_CONVERTED },
+	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat48bppRGB, FIT_RGB16, 48, ROWS_CMYK_16, CMYK_CONVERTED },
+	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_CMYKA_8, CMYK_CONVERTED },
+	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_CMYKA_16, CMYK_CONVERTED },
+	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_AS_DECODED, CMYK_KEPT },
+	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_AS_DECODED, CMYK_KEPT },
+	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_CMYKA_AS_CMYK_8, CMYK_KEPT },
+	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_CMYKA_AS_CMYK_16, CMYK_KEPT },
+	{ &GUID_PKPixelFormat32bppPBGRA, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
+	{ &GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppRGBA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
+	{ &GUID_PKPixelFormat64bppPRGBA, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_PREMULTIPLIED_16, CMYK_NONE },
+	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT, CMYK_NONE }
 };
 
 /**
-Get what is done to rows decoded in a pixel format
+Find the entry of s_FreeImageRowLayouts for pixels decoded in a pixel format
 @param in_guid_format Decoded pixel format
-@return Returns ROWS_AS_DECODED for a format FreeImage holds as it is, or converted by jxrlib
+@param keep_cmyk TRUE with JXR_CMYK
+@return Returns the entry's index, or -1 for a format FreeImage holds as it is, or jxrlib converts
+*/
+static int
+FindRowLayout(const PKPixelFormatGUID &in_guid_format, BOOL keep_cmyk) {
+	for(int i = 0; i < (int)(sizeof(s_FreeImageRowLayouts) / sizeof(*s_FreeImageRowLayouts)); i++) {
+		const JXRCMYKUse cmyk = s_FreeImageRowLayouts[i].cmyk;
+		if(IsEqualGUID(in_guid_format, *s_FreeImageRowLayouts[i].in_guid_format) && ((cmyk == CMYK_NONE) || (cmyk == (keep_cmyk ? CMYK_KEPT : CMYK_CONVERTED)))) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+/**
+Get what is done to rows decoded in one pixel format to give them the layout of another
+@param in_guid_format Decoded pixel format
+@param out_guid_format The dib's pixel format
+@return Returns ROWS_AS_DECODED for a format FreeImage holds as it is, or jxrlib converts
 */
 static JXRRowLayout
-GetRowLayout(const PKPixelFormatGUID &in_guid_format) {
+GetRowLayout(const PKPixelFormatGUID &in_guid_format, const PKPixelFormatGUID &out_guid_format) {
 	for(size_t i = 0; i < sizeof(s_FreeImageRowLayouts) / sizeof(*s_FreeImageRowLayouts); i++) {
-		if(IsEqualGUID(in_guid_format, *s_FreeImageRowLayouts[i].in_guid_format)) {
+		if(IsEqualGUID(in_guid_format, *s_FreeImageRowLayouts[i].in_guid_format) && IsEqualGUID(out_guid_format, *s_FreeImageRowLayouts[i].out_guid_format)) {
 			return s_FreeImageRowLayouts[i].layout;
 		}
 	}
@@ -306,6 +338,7 @@ GetRowLayout(const PKPixelFormatGUID &in_guid_format) {
 /**
 Scan input pixelInfo specifications and return the equivalent FreeImage info for loading
 @param pixelInfo Image specifications
+@param keep_cmyk TRUE with JXR_CMYK
 @param out_guid_format (returned value) output pixel format
 @param image_type (returned value) Image type
 @param bpp (returned value) Image bit depth
@@ -316,7 +349,7 @@ Scan input pixelInfo specifications and return the equivalent FreeImage info for
 @see GetInputPixelFormat
 */
 static ERR
-GetNativePixelFormat(const PKPixelInfo *pixelInfo, PKPixelFormatGUID *out_guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
+GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormatGUID *out_guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
 	const unsigned s_FreeImagePixelInfoSize = (unsigned)sizeof(s_FreeImagePixelInfo) / sizeof(*(s_FreeImagePixelInfo));
 	const PKPixelFormatGUID &guid_format = *pixelInfo->pGUIDPixFmt;
 
@@ -324,14 +357,13 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, PKPixelFormatGUID *out_guid_f
 	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
 		return WMP_errFail;
 	}
-	for(size_t i = 0; i < sizeof(s_FreeImageRowLayouts) / sizeof(*s_FreeImageRowLayouts); i++) {
-		if(IsEqualGUID(guid_format, *s_FreeImageRowLayouts[i].in_guid_format)) {
-			*out_guid_format = *s_FreeImageRowLayouts[i].out_guid_format;
-			*image_type = s_FreeImageRowLayouts[i].image_type;
-			*bpp = s_FreeImageRowLayouts[i].bpp;
-			*red_mask = *green_mask = *blue_mask = 0;
-			return WMP_errSuccess;
-		}
+	const int layout = FindRowLayout(guid_format, keep_cmyk);
+	if(layout >= 0) {
+		*out_guid_format = *s_FreeImageRowLayouts[layout].out_guid_format;
+		*image_type = s_FreeImageRowLayouts[layout].image_type;
+		*bpp = s_FreeImageRowLayouts[layout].bpp;
+		*red_mask = *green_mask = *blue_mask = 0;
+		return WMP_errSuccess;
 	}
 
 	for(unsigned i = 0; i < s_FreeImagePixelInfoSize; i++) {
@@ -356,6 +388,7 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, PKPixelFormatGUID *out_guid_f
 /**
 Scan input file guid format and return the equivalent FreeImage info & target guid format for loading
 @param pDecoder Decoder handle
+@param keep_cmyk TRUE with JXR_CMYK
 @param guid_format (returned value) Output pixel format
 @param image_type (returned value) Image type
 @param bpp (returned value) Image bit depth
@@ -365,7 +398,7 @@ Scan input file guid format and return the equivalent FreeImage info & target gu
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 static ERR
-GetInputPixelFormat(PKImageDecode *pDecoder, PKPixelFormatGUID *guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
+GetInputPixelFormat(PKImageDecode *pDecoder, BOOL keep_cmyk, PKPixelFormatGUID *guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
 	ERR error_code = 0;		// error code as returned by the interface
 	PKPixelInfo pixelInfo;	// image specifications
 
@@ -380,7 +413,7 @@ GetInputPixelFormat(PKImageDecode *pDecoder, PKPixelFormatGUID *guid_format, FRE
 		JXR_CHECK(error_code);
 
 		// search for an equivalent native FreeImage format
-		error_code = GetNativePixelFormat(&pixelInfo, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
+		error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 
 		if(error_code != WMP_errSuccess) {
 			// try to find a suitable conversion function ...
@@ -393,7 +426,7 @@ GetInputPixelFormat(PKImageDecode *pDecoder, PKPixelFormatGUID *guid_format, FRE
 					pixelInfo.pGUIDPixFmt = ppguidTargetPF;
 					error_code = PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD);
 					JXR_CHECK(error_code);
-					error_code = GetNativePixelFormat(&pixelInfo, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
+					error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 					if(error_code == WMP_errSuccess) {
 						break;
 					}
@@ -1328,6 +1361,16 @@ TransformRow(BYTE *row, unsigned width, JXRRowLayout layout) {
 		case ROWS_CMYKA_8: CMYKRow8(row, width, 5, 4); break;
 		case ROWS_CMYK_16: CMYKRow16((WORD*)row, width, 4, 3); break;
 		case ROWS_CMYKA_16: CMYKRow16((WORD*)row, width, 5, 4); break;
+		case ROWS_CMYKA_AS_CMYK_8:
+			for(unsigned x = 1; x < width; x++) {
+				memmove(row + (size_t)x * 4, row + (size_t)x * 5, 4);
+			}
+			break;
+		case ROWS_CMYKA_AS_CMYK_16:
+			for(unsigned x = 1; x < width; x++) {
+				memmove((WORD*)row + (size_t)x * 4, (WORD*)row + (size_t)x * 5, 4 * sizeof(WORD));
+			}
+			break;
 		case ROWS_PREMULTIPLIED_8: UnpremultiplyRow8(row, width); break;
 		case ROWS_PREMULTIPLIED_16: UnpremultiplyRow16((WORD*)row, width); break;
 		case ROWS_PREMULTIPLIED_FLOAT: UnpremultiplyRowFloat((float*)row, width); break;
@@ -1481,7 +1524,7 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 		JXR_CHECK(error_code);
 
 		// a layout of FreeImage's is decoded as it is, its rows then transformed here
-		const JXRRowLayout layout = GetRowLayout(in_guid_format);
+		const JXRRowLayout layout = GetRowLayout(in_guid_format, out_guid_format);
 		const BOOL convert = (layout == ROWS_AS_DECODED) && !IsEqualGUID(out_guid_format, in_guid_format);
 		if(convert) {
 			error_code = PKCodecFactory_CreateFormatConverter(&pConverter);
@@ -1572,6 +1615,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	BOOL header_only = (flags & FIF_LOAD_NOPIXELS) == FIF_LOAD_NOPIXELS;
+	BOOL keep_cmyk = (flags & JXR_CMYK) == JXR_CMYK;
 
 	try {
 		int width, height;	// image dimensions (in pixels)
@@ -1590,7 +1634,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// get dst image format specifications
 		unsigned red_mask = 0, green_mask = 0, blue_mask = 0;
-		error_code = GetInputPixelFormat(pDecoder, &guid_format, &image_type, &bpp, &red_mask, &green_mask, &blue_mask);
+		error_code = GetInputPixelFormat(pDecoder, keep_cmyk, &guid_format, &image_type, &bpp, &red_mask, &green_mask, &blue_mask);
 		JXR_CHECK(error_code);
 
 		// get image dimensions
@@ -1637,16 +1681,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		PKPixelFormatGUID in_guid_format;
 		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
 		JXR_CHECK(error_code);
-		switch(GetRowLayout(in_guid_format)) {
-			case ROWS_CMYK_8:
-			case ROWS_CMYK_16:
-			case ROWS_CMYKA_8:
-			case ROWS_CMYKA_16:
+		{
+			const int layout = FindRowLayout(in_guid_format, keep_cmyk);
+			if((layout >= 0) && (s_FreeImageRowLayouts[layout].cmyk == CMYK_CONVERTED)) {
 				// a CMYK profile does not describe the RGB pixels are loaded as
 				FreeImage_DestroyICCProfile(dib);
-				break;
-			default:
-				break;
+			} else if((layout >= 0) && (s_FreeImageRowLayouts[layout].cmyk == CMYK_KEPT)) {
+				FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
+			}
 		}
 
 		if(header_only) {
