@@ -264,6 +264,20 @@ Scan input pixelInfo specifications and return the equivalent FreeImage info for
 static ERR
 GetNativePixelFormat(const PKPixelInfo *pixelInfo, PKPixelFormatGUID *out_guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
 	const unsigned s_FreeImagePixelInfoSize = (unsigned)sizeof(s_FreeImagePixelInfo) / sizeof(*(s_FreeImagePixelInfo));
+	const PKPixelFormatGUID &guid_format = *pixelInfo->pGUIDPixFmt;
+
+	// shared exponents, or float RGB with padding: jxrlib converts them to RGBF
+	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
+		return WMP_errFail;
+	}
+	// 8-bit RGB with padding: 24-bit, the padding dropped while copying
+	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppBGR) || IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGB)) {
+		*out_guid_format = IsEqualGUID(guid_format, GUID_PKPixelFormat32bppBGR) ? GUID_PKPixelFormat24bppBGR : GUID_PKPixelFormat24bppRGB;
+		*image_type = FIT_BITMAP;
+		*bpp = 24;
+		*red_mask = *green_mask = *blue_mask = 0;
+		return WMP_errSuccess;
+	}
 
 	for(unsigned i = 0; i < s_FreeImagePixelInfoSize; i++) {
 		if(pixelInfo->bdBitDepth == s_FreeImagePixelInfo[i].bdBitDepth) {
@@ -1298,7 +1312,9 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
 		JXR_CHECK(error_code);
 
-		const BOOL convert = !IsEqualGUID(out_guid_format, in_guid_format);
+		// 8-bit RGB with padding is decoded as it is, then squeezed to 24-bit here
+		const BOOL squeeze = IsEqualGUID(in_guid_format, GUID_PKPixelFormat32bppBGR) || IsEqualGUID(in_guid_format, GUID_PKPixelFormat32bppRGB);
+		const BOOL convert = !squeeze && !IsEqualGUID(out_guid_format, in_guid_format);
 		if(convert) {
 			error_code = PKCodecFactory_CreateFormatConverter(&pConverter);
 			JXR_CHECK(error_code);
@@ -1334,6 +1350,16 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 				// the next band's rows would land above it
 				error_code = WMP_errFail;
 				JXR_CHECK(error_code);
+			}
+			if(squeeze) {
+				for(unsigned r = 0; r < rows; r++) {
+					BYTE *line = pb + (size_t)r * cbStride;
+					for(unsigned x = 1; x < width; x++) {
+						line[3 * x] = line[4 * x];
+						line[3 * x + 1] = line[4 * x + 1];
+						line[3 * x + 2] = line[4 * x + 2];
+					}
+				}
 			}
 			if(turn) {
 				for(unsigned r = 0; r < rows; r += BAND_ROWS) {

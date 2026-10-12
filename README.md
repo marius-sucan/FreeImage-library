@@ -51,6 +51,7 @@ Fixes:
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
 - fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
 - fixed JPEG XR images stored rotated by 90 degrees failing to load;
+- fixed JPEG XR RGBE images loading as 8-bit, and opaque 32-bit ones loading transparent;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;

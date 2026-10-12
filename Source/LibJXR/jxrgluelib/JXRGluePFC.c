@@ -923,6 +923,8 @@ ERR RGBE_RGB96Float(PKFormatConverter* pFC, const PKRect* pRect, U8* pb, U32 cbS
         {
             // First read the exponent
             const U8 rawExp = piSrcPixel[4*x+3];
+            // FreeImage: and the mantissas, before the floats overwrite them
+            const U8 r = piSrcPixel[4*x], g = piSrcPixel[4*x + 1], b = piSrcPixel[4*x + 2];
 
             if (0 == rawExp)
             {
@@ -946,9 +948,9 @@ ERR RGBE_RGB96Float(PKFormatConverter* pFC, const PKRect* pRect, U8* pb, U32 cbS
                     fltExp = (float)ldexp(1.0F, adjExp);
                 }
 
-                pfltDstPixel[3*x] = piSrcPixel[4*x] * fltExp;
-                pfltDstPixel[3*x + 1] = piSrcPixel[4*x + 1] * fltExp;
-                pfltDstPixel[3*x + 2] = piSrcPixel[4*x + 2] * fltExp;
+                pfltDstPixel[3*x] = r * fltExp;
+                pfltDstPixel[3*x + 1] = g * fltExp;
+                pfltDstPixel[3*x + 2] = b * fltExp;
             }
         }
     }
