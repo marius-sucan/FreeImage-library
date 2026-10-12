@@ -33,6 +33,9 @@ Status PatchDictionary::Decode(JxlMemoryManager* memory_manager, BitReader* br,
                                size_t num_extra_channels,
                                bool* uses_extra_channels) {
   positions_.clear();
+  // FreeImage: reused across frames, so the previous frame's blend modes go too
+  ref_positions_.clear();
+  blendings_.clear();
   blendings_stride_ = num_extra_channels + 1;
   std::vector<uint8_t> context_map;
   ANSCode code;

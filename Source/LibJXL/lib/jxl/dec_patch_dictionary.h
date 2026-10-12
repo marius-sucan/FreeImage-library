@@ -118,6 +118,9 @@ class PatchDictionary {
 
   void Clear() {
     positions_.clear();
+    // FreeImage: reused across frames, so the previous frame's blend modes go too
+    ref_positions_.clear();
+    blendings_.clear();
     ComputePatchTree();
   }
 
