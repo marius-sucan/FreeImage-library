@@ -1097,56 +1097,134 @@ TurnPixels(const BYTE * const *src_lines, unsigned c0, unsigned c1, unsigned x, 
 	}
 }
 
+/** upright rows decoded and turned at a time */
+static const unsigned TURN_BAND = 128;
+static_assert(TURN_BAND % 16 == 0, "a band has to end on a macroblock row");
+
 /**
-Turn an image as a container orientation of a quarter turn says: 90 degrees clockwise first, then its flips
-@param src Upright image, w x h
-@param dst Turned image, h x w
+Turn upright rows into the columns a container orientation of a quarter turn puts them in: 90 degrees clockwise first, then its flips
+@param src_bits Upright row y0, rows top-down
+@param cbStride Bytes from one src row to the next
+@param y0 First upright row
+@param y1 Upright row past the last, at most TURN_BAND rows after y0
+@param dst Turned image, h x w for an upright image of w x h
 @param oOrientation O_RCW, O_RCW_FLIPV, O_RCW_FLIPH or O_RCW_FLIPVH
 */
 static void
-TurnUpright(FIBITMAP *src, FIBITMAP *dst, ORIENTATION oOrientation) {
-	const unsigned w = FreeImage_GetWidth(src);
-	const unsigned h = FreeImage_GetHeight(src);
-	const unsigned bpp = FreeImage_GetBPP(src);
-	const unsigned bytespp = bpp / 8;
+TurnRows(const BYTE *src_bits, size_t cbStride, unsigned y0, unsigned y1, FIBITMAP *dst, ORIENTATION oOrientation) {
+	const unsigned w = FreeImage_GetHeight(dst);
+	const unsigned h = FreeImage_GetWidth(dst);
+	const unsigned bytespp = FreeImage_GetBPP(dst) / 8;
 	const BOOL flip_v = (oOrientation == O_RCW_FLIPV) || (oOrientation == O_RCW_FLIPVH);
 	const BOOL flip_h = (oOrientation == O_RCW_FLIPH) || (oOrientation == O_RCW_FLIPVH);
-	// 64 src scanlines at a time, which stay in the cache
-	const unsigned BLOCK = 64;
-	const BYTE *src_lines[BLOCK];
+	// upright row y lands in column flip_h ? y : h - 1 - y
+	const unsigned c0 = flip_h ? y0 : h - y1;
+	const unsigned c1 = flip_h ? y1 : h - y0;
+	const BYTE *src_lines[TURN_BAND];
 
-	// scanlines run bottom-up: dst scanline d is src column x, read along src scanlines
-	for(unsigned c0 = 0; c0 < h; c0 += BLOCK) {
-		const unsigned c1 = MIN(c0 + BLOCK, h);
-		for(unsigned col = c0; col < c1; col++) {
-			src_lines[col - c0] = FreeImage_GetScanLine(src, flip_h ? h - 1 - col : col);
-		}
-		for(unsigned d = 0; d < w; d++) {
-			const unsigned x = flip_v ? d : w - 1 - d;
-			BYTE *dst_line = FreeImage_GetScanLine(dst, d);
-			switch(bytespp) {
-				case 0:
-					for(unsigned col = c0; col < c1; col++) {
-						const BYTE mask = (BYTE)(0x80 >> (col & 7));
-						if(src_lines[col - c0][x >> 3] & (0x80 >> (x & 7))) {
-							dst_line[col >> 3] |= mask;
-						} else {
-							dst_line[col >> 3] &= (BYTE)~mask;
-						}
+	for(unsigned col = c0; col < c1; col++) {
+		src_lines[col - c0] = src_bits + (size_t)((flip_h ? col : h - 1 - col) - y0) * cbStride;
+	}
+	// scanlines run bottom-up: dst scanline d is upright column x
+	for(unsigned d = 0; d < w; d++) {
+		const unsigned x = flip_v ? d : w - 1 - d;
+		BYTE *dst_line = FreeImage_GetScanLine(dst, d);
+		switch(bytespp) {
+			case 0:
+				for(unsigned col = c0; col < c1; col++) {
+					const BYTE mask = (BYTE)(0x80 >> (col & 7));
+					if(src_lines[col - c0][x >> 3] & (0x80 >> (x & 7))) {
+						dst_line[col >> 3] |= mask;
+					} else {
+						dst_line[col >> 3] &= (BYTE)~mask;
 					}
-					break;
-				case 1: TurnPixels<1>(src_lines, c0, c1, x, dst_line); break;
-				case 2: TurnPixels<2>(src_lines, c0, c1, x, dst_line); break;
-				case 3: TurnPixels<3>(src_lines, c0, c1, x, dst_line); break;
-				case 4: TurnPixels<4>(src_lines, c0, c1, x, dst_line); break;
-				case 6: TurnPixels<6>(src_lines, c0, c1, x, dst_line); break;
-				case 8: TurnPixels<8>(src_lines, c0, c1, x, dst_line); break;
-				case 12: TurnPixels<12>(src_lines, c0, c1, x, dst_line); break;
-				case 16: TurnPixels<16>(src_lines, c0, c1, x, dst_line); break;
-				default: break;
-			}
+				}
+				break;
+			case 1: TurnPixels<1>(src_lines, c0, c1, x, dst_line); break;
+			case 2: TurnPixels<2>(src_lines, c0, c1, x, dst_line); break;
+			case 3: TurnPixels<3>(src_lines, c0, c1, x, dst_line); break;
+			case 4: TurnPixels<4>(src_lines, c0, c1, x, dst_line); break;
+			case 6: TurnPixels<6>(src_lines, c0, c1, x, dst_line); break;
+			case 8: TurnPixels<8>(src_lines, c0, c1, x, dst_line); break;
+			case 12: TurnPixels<12>(src_lines, c0, c1, x, dst_line); break;
+			case 16: TurnPixels<16>(src_lines, c0, c1, x, dst_line); break;
+			default: break;
 		}
 	}
+}
+
+/**
+Tell whether a codestream has windowing margins, which jxrlib crops off the top of its rows
+@param pWS Stream
+@param offset Codestream position
+@return Returns FALSE only for a codestream header without margins
+*/
+static BOOL
+IsWindowed(WMPStream *pWS, size_t offset) {
+	BYTE header[11];
+	size_t pos = 0;
+	BOOL windowed = TRUE;
+	if(pWS->GetPos(pWS, &pos) == WMP_errSuccess) {
+		if((pWS->SetPos(pWS, offset) == WMP_errSuccess) && (pWS->Read(pWS, header, sizeof(header)) == WMP_errSuccess)) {
+			// WINDOWING_FLAG: bit 5 of the third byte after the signature
+			windowed = (memcmp(header, "WMPHOTO", 7) != 0) || ((header[10] & 0x20) != 0);
+		}
+		pWS->SetPos(pWS, pos);
+	}
+	return windowed;
+}
+
+/**
+Get the stride of a buffer holding rows of either pixel format
+@param in_guid_format Decoded pixel format
+@param out_guid_format Target pixel format
+@param width Row width (in pixels)
+@param cbStride Returned stride
+@return Returns 0 if successful, returns ERR otherwise
+*/
+static ERR
+GetConverterStride(const PKPixelFormatGUID &in_guid_format, const PKPixelFormatGUID &out_guid_format, int width, unsigned *cbStride) {
+	PKPixelInfo pPIFrom;
+	PKPixelInfo pPITo;
+
+	pPIFrom.pGUIDPixFmt = &in_guid_format;
+	ERR error_code = PixelFormatLookup(&pPIFrom, LOOKUP_FORWARD);
+	if(error_code != WMP_errSuccess) {
+		return error_code;
+	}
+
+	pPITo.pGUIDPixFmt = &out_guid_format;
+	error_code = PixelFormatLookup(&pPITo, LOOKUP_FORWARD);
+	if(error_code != WMP_errSuccess) {
+		return error_code;
+	}
+
+	// 64-bit: a wide image overflows a 32-bit stride
+	const size_t cbStrideFrom = (size_t)((pPIFrom.cbitUnit + 7) >> 3) * (size_t)width;
+	const size_t cbStrideTo = (size_t)((pPITo.cbitUnit + 7) >> 3) * (size_t)width;
+	const size_t cbStrideMax = MAX(cbStrideFrom, cbStrideTo);
+	*cbStride = (unsigned)cbStrideMax;
+
+	// the codec passes a stride as U32
+	return (cbStrideMax > (size_t)UINT_MAX) ? WMP_errBufferOverflow : WMP_errSuccess;
+}
+
+/**
+Swap red and blue of pixels decoded in the other color order
+@param dib Decoded dib
+@param out_guid_format Decoded pixel format
+*/
+static void
+SwapRedBlueAsNeeded(FIBITMAP *dib, const PKPixelFormatGUID &out_guid_format) {
+#if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
+	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppRGB) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppRGB)) {
+		SwapRedBlue32(dib);
+	}
+#elif FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_RGB
+	if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppBGR) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppBGR)) {
+		SwapRedBlue32(dib);
+	}
+#endif
 }
 
 /**
@@ -1201,29 +1279,8 @@ CopyPixels(PKImageDecode *pDecoder, PKPixelFormatGUID out_guid_format, FIBITMAP 
 			
 			// get the maximum stride
 			unsigned cbStride = 0;
-			{
-				PKPixelInfo pPIFrom;
-				PKPixelInfo pPITo;
-
-				pPIFrom.pGUIDPixFmt = &in_guid_format;
-				error_code = PixelFormatLookup(&pPIFrom, LOOKUP_FORWARD);
-				JXR_CHECK(error_code);
-
-				pPITo.pGUIDPixFmt = &out_guid_format;
-				error_code = PixelFormatLookup(&pPITo, LOOKUP_FORWARD);
-				JXR_CHECK(error_code);
-
-				// 64-bit: a wide image overflows a 32-bit stride
-				const size_t cbStrideFrom = (size_t)((pPIFrom.cbitUnit + 7) >> 3) * (size_t)width;
-				const size_t cbStrideTo = (size_t)((pPITo.cbitUnit + 7) >> 3) * (size_t)width;
-				const size_t cbStrideMax = MAX(cbStrideFrom, cbStrideTo);
-				if(cbStrideMax > (size_t)UINT_MAX) {
-					// the codec passes a stride as U32
-					error_code = WMP_errBufferOverflow;
-					JXR_CHECK(error_code);
-				}
-				cbStride = (unsigned)cbStrideMax;
-			}
+			error_code = GetConverterStride(in_guid_format, out_guid_format, width, &cbStride);
+			JXR_CHECK(error_code);
 
 			// allocate a local decoder / encoder buffer
 			error_code = PKAllocAligned((void **) &pb, (size_t)cbStride * (size_t)height, 128);
@@ -1254,24 +1311,94 @@ CopyPixels(PKImageDecode *pDecoder, PKPixelFormatGUID out_guid_format, FIBITMAP 
 		// post-processing ...
 		// -------------------
 
-		// swap RGB as needed
+		SwapRedBlueAsNeeded(dib, out_guid_format);
 
-#if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
-		if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppRGB) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppRGB)) {
-			SwapRedBlue32(dib);
-		}
-#elif FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_RGB
-		if(IsEqualGUID(out_guid_format, GUID_PKPixelFormat24bppBGR) || IsEqualGUID(out_guid_format, GUID_PKPixelFormat32bppBGR)) {
-			SwapRedBlue32(dib);
-		}
-#endif
-		
 		return WMP_errSuccess;
 
 	} catch(...) {
 		// free the local buffer
 		PKFreeAligned((void **) &pb);
 		// free the pixel format converter
+		PKFormatConverter_Release(&pConverter);
+
+		return error_code;
+	}
+}
+
+/**
+Decode an image upright a band at a time, turning each band into the dib
+@param pDecoder Decoder handle, its orientation set to O_NONE
+@param out_guid_format Target guid format
+@param dib Output dib, turned
+@param oOrientation Container orientation of a quarter turn
+@return Returns 0 if successful, returns ERR otherwise
+*/
+static ERR
+CopyTurnedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_format, FIBITMAP *dib, ORIENTATION oOrientation) {
+	PKFormatConverter *pConverter = NULL;	// pixel format converter
+	ERR error_code = 0;	// error code as returned by the interface
+	BYTE *pb = NULL;	// band buffer, also used for pixel format conversion
+
+	// upright image dimensions
+	const unsigned width = FreeImage_GetHeight(dib);
+	const unsigned height = FreeImage_GetWidth(dib);
+
+	try {
+		PKPixelFormatGUID in_guid_format;
+		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
+		JXR_CHECK(error_code);
+
+		const BOOL convert = !IsEqualGUID(out_guid_format, in_guid_format);
+		if(convert) {
+			error_code = PKCodecFactory_CreateFormatConverter(&pConverter);
+			JXR_CHECK(error_code);
+			error_code = pConverter->Initialize(pConverter, pDecoder, NULL, out_guid_format);
+			JXR_CHECK(error_code);
+		}
+
+		unsigned cbStride = 0;
+		error_code = GetConverterStride(in_guid_format, out_guid_format, (int)width, &cbStride);
+		JXR_CHECK(error_code);
+
+		// margins would shift jxrlib's rows across bands: decode a windowed image in one band
+		WMPStream *pWS = pDecoder->pStream;
+		size_t image_pos = 0;
+		error_code = pWS->GetPos(pWS, &image_pos);
+		JXR_CHECK(error_code);
+		const BOOL windowed = IsWindowed(pWS, image_pos) || (pDecoder->WMP.bHasAlpha && IsWindowed(pWS, pDecoder->WMP.wmiDEMisc.uAlphaOffset));
+		const unsigned band = windowed ? height : MIN(height, TURN_BAND);
+
+		error_code = PKAllocAligned((void **) &pb, (size_t)cbStride * band, 128);
+		JXR_CHECK(error_code);
+
+		for(unsigned y = 0; y < height; y += band) {
+			const unsigned rows = MIN(band, height - y);
+			const PKRect rect = {0, (I32)y, (I32)width, (I32)rows};
+			if(convert) {
+				error_code = pConverter->Copy(pConverter, &rect, pb, cbStride);
+			} else {
+				error_code = pDecoder->Copy(pDecoder, &rect, pb, cbStride);
+			}
+			JXR_CHECK(error_code);
+			if((y + rows < height) && (pDecoder->WMP.cLinesCropped != 0)) {
+				// the next band's rows would land above it
+				error_code = WMP_errFail;
+				JXR_CHECK(error_code);
+			}
+			for(unsigned r = 0; r < rows; r += TURN_BAND) {
+				TurnRows(pb + (size_t)r * cbStride, cbStride, y + r, y + MIN(rows, r + TURN_BAND), dib, oOrientation);
+			}
+		}
+
+		PKFreeAligned((void **) &pb);
+		PKFormatConverter_Release(&pConverter);
+
+		SwapRedBlueAsNeeded(dib, out_guid_format);
+
+		return WMP_errSuccess;
+
+	} catch(...) {
+		PKFreeAligned((void **) &pb);
 		PKFormatConverter_Release(&pConverter);
 
 		return error_code;
@@ -1372,18 +1499,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		
 		// copy pixels into the dib, perform pixel conversion if needed
 		if(pDecoder->WMP.wmiI.oOrientation >= O_RCW) {
-			// jxrlib decodes row by row and cannot turn an image a quarter: decode it upright, then turn it
+			// jxrlib decodes row by row and cannot turn an image a quarter: decode it upright, a band at a time, and turn it
 			const ORIENTATION oOrientation = pDecoder->WMP.wmiI.oOrientation;
-			FIBITMAP *upright = FreeImage_AllocateT(image_type, height, width, bpp, red_mask, green_mask, blue_mask);
-			if(!upright) {
-				throw FI_MSG_ERROR_DIB_MEMORY;
-			}
 			pDecoder->WMP.wmiI.oOrientation = O_NONE;
-			error_code = CopyPixels(pDecoder, guid_format, upright, height, width);
-			if(error_code == WMP_errSuccess) {
-				TurnUpright(upright, dib, oOrientation);
-			}
-			FreeImage_Unload(upright);
+			error_code = CopyTurnedPixels(pDecoder, guid_format, dib, oOrientation);
 		} else {
 			error_code = CopyPixels(pDecoder, guid_format, dib, width, height);
 		}

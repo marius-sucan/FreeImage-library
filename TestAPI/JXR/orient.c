@@ -1,6 +1,7 @@
-/* FreeImage 3 - JPEG XR orientation: each pixel format saved losslessly, its container orientation set to each of the
-   8 values; the image must load as the upright one flipped, or turned a quarter clockwise and then flipped, with
-   width, height and resolution swapped on a quarter turn, in the header-only load too */
+/* FreeImage 3 - JPEG XR orientation: each pixel format saved losslessly, and images taller than a decode band lossy
+   too, its container orientation set to each of the 8 values; the image must load as the upright one flipped, or turned
+   a quarter clockwise and then flipped, with width, height and resolution swapped on a quarter turn, in the header-only
+   load too */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,13 +53,13 @@ static FIBITMAP *load(BYTE *data, DWORD size, int flags) {
     return dib;
 }
 
-static void orientations(const char *name, FREE_IMAGE_TYPE type, unsigned bpp, unsigned w, unsigned h) {
+static void orientations(const char *name, FREE_IMAGE_TYPE type, unsigned bpp, unsigned w, unsigned h, int flags) {
     FIBITMAP *src = picture(type, bpp, w, h), *up = NULL;
     FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
     BYTE *data = NULL, *orient = NULL, *p;
     DWORD size = 0, ifd, k;
     int o;
-    if (FreeImage_SaveToMemory(FIF_JXR, src, mem, JXR_LOSSLESS) && FreeImage_AcquireMemory(mem, &p, &size)) {
+    if (FreeImage_SaveToMemory(FIF_JXR, src, mem, flags) && FreeImage_AcquireMemory(mem, &p, &size)) {
         data = (BYTE *)malloc(size);
         memcpy(data, p, size);
         ifd = get32(data + 4);
@@ -114,21 +115,35 @@ static void orientations(const char *name, FREE_IMAGE_TYPE type, unsigned bpp, u
 int main(void) {
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(quiet);
-    orientations("1-bit", FIT_BITMAP, 1, 40, 24);
-    orientations("8-bit grey", FIT_BITMAP, 8, 40, 24);
-    orientations("16-bit 555", FIT_BITMAP, 16, 40, 24);
-    orientations("24-bit", FIT_BITMAP, 24, 40, 24);
-    orientations("32-bit", FIT_BITMAP, 32, 40, 24);
-    orientations("uint16", FIT_UINT16, 16, 40, 24);
-    orientations("rgb16", FIT_RGB16, 48, 40, 24);
-    orientations("rgba16", FIT_RGBA16, 64, 40, 24);
-    orientations("float", FIT_FLOAT, 32, 40, 24);
-    orientations("rgbf", FIT_RGBF, 96, 40, 24);
-    orientations("rgbaf", FIT_RGBAF, 128, 40, 24);
-    orientations("24-bit 17x5", FIT_BITMAP, 24, 17, 5);
-    orientations("1-bit 131x77", FIT_BITMAP, 1, 131, 77);
-    orientations("24-bit 130x70", FIT_BITMAP, 24, 130, 70);
-    orientations("32-bit 1x1", FIT_BITMAP, 32, 1, 1);
+    orientations("1-bit", FIT_BITMAP, 1, 40, 24, JXR_LOSSLESS);
+    orientations("8-bit grey", FIT_BITMAP, 8, 40, 24, JXR_LOSSLESS);
+    orientations("16-bit 555", FIT_BITMAP, 16, 40, 24, JXR_LOSSLESS);
+    orientations("24-bit", FIT_BITMAP, 24, 40, 24, JXR_LOSSLESS);
+    orientations("32-bit", FIT_BITMAP, 32, 40, 24, JXR_LOSSLESS);
+    orientations("uint16", FIT_UINT16, 16, 40, 24, JXR_LOSSLESS);
+    orientations("rgb16", FIT_RGB16, 48, 40, 24, JXR_LOSSLESS);
+    orientations("rgba16", FIT_RGBA16, 64, 40, 24, JXR_LOSSLESS);
+    orientations("float", FIT_FLOAT, 32, 40, 24, JXR_LOSSLESS);
+    orientations("rgbf", FIT_RGBF, 96, 40, 24, JXR_LOSSLESS);
+    orientations("rgbaf", FIT_RGBAF, 128, 40, 24, JXR_LOSSLESS);
+    orientations("24-bit 17x5", FIT_BITMAP, 24, 17, 5, JXR_LOSSLESS);
+    orientations("1-bit 131x77", FIT_BITMAP, 1, 131, 77, JXR_LOSSLESS);
+    orientations("24-bit 130x70", FIT_BITMAP, 24, 130, 70, JXR_LOSSLESS);
+    orientations("32-bit 1x1", FIT_BITMAP, 32, 1, 1, JXR_LOSSLESS);
+    /* a quarter turn decodes 128 rows at a time */
+    orientations("24-bit 37x128", FIT_BITMAP, 24, 37, 128, JXR_LOSSLESS);
+    orientations("24-bit 37x129", FIT_BITMAP, 24, 37, 129, JXR_LOSSLESS);
+    orientations("8-bit grey 29x256", FIT_BITMAP, 8, 29, 256, JXR_LOSSLESS);
+    orientations("1-bit 45x300", FIT_BITMAP, 1, 45, 300, JXR_LOSSLESS);
+    orientations("16-bit 555 21x200", FIT_BITMAP, 16, 21, 200, JXR_LOSSLESS);
+    orientations("32-bit 19x333", FIT_BITMAP, 32, 19, 333, JXR_LOSSLESS);
+    orientations("rgba16 13x260", FIT_RGBA16, 64, 13, 260, JXR_LOSSLESS);
+    orientations("rgbaf 11x290", FIT_RGBAF, 128, 11, 290, JXR_LOSSLESS);
+    orientations("24-bit lossy 48x129", FIT_BITMAP, 24, 48, 129, 0);
+    orientations("24-bit lossy 48x300", FIT_BITMAP, 24, 48, 300, 0);
+    orientations("32-bit lossy 64x333", FIT_BITMAP, 32, 64, 333, 0);
+    orientations("8-bit grey lossy 40x256", FIT_BITMAP, 8, 40, 256, 0);
+    orientations("rgbf lossy 33x270", FIT_RGBF, 96, 33, 270, 0);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;
