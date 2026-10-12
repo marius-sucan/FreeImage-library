@@ -8,13 +8,15 @@ TESTS   = decode regress robust
 CFLAGS ?= -O1 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS)
+# regress also reads frame layouts through libjxl, which libfreeimage.a holds
+TESTJXL = -I../../Source/LibJXL/lib/include -DJXL_TEST_LIBJXL
 
 default: all
 all: $(TESTS)
 
 # relink when libfreeimage.a changes
 $(TESTS): %: %.c pattern.h ../../Dist/libfreeimage.a
-	gcc $(CFLAGS) $(INC) $< -o $@ $(LIB)
+	gcc $(CFLAGS) $(INC) $(TESTJXL) $< -o $@ $(LIB)
 
 run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
@@ -60,7 +62,7 @@ asan-lib: asan-obj/.built
 
 asan-run: asan-obj/.built
 	@for t in $(TESTS); do \
-	  gcc $(CFLAGS) -fsanitize=address $(INC) $$t.c -o $$t-asan \
+	  gcc $(CFLAGS) -fsanitize=address $(INC) $(TESTJXL) $$t.c -o $$t-asan \
 	    asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS) || exit 1; done
 	@for t in $(TESTS); do echo "=== $$t (asan) ==="; \
 	  ASAN_OPTIONS=allocator_may_return_null=1:detect_leaks=1 ./$$t-asan || exit 1; done

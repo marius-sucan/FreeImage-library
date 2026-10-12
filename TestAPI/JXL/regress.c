@@ -5,6 +5,9 @@
 #include <math.h>
 #include "FreeImage.h"
 #include "pattern.h"
+#ifdef JXL_TEST_LIBJXL
+#include <jxl/decode.h>
+#endif
 
 static int g_failures = 0;
 static char g_last[512];
@@ -293,43 +296,117 @@ static void composite(Px *canvas, unsigned cw, unsigned ch, FIBITMAP *frame, uns
     }
 }
 
+#ifdef JXL_TEST_LIBJXL
+/* a file's frames as libjxl stores them; stock libjxl refuses lossy frames that blend in ICC colours */
+typedef struct { int xyb, icc, frames, cropped, blended, kept, timeless; } Layout;
+
+static int layout(const char *path, Layout *l) {
+    FILE *f = fopen(path, "rb");
+    BYTE *data = NULL;
+    long n = 0;
+    int ok = 0;
+    memset(l, 0, sizeof(*l));
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    data = malloc(n > 0 ? (size_t)n : 1);
+    if (data && fread(data, 1, (size_t)n, f) == (size_t)n) {
+        JxlDecoder *dec = JxlDecoderCreate(NULL);
+        JxlDecoderSubscribeEvents(dec, JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING | JXL_DEC_FRAME);
+        JxlDecoderSetCoalescing(dec, JXL_FALSE);
+        JxlDecoderSetInput(dec, data, (size_t)n);
+        JxlDecoderCloseInput(dec);
+        for (;;) {
+            JxlDecoderStatus st = JxlDecoderProcessInput(dec);
+            if (st == JXL_DEC_BASIC_INFO) {
+                JxlBasicInfo info;
+                JxlDecoderGetBasicInfo(dec, &info);
+                l->xyb = !info.uses_original_profile;
+            } else if (st == JXL_DEC_COLOR_ENCODING) {
+                JxlColorEncoding enc;
+                l->icc = JxlDecoderGetColorAsEncodedProfile(dec, JXL_COLOR_PROFILE_TARGET_ORIGINAL, &enc) != JXL_DEC_SUCCESS;
+            } else if (st == JXL_DEC_FRAME) {
+                JxlFrameHeader h;
+                JxlBlendInfo alpha;
+                alpha.blendmode = JXL_BLEND_REPLACE;
+                JxlDecoderGetFrameHeader(dec, &h);
+                JxlDecoderGetExtraChannelBlendInfo(dec, 0, &alpha);
+                l->frames++;
+                l->cropped += h.layer_info.have_crop ? 1 : 0;
+                l->blended += (h.layer_info.blend_info.blendmode != JXL_BLEND_REPLACE || alpha.blendmode != JXL_BLEND_REPLACE) ? 1 : 0;
+                l->kept += h.layer_info.save_as_reference ? 1 : 0;
+                l->timeless += h.duration ? 0 : 1;
+            } else {
+                ok = (st == JXL_DEC_SUCCESS);
+                break;
+            }
+        }
+        JxlDecoderDestroy(dec);
+    }
+    free(data);
+    fclose(f);
+    return ok;
+}
+#endif
+
 static void test_animation(void) {
     static const struct { unsigned w, h; WORD x, y; LONG ms; BYTE disposal, blend; } fr[] = {
         {64, 48, 0, 0, 100, 1, 1}, {30, 20, 5, 6, 80, 2, 0}, {24, 16, 25, 20, 60, 3, 0}, {20, 20, 40, 4, 40, 1, 1},
         {28, 30, 10, 10, 30, 0, 0}, {64, 48, 0, 0, 20, 2, 0}, {16, 12, 50, 40, 10, 1, 0},
     };
     const unsigned n = sizeof(fr) / sizeof(fr[0]), cw = 64, ch = 48;
-    /* ProPhoto stays an ICC profile in libjxl, so the lossy frames blend outside the original colours */
-    static const char *pass[3] = { "lossless", "lossy", "lossy ProPhoto" };
+    /* profiles libjxl keeps for lossy frames: ProPhoto, wider than sRGB, and Instagram's c2, sRGB in all but name */
+    enum { NONE, PROPHOTO, C2 };
+    static const struct { const char *name; int flags; FREE_IMAGE_TYPE type; unsigned bpp; int profile; } pass[] = {
+        {"lossless", JXL_LOSSLESS, FIT_BITMAP, 32, NONE}, {"lossy", 0, FIT_BITMAP, 32, NONE},
+        {"lossy ProPhoto", 0, FIT_BITMAP, 32, PROPHOTO}, {"lossy c2", 0, FIT_BITMAP, 32, C2},
+        {"lossy ProPhoto RGBA16", 0, FIT_RGBA16, 64, PROPHOTO}, {"lossy ProPhoto RGBAF", 0, FIT_RGBAF, 128, PROPHOTO},
+    };
+    const int npass = (int)(sizeof(pass) / sizeof(pass[0]));
     DWORD pro_size;
     const void *pro = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_PROPHOTO_RGB, &pro_size);
+    FIBITMAP *c2 = FreeImage_Load(FIF_JXL, "data/test-jxl.jxl", FIF_LOAD_NOPIXELS);
     FIMULTIBITMAP *m;
     Px *canvas = calloc(cw * ch, sizeof(Px)), *saved = calloc(cw * ch, sizeof(Px));
     unsigned i, x, y;
-    int flags[3] = { JXL_LOSSLESS, 0, 0 }, f;
+    int f;
 
-    for (f = 0; f < 3; f++) {
+    CHECK(c2 && FreeImage_GetICCProfile(c2)->size == 524, "data/test-jxl.jxl: no c2 profile");
+    for (f = 0; f < npass; f++) {
         m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_anim.jxl"), TRUE, FALSE, TRUE, 0);
         for (i = 0; i < n; i++) {
-            FIBITMAP *d = pattern(FIT_BITMAP, 32, fr[i].w, fr[i].h, 60 + (int)i);
+            FIBITMAP *d = pattern(pass[f].type, pass[f].bpp, fr[i].w, fr[i].h, 60 + (int)i);
             set_anim(d, fr[i].x, fr[i].y, fr[i].ms, fr[i].disposal, fr[i].blend, cw, ch, 2);
-            if (f == 2) FreeImage_CreateICCProfile(d, (void *)pro, (long)pro_size);
+            if (pass[f].profile == PROPHOTO) FreeImage_CreateICCProfile(d, (void *)pro, (long)pro_size);
+            if (pass[f].profile == C2 && c2) FreeImage_CreateICCProfile(d, FreeImage_GetICCProfile(c2)->data, FreeImage_GetICCProfile(c2)->size);
             CHECK(FreeImage_AppendPage(m, d), "AppendPage %u", i);
             FreeImage_Unload(d);
         }
-        CHECK(FreeImage_CloseMultiBitmap(m, flags[f]), "CloseMultiBitmap (flags %x): %s", flags[f], g_last);
+        CHECK(FreeImage_CloseMultiBitmap(m, pass[f].flags), "animation %s: CloseMultiBitmap: %s", pass[f].name, g_last);
+#ifdef JXL_TEST_LIBJXL
+        {
+            /* ProPhoto: every frame the whole canvas, replacing, kept for nothing; c2: sRGB, frames still cropped */
+            Layout l;
+            CHECK(layout(tmppath("fi_jxl_anim.jxl"), &l), "animation %s: libjxl cannot read it", pass[f].name);
+            CHECK(!(l.xyb && l.icc && (l.cropped || l.blended || l.kept)), "animation %s: lossy frames blend in ICC colours", pass[f].name);
+            if (pass[f].profile == PROPHOTO)
+                CHECK(l.xyb && l.icc && l.frames == (int)n && !l.timeless, "animation %s: %d frames, %d without a duration, not %u whole frames", pass[f].name, l.frames, l.timeless, n);
+            if (pass[f].profile == C2)
+                CHECK(l.xyb && !l.icc && l.cropped > 0, "animation %s: not sRGB with cropped frames", pass[f].name);
+        }
+#endif
 
         memset(canvas, 0, cw * ch * sizeof(Px));
         m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_anim.jxl"), FALSE, TRUE, TRUE, 0);
         CHECK(m && FreeImage_GetPageCount(m) == (int)n, "animation: %d pages, not %u", m ? FreeImage_GetPageCount(m) : -1, n);
         for (i = 0; m && i < n; i++) {
-            FIBITMAP *frame = pattern(FIT_BITMAP, 32, fr[i].w, fr[i].h, 60 + (int)i);
+            FIBITMAP *frame = pattern(pass[f].type, pass[f].bpp, fr[i].w, fr[i].h, 60 + (int)i);
             FIBITMAP *page = FreeImage_LockPage(m, (int)i);
             double worst = 0, se = 0;
             memcpy(saved, canvas, cw * ch * sizeof(Px));
             composite(canvas, cw, ch, frame, fr[i].x, fr[i].y, fr[i].blend == 0);
-            if (!page) { CHECK(0, "animation %s page %u not locked", pass[f], i); FreeImage_Unload(frame); continue; }
-            CHECK(FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch && FreeImage_GetBPP(page) == 32, "page %u: not the 32-bit canvas", i);
+            if (!page) { CHECK(0, "animation %s page %u not locked", pass[f].name, i); FreeImage_Unload(frame); continue; }
+            CHECK(FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch && FreeImage_GetImageType(page) == pass[f].type && FreeImage_GetBPP(page) == pass[f].bpp,
+                  "animation %s page %u: not the %u-bit canvas", pass[f].name, i, pass[f].bpp);
             for (y = 0; y < ch; y++) for (x = 0; x < cw; x++) {
                 const Px *p = &canvas[y * cw + x];
                 int c;
@@ -342,13 +419,15 @@ static void test_animation(void) {
                     se += e * e;
                 }
             }
-            if (f == 0)
+            if (pass[f].flags == JXL_LOSSLESS)
                 CHECK(worst <= 1.01 / 255, "animation lossless page %u: off by %.4f from GIF/APNG compositing", i, worst);
             else
-                CHECK(sqrt(se / (4.0 * cw * ch)) < 0.02, "animation %s page %u: RMS %.4f from GIF/APNG compositing", pass[f], i, sqrt(se / (4.0 * cw * ch)));
-            if (f == 2)
-                CHECK(FreeImage_GetICCProfile(page)->size == (long)pro_size && !memcmp(FreeImage_GetICCProfile(page)->data, pro, pro_size), "page %u: not the ProPhoto profile", i);
-            if (getenv("JXL_TEST_VERBOSE")) printf("    %s page %u: worst %.4f RMS %.4f\n", pass[f], i, worst, sqrt(se / (4.0 * cw * ch)));
+                CHECK(sqrt(se / (4.0 * cw * ch)) < 0.02, "animation %s page %u: RMS %.4f from GIF/APNG compositing", pass[f].name, i, sqrt(se / (4.0 * cw * ch)));
+            if (pass[f].profile == PROPHOTO)
+                CHECK(FreeImage_GetICCProfile(page)->size == (long)pro_size && !memcmp(FreeImage_GetICCProfile(page)->data, pro, pro_size), "animation %s page %u: not the ProPhoto profile", pass[f].name, i);
+            if (pass[f].profile == C2)
+                CHECK(cicp_is(page, 1, 13) && FreeImage_GetICCProfile(page)->size == 0, "animation %s page %u: not untagged sRGB", pass[f].name, i);
+            if (getenv("JXL_TEST_VERBOSE")) printf("    %s page %u: worst %.4f RMS %.4f\n", pass[f].name, i, worst, sqrt(se / (4.0 * cw * ch)));
             CHECK(anim_tag(page, "FrameTime") == fr[i].ms && anim_tag(page, "Loop") == 2, "page %u: FrameTime %ld Loop %ld", i, anim_tag(page, "FrameTime"), anim_tag(page, "Loop"));
             FreeImage_UnlockPage(m, page, FALSE);
             FreeImage_Unload(frame);
@@ -357,8 +436,41 @@ static void test_animation(void) {
         }
         if (m) FreeImage_CloseMultiBitmap(m, 0);
     }
+    if (c2) FreeImage_Unload(c2);
     free(canvas); free(saved);
     printf("animations: done\n");
+}
+
+/* float frames with FreeImage's linear sRGB profile, which libjxl keeps: written as linear sRGB */
+static void test_animation_float(void) {
+    DWORD size;
+    const void *linear = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_SRGB, &size);
+    FIBITMAP *a = pattern(FIT_RGBAF, 128, 64, 48, 75), *b = pattern(FIT_RGBAF, 128, 32, 24, 76), *page;
+    FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_animf.jxl"), TRUE, FALSE, TRUE, 0);
+    double p = 0;
+    set_anim(a, 0, 0, 50, 1, 0, 64, 48, 0);
+    set_anim(b, 8, 8, 50, 1, 0, 64, 48, 0);
+    FreeImage_CreateICCProfile(a, (void *)linear, (long)size);
+    FreeImage_CreateICCProfile(b, (void *)linear, (long)size);
+    FreeImage_AppendPage(m, a);
+    FreeImage_AppendPage(m, b);
+    CHECK(FreeImage_CloseMultiBitmap(m, 0), "float animation: %s", g_last);
+    m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_animf.jxl"), FALSE, TRUE, TRUE, 0);
+    page = m ? FreeImage_LockPage(m, 0) : NULL;
+    if (page) p = psnr(a, page, 3, 2);
+    CHECK(page && FreeImage_GetImageType(page) == FIT_RGBAF && cicp_is(page, 1, 8) && p > 33, "float animation: page 0 is not linear sRGB within 33 dB (%.1f)", p);
+    if (getenv("JXL_TEST_VERBOSE")) printf("    float animation page 0: PSNR %.1f dB\n", p);
+    if (page) FreeImage_UnlockPage(m, page, FALSE);
+    if (m) FreeImage_CloseMultiBitmap(m, 0);
+#ifdef JXL_TEST_LIBJXL
+    {
+        Layout l;
+        CHECK(layout(tmppath("fi_jxl_animf.jxl"), &l) && l.xyb && !l.icc && l.cropped == 1, "float animation: not linear sRGB with a cropped frame");
+    }
+#endif
+    FreeImage_Unload(a);
+    FreeImage_Unload(b);
+    printf("float animation: done\n");
 }
 
 static void test_pages(void) {
@@ -470,6 +582,7 @@ int main(void) {
     test_colors();
     test_metadata();
     test_animation();
+    test_animation_float();
     test_pages();
     test_refusals();
     test_offset();

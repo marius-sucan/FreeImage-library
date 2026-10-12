@@ -42,6 +42,7 @@
 
 #include "../Metadata/FreeImageTag.h"
 
+#include <jxl/cms.h>
 #include <jxl/decode.h>
 #include <jxl/encode.h>
 #include <jxl/resizable_parallel_runner.h>
@@ -1350,6 +1351,13 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk) {
 //   Writing
 // ==========================================================
 
+// how an animation's frames reach the file; libjxl blends lossy frames only in colours it can name
+typedef enum {
+	JXL_FRAMES_LAYERED = 0,		// each frame blends over the earlier ones in the decoder
+	JXL_FRAMES_SRGB = 1,		// layered, every frame converted to sRGB (linear sRGB for float) first
+	JXL_FRAMES_WHOLE = 2		// the writer composes; each frame is the whole canvas, keeping the ICC profile
+} JXLFrames;
+
 typedef struct tagJXLWriter {
 	JxlEncoder *encoder;
 	JxlEncoderFrameSettings *settings;
@@ -1365,6 +1373,8 @@ typedef struct tagJXLWriter {
 	BOOL animation;
 	std::vector<BYTE> profile;		// the file's ICC profile, every frame's colours
 	BOOL has_profile;
+	JXLFrames frame_mode;
+	std::vector<BYTE> canvas;		// JXL_FRAMES_WHOLE: what the frames drew so far, top-down in the frame layout
 	// a multi-page save: libjxl marks the last frame when it is added, so each page waits for the next
 	int frames;						// frames given to the encoder
 	FIBITMAP *held;					// the newest page; alone it is a still image
@@ -1654,26 +1664,89 @@ AddMetadataBoxes(JXLWriter *writer, FIBITMAP *dib) {
 	return TRUE;
 }
 
+// libjxl's choice for lossy samples: TRUE when it keeps the profile, FALSE when it names the colours instead
+static BOOL
+ProfileStaysICC(const std::vector<BYTE>& icc) {
+	const JxlCmsInterface *cms = JxlGetDefaultCms();
+	JxlColorEncoding enc;
+	JXL_BOOL cmyk = JXL_FALSE;
+	memset(&enc, 0, sizeof(enc));
+	if(!cms || !cms->set_fields_from_icc(cms->set_fields_data, &icc[0], icc.size(), &enc, &cmyk) || cmyk) {
+		return TRUE;
+	}
+	return ((enc.color_space == JXL_COLOR_SPACE_UNKNOWN) || (enc.transfer_function == JXL_TRANSFER_FUNCTION_UNKNOWN)) ? TRUE : FALSE;
+}
+
+// TRUE when every colour of an RGB profile lies within two 8-bit steps of the sRGB gamut
+static BOOL
+ProfileFitsSRGB(const std::vector<BYTE>& icc) {
+	const int N = 17;
+	cmsHPROFILE profile = cmsOpenProfileFromMem(&icc[0], (cmsUInt32Number)icc.size());
+	cmsHPROFILE srgb = cmsCreate_sRGBProfile();
+	cmsHTRANSFORM transform = NULL;
+	if(profile && srgb) {
+		transform = cmsCreateTransform(profile, TYPE_RGB_FLT, srgb, TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOCACHE | cmsFLAGS_BLACKPOINTCOMPENSATION | cmsFLAGS_HIGHRESPRECALC);
+	}
+	if(profile) {
+		cmsCloseProfile(profile);
+	}
+	if(srgb) {
+		cmsCloseProfile(srgb);
+	}
+	if(!transform) {
+		return FALSE;
+	}
+	std::vector<float> in(N * N * N * 3), out(in.size());
+	for(int r = 0, i = 0; r < N; r++) {
+		for(int g = 0; g < N; g++) {
+			for(int b = 0; b < N; b++, i += 3) {
+				in[i] = (float)r / (N - 1);
+				in[i + 1] = (float)g / (N - 1);
+				in[i + 2] = (float)b / (N - 1);
+			}
+		}
+	}
+	cmsDoTransform(transform, &in[0], &out[0], N * N * N);
+	cmsDeleteTransform(transform);
+	const float step = 2.0f / 255;
+	for(size_t i = 0; i < out.size(); i++) {
+		if(!((out[i] >= -step) && (out[i] <= 1 + step))) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 // the colours: the bitmap's ICC profile, else its CICP tag, else sRGB (linear for float)
 static BOOL
-SetColors(JXLWriter *writer, FIBITMAP *dib) {
+SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
 	const BOOL grey = (writer->format.num_channels < 3) ? TRUE : FALSE;
 	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	BOOL to_srgb = FALSE;
 	writer->has_profile = FALSE;
+	writer->frame_mode = JXL_FRAMES_LAYERED;
 	if(icc && icc->data && (icc->size >= 132) && !(icc->flags & FIICC_COLOR_IS_CMYK)) {
 		std::vector<BYTE> bytes((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
 		if(ProfileColorSpace(bytes) == (DWORD)(grey ? FICMS_COLORSPACE_GRAY : FICMS_COLORSPACE_RGB)) {
-			if(JxlEncoderSetICCProfile(writer->encoder, &bytes[0], bytes.size()) == JXL_ENC_SUCCESS) {
-				writer->profile.swap(bytes);
-				writer->has_profile = TRUE;
-				return TRUE;
+			// a profile libjxl keeps: its lossy frames could not blend
+			if(lossy_animation && ProfileStaysICC(bytes)) {
+				to_srgb = ProfileFitsSRGB(bytes);
+				writer->frame_mode = to_srgb ? JXL_FRAMES_SRGB : JXL_FRAMES_WHOLE;
 			}
-			FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile cannot be used; the colors are written as %s", (writer->format.data_type == JXL_TYPE_FLOAT) ? "linear sRGB" : "sRGB");
+			if(!to_srgb) {
+				if(JxlEncoderSetICCProfile(writer->encoder, &bytes[0], bytes.size()) == JXL_ENC_SUCCESS) {
+					writer->profile.swap(bytes);
+					writer->has_profile = TRUE;
+					return TRUE;
+				}
+				writer->frame_mode = JXL_FRAMES_LAYERED;
+				FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile cannot be used; the colors are written as %s", (writer->format.data_type == JXL_TYPE_FLOAT) ? "linear sRGB" : "sRGB");
+			}
 		}
 	}
 	JxlColorEncoding enc;
 	BYTE cicp[4];
-	if(!(GetCICPMetadata(dib, cicp) && CICPToEncoding(cicp, grey, &enc))) {
+	if(to_srgb || !(GetCICPMetadata(dib, cicp) && CICPToEncoding(cicp, grey, &enc))) {
 		if(writer->format.data_type == JXL_TYPE_FLOAT) {
 			JxlColorEncodingSetToLinearSRGB(&enc, grey ? JXL_TRUE : JXL_FALSE);
 		} else {
@@ -1746,7 +1819,7 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 			return FALSE;
 		}
 	}
-	if(!SetColors(writer, dib)) {
+	if(!SetColors(writer, dib, (animation && !lossless) ? TRUE : FALSE)) {
 		ReportEncoderError(writer->encoder, "Cannot encode the colors");
 		return FALSE;
 	}
@@ -1772,6 +1845,102 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 	return TRUE;
 }
 
+template <class T> static inline T
+CanvasSample(float v, float one) {
+	return (T)((v <= 0) ? 0 : (v >= one) ? one : v + 0.5f);
+}
+
+template <> inline float
+CanvasSample<float>(float v, float) {
+	return v;
+}
+
+// straight alpha, as GIF and APNG compose: the frame over the canvas, or in its place
+template <class T> static void
+DrawFrame(BYTE *canvas_bits, uint32_t canvas_width, const BYTE *frame_bits, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, BOOL over, float one) {
+	for(uint32_t y = 0; y < height; y++) {
+		T *dst = (T*)canvas_bits + ((size_t)(y0 + y) * canvas_width + x0) * 4;
+		const T *src = (const T*)frame_bits + (size_t)y * width * 4;
+		if(!over) {
+			memcpy(dst, src, (size_t)width * 4 * sizeof(T));
+			continue;
+		}
+		for(uint32_t x = 0; x < width; x++, src += 4, dst += 4) {
+			const float sa = (float)src[3] / one;
+			if(!(sa > 0)) {
+				continue;
+			}
+			if(sa >= 1) {
+				dst[0] = src[0];
+				dst[1] = src[1];
+				dst[2] = src[2];
+				dst[3] = src[3];
+				continue;
+			}
+			const float da = ((float)dst[3] <= 0) ? 0 : ((float)dst[3] >= one) ? 1 : (float)dst[3] / one;
+			const float behind = da * (1 - sa);
+			const float a = sa + behind;
+			for(int c = 0; c < 3; c++) {
+				dst[c] = CanvasSample<T>(((float)src[c] * sa + (float)dst[c] * behind) / a, one);
+			}
+			dst[3] = CanvasSample<T>(a * one, one);
+		}
+	}
+}
+
+// a frame drawn on the writer's canvas, written as the whole canvas: nothing is left for a decoder to blend
+static void
+AddWholeFrame(JXLWriter *writer, FIBITMAP *frame, uint32_t x0, uint32_t y0, uint32_t width, uint32_t height, BOOL empty, LONG disposal, LONG blend, LONG frametime) {
+	const size_t pixel = (size_t)writer->format.num_channels * SampleBytes(writer->format.data_type);
+	if(writer->canvas.empty()) {
+		writer->canvas.assign((size_t)writer->canvas_width * writer->canvas_height * pixel, 0);
+	}
+	std::vector<BYTE> before;
+	if(disposal == 3) {
+		before = writer->canvas;
+	}
+	BOOL clamped = FALSE;
+	if(!empty) {
+		std::vector<BYTE> samples;
+		FrameSamples(frame, writer, width, height, samples, &clamped);
+		const BOOL over = (blend == 0) ? TRUE : FALSE;
+		switch(writer->format.data_type) {
+			case JXL_TYPE_UINT8:
+				DrawFrame<BYTE>(&writer->canvas[0], writer->canvas_width, &samples[0], x0, y0, width, height, over, 255.0f);
+				break;
+			case JXL_TYPE_UINT16:
+				DrawFrame<WORD>(&writer->canvas[0], writer->canvas_width, &samples[0], x0, y0, width, height, over, 65535.0f);
+				break;
+			default:
+				DrawFrame<float>(&writer->canvas[0], writer->canvas_width, &samples[0], x0, y0, width, height, over, 1.0f);
+				break;
+		}
+	}
+
+	JxlFrameHeader header;
+	JxlEncoderInitFrameHeader(&header);
+	header.duration = (frametime > 0) ? (uint32_t)frametime : 1;
+	if((JxlEncoderSetFrameHeader(writer->settings, &header) != JXL_ENC_SUCCESS) ||
+		(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &header.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
+		(JxlEncoderAddImageFrame(writer->settings, &writer->format, &writer->canvas[0], writer->canvas.size()) != JXL_ENC_SUCCESS)) {
+		ReportEncoderError(writer->encoder, "Cannot encode a frame");
+		throw (int)0;
+	}
+	if(clamped) {
+		FreeImage_OutputMessageProc(s_format_id, "Warning: NaN and infinite samples are written as 0 and the largest float");
+	}
+
+	// what the next frame is drawn on
+	if(disposal == 3) {
+		writer->canvas.swap(before);
+	} else if((disposal == 2) && !empty) {
+		const size_t row = (size_t)writer->canvas_width * pixel;
+		for(uint32_t y = 0; y < height; y++) {
+			memset(&writer->canvas[(size_t)(y0 + y) * row + (size_t)x0 * pixel], 0, (size_t)width * pixel);
+		}
+	}
+}
+
 // a frame placed on the canvas; for a still image the whole canvas
 static BOOL
 AddFrame(JXLWriter *writer, FIBITMAP *dib) {
@@ -1782,9 +1951,9 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 	}
 	FIBITMAP *frame = converted ? converted : dib;
 
-	// later frames are converted to the first frame's profile
+	// later frames are converted to the first frame's profile; to sRGB, every frame
 	FIBITMAP *recolored = NULL;
-	if(writer->animation && (writer->frames > 0)) {
+	if(writer->animation && ((writer->frames > 0) || (writer->frame_mode == JXL_FRAMES_SRGB))) {
 		if(!ConvertToFileProfile(frame, writer->has_profile ? &writer->profile[0] : NULL, writer->has_profile ? (DWORD)writer->profile.size() : 0, &recolored)) {
 			FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
 		}
@@ -1831,71 +2000,75 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 				height = writer->canvas_height - y0;
 			}
 
-			const BOOL leave = ((disposal != 2) && (disposal != 3)) ? TRUE : FALSE;
-			if(leave) {
-				writer->nontrivial = TRUE;
-			}
-			const BOOL for_next = (writer->nontrivial && (disposal != 3)) ? TRUE : FALSE;
+			if(writer->frame_mode == JXL_FRAMES_WHOLE) {
+				AddWholeFrame(writer, frame, x0, y0, width, height, empty, disposal, blend, frametime);
+			} else {
+				const BOOL leave = ((disposal != 2) && (disposal != 3)) ? TRUE : FALSE;
+				if(leave) {
+					writer->nontrivial = TRUE;
+				}
+				const BOOL for_next = (writer->nontrivial && (disposal != 3)) ? TRUE : FALSE;
 
-			// the previous frame's rectangle back to transparent, as libjxl's APNG reader does
-			if(writer->clear_previous) {
-				JxlFrameHeader clear;
-				JxlEncoderInitFrameHeader(&clear);
-				clear.duration = 0;
-				clear.layer_info.have_crop = JXL_TRUE;
-				clear.layer_info.crop_x0 = (int32_t)writer->prev_x;
-				clear.layer_info.crop_y0 = (int32_t)writer->prev_y;
-				clear.layer_info.xsize = writer->prev_width;
-				clear.layer_info.ysize = writer->prev_height;
-				clear.layer_info.blend_info.blendmode = JXL_BLEND_REPLACE;
-				clear.layer_info.blend_info.source = 1;
-				clear.layer_info.save_as_reference = 1;
-				std::vector<BYTE> blank((size_t)writer->prev_width * writer->prev_height * writer->format.num_channels * SampleBytes(writer->format.data_type), 0);
-				if((JxlEncoderSetFrameHeader(writer->settings, &clear) != JXL_ENC_SUCCESS) ||
-					(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &clear.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
-					(JxlEncoderAddImageFrame(writer->settings, &writer->format, &blank[0], blank.size()) != JXL_ENC_SUCCESS)) {
+				// the previous frame's rectangle back to transparent, as libjxl's APNG reader does
+				if(writer->clear_previous) {
+					JxlFrameHeader clear;
+					JxlEncoderInitFrameHeader(&clear);
+					clear.duration = 0;
+					clear.layer_info.have_crop = JXL_TRUE;
+					clear.layer_info.crop_x0 = (int32_t)writer->prev_x;
+					clear.layer_info.crop_y0 = (int32_t)writer->prev_y;
+					clear.layer_info.xsize = writer->prev_width;
+					clear.layer_info.ysize = writer->prev_height;
+					clear.layer_info.blend_info.blendmode = JXL_BLEND_REPLACE;
+					clear.layer_info.blend_info.source = 1;
+					clear.layer_info.save_as_reference = 1;
+					std::vector<BYTE> blank((size_t)writer->prev_width * writer->prev_height * writer->format.num_channels * SampleBytes(writer->format.data_type), 0);
+					if((JxlEncoderSetFrameHeader(writer->settings, &clear) != JXL_ENC_SUCCESS) ||
+						(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &clear.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
+						(JxlEncoderAddImageFrame(writer->settings, &writer->format, &blank[0], blank.size()) != JXL_ENC_SUCCESS)) {
+						ReportEncoderError(writer->encoder, "Cannot encode a frame");
+						throw (int)0;
+					}
+				}
+
+				header.duration = (frametime > 0) ? (uint32_t)frametime : 1;
+				header.layer_info.have_crop = ((x0 != 0) || (y0 != 0) || (width != writer->canvas_width) || (height != writer->canvas_height)) ? JXL_TRUE : JXL_FALSE;
+				header.layer_info.crop_x0 = (int32_t)x0;
+				header.layer_info.crop_y0 = (int32_t)y0;
+				header.layer_info.xsize = width;
+				header.layer_info.ysize = height;
+				header.layer_info.blend_info.blendmode = ((blend == 0) || empty) ? JXL_BLEND_BLEND : JXL_BLEND_REPLACE;
+				header.layer_info.blend_info.source = 1;
+				header.layer_info.blend_info.alpha = 0;
+				header.layer_info.blend_info.clamp = JXL_FALSE;
+				header.layer_info.save_as_reference = for_next ? 1 : 0;
+
+				writer->clear_previous = (writer->nontrivial && (disposal == 2) && !empty) ? TRUE : FALSE;
+				writer->prev_x = x0;
+				writer->prev_y = y0;
+				writer->prev_width = width;
+				writer->prev_height = height;
+
+				if((JxlEncoderSetFrameHeader(writer->settings, &header) != JXL_ENC_SUCCESS) ||
+					(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &header.layer_info.blend_info) != JXL_ENC_SUCCESS)) {
 					ReportEncoderError(writer->encoder, "Cannot encode a frame");
 					throw (int)0;
 				}
-			}
 
-			header.duration = (frametime > 0) ? (uint32_t)frametime : 1;
-			header.layer_info.have_crop = ((x0 != 0) || (y0 != 0) || (width != writer->canvas_width) || (height != writer->canvas_height)) ? JXL_TRUE : JXL_FALSE;
-			header.layer_info.crop_x0 = (int32_t)x0;
-			header.layer_info.crop_y0 = (int32_t)y0;
-			header.layer_info.xsize = width;
-			header.layer_info.ysize = height;
-			header.layer_info.blend_info.blendmode = ((blend == 0) || empty) ? JXL_BLEND_BLEND : JXL_BLEND_REPLACE;
-			header.layer_info.blend_info.source = 1;
-			header.layer_info.blend_info.alpha = 0;
-			header.layer_info.blend_info.clamp = JXL_FALSE;
-			header.layer_info.save_as_reference = for_next ? 1 : 0;
-
-			writer->clear_previous = (writer->nontrivial && (disposal == 2) && !empty) ? TRUE : FALSE;
-			writer->prev_x = x0;
-			writer->prev_y = y0;
-			writer->prev_width = width;
-			writer->prev_height = height;
-
-			if((JxlEncoderSetFrameHeader(writer->settings, &header) != JXL_ENC_SUCCESS) ||
-				(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &header.layer_info.blend_info) != JXL_ENC_SUCCESS)) {
-				ReportEncoderError(writer->encoder, "Cannot encode a frame");
-				throw (int)0;
-			}
-
-			std::vector<BYTE> samples;
-			BOOL clamped = FALSE;
-			if(empty) {
-				samples.assign(writer->format.num_channels * SampleBytes(writer->format.data_type), 0);
-			} else {
-				FrameSamples(frame, writer, width, height, samples, &clamped);
-			}
-			if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
-				ReportEncoderError(writer->encoder, "Cannot encode a frame");
-				throw (int)0;
-			}
-			if(clamped) {
-				FreeImage_OutputMessageProc(s_format_id, "Warning: NaN and infinite samples are written as 0 and the largest float");
+				std::vector<BYTE> samples;
+				BOOL clamped = FALSE;
+				if(empty) {
+					samples.assign(writer->format.num_channels * SampleBytes(writer->format.data_type), 0);
+				} else {
+					FrameSamples(frame, writer, width, height, samples, &clamped);
+				}
+				if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
+					ReportEncoderError(writer->encoder, "Cannot encode a frame");
+					throw (int)0;
+				}
+				if(clamped) {
+					FreeImage_OutputMessageProc(s_format_id, "Warning: NaN and infinite samples are written as 0 and the largest float");
+				}
 			}
 		} else {
 			std::vector<BYTE> samples;
