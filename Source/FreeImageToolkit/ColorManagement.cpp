@@ -2344,7 +2344,7 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 // ==========================================================
 
 BOOL
-ConvertToFileProfile(FIBITMAP *dib, const void *profile, DWORD size, FIBITMAP **converted) {
+ConvertToFileProfile(FIBITMAP *dib, const void *profile, unsigned size, FIBITMAP **converted) {
 	*converted = NULL;
 	if (!FreeImage_HasPixels(dib)) {
 		return TRUE;

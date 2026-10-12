@@ -476,10 +476,11 @@ FIBITMAP* ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib);
 
 /**
 A frame of a file with one ICC profile for every frame, in that profile's colors (NULL: sRGB) as *converted;
-*converted is NULL when the frame already has them, and FALSE is returned when they cannot be converted
+*converted is NULL when the frame already has them, and FALSE is returned when they cannot be converted.
+size is unsigned, not DWORD: MinGW's DWORD depends on whether windows.h came first
 @see See definition in ColorManagement.cpp
 */
-BOOL ConvertToFileProfile(FIBITMAP *dib, const void *profile, DWORD size, FIBITMAP **converted);
+BOOL ConvertToFileProfile(FIBITMAP *dib, const void *profile, unsigned size, FIBITMAP **converted);
 
 /**
 Attach the color description of a file, its ITU-T H.273 code points, as the FIMD_CUSTOM tag "CICP":
