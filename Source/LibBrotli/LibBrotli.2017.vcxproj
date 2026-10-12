@@ -1,0 +1,310 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectName>LibBrotli</ProjectName>
+    <ProjectGuid>{1E9A6343-F64C-5FF0-9E76-21D734344CDC}</ProjectGuid>
+    <RootNamespace>LibBrotli</RootNamespace>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v142</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>12.0.21005.1</_ProjectFileVersion>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <OutDir>.\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>.\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>./c/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>./c/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+    </ClCompile>
+    <ProjectReference>
+      <LinkLibraryDependencies>true</LinkLibraryDependencies>
+    </ProjectReference>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>./c/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Midl>
+      <TargetEnvironment>X64</TargetEnvironment>
+    </Midl>
+    <ClCompile>
+      <Optimization>Full</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <StringPooling>false</StringPooling>
+      <MinimalRebuild>false</MinimalRebuild>
+      <ExceptionHandling />
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
+      <BufferSecurityCheck>true</BufferSecurityCheck>
+      <FunctionLevelLinking>false</FunctionLevelLinking>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <DebugInformationFormat>None</DebugInformationFormat>
+      <CompileAs>CompileAsC</CompileAs>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <UseUnicodeForAssemblerListing>false</UseUnicodeForAssemblerListing>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <AdditionalIncludeDirectories>./c/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <OmitFramePointers>true</OmitFramePointers>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+    </ClCompile>
+    <Lib />
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="c\common\constants.h" />
+    <ClInclude Include="c\common\context.h" />
+    <ClInclude Include="c\common\dictionary.h" />
+    <ClInclude Include="c\common\dictionary_inc.h" />
+    <ClInclude Include="c\common\platform.h" />
+    <ClInclude Include="c\common\shared_dictionary_internal.h" />
+    <ClInclude Include="c\common\static_init.h" />
+    <ClInclude Include="c\common\transform.h" />
+    <ClInclude Include="c\common\version.h" />
+    <ClInclude Include="c\dec\bit_reader.h" />
+    <ClInclude Include="c\dec\huffman.h" />
+    <ClInclude Include="c\dec\prefix.h" />
+    <ClInclude Include="c\dec\prefix_inc.h" />
+    <ClInclude Include="c\dec\state.h" />
+    <ClInclude Include="c\dec\static_init.h" />
+    <ClInclude Include="c\enc\backward_references.h" />
+    <ClInclude Include="c\enc\backward_references_hq.h" />
+    <ClInclude Include="c\enc\backward_references_inc.h" />
+    <ClInclude Include="c\enc\bit_cost.h" />
+    <ClInclude Include="c\enc\bit_cost_inc.h" />
+    <ClInclude Include="c\enc\block_encoder_inc.h" />
+    <ClInclude Include="c\enc\block_splitter.h" />
+    <ClInclude Include="c\enc\block_splitter_inc.h" />
+    <ClInclude Include="c\enc\brotli_bit_stream.h" />
+    <ClInclude Include="c\enc\cluster.h" />
+    <ClInclude Include="c\enc\cluster_inc.h" />
+    <ClInclude Include="c\enc\command.h" />
+    <ClInclude Include="c\enc\compound_dictionary.h" />
+    <ClInclude Include="c\enc\compress_fragment.h" />
+    <ClInclude Include="c\enc\compress_fragment_two_pass.h" />
+    <ClInclude Include="c\enc\dictionary_hash.h" />
+    <ClInclude Include="c\enc\dictionary_hash_inc.h" />
+    <ClInclude Include="c\enc\encoder_dict.h" />
+    <ClInclude Include="c\enc\entropy_encode.h" />
+    <ClInclude Include="c\enc\entropy_encode_static.h" />
+    <ClInclude Include="c\enc\fast_log.h" />
+    <ClInclude Include="c\enc\find_match_length.h" />
+    <ClInclude Include="c\enc\hash.h" />
+    <ClInclude Include="c\enc\hash_base.h" />
+    <ClInclude Include="c\enc\hash_composite_inc.h" />
+    <ClInclude Include="c\enc\hash_forgetful_chain_inc.h" />
+    <ClInclude Include="c\enc\hash_longest_match64_inc.h" />
+    <ClInclude Include="c\enc\hash_longest_match64_simd_inc.h" />
+    <ClInclude Include="c\enc\hash_longest_match_inc.h" />
+    <ClInclude Include="c\enc\hash_longest_match_quickly_inc.h" />
+    <ClInclude Include="c\enc\hash_longest_match_simd_inc.h" />
+    <ClInclude Include="c\enc\hash_rolling_inc.h" />
+    <ClInclude Include="c\enc\hash_to_binary_tree_inc.h" />
+    <ClInclude Include="c\enc\histogram.h" />
+    <ClInclude Include="c\enc\histogram_inc.h" />
+    <ClInclude Include="c\enc\literal_cost.h" />
+    <ClInclude Include="c\enc\matching_tag_mask.h" />
+    <ClInclude Include="c\enc\memory.h" />
+    <ClInclude Include="c\enc\metablock.h" />
+    <ClInclude Include="c\enc\metablock_inc.h" />
+    <ClInclude Include="c\enc\params.h" />
+    <ClInclude Include="c\enc\prefix.h" />
+    <ClInclude Include="c\enc\quality.h" />
+    <ClInclude Include="c\enc\ringbuffer.h" />
+    <ClInclude Include="c\enc\state.h" />
+    <ClInclude Include="c\enc\static_dict.h" />
+    <ClInclude Include="c\enc\static_dict_lut.h" />
+    <ClInclude Include="c\enc\static_dict_lut_inc.h" />
+    <ClInclude Include="c\enc\static_init.h" />
+    <ClInclude Include="c\enc\utf8_util.h" />
+    <ClInclude Include="c\enc\write_bits.h" />
+    <ClInclude Include="c\include\brotli\decode.h" />
+    <ClInclude Include="c\include\brotli\encode.h" />
+    <ClInclude Include="c\include\brotli\port.h" />
+    <ClInclude Include="c\include\brotli\shared_dictionary.h" />
+    <ClInclude Include="c\include\brotli\types.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="c\common\constants.c" />
+    <ClCompile Include="c\common\context.c" />
+    <ClCompile Include="c\common\dictionary.c" />
+    <ClCompile Include="c\common\platform.c" />
+    <ClCompile Include="c\common\shared_dictionary.c" />
+    <ClCompile Include="c\common\transform.c" />
+    <ClCompile Include="c\dec\bit_reader.c" />
+    <ClCompile Include="c\dec\decode.c" />
+    <ClCompile Include="c\dec\huffman.c" />
+    <ClCompile Include="c\dec\prefix.c" />
+    <ClCompile Include="c\dec\state.c" />
+    <!-- FreeImage: two static_init.c files, so distinct object names -->
+    <ClCompile Include="c\dec\static_init.c">
+      <ObjectFileName>$(IntDir)dec_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="c\enc\backward_references.c" />
+    <ClCompile Include="c\enc\backward_references_hq.c" />
+    <ClCompile Include="c\enc\bit_cost.c" />
+    <ClCompile Include="c\enc\block_splitter.c" />
+    <ClCompile Include="c\enc\brotli_bit_stream.c" />
+    <ClCompile Include="c\enc\cluster.c" />
+    <ClCompile Include="c\enc\command.c" />
+    <ClCompile Include="c\enc\compound_dictionary.c" />
+    <ClCompile Include="c\enc\compress_fragment.c" />
+    <ClCompile Include="c\enc\compress_fragment_two_pass.c" />
+    <ClCompile Include="c\enc\dictionary_hash.c" />
+    <ClCompile Include="c\enc\encode.c" />
+    <ClCompile Include="c\enc\encoder_dict.c" />
+    <ClCompile Include="c\enc\entropy_encode.c" />
+    <ClCompile Include="c\enc\fast_log.c" />
+    <ClCompile Include="c\enc\histogram.c" />
+    <ClCompile Include="c\enc\literal_cost.c" />
+    <ClCompile Include="c\enc\memory.c" />
+    <ClCompile Include="c\enc\metablock.c" />
+    <ClCompile Include="c\enc\static_dict.c" />
+    <ClCompile Include="c\enc\static_dict_lut.c" />
+    <ClCompile Include="c\enc\static_init.c">
+      <ObjectFileName>$(IntDir)enc_%(Filename).obj</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="c\enc\utf8_util.c" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>
