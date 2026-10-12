@@ -1,0 +1,11 @@
+decode
+regress
+robust
+mkdata
+decode-asan
+regress-asan
+robust-asan
+asan-obj/
+fi_jxl_*
+# fetched by fetch_conformance.py, not redistributed
+conformance/
