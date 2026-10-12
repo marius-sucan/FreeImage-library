@@ -8,7 +8,7 @@ non-zero on failure.
 |---|---|
 | `decode` | The files of `data/`: geometry, pixel type, ICC profile, CICP tag, Exif, XMP and animation tags of every page, against a recorded table; lossless files by checksum, lossy ones by PSNR against the patterns they were made from (`pattern.h`); header-only loads against full ones; pages locked out of order; `JXL_PLAYBACK`; every page of `test-jxl.jxl` against the page before it. |
 | `regress` | Round trips of all nine exportable types at three sizes, lossless (bit exact, at several efforts) and lossy (PSNR, quality ordering); palettes; ICC profiles, the CICP tag, Exif and XMP; a 7-frame animation with offsets, all three disposals and both blends, checked against a GIF/APNG compositor, also lossy in ProPhoto (an ICC profile to libjxl); a single page; the page cache; refused types; NaN and infinity; a file 777 bytes into a stream and a handle without `SEEK_END`. |
-| `robust` | Truncations, single-byte corruptions, wiped regions, appended junk and nonsense box sizes of `data/` files and of a lossy ProPhoto animation it writes - about 13000 damaged inputs, each loaded plainly, header-only and page by page. They may load or be refused; they may not crash. |
+| `robust` | Truncations, single-byte corruptions, wiped regions, appended junk and nonsense box sizes - about 13000 damaged inputs, each loaded plainly, header-only and page by page. They may load or be refused; they may not crash. |
 | `conformance.py` | The JPEG XL conformance suite (`fetch_conformance.py`, not kept here), every frame against its reference within the test's tolerances. |
 
 ## Running
@@ -25,8 +25,9 @@ Scratch files go to `$JXL_TEST_TMP`, or the current directory; `make clean` remo
 
 `data/` was written by `mkdata.c` with libjxl 0.12.0, partly through FreeImage's writer and partly
 through libjxl directly (orientation, layers, premultiplied alpha, a Brotli-compressed Exif box,
-a bare codestream), except `test-jxl.jxl`: 22 lossy frames whose colours are an ICC profile, blended
-over each other. It is kept, not regenerated: it is what the next libjxl must still decode.
+a bare codestream, lossy frames blended in ICC colours), except `test-jxl.jxl`: 22 lossy frames whose
+colours are an ICC profile, blended over each other. It is kept, not regenerated: it is what the next
+libjxl must still decode; `./mkdata name...` writes only the files named.
 Lossy decodes are compared by PSNR, not checksums, because libjxl's SIMD targets may round
 differently.
 

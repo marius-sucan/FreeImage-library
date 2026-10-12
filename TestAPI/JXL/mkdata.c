@@ -1,4 +1,4 @@
-/* Writes data/: small JPEG XL files, each for one reader path.
+/* Writes data/: small JPEG XL files, each for one reader path; "./mkdata name..." writes only those.
    Most go through FreeImage's writer; the rest through libjxl, which libfreeimage.a holds.
    Kept as documentation: decode.c pins what this libjxl decodes them to, so do not regenerate. */
 #include <stdio.h>
@@ -14,8 +14,18 @@ static void message(FREE_IMAGE_FORMAT fif, const char *msg) {
     printf("    [%s] %s\n", fif == FIF_UNKNOWN ? "?" : FreeImage_GetFormatFromFIF(fif), msg);
 }
 
+static int g_argc;
+static char **g_argv;
+
+static int wanted(const char *name) {
+    int i;
+    for (i = 1; i < g_argc; i++) if (!strcmp(g_argv[i], name)) return 1;
+    return g_argc < 2;
+}
+
 static void save(FIBITMAP *d, const char *name, int flags) {
     char path[256];
+    if (!wanted(name)) return;
     snprintf(path, sizeof(path), "data/%s", name);
     printf("%-24s %s\n", name, FreeImage_Save(FIF_JXL, d, path, flags) ? "ok" : "FAILED");
 }
@@ -48,7 +58,10 @@ static void set_anim(FIBITMAP *d, WORD left, WORD top, LONG ms, BYTE disposal, B
 
 typedef struct { uint32_t w, h, channels, bits; int orientation, premul, frames, layered, container, brob_exif; } Raw;
 
+static void finish(JxlEncoder *enc, const char *name);
+
 static void raw(const char *name, Raw r) {
+    if (!wanted(name)) return;
     JxlEncoder *enc = JxlEncoderCreate(NULL);
     JxlBasicInfo bi; JxlEncoderInitBasicInfo(&bi);
     bi.xsize = r.w; bi.ysize = r.h; bi.bits_per_sample = r.bits;
@@ -104,6 +117,12 @@ static void raw(const char *name, Raw r) {
         }
         JxlEncoderAddImageFrame(fs, &pf, px, n * sample);
     }
+    free(px);
+    finish(enc, name);
+}
+
+/* the encoder's output into data/ */
+static void finish(JxlEncoder *enc, const char *name) {
     JxlEncoderCloseInput(enc);
     size_t cap = 1 << 16, pos = 0; unsigned char *out = malloc(cap);
     for (;;) {
@@ -119,7 +138,7 @@ static void raw(const char *name, Raw r) {
         FILE *f = fopen(path, "wb"); fwrite(out, 1, pos, f); fclose(f);
         printf("%-24s ok\n", name);
     }
-    free(out); free(px); JxlEncoderDestroy(enc);
+    free(out); JxlEncoderDestroy(enc);
 }
 
 /* an RGB profile with a sampled tone curve: no JPEG XL enum describes it */
@@ -138,7 +157,51 @@ static void sampled_profile(BYTE **data, DWORD *size) {
     cmsCloseProfile(p); cmsFreeToneCurve(curve);
 }
 
-int main(void) {
+/* lossy frames whose colours are an ICC profile, cropped and blended over the frame before */
+static void icc_blended(const char *name) {
+    static const struct { uint32_t w, h; int32_t x, y; } fr[] = { {48, 40, 0, 0}, {20, 16, 5, 6}, {24, 12, 20, 20} };
+    BYTE *icc; DWORD size;
+    uint32_t x, y;
+    int i;
+    if (!wanted(name)) return;
+    sampled_profile(&icc, &size);
+    JxlEncoder *enc = JxlEncoderCreate(NULL);
+    JxlBasicInfo bi; JxlEncoderInitBasicInfo(&bi);
+    bi.xsize = 48; bi.ysize = 40; bi.alpha_bits = 8; bi.num_extra_channels = 1;
+    bi.have_animation = JXL_TRUE; bi.animation.tps_numerator = 1000; bi.animation.tps_denominator = 1;
+    JxlEncoderSetBasicInfo(enc, &bi);
+    JxlExtraChannelInfo ec; JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &ec); ec.bits_per_sample = 8;
+    JxlEncoderSetExtraChannelInfo(enc, 0, &ec);
+    JxlEncoderSetICCProfile(enc, icc, size);
+    JxlEncoderFrameSettings *fs = JxlEncoderFrameSettingsCreate(enc, NULL);
+    JxlEncoderSetFrameDistance(fs, 1.0f);
+    JxlPixelFormat pf = { 4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 };
+    for (i = 0; i < 3; i++) {
+        FIBITMAP *d = pattern(FIT_BITMAP, 32, fr[i].w, fr[i].h, 30 + i);
+        unsigned char *px = malloc((size_t)fr[i].w * fr[i].h * 4), *o = px;
+        for (y = 0; y < fr[i].h; y++) {
+            const BYTE *p = FreeImage_GetScanLine(d, fr[i].h - 1 - y);
+            for (x = 0; x < fr[i].w; x++, p += 4, o += 4) { o[0] = p[FI_RGBA_RED]; o[1] = p[FI_RGBA_GREEN]; o[2] = p[FI_RGBA_BLUE]; o[3] = p[FI_RGBA_ALPHA]; }
+        }
+        JxlFrameHeader fh; JxlEncoderInitFrameHeader(&fh);
+        fh.duration = 100;
+        fh.layer_info.have_crop = (i > 0) ? JXL_TRUE : JXL_FALSE;
+        fh.layer_info.crop_x0 = fr[i].x; fh.layer_info.crop_y0 = fr[i].y;
+        fh.layer_info.xsize = fr[i].w; fh.layer_info.ysize = fr[i].h;
+        fh.layer_info.blend_info.blendmode = JXL_BLEND_BLEND;
+        fh.layer_info.blend_info.source = 1;
+        fh.layer_info.save_as_reference = 1;
+        JxlEncoderSetFrameHeader(fs, &fh);
+        JxlEncoderSetExtraChannelBlendInfo(fs, 0, &fh.layer_info.blend_info);
+        JxlEncoderAddImageFrame(fs, &pf, px, (size_t)fr[i].w * fr[i].h * 4);
+        free(px); FreeImage_Unload(d);
+    }
+    free(icc);
+    finish(enc, name);
+}
+
+int main(int argc, char **argv) {
+    g_argc = argc; g_argv = argv;
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(message);
     FIBITMAP *d;
@@ -150,7 +213,7 @@ int main(void) {
     d = pattern(FIT_RGB16, 48, 40, 30, 5); set_cicp(d, 9, 16); save(d, "rgb16_pq_lossless.jxl", JXL_LOSSLESS); FreeImage_Unload(d);
     d = pattern(FIT_RGBAF, 128, 32, 24, 6); save(d, "rgbaf_lossless.jxl", JXL_LOSSLESS); FreeImage_Unload(d);
     d = pattern(FIT_RGBF, 96, 32, 24, 7); save(d, "rgbf_lossy.jxl", 0); FreeImage_Unload(d);
-    {
+    if (wanted("meta_lossy.jxl") || wanted("meta_lossless.jxl")) {
         /* an image with Exif, XMP and an sRGB profile, made smaller */
         FIBITMAP *src = FreeImage_Load(FIF_JPEG, "../exif.jpg", 0);
         d = FreeImage_Rescale(src, 75, 50, FILTER_BILINEAR);
@@ -169,7 +232,7 @@ int main(void) {
         save(d, "icc_sampled_lossy.jxl", 0);
         FreeImage_Unload(d); free(icc);
     }
-    {
+    if (wanted("anim_lossless.jxl")) {
         /* frames at offsets, every disposal, both blends */
         FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, "data/anim_lossless.jxl", TRUE, FALSE, TRUE, 0);
         struct { unsigned w, h; WORD x, y; LONG ms; BYTE disposal, blend; } fr[] = {
@@ -183,7 +246,7 @@ int main(void) {
         }
         printf("%-24s %s\n", "anim_lossless.jxl", FreeImage_CloseMultiBitmap(m, JXL_LOSSLESS) ? "ok" : "FAILED");
     }
-    {
+    if (wanted("anim16_lossy.jxl")) {
         FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, "data/anim16_lossy.jxl", TRUE, FALSE, TRUE, 0);
         for (int i = 0; i < 3; i++) {
             d = pattern(FIT_RGB16, 48, 36, 28, 20 + i);
@@ -202,5 +265,6 @@ int main(void) {
     raw("layers_still.jxl", (Raw){ 40, 32, 4, 8, 0, 0, 2, 1, 1, 0 });
     raw("anim_ticks.jxl", (Raw){ 24, 16, 3, 8, 0, 0, 4, 0, 1, 0 });
     raw("brob_exif.jxl", (Raw){ 20, 10, 3, 8, 0, 0, 1, 0, 1, 1 });
+    icc_blended("anim_icc_lossy.jxl");
     return 0;
 }

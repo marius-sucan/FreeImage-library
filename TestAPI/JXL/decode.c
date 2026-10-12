@@ -43,6 +43,7 @@ static const Expected EXPECTED[] = {
     {"layers_still.jxl",        1, 40, 32, FIT_BITMAP,  32,    0, "1 13",  0, 0,  -1, -1, 0x46784bc773b3376cULL},
     {"brob_exif.jxl",           1, 20, 10, FIT_BITMAP,  24,    0, "1 13",  1, 0,  -1, -1, 0x0947e8c58d733f0cULL},
     {"test-jxl.jxl",           22, 1170, 1455, FIT_BITMAP, 32, 524, NULL, 0, 0, 400,  0, 0},
+    {"anim_icc_lossy.jxl",      3, 48, 40, FIT_BITMAP,  32, 1076, NULL,    0, 0, 100,  0, 0},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
 
@@ -67,6 +68,7 @@ static const struct { const char *file; int page; FREE_IMAGE_TYPE type; unsigned
     {"anim16_lossy.jxl",      0, FIT_RGB16,  48, 36, 28, 20, NULL, 34},
     {"anim16_lossy.jxl",      2, FIT_RGB16,  48, 36, 28, 22, NULL, 34},
     {"meta_lossy.jxl",        0, FIT_BITMAP, 24, 0, 0, 0, "meta_lossless.jxl", 34},
+    {"anim_icc_lossy.jxl",    0, FIT_BITMAP, 32, 48, 40, 30, NULL, 34},
 };
 #define NLOSSY (sizeof(LOSSY) / sizeof(LOSSY[0]))
 
