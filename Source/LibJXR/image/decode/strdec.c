@@ -3640,7 +3640,8 @@ Int ImageStrDecInit(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CTXSTRCODEC* pct
 		// read plane header of second image plane
 		Call(attach_SB(&SB, pSCP->pWStream));
 		InitializeStrDec(pNextSC, &SC.m_param, &SC);
-		if (ReadImagePlaneHeader(&pNextSC->WMII, &pNextSC->WMISCP, &pNextSC->m_param, &SB) != ICERR_OK) {
+		if (ReadImagePlaneHeader(&pNextSC->WMII, &pNextSC->WMISCP, &pNextSC->m_param, &SB) != ICERR_OK
+			|| pNextSC->WMISCP.sbSubband != pSC->WMISCP.sbSubband) { // FreeImage: both planes decode by m_Dparam's band flags
 			// FreeImage: a broken alpha plane header
 			free(pNextSC);
 			free(pSC);

@@ -230,6 +230,14 @@ int main(void) {
             memcpy(work, s->data, s->size);
             work[at + 10] ^= 1;
             attempt(work, s->size);
+            /* an interleaved alpha plane whose bands present differ from the image plane's */
+            for (j = 0; j < 16; j++) {
+                const DWORD plane = at + 12 + ((work[at + 10] & 0x80) ? 4 : 8);
+                memcpy(work, s->data, s->size);
+                work[at + 10] |= 1;
+                work[plane] = (BYTE)((work[plane] & 0xf0) | j);
+                attempt(work, s->size);
+            }
             if (work[at + 10] & 0x80) {
                 static const unsigned SIZES[] = { 0, 1, 15, 16, 17, 31, 33, 47, 63, 1055 };
                 for (j = 0; j < (int)(sizeof(SIZES) / sizeof(SIZES[0])); j++) {
