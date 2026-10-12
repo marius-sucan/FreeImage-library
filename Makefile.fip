@@ -10,6 +10,8 @@ include Makefile.heif
 
 include Makefile.openexr
 
+include Makefile.jxl
+
 # General configuration variables:
 DESTDIR ?= /
 INCDIR ?= $(DESTDIR)/usr/include

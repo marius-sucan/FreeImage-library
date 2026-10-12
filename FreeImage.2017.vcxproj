@@ -112,7 +112,7 @@
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <OmitFramePointers>true</OmitFramePointers>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;Source\LibJXL\lib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -167,7 +167,7 @@ copy Source\FreeImage.h Dist\x32
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <WholeProgramOptimization>true</WholeProgramOptimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;Source\LibJXL\lib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
@@ -219,7 +219,7 @@ copy Source\FreeImage.h Dist\x64
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\DeprecationManager;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;Source\LibJXL\lib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -266,7 +266,7 @@ copy Source\FreeImage.h Dist\x32
     </Midl>
     <ClCompile>
       <Optimization>Disabled</Optimization>
-      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>Source;Source\ZLib;Source\OpenEXR;Source\OpenEXR\Iex;Source\OpenEXR\IlmThread;Source\OpenEXR\Imath;Source\OpenEXR\OpenEXR;Source\OpenEXR\OpenEXRCore;Source\LibJXR\jxrgluelib;Source\LibJXR\image\sys;Source\LibHEIF\libheif\api;Source\LibJXL\lib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;_USRDLL;OPJ_STATIC;FREEIMAGE_EXPORTS;_CRT_SECURE_NO_DEPRECATE;LIBRAW_NODLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <StringPooling>true</StringPooling>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -333,6 +333,7 @@ copy Source\FreeImage.h Dist\x64
     <ClCompile Include="Source\FreeImage\PluginJNG.cpp" />
     <ClCompile Include="Source\FreeImage\PluginJP2.cpp" />
     <ClCompile Include="Source\FreeImage\PluginJPEG.cpp" />
+    <ClCompile Include="Source\FreeImage\PluginJXL.cpp" />
     <ClCompile Include="Source\FreeImage\PluginJXR.cpp" />
     <ClCompile Include="Source\FreeImage\PluginKOALA.cpp" />
     <ClCompile Include="Source\FreeImage\PluginMNG.cpp" />
@@ -428,6 +429,10 @@ copy Source\FreeImage.h Dist\x64
       <Project>{b0a0d2dd-97d7-4bd9-ad3b-f393f2ce937e}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
+    <ProjectReference Include="Source\LibBrotli\LibBrotli.2017.vcxproj">
+      <Project>{1e9a6343-f64c-5ff0-9e76-21d734344cdc}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
     <ProjectReference Include="Source\LibDav1d\LibDav1d.2017.vcxproj">
       <Project>{04de9318-5a87-4180-99cd-aee139c03fb9}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
@@ -442,6 +447,10 @@ copy Source\FreeImage.h Dist\x64
     </ProjectReference>
     <ProjectReference Include="Source\LibJPEG\LibJPEG.2017.vcxproj">
       <Project>{5e1d4e5f-e10c-4ba3-b663-f33014fd21d9}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+    <ProjectReference Include="Source\LibJXL\LibJXL.2017.vcxproj">
+      <Project>{31e8895b-90b6-57e4-ab7c-19f626db0539}</Project>
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
     </ProjectReference>
     <ProjectReference Include="Source\LibJXR\LibJXR.2017.vcxproj">

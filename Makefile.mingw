@@ -51,6 +51,8 @@ include Makefile.heif
 
 include Makefile.openexr
 
+include Makefile.jxl
+
 # Define additional libraries needed.
 # libstdc++ is included by default with MinGW, however for
 # WIN32 based builds, LibRawLite needs the winsock libraries.

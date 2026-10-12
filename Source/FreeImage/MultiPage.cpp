@@ -395,12 +395,15 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	return dib;
 }
 
-// lossless cache round trip (WebP defaults to lossy)
+// lossless cache round trip (WebP and JPEG XL default to lossy)
 static int
 FreeImage_GetCacheFlags(FREE_IMAGE_FORMAT fif) {
 	switch (fif) {
 		case FIF_WEBP:
 			return WEBP_LOSSLESS;
+		case FIF_JXL:
+			// effort 1: the fastest
+			return JXL_LOSSLESS | 0x10000;
 		default:
 			return 0;
 	}

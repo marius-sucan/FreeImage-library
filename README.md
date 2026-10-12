@@ -81,10 +81,11 @@ Changes:
 - added animated HEIC/HEIF reading (HEIF image sequences);
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
+- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
-- the PNG, APNG, AVIF and HEIF loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
+- the PNG, APNG, AVIF, HEIF and JPEG XL loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
 - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. Bitmaps tagged "UnscaledBits" return FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); Floating-point RGB bitmaps always return FITM_REQUIRED;
 - added FreeImage_ConvertToLinear();
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
@@ -101,6 +102,7 @@ Changes:
 | JPEG-XR | [jxrlib](https://github.com/4creators/jxrlib) | 1.2 (FreeImage fork) | 1.2 |
 | AVIF | [libavif](https://github.com/AOMediaCodec/libavif) + libdav1d (v1.5.4) | 1.4.2 | not included |
 | HEIF | [libheif](https://github.com/strukturag/libheif) + libde265 (v1.1.3) | 1.23.5 | not included |
+| JPEG XL | [libjxl](https://github.com/libjxl/libjxl) + highway (v1.2.0), brotli (v1.2.0) | 0.12.0 | not included |
 | ICC profiles | [LittleCMS](https://github.com/mm2/Little-CMS) | 2.19.1 | not included |
 
 Color management:
@@ -112,8 +114,8 @@ Color management:
 - the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type; a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders. FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
 - flags: FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION; FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
 - results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey. FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
-- to display an image: load it with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF and PSD files with JPEG_CMYK, TIFF_CMYK or PSD_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
-- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF and PSD files come back as 24- or 48-bit RGB; grey images stay grey; float images are not changed, and neither are PQ images (a CICP tag, or an ICC profile's cicp tag, saying PQ), which keep their light for the tone mappers and the CICP tag FreeImage_MustTonemap() reads. A profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
+- to display an image: load it with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF, PSD and JPEG XL files with JPEG_CMYK, TIFF_CMYK, PSD_CMYK or JXL_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and FreeImage_Rescale(), which drop the profile;
+- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF, PSD and JPEG XL files come back as 24- or 48-bit RGB; grey images stay grey; float images are not changed, and neither are PQ images (a CICP tag, or an ICC profile's cicp tag, saying PQ), which keep their light for the tone mappers and the CICP tag FreeImage_MustTonemap() reads. A profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
 - FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use the image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
 
 Bugs or limitations identified:

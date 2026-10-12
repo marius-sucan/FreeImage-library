@@ -173,6 +173,9 @@
     <ClCompile Include="..\FreeImage\PluginJPEG.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>
+    <ClCompile Include="..\FreeImage\PluginJXL.cpp">
+      <Filter>Source Files\Plugins</Filter>
+    </ClCompile>
     <ClCompile Include="..\FreeImage\PluginJXR.cpp">
       <Filter>Source Files\Plugins</Filter>
     </ClCompile>

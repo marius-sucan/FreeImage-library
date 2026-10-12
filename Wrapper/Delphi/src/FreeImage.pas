@@ -310,6 +310,8 @@ const
   FIF_JXR     = FREE_IMAGE_FORMAT(36);
   FIF_AVIF    = FREE_IMAGE_FORMAT(37);
   FIF_HEIF    = FREE_IMAGE_FORMAT(38);
+  FIF_APNG    = FREE_IMAGE_FORMAT(39);
+  FIF_JXL     = FREE_IMAGE_FORMAT(40);
 
   // Image type used in FreeImage.
   FIT_UNKNOWN = FREE_IMAGE_TYPE(0);  // unknown type

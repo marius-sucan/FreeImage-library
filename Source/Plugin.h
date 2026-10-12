@@ -143,6 +143,7 @@ void DLL_CALLCONV InitJXR(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitAVIF(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitHEIF(Plugin *plugin, int format_id);
 void DLL_CALLCONV InitAPNG(Plugin *plugin, int format_id);
+void DLL_CALLCONV InitJXL(Plugin *plugin, int format_id);
 
 // ==========================================================
 //   Shared between the PNG, APNG, JNG and WebP plugins

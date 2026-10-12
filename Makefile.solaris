@@ -16,6 +16,8 @@ include Makefile.heif
 
 include Makefile.openexr
 
+include Makefile.jxl
+
 INSTALLDIR = /usr/local
 
 # Converts cr/lf to just lf

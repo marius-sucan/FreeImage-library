@@ -282,6 +282,7 @@ FreeImage_Initialise(BOOL load_local_plugins_only) {
 			s_plugins->AddNode(InitAVIF);
 			s_plugins->AddNode(InitHEIF);
 			s_plugins->AddNode(InitAPNG);
+			s_plugins->AddNode(InitJXL);
 
 			// external plugin initialization
 

@@ -422,7 +422,8 @@ FI_ENUM(FREE_IMAGE_FORMAT) {
 	FIF_JXR		= 36,
 	FIF_AVIF	= 37,
 	FIF_HEIF	= 38,
-	FIF_APNG	= 39
+	FIF_APNG	= 39,
+	FIF_JXL		= 40
 };
 
 /** Image type used in FreeImage.
@@ -675,7 +676,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 // Load / Save flag constants -----------------------------------------------
 
 #define FIF_LOAD_NOPIXELS 0x8000	//! loading: load the image header only (not supported by all plugins, default to full loading)
-#define FIF_LOAD_DISPLAY_ICC 0x4000	//! loading: convert to the display's ICC profile (sRGB when unknown), CMYK JPEG, TIFF and PSD read as CMYK first; ignored with FIF_LOAD_NOPIXELS
+#define FIF_LOAD_DISPLAY_ICC 0x4000	//! loading: convert to the display's ICC profile (sRGB when unknown), CMYK JPEG, TIFF, PSD and JPEG XL read as CMYK first; ignored with FIF_LOAD_NOPIXELS
 
 #define APNG_DEFAULT		0
 #define APNG_PLAYBACK		2		//! 'Play' the APNG: each frame composited, as 32bpp
@@ -784,6 +785,10 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define AVIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
 #define HEIF_DEFAULT		0		//! primary image or first frame, transforms applied (load only)
 #define HEIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
+#define JXL_DEFAULT			0		//! load every frame in its own pixel format; save lossy at quality 90, effort 7; or pass a quality 1-100 (100 = lossless) plus an effort 1-10 times 0x10000
+#define JXL_PLAYBACK		2		//! animation: every frame as 32bpp
+#define JXL_CMYK			0x0004	//! load CMYK images as CMYK, not converted to RGB
+#define JXL_LOSSLESS		0x100	//! save lossless
 
 // Background filling options ---------------------------------------------------------
 // Constants used in FreeImage_FillBackground and FreeImage_EnlargeCanvas

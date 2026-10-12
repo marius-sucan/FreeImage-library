@@ -1,0 +1,11 @@
+# ---------------------------------------------------------------------------
+#  JPEG XL support (libjxl + highway, brotli), shared by every FreeImage makefile.
+#  libjxl's *.cc files take the .cc rule's per-library slots, see Makefile.heif.
+# ---------------------------------------------------------------------------
+
+# NDEBUG: without it libjxl aborts on damaged files; the target list is libjxl's default
+LIBJXL_CXXFLAGS_PRE = -ISource/LibJXL -ISource/LibJXL/lib/include -ISource/LibJXL/third_party/highway -ISource/LibBrotli/c/include -ISource/LibLCMS2/include
+LIBJXL_CXXFLAGS_POST = -std=c++17 -DNDEBUG -DJPEGXL_ENABLE_TRANSCODE_JPEG=1 -DJPEGXL_ENABLE_BOXES=1 -DFJXL_ENABLE_AVX512=0 -DHWY_DISABLED_TARGETS=HWY_AVX3+HWY_AVX3_SPR+HWY_AVX3_ZEN4+HWY_SSSE3+HWY_RVV+HWY_SVE_256
+
+./Source/LibJXL/%: HEIF_CXXFLAGS_PRE = $(LIBJXL_CXXFLAGS_PRE)
+./Source/LibJXL/%: HEIF_CXXFLAGS_POST = $(LIBJXL_CXXFLAGS_POST)
