@@ -1898,6 +1898,8 @@ ERR PKImageDecode_Initialize_WMP(
     pID->WMP.cLinesDecoded = 0;
     pID->WMP.cLinesCropped = 0;
     pID->WMP.fFirstNonZeroDecode = FALSE;
+    pID->WMP.cLinesCroppedAlpha = 0; // FreeImage
+    pID->WMP.fFirstNonZeroDecodeAlpha = FALSE;
 
     FailIf(ICERR_OK != ImageStrDecGetInfo(&pID->WMP.wmiI, &pID->WMP.wmiSCP), WMP_errFail);
     // FreeImage: errors, not asserts
@@ -2167,14 +2169,17 @@ ERR PKImageDecode_Copy_WMP(
         }
         
         // Re-entrant mode incurs 1 MBR delay, so to get 0th MBR, we have to ask for 1st MBR
-        cMBRow = ((U32) pID->WMP.cLinesCropped + pRect->Y + pRect->Height +          
+        // FreeImage: counted by the alpha plane's own crop
+        cMBRow = ((U32) pID->WMP.cLinesCroppedAlpha + pRect->Y + pRect->Height +          
             (pRect->Y + pRect->Height >= (I32) pID->WMP.wmiI.cROIHeight ? linesperMBRow - 1 : 0)) / // round up if last MBR
             linesperMBRow + 1;
-        cMBRowStart = ((U32) pID->WMP.cLinesCropped + pRect->Y) / linesperMBRow + 1;
+        cMBRowStart = ((U32) pID->WMP.cLinesCroppedAlpha + pRect->Y) / linesperMBRow + 1;
         // if current request starts before current state, then rewind.
         if (cMBRowStart < pID->WMP.DecoderCurrAlphaMBRow) 
         {
             pID->WMP.DecoderCurrAlphaMBRow = 0;
+            pID->WMP.cLinesCroppedAlpha = 0; // FreeImage
+            pID->WMP.fFirstNonZeroDecodeAlpha = FALSE;
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC_Alpha), WMP_errFail);
             pID->WMP.ctxSC_Alpha = NULL; // FreeImage: so Release does not terminate it again
             FailIf(ICERR_OK != ImageStrDecInit(&pID->WMP.wmiI_Alpha, &pID->WMP.wmiSCP_Alpha, &pID->WMP.ctxSC_Alpha), WMP_errFail);
@@ -2186,10 +2191,24 @@ ERR PKImageDecode_Copy_WMP(
             wmiBI.uiFirstMBRow = i;
             wmiBI.uiLastMBRow = i;
             FailIf(ICERR_OK != ImageStrDecDecode(pID->WMP.ctxSC_Alpha, &wmiBI, &cLinesDecoded), WMP_errFail);
+            // FreeImage: the alpha plane's crop, found as the image's
+            if (FALSE == pID->WMP.fFirstNonZeroDecodeAlpha && cLinesDecoded > 0)
+            {
+                pID->WMP.cLinesCroppedAlpha += (linesperMBRow - cLinesDecoded);
+                pID->WMP.fFirstNonZeroDecodeAlpha = TRUE;
+                cMBRow = ((U32) pID->WMP.cLinesCroppedAlpha + pRect->Y + pRect->Height +
+                    (pRect->Y + pRect->Height >= (I32) pID->WMP.wmiI.cROIHeight ? linesperMBRow - 1 : 0)) /
+                    linesperMBRow + 1;
+            }
+            if (0 == cLinesDecoded && i > 0)
+            {
+                pID->WMP.cLinesCroppedAlpha += linesperMBRow;
+                cMBRow++;
+            }
         }
 
         // If we're past the top of the image, then we're done, so terminate
-        if (linesperMBRow * (cMBRow - 1) >= (U32) pID->WMP.cLinesCropped + pID->WMP.wmiI.cROIHeight) {
+        if (linesperMBRow * (cMBRow - 1) >= (U32) pID->WMP.cLinesCroppedAlpha + pID->WMP.wmiI.cROIHeight) {
             FailIf(ICERR_OK != ImageStrDecTerm(pID->WMP.ctxSC_Alpha), WMP_errFail);
             pID->WMP.ctxSC_Alpha = NULL; // FreeImage: so Release does not terminate it again
         }

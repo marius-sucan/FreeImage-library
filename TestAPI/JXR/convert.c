@@ -3,8 +3,9 @@
    values exact in either, and 9x140, an odd width, 32bppRGB101010 (RGB16), 32bppBGR and 32bppRGB (24-bit, their
    padding dropped), 32bppRGBA, premultiplied 32bppPBGRA, 32bppPRGBA, 64bppPRGBA and 128bppPRGBAFloat (straight alpha),
    and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped; with JXR_CMYK their
-   CMYK samples, the alpha dropped, the profile kept and marked CMYK); every container orientation must load the values
-   the file was made from, and a header-only load the same type and size */
+   CMYK samples, the alpha dropped, the profile kept and marked CMYK); crop.jxr, 40x140 32bppBGRA with planar alpha
+   cropped by jxrlib at 16,32 of a 64x200 image, its image plane keeping a 16-row margin its alpha plane lacks; every
+   container orientation must load the values the file was made from, and a header-only load the same type and size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,6 +22,12 @@ static unsigned get32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) 
 /* channel c (R, G, B, A) of upright pixel (x, y) as made, y counted from the top; alpha is channel 3, CMYK's alpha 4 */
 static double made(const char *name, unsigned x, unsigned y, unsigned c) {
     const unsigned k = (3 * x + 5 * y + 17 * c) % 97, k3 = (3 * x + 5 * y + 17 * 3) % 97, k4 = (3 * x + 5 * y + 17 * 4) % 97;
+    if (!strcmp(name, "crop")) {
+        /* the source's x, y, ..., 5y + x / 16, at (x + 16, y + 32) */
+        const unsigned sx = x + 16, sy = y + 32;
+        const unsigned v[4] = { sx & 255, sy & 255, ((sx >> 8) * 64 + (sy >> 8) * 16) & 255, (sy * 5 + (sx >> 4)) & 255 };
+        return v[c];
+    }
     if (!strcmp(name, "rgb101010")) return (double)((k * 8) << 6);
     if (!strcmp(name, "bgr32") || !strcmp(name, "rgb32")) return 2.0 * k;
     /* mantissa 128 + k, exponent 130 + k(alpha) % 4 */
@@ -169,6 +176,7 @@ int main(int argc, char **argv) {
     formats(dir, "cmyk64", 9, FIT_RGBA16, 64, JXR_CMYK);
     formats(dir, "cmyka40", 9, FIT_BITMAP, 32, JXR_CMYK);
     formats(dir, "cmyka80", 9, FIT_RGBA16, 64, JXR_CMYK);
+    formats(dir, "crop", 40, FIT_BITMAP, 32, 0);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

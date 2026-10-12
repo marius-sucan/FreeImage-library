@@ -550,6 +550,8 @@ typedef struct tagPKImageDecode
         size_t cLinesDecoded;
         size_t cLinesCropped; // Lines may be cropped from the top - buffer for subsequent decodes must be adjusted
         Bool fFirstNonZeroDecode;
+        size_t cLinesCroppedAlpha; // FreeImage: the alpha plane's own, its margins can differ from the image's
+        Bool fFirstNonZeroDecodeAlpha;
 
         Bool fOrientationFromContainer;
         ORIENTATION oOrientationFromContainer; // Tag 0xBC02 in HD Photo container
