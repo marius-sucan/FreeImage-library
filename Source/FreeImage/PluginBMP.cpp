@@ -208,6 +208,12 @@ CheckBitmapInfoHeader(BITMAPINFOHEADER *bih) {
 	return TRUE;
 }
 
+// what a 1-, 4- or 8-bit image may be: uncompressed, RLE4 at 4 bits, RLE8 at 8 bits
+static BOOL
+PaletteCompressionSupported(unsigned bit_count, unsigned compression) {
+	return (compression == BI_RGB) || ((compression == BI_RLE4) && (bit_count == 4)) || ((compression == BI_RLE8) && (bit_count == 8));
+}
+
 // --------------------------------------------------------------------------
 
 /**
@@ -814,6 +820,10 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 		if (CheckBitmapInfoHeader(&bih) == FALSE) {
 			throw FI_MSG_ERROR_INVALID_FORMAT;
 		}
+		// before a header-only load returns, as the full load would refuse it
+		if ((bih.biBitCount <= 8) && !PaletteCompressionSupported(bih.biBitCount, bih.biCompression)) {
+			throw FI_MSG_ERROR_UNSUPPORTED_COMPRESSION;
+		}
 
 		// keep some general information about the bitmap
 
@@ -1079,6 +1089,10 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 
 		if (CheckBitmapInfoHeader(&bih) == FALSE) {
 			throw FI_MSG_ERROR_INVALID_FORMAT;
+		}
+		// before a header-only load returns, as the full load would refuse it
+		if ((bih.biBitCount <= 8) && !PaletteCompressionSupported(bih.biBitCount, bih.biCompression)) {
+			throw FI_MSG_ERROR_UNSUPPORTED_COMPRESSION;
 		}
 
 		// keep some general information about the bitmap

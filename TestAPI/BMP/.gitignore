@@ -6,4 +6,6 @@ rle
 rle-asan
 save
 save-asan
+nopixels
+nopixels-asan
 asan-obj/

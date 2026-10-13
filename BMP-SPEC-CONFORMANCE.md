@@ -386,6 +386,16 @@ header's `offBits` (808) counts from the start of the whole file.
 **Fix.** Either load the first bitmap, the device-independent one (skip the 14-byte array header, read the embedded
 file header, keep offsets relative to the array's start in the stream), or stop accepting "BA" in `Validate()`.
 
+### L13 — 16-, 24- and 32-bit files that claim RLE, or 24-bit ones that claim bit fields, load as uncompressed (low)
+
+**Spec.** [MS-LEARN] `biCompression`: `BI_RLE8` is "A run-length encoded (RLE) format for bitmaps with 8 bpp",
+`BI_RLE4` "An RLE format for bitmaps with 4 bpp", and `BI_BITFIELDS` "is valid when used with 16- and 32-bpp bitmaps".
+
+**FreeImage.** `CheckBitmapInfoHeader()` accepts RLE4, RLE8 and `BI_BITFIELDS` at every depth, and the 16-, 24- and
+32-bit paths ignore them: the RLE data is read as raw pixels (a short file then loads with a warning), and a 24-bit
+file's masks are skipped. Header-only and full loads agree. Found by the S3 sweep; Pillow refuses all seven
+combinations. **Fix, if wanted.** Refuse them as S3's fix refuses a palette image's wrong compression. Open.
+
 ## 5. Writer findings
 
 What the writer produces (`Save()`, `PluginBMP.cpp:1483-1698`), checked on 17 saves:
@@ -535,6 +545,15 @@ For 1-, 4- and 8-bit images the header-only path returns before the compression 
 (and, by code reading, any 8-bit `BI_RLE4` or `BI_BITFIELDS` file) loads with `FIF_LOAD_NOPIXELS` and fails without
 it. The contract is
 that a header-only load describes what the full load returns.
+
+**Fixed** 2026-10-13: the Windows and OS/2 2.x loaders check a palette image's compression right after the header,
+before a header-only load can return: uncompressed, RLE4 at 4 bits or RLE8 at 8 bits, anything else refused in both
+loads with "Unsupported compression type" (an RLE at the wrong depth used to say "Error encountered while decoding
+RLE4/RLE8 BMP data" without decoding anything). Over 5 header sizes, 8 bit depths and 10 compressions
+(`TestAPI/BMP/nopixels`), the two loads now agree in all 328 cases; 28 disagreed, every one a palette image with such
+a compression. In BMP Suite only `q/pal1huffmsb.bmp` changes. One difference stays on purpose: the check that a file
+holds enough data for the size it claims (`b/reallybig.bmp`) runs for full loads only, as in the PCX, TGA and JPEG XR
+loaders, since it exists to keep pixels from being allocated.
 
 ### S4 — Messages
 

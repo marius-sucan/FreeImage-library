@@ -1,8 +1,8 @@
 # BMP tests
 
-Standalone programs for the BMP loader's colour masks, alpha, ICC profiles and RLE8
-runs, and for what the writer stores. Every file is built in memory, so the suite
-carries no data.
+Standalone programs for the BMP loader's colour masks, alpha, ICC profiles, RLE8
+runs and header-only loads, and for what the writer stores. Every file is built in
+memory, so the suite carries no data.
 Each prints a report and exits non-zero on failure.
 
 | test | what it covers |
@@ -11,13 +11,14 @@ Each prints a report and exits non-zero on failure.
 | `icc` | `BITMAPV5HEADER` files with an embedded ICC profile (after the pixels, as in the format): the profile is attached in full and header-only loads, also to a palette image, and one padded in the file is cut to its own size. Not attached, the image loading as usual: a linked profile (a file name, never opened), `sRGB` with profile bytes present, an offset past the file or into the header, a size below an ICC header or of 4 GB, a grey, CMYK or damaged profile, a V4 header. With the display set to sRGB, `FIF_LOAD_DISPLAY_ICC` converts an Adobe RGB file's pixels (or a palette image's palette), exactly as `FreeImage_ApplyDisplayICCProfile()` does, and leaves an sRGB-tagged file's pixels alone. `FreeImage_FIFSupportsICCProfiles(FIF_BMP)` is TRUE, and a saved image carries no profile. |
 | `rle` | RLE8 literal runs that pass the row end are cut there and the stream is read on past them: 3 pixels past it, 2 past it with the pad byte, a literal starting at the row end; a file cut among the dropped bytes keeps its full row, with a warning. A move past the row end followed by an end of line leaves the next row intact, and 8.4 million moves of 255 pixels on one row (a 34 MB file) end the decoding there instead of carrying the column past 2^31. RLE8 saves of an image in runs, of one without runs (which RLE8 makes larger than uncompressed) and of a view: `bfSize` is the file's size and `biSizeImage` that of the RLE data, every row's runs fill exactly its width and end the line, the bitmap ends where the file does, and the image loads back unchanged. |
 | `save` | `biSizeImage`: pitch x height for 16-bit (`BI_BITFIELDS`) and 32-bit alpha (V5) saves, 0 for `BI_RGB` ones (1, 4, 8, 24, 32-bit). Palette entries are written with `rgbReserved` 0 whatever the dib holds. Row padding is zeros, and so are the unused bits of a 1- or 4-bit row's last byte, for 33-pixel views of parents filled with FF at every bit depth and for plain images with FF in their padding. |
+| `nopixels` | A header-only load (`FIF_LOAD_NOPIXELS`) describes what the full load returns: for 12-, 40-, 56-, 64- and 124-byte headers, every bit depth from 1 to 64 and compressions 0 to 6 and 11 to 13, both loads refuse the file or give the same size, bit depth, palette size and masks. A 1-, 4- or 8-bit image with a compression its depth cannot use (RLE8 below 8 bits, RLE4 at 1 or 8 bits, compression 3, which OS/2 uses for Huffman 1D) is refused by both, under the Windows and the OS/2 2.x header. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
-    make run        # masks, icc, rle, save
-    make asan-run   # all four, with PluginBMP.cpp rebuilt with AddressSanitizer and UBSan
+    make run        # masks, icc, rle, save, nopixels
+    make asan-run   # all five, with PluginBMP.cpp rebuilt with AddressSanitizer and UBSan
 
 ## What "expected" looks like
 
