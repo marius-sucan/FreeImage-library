@@ -256,12 +256,12 @@ What is done to decoded rows, in place, before they reach the dib
 typedef enum {
 	ROWS_AS_DECODED = 0,
 	ROWS_PADDED_8,			// RGB and a padding byte: the padding dropped
-	ROWS_CMYK_8,			// CMYK: BGR, as ConvertCMYKtoRGBA
+	ROWS_CMYK_8,			// CMYK, then any further channels: BGR, as ConvertCMYKtoRGBA
 	ROWS_CMYK_16,			// CMYK: RGB16
-	ROWS_CMYKA_8,			// CMYK and alpha: BGRA
+	ROWS_CMYKA_8,			// CMYK, any further channels, alpha last: BGRA
 	ROWS_CMYKA_16,			// CMYK and alpha: RGBA16
-	ROWS_CMYKA_AS_CMYK_8,	// CMYK and alpha, with JXR_CMYK: the alpha dropped
-	ROWS_CMYKA_AS_CMYK_16,
+	ROWS_CMYK_KEPT_8,		// CMYK with JXR_CMYK: further channels and alpha dropped
+	ROWS_CMYK_KEPT_16,
 	ROWS_PREMULTIPLIED_8,	// premultiplied alpha undone
 	ROWS_PREMULTIPLIED_16,
 	ROWS_PREMULTIPLIED_FLOAT
@@ -292,15 +292,36 @@ static const struct {
 	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat48bppRGB, FIT_RGB16, 48, ROWS_CMYK_16, CMYK_CONVERTED },
 	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_CMYKA_8, CMYK_CONVERTED },
 	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_CMYKA_16, CMYK_CONVERTED },
-	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_AS_DECODED, CMYK_KEPT },
-	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_AS_DECODED, CMYK_KEPT },
-	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_CMYKA_AS_CMYK_8, CMYK_KEPT },
-	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_CMYKA_AS_CMYK_16, CMYK_KEPT },
+	{ &GUID_PKPixelFormat32bppCMYK, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_CMYK_KEPT_8, CMYK_KEPT },
+	{ &GUID_PKPixelFormat64bppCMYK, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_CMYK_KEPT_16, CMYK_KEPT },
+	{ &GUID_PKPixelFormat40bppCMYKAlpha, &GUID_PKPixelFormat32bppCMYK, FIT_BITMAP, 32, ROWS_CMYK_KEPT_8, CMYK_KEPT },
+	{ &GUID_PKPixelFormat80bppCMYKAlpha, &GUID_PKPixelFormat64bppCMYK, FIT_RGBA16, 64, ROWS_CMYK_KEPT_16, CMYK_KEPT },
 	{ &GUID_PKPixelFormat32bppPBGRA, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
 	{ &GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppRGBA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
 	{ &GUID_PKPixelFormat64bppPRGBA, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_PREMULTIPLIED_16, CMYK_NONE },
 	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT, CMYK_NONE }
 };
+
+/**
+Get the pixel format the rows of an n-channel format stand for: three channels are RGB, four or more CMYK followed by
+channels to drop (T.832 A.7.18 and Annex C)
+@param guid_format Decoded pixel format
+@return Returns the RGB or CMYK format of the same bit depth and alpha, or guid_format for any other format
+*/
+static const PKPixelFormatGUID&
+GetRowsFormat(const PKPixelFormatGUID &guid_format) {
+	PKPixelInfo pixelInfo;
+	pixelInfo.pGUIDPixFmt = &guid_format;
+	if((PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD) != WMP_errSuccess) || (pixelInfo.cfColorFormat != NCOMPONENT)) {
+		return guid_format;
+	}
+	const BOOL alpha = (pixelInfo.grBit & PK_pixfmtHasAlpha) != 0;
+	const BOOL deep = (pixelInfo.bdBitDepth == BD_16);
+	if(pixelInfo.cChannel - (alpha ? 1 : 0) == 3) {
+		return deep ? (alpha ? GUID_PKPixelFormat64bppRGBA : GUID_PKPixelFormat48bppRGB) : (alpha ? GUID_PKPixelFormat32bppRGBA : GUID_PKPixelFormat24bppRGB);
+	}
+	return deep ? (alpha ? GUID_PKPixelFormat80bppCMYKAlpha : GUID_PKPixelFormat64bppCMYK) : (alpha ? GUID_PKPixelFormat40bppCMYKAlpha : GUID_PKPixelFormat32bppCMYK);
+}
 
 /**
 Find the entry of s_FreeImageRowLayouts for pixels decoded in a pixel format
@@ -356,6 +377,19 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormat
 	// shared exponents, or float RGB with padding: jxrlib converts them to RGBF
 	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
 		return WMP_errFail;
+	}
+	// YCC: only PTM_COLOR_INFO, which is not read, could say which matrix gives its RGB
+	if((pixelInfo->cfColorFormat == YUV_444) || (pixelInfo->cfColorFormat == YUV_422) || (pixelInfo->cfColorFormat == YUV_420)) {
+		return WMP_errFail;
+	}
+	const PKPixelFormatGUID &rows_format = GetRowsFormat(guid_format);
+	if(!IsEqualGUID(rows_format, guid_format)) {
+		PKPixelInfo rowsInfo;
+		rowsInfo.pGUIDPixFmt = &rows_format;
+		if(PixelFormatLookup(&rowsInfo, LOOKUP_FORWARD) != WMP_errSuccess) {
+			return WMP_errFail;
+		}
+		return GetNativePixelFormat(&rowsInfo, keep_cmyk, out_guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 	}
 	const int layout = FindRowLayout(guid_format, keep_cmyk);
 	if(layout >= 0) {
@@ -1259,7 +1293,7 @@ TurnRows(const BYTE *src_bits, size_t cbStride, unsigned y0, unsigned y1, FIBITM
 CMYK samples, and alpha, to BGR(A) in place, as ConvertCMYKtoRGBA: (255 - C) * (255 - K) / 255
 @param row Row of pixels
 @param width Row width (in pixels)
-@param in_channels 4, or 5 with alpha
+@param in_channels 4 to 9: CMYK, then channels to drop, alpha last
 @param out_channels 3, or 4 with alpha
 */
 static void
@@ -1271,7 +1305,7 @@ CMYKRow8(BYTE *row, unsigned width, unsigned in_channels, unsigned out_channels)
 		px[0] = (BYTE)((255 - src[2]) * k / 255);
 		px[1] = (BYTE)((255 - src[1]) * k / 255);
 		px[2] = (BYTE)((255 - src[0]) * k / 255);
-		px[3] = (in_channels > 4) ? src[4] : 255;
+		px[3] = src[in_channels - 1];
 		memcpy(row + (size_t)x * out_channels, px, out_channels);
 	}
 }
@@ -1289,7 +1323,7 @@ CMYKRow16(WORD *row, unsigned width, unsigned in_channels, unsigned out_channels
 		px[0] = (WORD)((65535 - src[0]) * k / 65535);
 		px[1] = (WORD)((65535 - src[1]) * k / 65535);
 		px[2] = (WORD)((65535 - src[2]) * k / 65535);
-		px[3] = (in_channels > 4) ? src[4] : 65535;
+		px[3] = src[in_channels - 1];
 		memcpy(row + (size_t)x * out_channels, px, out_channels * sizeof(WORD));
 	}
 }
@@ -1346,9 +1380,10 @@ Give a decoded row the layout of the dib's rows, in place
 @param row Row of pixels
 @param width Row width (in pixels)
 @param layout What the row needs
+@param in_channels Channels of a decoded pixel
 */
 static void
-TransformRow(BYTE *row, unsigned width, JXRRowLayout layout) {
+TransformRow(BYTE *row, unsigned width, JXRRowLayout layout, unsigned in_channels) {
 	switch(layout) {
 		case ROWS_PADDED_8:
 			for(unsigned x = 1; x < width; x++) {
@@ -1357,18 +1392,18 @@ TransformRow(BYTE *row, unsigned width, JXRRowLayout layout) {
 				row[3 * x + 2] = row[4 * x + 2];
 			}
 			break;
-		case ROWS_CMYK_8: CMYKRow8(row, width, 4, 3); break;
-		case ROWS_CMYKA_8: CMYKRow8(row, width, 5, 4); break;
-		case ROWS_CMYK_16: CMYKRow16((WORD*)row, width, 4, 3); break;
-		case ROWS_CMYKA_16: CMYKRow16((WORD*)row, width, 5, 4); break;
-		case ROWS_CMYKA_AS_CMYK_8:
-			for(unsigned x = 1; x < width; x++) {
-				memmove(row + (size_t)x * 4, row + (size_t)x * 5, 4);
+		case ROWS_CMYK_8: CMYKRow8(row, width, in_channels, 3); break;
+		case ROWS_CMYKA_8: CMYKRow8(row, width, in_channels, 4); break;
+		case ROWS_CMYK_16: CMYKRow16((WORD*)row, width, in_channels, 3); break;
+		case ROWS_CMYKA_16: CMYKRow16((WORD*)row, width, in_channels, 4); break;
+		case ROWS_CMYK_KEPT_8:
+			for(unsigned x = 1; (in_channels > 4) && (x < width); x++) {
+				memmove(row + (size_t)x * 4, row + (size_t)x * in_channels, 4);
 			}
 			break;
-		case ROWS_CMYKA_AS_CMYK_16:
-			for(unsigned x = 1; x < width; x++) {
-				memmove((WORD*)row + (size_t)x * 4, (WORD*)row + (size_t)x * 5, 4 * sizeof(WORD));
+		case ROWS_CMYK_KEPT_16:
+			for(unsigned x = 1; (in_channels > 4) && (x < width); x++) {
+				memmove((WORD*)row + (size_t)x * 4, (WORD*)row + (size_t)x * in_channels, 4 * sizeof(WORD));
 			}
 			break;
 		case ROWS_PREMULTIPLIED_8: UnpremultiplyRow8(row, width); break;
@@ -1523,9 +1558,14 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
 		JXR_CHECK(error_code);
 
-		// a layout of FreeImage's is decoded as it is, its rows then transformed here
-		const JXRRowLayout layout = GetRowLayout(in_guid_format, out_guid_format);
-		const BOOL convert = (layout == ROWS_AS_DECODED) && !IsEqualGUID(out_guid_format, in_guid_format);
+		// a layout of FreeImage's is decoded as it is, its rows then transformed here; n-channel rows stand for RGB or CMYK
+		const PKPixelFormatGUID &rows_format = GetRowsFormat(in_guid_format);
+		const JXRRowLayout layout = GetRowLayout(rows_format, out_guid_format);
+		const BOOL convert = (layout == ROWS_AS_DECODED) && !IsEqualGUID(out_guid_format, rows_format);
+		PKPixelInfo inInfo;
+		inInfo.pGUIDPixFmt = &in_guid_format;
+		error_code = PixelFormatLookup(&inInfo, LOOKUP_FORWARD);
+		JXR_CHECK(error_code);
 		if(convert) {
 			error_code = PKCodecFactory_CreateFormatConverter(&pConverter);
 			JXR_CHECK(error_code);
@@ -1564,7 +1604,7 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 			}
 			if(layout != ROWS_AS_DECODED) {
 				for(unsigned r = 0; r < rows; r++) {
-					TransformRow(pb + (size_t)r * cbStride, width, layout);
+					TransformRow(pb + (size_t)r * cbStride, width, layout, (unsigned)inInfo.cChannel);
 				}
 			}
 			if(turn) {
@@ -1683,7 +1723,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		error_code = pDecoder->GetPixelFormat(pDecoder, &in_guid_format);
 		JXR_CHECK(error_code);
 		{
-			const int layout = FindRowLayout(in_guid_format, keep_cmyk);
+			const int layout = FindRowLayout(GetRowsFormat(in_guid_format), keep_cmyk);
 			if((layout >= 0) && (s_FreeImageRowLayouts[layout].cmyk == CMYK_CONVERTED)) {
 				// a CMYK profile does not describe the RGB pixels are loaded as
 				FreeImage_DestroyICCProfile(dib);

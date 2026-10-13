@@ -11,7 +11,10 @@
    output in ileave_q.ref (B, G, R, A); lpqp.jxr, 32x140 24bppBGR in frequency mode with 2x2 tiles of two LP QPs each and
    an LP QP index per macroblock, held to lpqp.ref (B, G, R, 255); every container orientation must load the values the
    file was made from, and a header-only load the same type and size. lpqp_bad.jxr, lpqp.jxr with the reserved LP QP
-   index 2 in one macroblock, must be refused */
+   index 2 in one macroblock, must be refused. n-channel images, 9x140 lossless, alpha planar and last: nch3 24bpp3Channels,
+   nch3a 32bpp3ChannelsAlpha and nch3ax16 64bpp3ChannelsAlpha load as RGB(A), channel 0 red; nch4 32bpp4Channels,
+   nch4a 40bpp4ChannelsAlpha, nch5a 48bpp5ChannelsAlpha and nch8x16 128bpp8Channels as CMYK, their first four channels,
+   loaded as the CMYK files are, the further channels dropped. ycc444, 24bppYCC444, must be refused, header only too */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -62,13 +65,20 @@ static double made(const char *name, unsigned x, unsigned y, unsigned c) {
     /* (max - C,M,Y) * (max - K) / max */
     if (!strcmp(name, "cmyk32") || !strcmp(name, "cmyka40")) return (c == 3) ? 64 + k4 : (255 - 2 * k) * (255 - k3) / 255;
     if (!strcmp(name, "cmyk64") || !strcmp(name, "cmyka80")) return (c == 3) ? 16384 + 256 * k4 : (65535 - 512 * k) * (65535 - 256 * k3) / 65535;
+    if (!strncmp(name, "nch", 3)) {
+        /* channel n, after the n colour channels, is the alpha */
+        const unsigned n = (unsigned)(name[3] - '0'), deep = (strstr(name, "x16") != NULL), ka = (3 * x + 5 * y + 17 * n) % 97;
+        if (c == 3) return deep ? 16384 + 256 * ka : 64 + ka;
+        if (n == 3) return deep ? 512.0 * k : 2.0 * k;
+        return deep ? (65535 - 512 * k) * (65535 - 256 * k3) / 65535 : (255 - 2 * k) * (255 - k3) / 255;
+    }
     return k / 32.0;
 }
 
 /* sample c (C, M, Y, K) of upright pixel (x, y) as made, for a CMYK file loaded with JXR_CMYK */
 static double made_cmyk(const char *name, unsigned x, unsigned y, unsigned c) {
     const unsigned k = (3 * x + 5 * y + 17 * c) % 97;
-    const int deep = (strstr(name, "64") != NULL) || (strstr(name, "80") != NULL);
+    const int deep = (strstr(name, "64") != NULL) || (strstr(name, "80") != NULL) || (strstr(name, "x16") != NULL);
     if (c == 3) return deep ? 256.0 * k : k;
     return deep ? 512.0 * k : 2.0 * k;
 }
@@ -87,7 +97,7 @@ static double loaded(FIBITMAP *dib, const BYTE *line, unsigned x, unsigned c) {
 
 static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TYPE type, unsigned bpp, int flags) {
     const unsigned h = 140, channels = (type == FIT_RGBAF || type == FIT_RGBA16 || bpp == 32) ? 4 : 3;
-    const int cmyk = (strstr(name, "cmyk") != NULL), kept = cmyk && ((flags & JXR_CMYK) == JXR_CMYK);
+    const int cmyk = (strstr(name, "cmyk") != NULL) || (!strncmp(name, "nch", 3) && name[3] >= '4'), kept = cmyk && ((flags & JXR_CMYK) == JXR_CMYK);
     char path[1024];
     BYTE *data = NULL, *orient = NULL;
     long size = 0;
@@ -187,6 +197,19 @@ static void refused(const char *dir, const char *name) {
     FreeImage_Unload(hdr);
 }
 
+/* a format FreeImage does not load: refused, header only too */
+static void unsupported(const char *dir, const char *name) {
+    char path[1024];
+    FIBITMAP *dib, *hdr;
+    snprintf(path, sizeof(path), "%s/%s.jxr", dir, name);
+    dib = FreeImage_Load(FIF_JXR, path, 0);
+    hdr = FreeImage_Load(FIF_JXR, path, FIF_LOAD_NOPIXELS);
+    CHECK(dib == NULL, "%s: loaded", name);
+    CHECK(hdr == NULL, "%s: header-only load not refused", name);
+    FreeImage_Unload(dib);
+    FreeImage_Unload(hdr);
+}
+
 int main(int argc, char **argv) {
     const char *dir = (argc > 1) ? argv[1] : "data";
     FreeImage_Initialise(FALSE);
@@ -219,6 +242,19 @@ int main(int argc, char **argv) {
     formats(dir, "ileave_q", 9, FIT_BITMAP, 32, 0);
     formats(dir, "lpqp", 32, FIT_BITMAP, 24, 0);
     refused(dir, "lpqp_bad");
+    formats(dir, "nch3", 9, FIT_BITMAP, 24, 0);
+    formats(dir, "nch3", 9, FIT_BITMAP, 24, JXR_CMYK);
+    formats(dir, "nch3a", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "nch3ax16", 9, FIT_RGBA16, 64, 0);
+    formats(dir, "nch4", 9, FIT_BITMAP, 24, 0);
+    formats(dir, "nch4a", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "nch5a", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "nch8x16", 9, FIT_RGB16, 48, 0);
+    formats(dir, "nch4", 9, FIT_BITMAP, 32, JXR_CMYK);
+    formats(dir, "nch4a", 9, FIT_BITMAP, 32, JXR_CMYK);
+    formats(dir, "nch5a", 9, FIT_BITMAP, 32, JXR_CMYK);
+    formats(dir, "nch8x16", 9, FIT_RGBA16, 64, JXR_CMYK);
+    unsupported(dir, "ycc444");
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

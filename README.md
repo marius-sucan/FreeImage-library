@@ -60,6 +60,7 @@ Fixes:
 - fixed JPEG XR files saved with metadata storing it at odd offsets, which strict readers refuse;
 - fixed JPEG XR files saved from float RGB images using a pixel format the standard does not define;
 - fixed black-is-one JPEG XR bilevel images loading inverted, and min-is-white 1-bit images failing to save as JPEG XR;
+- fixed JPEG XR n-channel images loading with wrong colours, or failing to load;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
