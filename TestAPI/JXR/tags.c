@@ -1,5 +1,6 @@
 /* FreeImage 3 - JPEG XR descriptive tags: every Exif-Main tag the container holds, alone, together and of a
-   wrong type, saved losslessly and loaded back; the pixels must survive and the tags come back or be left out */
+   wrong type, saved losslessly and loaded back; the pixels must survive and the tags come back or be left out;
+   every save has its IFD entries in ascending tag order (T.832 A.7.2) */
 /* argv[1]: a TIFF with a PageNumber tag, default ../../Wrapper/FreeImagePlus/test/test.tif */
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,7 +40,36 @@ static const Tag TAGS[14] = {
     { "HostComputer", 0x013c, FIDT_ASCII, 5, "Host" },
 };
 
+/* the IFD tags of the last file saved, in file order */
+static unsigned saved_tags[64], saved_count = 0;
+
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
+
+static unsigned get16(const BYTE *p) { return p[0] | (p[1] << 8); }
+static unsigned get32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24); }
+
+/* records the first IFD's tags; 0 if they do not ascend */
+static int read_ifd(const BYTE *data, DWORD size) {
+    const DWORD ifd = (data && size >= 8) ? get32(data + 4) : 0;
+    unsigned i, n;
+    int ascending = 1;
+    saved_count = 0;
+    if (!ifd || ifd + 2 > size) return 0;
+    n = get16(data + ifd);
+    for (i = 0; i < n && i < 64 && ifd + 2 + 12 * (i + 1) <= size; i++) {
+        saved_tags[saved_count++] = get16(data + ifd + 2 + 12 * i);
+        if (i && saved_tags[i] <= saved_tags[i - 1]) ascending = 0;
+    }
+    return ascending && (saved_count == n);
+}
+
+static int saved(unsigned tag) {
+    unsigned i;
+    for (i = 0; i < saved_count; i++) {
+        if (saved_tags[i] == tag) return 1;
+    }
+    return 0;
+}
 
 static DWORD width(FREE_IMAGE_MDTYPE type) { return (type == FIDT_SHORT) ? 2 : (type == FIDT_LONG) ? 4 : 1; }
 
@@ -53,7 +83,7 @@ static FIBITMAP *picture(void) {
     return dib;
 }
 
-static void put(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, const void *value) {
+static void put_in(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, const void *value) {
     FITAG *tag = FreeImage_CreateTag();
     FreeImage_SetTagKey(tag, key);
     FreeImage_SetTagID(tag, id);
@@ -61,8 +91,12 @@ static void put(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type,
     FreeImage_SetTagCount(tag, count);
     FreeImage_SetTagLength(tag, count * width(type));
     FreeImage_SetTagValue(tag, value);
-    FreeImage_SetMetadata(FIMD_EXIF_MAIN, dib, key, tag);
+    FreeImage_SetMetadata(model, dib, key, tag);
     FreeImage_DeleteTag(tag);
+}
+
+static void put(FIBITMAP *dib, const char *key, WORD id, FREE_IMAGE_MDTYPE type, DWORD count, const void *value) {
+    put_in(FIMD_EXIF_MAIN, dib, key, id, type, count, value);
 }
 
 /* the tag came back with these bytes; UTF-16 comes back FIDT_UNDEFINED */
@@ -88,6 +122,10 @@ static FIBITMAP *round_trip(FIBITMAP *dib, const char *what) {
     if (!FreeImage_SaveToMemory(FIF_JXR, dib, mem, JXR_LOSSLESS)) {
         CHECK(0, "%s: not saved", what);
     } else {
+        BYTE *data = NULL;
+        DWORD size = 0;
+        FreeImage_AcquireMemory(mem, &data, &size);
+        CHECK(read_ifd(data, size), "%s: IFD entries not in ascending tag order", what);
         FreeImage_SeekMemory(mem, 0, SEEK_SET);
         back = FreeImage_LoadFromMemory(FIF_JXR, mem, 0);
         CHECK(back != NULL, "%s: saved, but does not load", what);
@@ -129,6 +167,44 @@ int main(int argc, char **argv) {
     for (i = 0; back && i < 14; i++) CHECK(same_tag(back, &TAGS[i]), "all 14 tags: %s not the same back", TAGS[i].key);
     FreeImage_Unload(back);
     FreeImage_Unload(dib);
+
+    /* all of them with XMP, IPTC, Exif, GPS and an ICC profile: every IFD entry a save can have */
+    {
+        static const char XMP[] = "<x:xmpmeta xmlns:x='adobe:ns:meta/'/>";
+        static const WORD ISO = 200;
+        static const BYTE GPS_VERSION[4] = { 2, 2, 0, 0 };
+        static const unsigned ENTRIES[] = { 0x02bc, 0x83bb, 0x8769, 0x8773, 0x8825, 0x9c9b, 0xbc01 };
+        BYTE icc[132];
+        FITAG *tag = NULL;
+        FIICCPROFILE *profile;
+        dib = picture();
+        for (i = 0; i < 14; i++) put(dib, TAGS[i].key, TAGS[i].id, TAGS[i].type, TAGS[i].count, TAGS[i].value);
+        put_in(FIMD_XMP, dib, "XMLPacket", 0x02bc, FIDT_ASCII, sizeof(XMP), XMP);
+        put_in(FIMD_IPTC, dib, "Headline", 0x0269, FIDT_ASCII, 9, "Headline");
+        put_in(FIMD_EXIF_EXIF, dib, "ISOSpeedRatings", 0x8827, FIDT_SHORT, 1, &ISO);
+        put_in(FIMD_EXIF_GPS, dib, "GPSVersionID", 0x0000, FIDT_BYTE, 4, GPS_VERSION);
+        memset(icc, 0, sizeof(icc));
+        icc[3] = sizeof(icc);
+        memcpy(icc + 36, "acsp", 4);
+        FreeImage_CreateICCProfile(dib, icc, sizeof(icc));
+        back = round_trip(dib, "everything");
+        for (i = 0; i < (int)(sizeof(ENTRIES) / sizeof(ENTRIES[0])); i++) CHECK(saved(ENTRIES[i]), "everything: no %04x entry", ENTRIES[i]);
+        if (back) {
+            for (i = 0; i < 14; i++) CHECK(same_tag(back, &TAGS[i]), "everything: %s not the same back", TAGS[i].key);
+            CHECK(FreeImage_GetMetadata(FIMD_XMP, back, "XMLPacket", &tag) && tag && FreeImage_GetTagLength(tag) >= strlen(XMP) &&
+                  !memcmp(FreeImage_GetTagValue(tag), XMP, strlen(XMP)), "everything: XMP not the same back");
+            CHECK(FreeImage_GetMetadata(FIMD_IPTC, back, "Headline", &tag) && tag && !strcmp((const char *)FreeImage_GetTagValue(tag), "Headline"),
+                  "everything: IPTC Headline not the same back");
+            CHECK(FreeImage_GetMetadata(FIMD_EXIF_EXIF, back, "ISOSpeedRatings", &tag) && tag && *(const WORD *)FreeImage_GetTagValue(tag) == ISO,
+                  "everything: Exif ISOSpeedRatings not the same back");
+            CHECK(FreeImage_GetMetadata(FIMD_EXIF_GPS, back, "GPSVersionID", &tag) && tag && !memcmp(FreeImage_GetTagValue(tag), GPS_VERSION, 4),
+                  "everything: GPSVersionID not the same back");
+            profile = FreeImage_GetICCProfile(back);
+            CHECK(profile->size == sizeof(icc) && !memcmp(profile->data, icc, sizeof(icc)), "everything: ICC profile not the same back");
+        }
+        FreeImage_Unload(back);
+        FreeImage_Unload(dib);
+    }
 
     /* only the inline ones: the rating, the page number, short strings */
     dib = picture();

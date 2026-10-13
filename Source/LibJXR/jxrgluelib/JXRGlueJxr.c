@@ -311,6 +311,7 @@ ERR WriteContainerPre(
     U16 cInactiveMetadata = 0;
     U32 uiCurrDescMetadataOffset = 0;
 
+    // FreeImage: in ascending tag order (T.832 A.7.2), as are the writes below
     static WmpDE wmpDEs[] =
     {
         {WMP_tagDocumentName, WMP_typASCII, 1, (U32) -1},     // Descriptive metadata
@@ -323,17 +324,16 @@ ERR WriteContainerPre(
         {WMP_tagDateTime, WMP_typASCII, 1, (U32) -1},         // Descriptive metadata
         {WMP_tagArtist, WMP_typASCII, 1, (U32) -1},           // Descriptive metadata
         {WMP_tagHostComputer, WMP_typASCII, 1, (U32) -1},     // Descriptive metadata
+        {WMP_tagXMPMetadata, WMP_typBYTE, 1, (U32) -1},
         {WMP_tagRatingStars, WMP_typSHORT, 1, (U32) -1},      // Descriptive metadata
         {WMP_tagRatingValue, WMP_typSHORT, 1, (U32) -1},      // Descriptive metadata
         {WMP_tagCopyright, WMP_typASCII, 1, (U32) -1},        // Descriptive metadata
-        {WMP_tagCaption, WMP_typBYTE, 1, (U32) -1},           // Descriptive metadata
-
-        {WMP_tagXMPMetadata, WMP_typBYTE, 1, (U32) -1},
         {WMP_tagIPTCNAAMetadata, WMP_typBYTE, 1, (U32) -1},
         {WMP_tagPhotoshopMetadata, WMP_typBYTE, 1, (U32) -1},
         {WMP_tagEXIFMetadata, WMP_typLONG, 1, (U32) -1},
         {WMP_tagIccProfile, WMP_typUNDEFINED, 1, (U32) -1},
         {WMP_tagGPSInfoMetadata, WMP_typLONG, 1, (U32) -1},
+        {WMP_tagCaption, WMP_typBYTE, 1, (U32) -1},           // Descriptive metadata
 
         {WMP_tagPixelFormat, WMP_typBYTE, 16, (U32) -1},
         {WMP_tagTransformation, WMP_typLONG, 1, (U32) -1},
@@ -518,6 +518,17 @@ ERR WriteContainerPre(
     Call(WriteDescMetadata(pIE, pIE->sDescMetadata.pvarHostComputer, &wmpDE,
         &uiCurrDescMetadataOffset, &offPos));
 
+    // XMP Metadata
+    wmpDE = wmpDEs[i++];
+    assert(WMP_tagXMPMetadata == wmpDE.uTag);
+    if (pIE->cbXMPMetadataByteCount > 0)
+    {
+        U32 uiTemp;
+        wmpDE.uCount = pIE->cbXMPMetadataByteCount;
+        wmpDE.uValueOrOffset = pDEMisc->uXMPMetadataOffset;
+        Call(WriteWmpDE(pWS, &offPos, &wmpDE, pIE->pbXMPMetadata, &uiTemp));
+    }
+
     wmpDE = wmpDEs[i++];
     assert(WMP_tagRatingStars == wmpDE.uTag);
     Call(WriteDescMetadata(pIE, pIE->sDescMetadata.pvarRatingStars, &wmpDE,
@@ -532,22 +543,6 @@ ERR WriteContainerPre(
     assert(WMP_tagCopyright == wmpDE.uTag);
     Call(WriteDescMetadata(pIE, pIE->sDescMetadata.pvarCopyright, &wmpDE,
         &uiCurrDescMetadataOffset, &offPos));
-
-    wmpDE = wmpDEs[i++];
-    assert(WMP_tagCaption == wmpDE.uTag);
-    Call(WriteDescMetadata(pIE, pIE->sDescMetadata.pvarCaption, &wmpDE,
-        &uiCurrDescMetadataOffset, &offPos));
-
-    // XMP Metadata
-    wmpDE = wmpDEs[i++];
-    assert(WMP_tagXMPMetadata == wmpDE.uTag);
-    if (pIE->cbXMPMetadataByteCount > 0)
-    {
-        U32 uiTemp;
-        wmpDE.uCount = pIE->cbXMPMetadataByteCount;
-        wmpDE.uValueOrOffset = pDEMisc->uXMPMetadataOffset;
-        Call(WriteWmpDE(pWS, &offPos, &wmpDE, pIE->pbXMPMetadata, &uiTemp));
-    }
 
     // IPTCNAA Metadata
     wmpDE = wmpDEs[i++];
@@ -627,6 +622,11 @@ ERR WriteContainerPre(
         Call(pWS->SetPos(pWS, pDEMisc->uGPSInfoMetadataOffset));
         Call(pWS->Write(pWS, pbGPSInfoMetadata, pIE->cbGPSInfoMetadataByteCount));
     }
+
+    wmpDE = wmpDEs[i++];
+    assert(WMP_tagCaption == wmpDE.uTag);
+    Call(WriteDescMetadata(pIE, pIE->sDescMetadata.pvarCaption, &wmpDE,
+        &uiCurrDescMetadataOffset, &offPos));
 
     wmpDE = wmpDEs[i++];
     assert(WMP_tagPixelFormat == wmpDE.uTag);
