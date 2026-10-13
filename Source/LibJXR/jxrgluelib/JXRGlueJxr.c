@@ -47,7 +47,7 @@ void CalcMetadataSizeLPSTR(const DPKPROPVARIANT var,
 
         // We only use offset if size > 4
         if (uiLenWithNull > 4)
-            *pcbOffsetSize += uiLenWithNull;
+            *pcbOffsetSize += uiLenWithNull + (uiLenWithNull & 1); // FreeImage: and WriteWmpDE's pad byte
 
         if (pcbCount)
             *pcbCount = uiLenWithNull;
@@ -441,42 +441,43 @@ ERR WriteContainerPre(
         pDEMisc->uImageOffset += cbMetadataOffsetSize;
     }
 
+    // FreeImage: each area padded to an even size, so that every one starts at an even offset (T.832 A.7.5)
     if (pIE->cbXMPMetadataByteCount > 0)
     {
         pDEMisc->uXMPMetadataOffset = pDEMisc->uImageOffset;
-        pDEMisc->uImageOffset += pIE->cbXMPMetadataByteCount;
+        pDEMisc->uImageOffset += pIE->cbXMPMetadataByteCount + (pIE->cbXMPMetadataByteCount & 1);
     }
 
     if (pIE->cbIPTCNAAMetadataByteCount > 0)
     {
         pDEMisc->uIPTCNAAMetadataOffset = pDEMisc->uImageOffset;
-        pDEMisc->uImageOffset += pIE->cbIPTCNAAMetadataByteCount;
+        pDEMisc->uImageOffset += pIE->cbIPTCNAAMetadataByteCount + (pIE->cbIPTCNAAMetadataByteCount & 1);
     }
 
     if (pIE->cbPhotoshopMetadataByteCount > 0)
     {
         pDEMisc->uPhotoshopMetadataOffset = pDEMisc->uImageOffset;
-        pDEMisc->uImageOffset += pIE->cbPhotoshopMetadataByteCount;
+        pDEMisc->uImageOffset += pIE->cbPhotoshopMetadataByteCount + (pIE->cbPhotoshopMetadataByteCount & 1);
     }
 
     if (pIE->cbEXIFMetadataByteCount > 0)
     {
         pDEMisc->uEXIFMetadataOffset = pDEMisc->uImageOffset;
         pDEMisc->uImageOffset += (pDEMisc->uImageOffset & 1);
-        pDEMisc->uImageOffset += pIE->cbEXIFMetadataByteCount;
+        pDEMisc->uImageOffset += pIE->cbEXIFMetadataByteCount + (pIE->cbEXIFMetadataByteCount & 1);
     }
 
     if (pIE->cbColorContext > 0)
     {
         pDEMisc->uColorProfileOffset = pDEMisc->uImageOffset;
-        pDEMisc->uImageOffset += pIE->cbColorContext;
+        pDEMisc->uImageOffset += pIE->cbColorContext + (pIE->cbColorContext & 1);
     }
 
     if (pIE->cbGPSInfoMetadataByteCount > 0)
     {
         pDEMisc->uGPSInfoMetadataOffset = pDEMisc->uImageOffset;
         pDEMisc->uImageOffset += (pDEMisc->uImageOffset & 1);
-        pDEMisc->uImageOffset += pIE->cbGPSInfoMetadataByteCount;
+        pDEMisc->uImageOffset += pIE->cbGPSInfoMetadataByteCount + (pIE->cbGPSInfoMetadataByteCount & 1);
     }
 
     Call(PutUShort(pWS, offPos, cWmpDEs)); offPos += 2;
@@ -602,6 +603,11 @@ ERR WriteContainerPre(
             pbEXIFMetadata - uiTemp, uiTemp + pIE->cbEXIFMetadataByteCount, &uiTemp));
         Call(pWS->SetPos(pWS, pDEMisc->uEXIFMetadataOffset));
         Call(pWS->Write(pWS, pbEXIFMetadata, pIE->cbEXIFMetadataByteCount));
+        // FreeImage: pad byte, as WriteWmpDE's
+        if (pIE->cbEXIFMetadataByteCount & 1)
+        {
+            Call(pWS->Write(pWS, Zero, 1));
+        }
     }
 
     // ICC Profile
@@ -636,6 +642,11 @@ ERR WriteContainerPre(
             pbGPSInfoMetadata - uiTemp, uiTemp + pIE->cbGPSInfoMetadataByteCount, &uiTemp));
         Call(pWS->SetPos(pWS, pDEMisc->uGPSInfoMetadataOffset));
         Call(pWS->Write(pWS, pbGPSInfoMetadata, pIE->cbGPSInfoMetadataByteCount));
+        // FreeImage: pad byte, as WriteWmpDE's
+        if (pIE->cbGPSInfoMetadataByteCount & 1)
+        {
+            Call(pWS->Write(pWS, Zero, 1));
+        }
     }
 
     wmpDE = wmpDEs[i++];

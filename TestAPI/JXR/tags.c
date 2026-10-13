@@ -1,6 +1,6 @@
 /* FreeImage 3 - JPEG XR descriptive tags: every Exif-Main tag the container holds, alone, together and of a
    wrong type, saved losslessly and loaded back; the pixels must survive and the tags come back or be left out;
-   every save has its IFD entries in ascending tag order (T.832 A.7.2) */
+   every save has its IFD entries in ascending tag order (T.832 A.7.2), the values past them at even offsets (A.7.5) */
 /* argv[1]: a TIFF with a PageNumber tag, default ../../Wrapper/FreeImagePlus/test/test.tif */
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,19 +48,24 @@ static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg
 static unsigned get16(const BYTE *p) { return p[0] | (p[1] << 8); }
 static unsigned get32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24); }
 
-/* records the first IFD's tags; 0 if they do not ascend */
+/* records the first IFD's tags; ORDERED if they ascend, EVEN if every value stored past its entry starts at an even offset */
+enum { ORDERED = 1, EVEN = 2 };
 static int read_ifd(const BYTE *data, DWORD size) {
+    static const unsigned TYPE_SIZE[13] = { 0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8 };
     const DWORD ifd = (data && size >= 8) ? get32(data + 4) : 0;
     unsigned i, n;
-    int ascending = 1;
+    int result = ORDERED | EVEN;
     saved_count = 0;
     if (!ifd || ifd + 2 > size) return 0;
     n = get16(data + ifd);
     for (i = 0; i < n && i < 64 && ifd + 2 + 12 * (i + 1) <= size; i++) {
-        saved_tags[saved_count++] = get16(data + ifd + 2 + 12 * i);
-        if (i && saved_tags[i] <= saved_tags[i - 1]) ascending = 0;
+        const BYTE *e = data + ifd + 2 + 12 * i;
+        const unsigned type = get16(e + 2);
+        saved_tags[saved_count++] = get16(e);
+        if (i && saved_tags[i] <= saved_tags[i - 1]) result &= ~ORDERED;
+        if (type < 13 && TYPE_SIZE[type] * get32(e + 4) > 4 && (get32(e + 8) & 1)) result &= ~EVEN;
     }
-    return ascending && (saved_count == n);
+    return (saved_count == n) ? result : 0;
 }
 
 static int saved(unsigned tag) {
@@ -124,8 +129,11 @@ static FIBITMAP *round_trip(FIBITMAP *dib, const char *what) {
     } else {
         BYTE *data = NULL;
         DWORD size = 0;
+        int layout;
         FreeImage_AcquireMemory(mem, &data, &size);
-        CHECK(read_ifd(data, size), "%s: IFD entries not in ascending tag order", what);
+        layout = read_ifd(data, size);
+        CHECK(layout & ORDERED, "%s: IFD entries not in ascending tag order", what);
+        CHECK(layout & EVEN, "%s: a value at an odd offset", what);
         FreeImage_SeekMemory(mem, 0, SEEK_SET);
         back = FreeImage_LoadFromMemory(FIF_JXR, mem, 0);
         CHECK(back != NULL, "%s: saved, but does not load", what);

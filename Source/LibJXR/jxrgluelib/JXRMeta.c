@@ -829,10 +829,16 @@ ERR WriteWmpDE(
                 // Write the data if requested to do so
                 if (pbData)
                 {
+                    const U8 cZero = 0;
                     Call(pWS->SetPos(pWS, pDE->uValueOrOffset));
                     Call(pWS->Write(pWS, pbData, pDE->uCount));
+                    // FreeImage: a pad byte puts the next out-of-line value at an even offset (T.832 A.7.5)
+                    if (pDE->uCount & 1)
+                    {
+                        Call(pWS->Write(pWS, &cZero, 1));
+                    }
                     Call(pWS->SetPos(pWS, offPos));
-                    *pcbDataWrittenToOffset = pDE->uCount;
+                    *pcbDataWrittenToOffset = pDE->uCount + (pDE->uCount & 1);
                 }
             }
             break;

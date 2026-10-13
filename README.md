@@ -57,6 +57,7 @@ Fixes:
 - fixed JPEG XR images with interleaved alpha loading with wrong alpha values;
 - fixed JPEG XR files saved with alpha carrying a wrong alpha data size;
 - fixed JPEG XR files saved with metadata listing their tags out of order;
+- fixed JPEG XR files saved with metadata storing it at odd offsets, which strict readers refuse;
 - fixed JPEG XR files saved from float RGB images using a pixel format the standard does not define;
 - fixed black-is-one JPEG XR bilevel images loading inverted, and min-is-white 1-bit images failing to save as JPEG XR;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
