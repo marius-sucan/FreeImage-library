@@ -466,8 +466,8 @@ GetOutputPixelFormat(FIBITMAP *dib, PKPixelFormatGUID *guid_format, BOOL *bHasAl
 		case FIT_BITMAP:	// standard image	: 1-, 4-, 8-, 16-, 24-, 32-bit
 			switch(bpp) {
 				case 1:
-					// assume FIC_MINISBLACK
-					if(color_type == FIC_MINISBLACK) {
+					// FIC_MINISWHITE is saved as BD1BLACK1
+					if((color_type == FIC_MINISBLACK) || (color_type == FIC_MINISWHITE)) {
 						*guid_format = GUID_PKPixelFormatBlackWhite;
 					}
 					break;
@@ -1652,10 +1652,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				throw FI_MSG_ERROR_DIB_MEMORY;
 			}
 			if(FreeImage_GetBPP(dib) == 1) {
-				// BD_1 - build a FIC_MINISBLACK palette
+				// BD1WHITE1 as FIC_MINISBLACK; BD1BLACK1, where 1 is black, as FIC_MINISWHITE
+				const BYTE zero = pDecoder->WMP.wmiSCP.bBlackWhite ? 255 : 0;
 				RGBQUAD *pal = FreeImage_GetPalette(dib);
-				pal[0].rgbRed = pal[0].rgbGreen = pal[0].rgbBlue = 0;
-				pal[1].rgbRed = pal[1].rgbGreen = pal[1].rgbBlue = 255;
+				pal[0].rgbRed = pal[0].rgbGreen = pal[0].rgbBlue = zero;
+				pal[1].rgbRed = pal[1].rgbGreen = pal[1].rgbBlue = (BYTE)(255 - zero);
 			}
 		}
 
@@ -1913,6 +1914,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		// ... then configure the encoder
 		SetEncoderParameters(&pEncoder->WMP.wmiSCP, &pixelInfo, width, flags, bHasAlpha);
+		// BD1BLACK1: a 1 is black
+		pEncoder->WMP.wmiSCP.bBlackWhite = (pixelInfo.bdBitDepth == BD_1) && (FreeImage_GetColorType(dib) == FIC_MINISWHITE);
 
 		// set pixel format
 		pEncoder->SetPixelFormat(pEncoder, guid_format);

@@ -2,7 +2,7 @@
 
 This report checks FreeImage's JPEG XR code against the JPEG XR standard. It asks two questions: does the code follow the specification, and which parts of the specification does it not implement? The code is `Source/LibJXR`, which is Microsoft's jxrlib with FreeImage's `// FreeImage:` patches, together with `Source/FreeImage/PluginJXR.cpp`. Both were taken at qpv 3edde65 and built the way FreeImage builds them (`-D__ANSI__ -DDISABLE_PERF_MEASUREMENT`, `REENTRANT_MODE`).
 
-The report was written on 2026-10-12. **No source file was changed by this review.** R1, D1, E1, D2, C1, C2 and C4 have been fixed since; their rows say how.
+The report was written on 2026-10-12. **No source file was changed by this review.** R1, D1, E1, D2, C1, C2, C4 and F1 have been fixed since; their rows say how.
 
 ## The documents used
 
@@ -73,7 +73,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
 | C2 | A FreeImage save with Exif Copyright and XMP **is rejected by the reference decoder**: IFD tags are out of order. | Medium | **fixed** |
 | C3 | A FreeImage save with metadata **is rejected by the reference decoder** when a string or XMP of odd length puts the next metadata at an odd offset. | Medium | open |
 | C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium | **fixed** |
-| F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium | open |
+| F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium | **fixed** |
 | R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium | open |
 
 **Not implemented:**
@@ -207,7 +207,7 @@ FreeImage's save path avoids every item in this table except where noted. It use
 | C6 | A.7.17, A.7.21, A.7.22 | COLOR_SPACE, PTM_COLOR_INFO and PROFILE_LEVEL_CONTAINER are neither read nor written. BT.2020 and PQ/HLG signalling is lost. Each unknown tag, including these and PADDING_DATA, prints `Unrecognized WMPTag` to stderr from inside the library (`JXRGlueJxr.c:1784`). | repro | Missing, low |
 | C7 | A.6.3, A.7.20 | Only the first IFD is read (A.6.3 allows that), so there are no previews or pages. A file whose first IFD is a preview loads as the preview. | code | Missing, low |
 | C8 | A.7.29 | A.7.29 says the separate alpha codestream "shall" have ALPHA_IMAGE_PLANE_FLAG=1. Every file observed writes 0, as 8.3.18 implies: jxrlib, T.835, and all 36 planar-alpha files of the official suite. | repro | Unclear (likely spec erratum) |
-| F1 | 8.3.20, Table 199 | **BD1BLACK1 loads inverted.** jxrlib's output keeps the file's convention, which is correct, but PluginJXR always installs a black=0 palette (`PluginJXR.cpp:1655-1658`) and ignores `wmiSCP.bBlackWhite`. | ref, repro: FreeImage's bits equal T.835's raw bits for both suite BlackWhite files, under one palette | Deviation, medium |
+| F1 | 8.3.20, Table 199 | **BD1BLACK1 loads inverted.** jxrlib's output keeps the file's convention, which is correct, but PluginJXR always installs a black=0 palette (`PluginJXR.cpp:1655-1658`) and ignores `wmiSCP.bBlackWhite`. | ref, repro: FreeImage's bits equal T.835's raw bits for both suite BlackWhite files, under one palette | Deviation, medium. **Fixed** 2026-10-13: the palette follows `bBlackWhite`, so a BD1BLACK1 image loads as FIC_MINISWHITE, its bits still T.835's; a FIC_MINISWHITE image, which FreeImage refused to save, saves as BD1BLACK1, and T.835 decodes it to the source pixels. |
 | F2 | A.7.18 | n-channel images with 5–8 channels, or 4 with alpha, are refused (36 suite files), although jxrlib decodes them bit-exactly. 3- and 4-channel images and 24bppYCC444 load as raw samples into RGB(A) bitmaps; this is the known open item. | ref | Missing, medium |
 | F3 | Annex E | `MimeType` returns "image/vnd.ms-photo" (`PluginJXR.cpp:1080`), so `FreeImage_GetFIFFromMime("image/jxr")` fails. The glue also rewrites an XMP `dc:format` to that type. | code | Deviation, low |
 | F4 | Annex F, T.801 | JPEG XR stored in HEIF ('jxr1' items, brands jxrA and jxrS) and JPX-boxed JPEG XR are not supported. Such files are identified as FIF_HEIF or FIF_JP2 and then fail. | code | Missing, low |
@@ -278,7 +278,7 @@ Beyond the suite results in §2:
 | 4 | C2 and C3: sort IFD entries by tag before writing, and pad out-of-line data to even offsets. C2 **done** 2026-10-13; T.835 reads most metadata saves only once C3 is done too. |
 | 5 | C4: save FIT_RGBF as 128bppRGBFloat (the glue has the converter). **Done** 2026-10-13, in the container's PIXEL_FORMAT alone: the codestream is the same. |
 | 6 | C1: write the true ALPHA_BYTE_COUNT. **Done** 2026-10-13. |
-| 7 | F1: build the palette from `bBlackWhite`, or invert the bits on load. |
+| 7 | F1: build the palette from `bBlackWhite`, or invert the bits on load. **Done** 2026-10-13, by the palette. |
 | 8 | D2-D4: rounding 3 in `outputMBRowAlpha`, the alpha plane's own parameters, fix the guard; TRIM_FLEXBITS on the alpha contexts; re-remap the copied HP quantizers. D2 **done** 2026-10-13. |
 | 9 | F2: load n-channel images, and refuse or convert the raw 3/4-channel and YCC444 cases. |
 

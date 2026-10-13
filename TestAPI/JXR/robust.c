@@ -128,6 +128,36 @@ static DWORD codestream(const Seed *s, unsigned tag) {
     return (at && at + 32 <= s->size && !memcmp(s->data + at, "WMPHOTO", 7)) ? at : 0;
 }
 
+static int bit(FIBITMAP *dib, unsigned x, unsigned y) {
+    return (FreeImage_GetScanLine(dib, y)[x >> 3] >> (7 - (x & 7))) & 1;
+}
+
+/* two 1-bit images show the same picture; inverted: through each other's bits */
+static int same_picture(FIBITMAP *a, FIBITMAP *b, int inverted) {
+    const RGBQUAD *pa, *pb;
+    unsigned x, y;
+    if (!a || !b || FreeImage_GetBPP(a) != 1 || FreeImage_GetBPP(b) != 1 || FreeImage_GetWidth(a) != FreeImage_GetWidth(b) ||
+        FreeImage_GetHeight(a) != FreeImage_GetHeight(b)) return 0;
+    pa = FreeImage_GetPalette(a);
+    pb = FreeImage_GetPalette(b);
+    for (y = 0; y < FreeImage_GetHeight(a); y++) {
+        for (x = 0; x < FreeImage_GetWidth(a); x++) {
+            const int ba = bit(a, x, y), bb = bit(b, x, y);
+            if ((inverted ? ba == bb : ba != bb) || pa[ba].rgbRed != pb[bb].rgbRed) return 0;
+        }
+    }
+    return 1;
+}
+
+static FREE_IMAGE_COLOR_TYPE header_colors(const BYTE *data, DWORD size) {
+    FIMEMORY *mem = FreeImage_OpenMemory((BYTE *)data, size);
+    FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_JXR, mem, FIF_LOAD_NOPIXELS);
+    const FREE_IMAGE_COLOR_TYPE colors = dib ? FreeImage_GetColorType(dib) : FIC_PALETTE;
+    FreeImage_Unload(dib);
+    FreeImage_CloseMemory(mem);
+    return colors;
+}
+
 int main(void) {
     Seed seeds[6];
     BYTE *work;
@@ -207,6 +237,53 @@ int main(void) {
             FreeImage_Unload(dib);
         }
         free(work);
+    }
+
+    /* BD1BLACK1, where 1 is black: the 1-bit seed's codestream set to it shows the same picture through inverted bits,
+       as FIC_MINISWHITE; a FIC_MINISWHITE image saves as BD1BLACK1 and loads back as it was */
+    {
+        Seed *s = &seeds[3];
+        const DWORD at = codestream(s, 0xbcc0);
+        static const int FLAGS[2] = { JXR_LOSSLESS, 60 };
+        FIBITMAP *dib, *white;
+        unsigned x, y;
+        work = (BYTE *)malloc(s->size);
+        memcpy(work, s->data, s->size);
+        CHECK(at && work[at + 11] == 0x00 && FreeImage_GetColorType(s->decoded) == FIC_MINISBLACK, "%s: not BD1WHITE1, FIC_MINISBLACK", s->name);
+        if (at) {
+            work[at + 11] = 0x0f;
+            dib = load(work, s->size);
+            CHECK(dib && FreeImage_GetColorType(dib) == FIC_MINISWHITE && same_picture(dib, s->decoded, 1),
+                  "%s as BD1BLACK1: not the same picture through inverted bits, as FIC_MINISWHITE", s->name);
+            CHECK(header_colors(work, s->size) == FIC_MINISWHITE, "%s as BD1BLACK1: header only, not FIC_MINISWHITE", s->name);
+            FreeImage_Unload(dib);
+        }
+        free(work);
+        white = FreeImage_Clone(s->decoded);
+        for (y = 0; y < FreeImage_GetHeight(white); y++) {
+            for (x = 0; x < FreeImage_GetLine(white); x++) FreeImage_GetScanLine(white, y)[x] ^= 0xff;
+        }
+        FreeImage_GetPalette(white)[0].rgbRed = FreeImage_GetPalette(white)[0].rgbGreen = FreeImage_GetPalette(white)[0].rgbBlue = 255;
+        FreeImage_GetPalette(white)[1].rgbRed = FreeImage_GetPalette(white)[1].rgbGreen = FreeImage_GetPalette(white)[1].rgbBlue = 0;
+        for (j = 0; j < 2; j++) {
+            FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+            BYTE *p = NULL;
+            DWORD n = 0, cs;
+            Seed saved = { "FIC_MINISWHITE", NULL, 0, NULL };
+            CHECK(FreeImage_SaveToMemory(FIF_JXR, white, mem, FLAGS[j]) && FreeImage_AcquireMemory(mem, &p, &n), "FIC_MINISWHITE %s: not saved",
+                  j ? "q60" : "lossless");
+            saved.data = p;
+            saved.size = n;
+            cs = p ? codestream(&saved, 0xbcc0) : 0;
+            CHECK(cs && p[cs + 11] == 0x0f, "FIC_MINISWHITE %s: not saved as BD1BLACK1", j ? "q60" : "lossless");
+            dib = p ? load(p, n) : NULL;
+            CHECK(dib && FreeImage_GetColorType(dib) == FIC_MINISWHITE && (j || same_picture(dib, white, 0)),
+                  "FIC_MINISWHITE %s: not loaded back as it was", j ? "q60" : "lossless");
+            CHECK(p && header_colors(p, n) == FIC_MINISWHITE, "FIC_MINISWHITE %s: header only, not FIC_MINISWHITE", j ? "q60" : "lossless");
+            FreeImage_Unload(dib);
+            FreeImage_CloseMemory(mem);
+        }
+        FreeImage_Unload(white);
     }
 
     for (i = 0; i < 6; i++) {
