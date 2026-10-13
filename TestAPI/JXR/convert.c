@@ -5,8 +5,11 @@
    and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped; with JXR_CMYK their
    CMYK samples, the alpha dropped, the profile kept and marked CMYK); crop.jxr, 40x140 32bppBGRA with planar alpha
    cropped by jxrlib at 16,32 of a 64x200 image, its image plane keeping a 16-row margin its alpha plane lacks;
-   hardtiles.jxr, 96x140 24bppBGR with two levels of overlap and hard tiles 2, 2, 2 macroblocks wide and 5, 4 high; every
-   container orientation must load the values the file was made from, and a header-only load the same type and size */
+   hardtiles.jxr, 96x140 24bppBGR with two levels of overlap and hard tiles 2, 2, 2 macroblocks wide and 5, 4 high;
+   interleaved alpha in ileave420.jxr, 8x140 32bppBGRA with grey 4:2:0 colour scaled and its lossless alpha not, ileave16.jxr,
+   9x140 64bppRGBA with SHIFT_BITS 3, and ileave_q.jxr, 9x140 32bppBGRA at QP index 40, held to the reference decoder's
+   output in ileave_q.ref (B, G, R, A); every container orientation must load the values the file was made from, and a
+   header-only load the same type and size */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,9 +23,16 @@ static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg
 static unsigned get16(const BYTE *p) { return p[0] | (p[1] << 8); }
 static unsigned get32(const BYTE *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((unsigned)p[3] << 24); }
 
+/* the reference decoder's output of a lossy file, B, G, R, A, top-down */
+static const BYTE *ref = NULL;
+static unsigned ref_width = 0;
+
 /* channel c (R, G, B, A) of upright pixel (x, y) as made, y counted from the top; alpha is channel 3, CMYK's alpha 4 */
 static double made(const char *name, unsigned x, unsigned y, unsigned c) {
     const unsigned k = (3 * x + 5 * y + 17 * c) % 97, k3 = (3 * x + 5 * y + 17 * 3) % 97, k4 = (3 * x + 5 * y + 17 * 4) % 97;
+    if (ref) return ref[((size_t)y * ref_width + x) * 4 + (c == 3 ? 3 : 2 - c)];
+    if (!strcmp(name, "ileave420")) return (c == 3) ? 64 + k3 : 2.0 * ((3 * x + 5 * y) % 97);
+    if (!strcmp(name, "ileave16")) return (c == 3) ? 16384 + 256 * k3 : 512.0 * k;
     if (!strcmp(name, "crop")) {
         /* the source's x, y, ..., 5y + x / 16, at (x + 16, y + 32) */
         const unsigned sx = x + 16, sy = y + 32;
@@ -92,6 +102,14 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
     data = (BYTE *)malloc(size);
     size = (long)fread(data, 1, size, f);
     fclose(f);
+    snprintf(path, sizeof(path), "%s/%s.ref", dir, name);
+    if ((f = fopen(path, "rb")) != NULL) {
+        BYTE *r = (BYTE *)malloc((size_t)w * h * 4);
+        if (fread(r, 1, (size_t)w * h * 4, f) == (size_t)w * h * 4) ref = r, ref_width = w;
+        else free(r);
+        fclose(f);
+    }
+    CHECK(ref != NULL || strcmp(name, "ileave_q"), "%s: missing or short", path);
     ifd = get32(data + 4);
     for (k = 0; ifd + 2 <= (DWORD)size && k < get16(data + ifd) && ifd + 14 + 12 * k <= (DWORD)size; k++) {
         if (get16(data + ifd + 2 + 12 * k) == 0xbc02) orient = data + ifd + 2 + 12 * k;
@@ -149,6 +167,8 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
         }
         FreeImage_Unload(dib);
     }
+    free((void *)ref);
+    ref = NULL;
     free(data);
 }
 
@@ -179,6 +199,9 @@ int main(int argc, char **argv) {
     formats(dir, "cmyka80", 9, FIT_RGBA16, 64, JXR_CMYK);
     formats(dir, "crop", 40, FIT_BITMAP, 32, 0);
     formats(dir, "hardtiles", 96, FIT_BITMAP, 24, 0);
+    formats(dir, "ileave420", 8, FIT_BITMAP, 32, 0);
+    formats(dir, "ileave16", 9, FIT_RGBA16, 64, 0);
+    formats(dir, "ileave_q", 9, FIT_BITMAP, 32, 0);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

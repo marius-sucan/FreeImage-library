@@ -54,6 +54,7 @@ Fixes:
 - fixed JPEG XR RGBE images loading as 8-bit, and opaque 32-bit ones loading transparent;
 - fixed JPEG XR CMYK, premultiplied-alpha and RGBA-ordered images loading with wrong colours;
 - fixed JPEG XR images with hard tile boundaries loading with wrong pixels along the tile edges;
+- fixed JPEG XR images with interleaved alpha loading with wrong alpha values;
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;

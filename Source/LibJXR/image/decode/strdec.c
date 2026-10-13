@@ -805,22 +805,19 @@ break
 // centralized alpha channel color conversion, small perf penalty
 Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 {
-	if (pSC->WMII.bdBitDepth == BD_8 && pSC->WMISCP.cfColorFormat == CF_RGB) {
-		// has been taken care of and optimized out
-		return ICERR_OK;
-	}
-
+	// FreeImage: every bit depth, by the alpha plane's own header and T.832 9.10.5-9.10.7
 	if (pSC->m_bSecondary == FALSE && pSC->m_pNextSC != NULL) {
 		// with alpha channel
 		const BITDEPTH_BITS bd = pSC->WMII.bdBitDepth;
-		const PixelI iShift = (pSC->m_param.bScaledArith ? SHIFTZERO + QPFRACBITS : 0);
+		const PixelI iShift = (pSC->m_pNextSC->m_param.bScaledArith ? SHIFTZERO + QPFRACBITS : 0);
+		const PixelI iRound = pSC->m_pNextSC->m_param.bScaledArith ? ((1 << (SHIFTZERO + QPFRACBITS - 1)) - 1) : 0;
 		const size_t cHeight = min((pSC->m_Dparam->cROIBottomY + 1) - (pSC->cRow - 1) * 16, 16);
 		const size_t cWidth = (pSC->m_Dparam->cROIRightX + 1);
 		const size_t iFirstRow = ((pSC->cRow - 1) * 16 > pSC->m_Dparam->cROITopY ? 0 : (pSC->m_Dparam->cROITopY & 0xf)), iFirstColumn = pSC->m_Dparam->cROILeftX;
 		const size_t iAlphaPos = pSC->WMII.cLeadingPadding + (pSC->WMII.cfColorFormat == CMYK ? 4 : 3);//only RGB and CMYK may have interleaved alpha
 		const PixelI * pA = pSC->m_pNextSC->a0MBbuffer[0];
-		const U8 nLen = pSC->WMISCP.nLenMantissaOrShift;
-		const I8 nExpBias = pSC->WMISCP.nExpBias;
+		const U8 nLen = pSC->m_pNextSC->WMISCP.nLenMantissaOrShift;
+		const I8 nExpBias = pSC->m_pNextSC->WMISCP.nExpBias;
 		size_t iRow, iColumn;
 		size_t * pOffsetX = pSC->m_Dparam->pOffsetX, *pOffsetY = pSC->m_Dparam->pOffsetY + (pSC->cRow - 1) * 16, iY;
 
@@ -829,7 +826,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 		}
 
 		if (bd == BD_8) {
-			const PixelI iBias = (1 << (iShift + 7)) + (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = (1 << (iShift + 7)) + iRound;
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
@@ -839,7 +836,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 			}
 		}
 		else if (bd == BD_16) {
-			const PixelI iBias = (1 << (iShift + 15)) + (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = (((1 << 15) >> nLen) << iShift) + (iShift == 0 ? 0 : (1 << (iShift - 1)));
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
@@ -849,7 +846,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 			}
 		}
 		else if (bd == BD_16S) {
-			const PixelI iBias = (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = iRound;
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
@@ -859,7 +856,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 			}
 		}
 		else if (bd == BD_16F) {
-			const PixelI iBias = (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = iRound;
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
@@ -869,7 +866,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 			}
 		}
 		else if (bd == BD_32S) {
-			const PixelI iBias = (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = iRound;
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
@@ -879,7 +876,7 @@ Int outputMBRowAlpha(CWMImageStrCodec * pSC)
 			}
 		}
 		else if (bd == BD_32F) {
-			const PixelI iBias = (iShift == 0 ? 0 : (1 << (iShift - 1)));
+			const PixelI iBias = iRound;
 
 			for (iRow = iFirstRow; iRow < cHeight; iRow++) {
 				for (iColumn = iFirstColumn, iY = pOffsetY[iRow]; iColumn < cWidth; iColumn++) {
