@@ -1,10 +1,12 @@
 /* FreeImage 3 - JPEG XR descriptive tags: every Exif-Main tag the container holds, alone, together and of a
    wrong type, saved losslessly and loaded back; the pixels must survive and the tags come back or be left out;
-   every save has its IFD entries in ascending tag order (T.832 A.7.2), the values past them at even offsets (A.7.5) */
+   every save has its IFD entries in ascending tag order (T.832 A.7.2), the values past them at even offsets (A.7.5).
+   Entries jxrlib has no use for, Annex A's and a private one, are ignored without a line on stderr (A.7.1) */
 /* argv[1]: a TIFF with a PageNumber tag, default ../../Wrapper/FreeImagePlus/test/test.tif */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "FreeImage.h"
 
 static int checks = 0, failures = 0;
@@ -116,6 +118,46 @@ static int same_tag(FIBITMAP *dib, const Tag *t) {
 static int has_tag(FIBITMAP *dib, const char *key) {
     FITAG *tag = NULL;
     return FreeImage_GetMetadata(FIMD_EXIF_MAIN, dib, key, &tag) && tag;
+}
+
+/* a copy of a save whose first IFD, with these entries added in tag order, is appended and made the first */
+static BYTE *with_entries(const BYTE *data, DWORD size, const BYTE (*added)[12], unsigned count, DWORD *out_size) {
+    const DWORD ifd = get32(data + 4), at = (size + 1) & ~1u;
+    const unsigned n = get16(data + ifd);
+    unsigned i = 0, j = 0, k = 0;
+    BYTE *out = (BYTE *)calloc(at + 2 + 12 * (n + count) + 4, 1);
+    memcpy(out, data, size);
+    out[4] = (BYTE)at, out[5] = (BYTE)(at >> 8), out[6] = (BYTE)(at >> 16), out[7] = (BYTE)(at >> 24);
+    out[at] = (BYTE)(n + count), out[at + 1] = (BYTE)((n + count) >> 8);
+    while (i < n || j < count) {
+        const BYTE *e = (j == count || (i < n && get16(data + ifd + 2 + 12 * i) < get16(added[j]))) ? data + ifd + 2 + 12 * i++ : added[j++];
+        memcpy(out + at + 2 + 12 * k++, e, 12);
+    }
+    *out_size = at + 2 + 12 * (n + count) + 4;
+    return out;
+}
+
+/* loads a file from memory, returning how many bytes went to stderr meanwhile */
+static long load_watching_stderr(BYTE *data, DWORD size, FIBITMAP **dib) {
+    FILE *t = tmpfile();
+    FIMEMORY *mem;
+    long written = -1;
+    int saved_fd;
+    *dib = NULL;
+    if (!t) return -1;
+    fflush(stderr);
+    saved_fd = dup(2);
+    dup2(fileno(t), 2);
+    mem = FreeImage_OpenMemory(data, size);
+    *dib = FreeImage_LoadFromMemory(FIF_JXR, mem, 0);
+    FreeImage_CloseMemory(mem);
+    fflush(stderr);
+    dup2(saved_fd, 2);
+    close(saved_fd);
+    fseek(t, 0, SEEK_END);
+    written = ftell(t);
+    fclose(t);
+    return written;
 }
 
 /* saved lossless and loaded back with the same pixels, or NULL */
@@ -252,6 +294,42 @@ int main(int argc, char **argv) {
             FreeImage_Unload(back);
             FreeImage_Unload(dib);
         }
+    }
+
+    /* COLOR_SPACE, IMAGE_TYPE, PTM_COLOR_INFO, PROFILE_LEVEL_CONTAINER, PADDING_DATA and a private tag, values in their entries */
+    {
+        static const BYTE ADDED[6][12] = {
+            { 0x01, 0xa0, 3, 0, 1, 0, 0, 0, 0xff, 0xff, 0, 0 },
+            { 0x04, 0xbc, 4, 0, 1, 0, 0, 0, 0, 0, 0, 0 },
+            { 0x05, 0xbc, 1, 0, 4, 0, 0, 0, 2, 2, 2, 0 },
+            { 0x06, 0xbc, 1, 0, 4, 0, 0, 0, 111, 255, 0, 1 },
+            { 0x1c, 0xea, 7, 0, 4, 0, 0, 0, 0x1c, 0xea, 0, 0 },
+            { 0xe8, 0xfd, 4, 0, 1, 0, 0, 0, 7, 0, 0, 0 }
+        };
+        FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+        dib = picture();
+        if (!FreeImage_SaveToMemory(FIF_JXR, dib, mem, JXR_LOSSLESS)) {
+            CHECK(0, "unused tags: not saved");
+        } else {
+            BYTE *data = NULL, *tagged;
+            DWORD size = 0, tagged_size = 0;
+            unsigned y;
+            int same;
+            long written;
+            FreeImage_AcquireMemory(mem, &data, &size);
+            tagged = with_entries(data, size, ADDED, 6, &tagged_size);
+            CHECK(read_ifd(tagged, tagged_size) == (ORDERED | EVEN) && saved(0xa001) && saved(0xfde8), "unused tags: file not made");
+            written = load_watching_stderr(tagged, tagged_size, &back);
+            CHECK(written == 0, "unused tags: %ld bytes written to stderr", written);
+            same = back && FreeImage_GetWidth(back) == FreeImage_GetWidth(dib) && FreeImage_GetHeight(back) == FreeImage_GetHeight(dib);
+            for (y = 0; same && y < FreeImage_GetHeight(dib); y++)
+                same = !memcmp(FreeImage_GetScanLine(back, y), FreeImage_GetScanLine(dib, y), FreeImage_GetLine(dib));
+            CHECK(same, "unused tags: %s", back ? "other pixels" : "does not load");
+            FreeImage_Unload(back);
+            free(tagged);
+        }
+        FreeImage_CloseMemory(mem);
+        FreeImage_Unload(dib);
     }
 
     /* a TIFF with a PageNumber, as loaded */

@@ -1806,8 +1806,7 @@ ERR ParsePFDEntry(
             break;
 
         default:
-            fprintf(stderr, "Unrecognized WMPTag: %d(%#x), %d, %d, %#x" CRLF,
-                (int)uTag, (int)uTag, (int)uType, (int)uCount, (int)uValue);
+            // FreeImage: an unknown tag is ignored, as T.832 A.7.1 asks, without a line on stderr
             break;
     }
 
