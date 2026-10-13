@@ -103,9 +103,9 @@ with "Unknown bmp subtype with id N". `CheckBitmapInfoHeader()`'s `biSize >= 40`
 | Value | Windows meaning | OS/2 2.x meaning | Valid for | Read | Written |
 |---|---|---|---|---|---|
 | 0 `BI_RGB` | uncompressed | same | all | yes | yes |
-| 1 `BI_RLE8` | RLE, 8 bpp | same | 8 bpp, bottom-up | yes | with `BMP_SAVE_RLE` |
-| 2 `BI_RLE4` | RLE, 4 bpp | same | 4 bpp, bottom-up | yes | no |
-| 3 `BI_BITFIELDS` | masks | Huffman 1D | 16 and 32 bpp / 1 bpp | 16-bit: 5-5-5 and 5-6-5 only (L3); 32-bit: masks ignored (L2); both **fixed**; Huffman refused (L10) | 16-bit |
+| 1 `BI_RLE8` | RLE, 8 bpp | same | 8 bpp, bottom-up | yes; at other depths read as raw pixels (L13), refused since its fix | with `BMP_SAVE_RLE` |
+| 2 `BI_RLE4` | RLE, 4 bpp | same | 4 bpp, bottom-up | yes; at other depths read as raw pixels (L13), refused since its fix | no |
+| 3 `BI_BITFIELDS` | masks | Huffman 1D | 16 and 32 bpp / 1 bpp | 16-bit: 5-5-5 and 5-6-5 only (L3); 32-bit: masks ignored (L2); both **fixed**; Huffman refused (L10); 24-bit: masks ignored (L13), applied since its fix | 16-bit |
 | 4 `BI_JPEG` | JPEG stream | RLE24 | printers only / 24 bpp | refused (L9, L10) | no |
 | 5 `BI_PNG` | PNG stream | — | printers only | refused (L9) | no |
 | 6 `BI_ALPHABITFIELDS` | 4 masks | — | Windows CE .NET 4.0+, 16 and 32 bpp | refused (L7, **fixed**) | no |
@@ -395,6 +395,20 @@ file header, keep offsets relative to the array's start in the stream), or stop 
 32-bit paths ignore them: the RLE data is read as raw pixels (a short file then loads with a warning), and a 24-bit
 file's masks are skipped. Header-only and full loads agree. Found by the S3 sweep; Pillow refuses all seven
 combinations. **Fix, if wanted.** Refuse them as S3's fix refuses a palette image's wrong compression. Open.
+
+**Fixed** 2026-10-13, but not quite as proposed. Every decoder read for this report refuses RLE at 16, 24 or 32 bits
+(Firefox, Chromium, GIMP, ImageMagick, Pillow), and so does FreeImage now, header-only too, with "Unsupported
+compression type". 24-bit `BI_BITFIELDS` splits them: Firefox, Chromium and Pillow refuse it, ImageMagick reads the
+pixels as plain B, G, R, and GIMP applies the masks. It also exists in the wild: GIMP's writer used `BI_BITFIELDS`
+whenever it wrote a V5 header, its default, from 2.10.22 (October 2020; the commit reached the 2.10 branch on
+2020-09-27) to the 2.10.24 fix ("plug-ins: fix #6144 Unrecognised or invalid BMP compression format", 2021-01-07),
+with masks `00FF0000 0000FF00 000000FF`; Debian 11 ships 2.10.22. So a 24-bit image with masks in a Windows header
+loads, the masks applied as at 16 and 32 bits: GIMP's layout is read as before, byte for byte and as fast, another
+decodes right instead of raw (R and B swapped, 6-6-6, an alpha mask making it 32-bit). In an OS/2 2.x header
+compression 3 means Huffman 1D, so a 24-bit one there is refused. Nothing in BMP Suite, the crafted files or the
+salvage rig's 1144 files changes. Open: GIMP 2.10.22 wrote 1-, 4- and 8-bit images saved without RLE the same way;
+they stay refused (S3), as by GIMP 3, ImageMagick, the browsers and Pillow; only GIMP 2.10's later releases load
+them, as uncompressed.
 
 ## 5. Writer findings
 

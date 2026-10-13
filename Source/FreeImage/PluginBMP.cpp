@@ -208,10 +208,23 @@ CheckBitmapInfoHeader(BITMAPINFOHEADER *bih) {
 	return TRUE;
 }
 
-// what a 1-, 4- or 8-bit image may be: uncompressed, RLE4 at 4 bits, RLE8 at 8 bits
+// the compressions each depth decodes: RLE4 at 4 bits, RLE8 at 8, masks at 16 and 32 (and 24, off-spec, as GIMP 2.10.22 wrote)
 static BOOL
-PaletteCompressionSupported(unsigned bit_count, unsigned compression) {
-	return (compression == BI_RGB) || ((compression == BI_RLE4) && (bit_count == 4)) || ((compression == BI_RLE8) && (bit_count == 8));
+CompressionSupported(unsigned bit_count, unsigned compression) {
+	switch (compression) {
+		case BI_RGB:
+			return TRUE;
+		case BI_RLE4:
+			return (bit_count == 4);
+		case BI_RLE8:
+			return (bit_count == 8);
+		case BI_BITFIELDS:
+			return (bit_count >= 16);
+		case BI_ALPHABITFIELDS:
+			return (bit_count == 16) || (bit_count == 32);
+		default:
+			return FALSE;
+	}
 }
 
 // --------------------------------------------------------------------------
@@ -654,7 +667,7 @@ ChannelValue(const BMPCHANNEL *channel, DWORD pixel) {
 }
 
 /**
-Load 16- or 32-bit pixels in a BI_BITFIELDS layout FreeImage does not keep, into a 24- or 32-bit dib
+Load 16-, 24- or 32-bit pixels in a BI_BITFIELDS layout FreeImage does not keep, into a 24- or 32-bit dib
 @param masks Red, green, blue and alpha
 @param alpha FALSE: a 32-bit dib is opaque
 @return Returns the rows read: fewer than the height for a cut file, -1 when out of memory
@@ -682,8 +695,11 @@ LoadPixelDataBitfields(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int hei
 			const unsigned pixels = MIN(got, used) / src_bytes;
 			for (unsigned x = 0; x < pixels; x++) {
 				DWORD pixel = src[0] | ((DWORD)src[1] << 8);
+				if (src_bytes >= 3) {
+					pixel |= (DWORD)src[2] << 16;
+				}
 				if (src_bytes == 4) {
-					pixel |= ((DWORD)src[2] << 16) | ((DWORD)src[3] << 24);
+					pixel |= (DWORD)src[3] << 24;
 				}
 				dst[FI_RGBA_RED]   = ChannelValue(&channels[0], pixel);
 				dst[FI_RGBA_GREEN] = ChannelValue(&channels[1], pixel);
@@ -821,7 +837,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 			throw FI_MSG_ERROR_INVALID_FORMAT;
 		}
 		// before a header-only load returns, as the full load would refuse it
-		if ((bih.biBitCount <= 8) && !PaletteCompressionSupported(bih.biBitCount, bih.biCompression)) {
+		if (!CompressionSupported(bih.biBitCount, bih.biCompression)) {
 			throw FI_MSG_ERROR_UNSUPPORTED_COMPRESSION;
 		}
 
@@ -924,6 +940,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 			break; // 1-, 4-, 8-bit
 
 			case 16 :
+			case 24 :
 			case 32 :
 			{
 				// the masks follow a 40-byte header and sit inside a larger one; an alpha mask needs 56 bytes or BI_ALPHABITFIELDS
@@ -938,8 +955,9 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 #ifdef FREEIMAGE_BIGENDIAN
 						SwapLong(&masks[i]);
 #endif
-						if (bit_count == 16) {
-							masks[i] &= 0xFFFF;
+						// no channel lies past the pixel's bits
+						if (bit_count < 32) {
+							masks[i] &= ((DWORD)1 << bit_count) - 1;
 						}
 					}
 					// an alpha mask that overlaps the colours is no alpha
@@ -957,7 +975,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 				}
 				const BOOL alpha = (masks[3] != 0);
 
-				// the layouts FreeImage keeps as they are: 5-5-5 or 5-6-5 without alpha, B, G, R with or without alpha in the fourth byte
+				// the layouts FreeImage keeps as they are: 5-5-5 or 5-6-5 without alpha, B, G, R with or without alpha in a fourth byte
 				BOOL native = FALSE;
 				if (bit_count == 16) {
 					native = !alpha && (masks[2] == FI16_555_BLUE_MASK) &&
@@ -969,7 +987,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 				if (native && (bit_count == 16)) {
 					dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bit_count, masks[0], masks[1], masks[2]);
 				} else {
-					// a 32-bit layout stays 32-bit; a 16-bit one becomes 24-bit, or 32-bit with alpha
+					// a 32-bit layout stays 32-bit; a 16- or 24-bit one becomes 24-bit, or 32-bit with alpha
 					const int bpp = ((bit_count == 32) || alpha) ? 32 : 24;
 					dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 				}
@@ -1018,40 +1036,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 
 				return dib;
 			}
-			break; // 16-, 32-bit
-
-			case 24 :
-			{
-				// masks do not apply to 24 bits
-				dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bit_count, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
-
-				if (dib == NULL) {
-					throw FI_MSG_ERROR_DIB_MEMORY;
-				}
-
-				// set resolution information
-				FreeImage_SetDotsPerMeterX(dib, bih.biXPelsPerMeter);
-				FreeImage_SetDotsPerMeterY(dib, bih.biYPelsPerMeter);
-
-				if(header_only) {
-					// header only mode
-					return dib;
-				}
-
-				// Skip over the optional palette 
-				// A 24 or 32 bit DIB may contain a palette for faster color reduction
-				// i.e. you can have (FreeImage_GetColorsUsed(dib) > 0)
-
-				// seek to the actual pixel data
-				io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
-
-				// read in the bitmap bits
-				// load pixel data and swap as needed if OS is Big Endian
-				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
-
-				return dib;
-			}
-			break; // 24-bit
+			break; // 16-, 24-, 32-bit
 		}
 	} catch(const char *message) {
 		if(dib) {
@@ -1090,8 +1075,8 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 		if (CheckBitmapInfoHeader(&bih) == FALSE) {
 			throw FI_MSG_ERROR_INVALID_FORMAT;
 		}
-		// before a header-only load returns, as the full load would refuse it
-		if ((bih.biBitCount <= 8) && !PaletteCompressionSupported(bih.biBitCount, bih.biCompression)) {
+		// before a header-only load returns, as the full load would refuse it; OS/2 has no masks at 24 bits
+		if (!CompressionSupported(bih.biBitCount, bih.biCompression) || ((bih.biBitCount == 24) && (bih.biCompression != BI_RGB))) {
 			throw FI_MSG_ERROR_UNSUPPORTED_COMPRESSION;
 		}
 

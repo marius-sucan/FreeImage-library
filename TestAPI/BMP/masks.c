@@ -203,6 +203,7 @@ int main(void) {
     static const DWORD M4444[4] = { 0x0F00, 0x00F0, 0x000F, 0xF000 };
     static const DWORD M1555[4] = { 0x7C00, 0x03E0, 0x001F, 0x8000 };
     static const DWORD M444[4] = { 0x0F00, 0x00F0, 0x000F, 0 };
+    static const DWORD M6666[4] = { 0xFC0000, 0x03F000, 0x000FC0, 0x00003F };
     SPEC s;
     FIBITMAP *dib;
 
@@ -265,6 +266,16 @@ int main(void) {
     dib = load(&s, 0);
     report("V5, alpha mask outside 16 bits: 16-bit 5-5-5 kept", dib && FreeImage_GetBPP(dib) == 16 && FreeImage_GetRedMask(dib) == 0x7C00);
     if (dib) FreeImage_Unload(dib);
+
+    printf("24-bit masks: off-spec, but GIMP 2.10.22 wrote them\n");
+    memset(&s, 0, sizeof s); s.header = 124; s.bpp = 24; s.compression = BMP_BITFIELDS; memcpy(s.masks, BGRX, sizeof s.masks);
+    expect("V5, B, G, R, as GIMP 2.10.22 writes", &s, 24, 0);
+    memset(&s, 0, sizeof s); s.header = 40; s.bpp = 24; s.compression = BMP_BITFIELDS; memcpy(s.masks, BGRX, sizeof s.masks); s.after = 3;
+    expect("40-byte header, B, G, R", &s, 24, 0);
+    memcpy(s.masks, RGBX, sizeof s.masks);
+    expect("40-byte header, R and B swapped", &s, 24, 0);
+    memset(&s, 0, sizeof s); s.header = 124; s.bpp = 24; s.compression = BMP_BITFIELDS; memcpy(s.masks, M6666, sizeof s.masks);
+    expect("V5, 6-6-6-6", &s, 32, 1);
 
     printf("BI_ALPHABITFIELDS\n");
     memset(&s, 0, sizeof s); s.header = 40; s.bpp = 32; s.compression = BMP_ALPHABITFIELDS; memcpy(s.masks, RGBA, sizeof s.masks); s.after = 4;

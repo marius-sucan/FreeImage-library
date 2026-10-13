@@ -101,11 +101,13 @@ int main(void) {
         report(line, agreed == cases);
     }
 
-    printf("Compressions a palette image cannot use: refused, header-only too\n");
+    printf("Compressions a depth cannot use: refused, header-only too\n");
     {
         static const struct { unsigned bpp, compression; const char *what; } bad[] = {
             { 1, 1, "1-bit RLE8" }, { 1, 2, "1-bit RLE4" }, { 1, 3, "1-bit compression 3 (OS/2 Huffman 1D)" },
             { 4, 1, "4-bit RLE8" }, { 4, 3, "4-bit compression 3" }, { 8, 2, "8-bit RLE4" }, { 8, 3, "8-bit compression 3" },
+            { 16, 1, "16-bit RLE8" }, { 16, 2, "16-bit RLE4" }, { 24, 1, "24-bit RLE8" }, { 24, 2, "24-bit RLE4" },
+            { 32, 1, "32-bit RLE8" }, { 32, 2, "32-bit RLE4" },
         };
         unsigned i;
         for (i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
@@ -119,6 +121,20 @@ int main(void) {
             free(win.p);
             free(os2.p);
         }
+    }
+
+    {
+        /* masks at 24 bits are off-spec, yet GIMP 2.10.22 wrote them; OS/2's compression 3 is Huffman 1D */
+        BUF win = build(40, 24, 3), os2 = build(64, 24, 3);
+        FIBITMAP *a = load(&win, FIF_LOAD_NOPIXELS), *b = load(&win, 0), *c = load(&os2, FIF_LOAD_NOPIXELS), *d = load(&os2, 0);
+        report("24-bit compression 3: loads under a 40-byte header", a && b && FreeImage_GetBPP(a) == 24 && FreeImage_GetBPP(b) == 24);
+        report("  refused under an OS/2 2.x one", !c && !d);
+        if (a) FreeImage_Unload(a);
+        if (b) FreeImage_Unload(b);
+        if (c) FreeImage_Unload(c);
+        if (d) FreeImage_Unload(d);
+        free(win.p);
+        free(os2.p);
     }
 
     printf("--- %d failure(s) ---\n", failures);
