@@ -4,7 +4,8 @@
    padding dropped), 32bppRGBA, premultiplied 32bppPBGRA, 32bppPRGBA, 64bppPRGBA and 128bppPRGBAFloat (straight alpha),
    and 32bppCMYK, 64bppCMYK, 40bppCMYKAlpha and 80bppCMYKAlpha (RGB, their CMYK profile dropped; with JXR_CMYK their
    CMYK samples, the alpha dropped, the profile kept and marked CMYK); crop.jxr, 40x140 32bppBGRA with planar alpha
-   cropped by jxrlib at 16,32 of a 64x200 image, its image plane keeping a 16-row margin its alpha plane lacks; every
+   cropped by jxrlib at 16,32 of a 64x200 image, its image plane keeping a 16-row margin its alpha plane lacks;
+   hardtiles.jxr, 96x140 24bppBGR with two levels of overlap and hard tiles 2, 2, 2 macroblocks wide and 5, 4 high; every
    container orientation must load the values the file was made from, and a header-only load the same type and size */
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,7 +30,7 @@ static double made(const char *name, unsigned x, unsigned y, unsigned c) {
         return v[c];
     }
     if (!strcmp(name, "rgb101010")) return (double)((k * 8) << 6);
-    if (!strcmp(name, "bgr32") || !strcmp(name, "rgb32")) return 2.0 * k;
+    if (!strcmp(name, "bgr32") || !strcmp(name, "rgb32") || !strcmp(name, "hardtiles")) return 2.0 * k;
     /* mantissa 128 + k, exponent 130 + k(alpha) % 4 */
     if (!strcmp(name, "rgbe")) return (128.0 + k) / 64.0 * (1 << (k3 % 4));
     if (!strcmp(name, "rgba32")) return (c == 3) ? 64 + k3 : 2.0 * k;
@@ -177,6 +178,7 @@ int main(int argc, char **argv) {
     formats(dir, "cmyka40", 9, FIT_BITMAP, 32, JXR_CMYK);
     formats(dir, "cmyka80", 9, FIT_RGBA16, 64, JXR_CMYK);
     formats(dir, "crop", 40, FIT_BITMAP, 32, 0);
+    formats(dir, "hardtiles", 96, FIT_BITMAP, 24, 0);
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

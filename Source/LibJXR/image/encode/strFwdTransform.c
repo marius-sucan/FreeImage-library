@@ -509,29 +509,30 @@ void transformMacroblock(CWMImageStrCodec * pSC)
 
     if (pSC->WMISCP.bUseHardTileBoundaries) {
         //Add tile location information
+        // FreeImage: tile columns are uiTileX, rows uiTileY
         if (pSC->cColumn == 0) {
             bVertTileBoundary = FALSE;
-            tileY = 0;
+            tileX = 0;
         }
         bOneMBLeftVertTB = bOneMBRightVertTB = FALSE;
-        if(tileY > 0 && tileY <= pSC->WMISCP.cNumOfSliceMinus1H && (pSC->cColumn - 1) == pSC->WMISCP.uiTileY[tileY]) 
+        if(tileX > 0 && tileX <= pSC->WMISCP.cNumOfSliceMinus1V && (pSC->cColumn - 1) == pSC->WMISCP.uiTileX[tileX]) 
             bOneMBRightVertTB = TRUE;
-        if(tileY < pSC->WMISCP.cNumOfSliceMinus1H && pSC->cColumn == pSC->WMISCP.uiTileY[tileY + 1]) {
+        if(tileX < pSC->WMISCP.cNumOfSliceMinus1V && pSC->cColumn == pSC->WMISCP.uiTileX[tileX + 1]) {
             bVertTileBoundary = TRUE;
-            tileY++; 
+            tileX++; 
         }
         else 
             bVertTileBoundary = FALSE;
-        if(tileY < pSC->WMISCP.cNumOfSliceMinus1H && (pSC->cColumn + 1) == pSC->WMISCP.uiTileY[tileY + 1]) 
+        if(tileX < pSC->WMISCP.cNumOfSliceMinus1V && (pSC->cColumn + 1) == pSC->WMISCP.uiTileX[tileX + 1]) 
             bOneMBLeftVertTB = TRUE;
 
         if (pSC->cRow == 0) {
             bHoriTileBoundary = FALSE;
-            tileX = 0;
+            tileY = 0;
         }
-        else if(mbY != pSC->cRow && tileX < pSC->WMISCP.cNumOfSliceMinus1V && pSC->cRow == pSC->WMISCP.uiTileX[tileX + 1]) {
+        else if(mbY != pSC->cRow && tileY < pSC->WMISCP.cNumOfSliceMinus1H && pSC->cRow == pSC->WMISCP.uiTileY[tileY + 1]) {
             bHoriTileBoundary = TRUE;
-            tileX++; 
+            tileY++; 
         }
         else if(mbY != pSC->cRow)
             bHoriTileBoundary = FALSE;

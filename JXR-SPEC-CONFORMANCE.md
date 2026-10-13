@@ -2,7 +2,7 @@
 
 This report checks FreeImage's JPEG XR code against the JPEG XR standard. It asks two questions: does the code follow the specification, and which parts of the specification does it not implement? The code is `Source/LibJXR`, which is Microsoft's jxrlib with FreeImage's `// FreeImage:` patches, together with `Source/FreeImage/PluginJXR.cpp`. Both were taken at qpv 3edde65 and built the way FreeImage builds them (`-D__ANSI__ -DDISABLE_PERF_MEASUREMENT`, `REENTRANT_MODE`).
 
-The report was written on 2026-10-12. **No source file was changed by this review.**
+The report was written on 2026-10-12. **No source file was changed by this review.** D1 and E1 have been fixed since; their rows say how.
 
 ## The documents used
 
@@ -56,7 +56,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
   - interleaved and planar alpha;
   - every Baseline and Main output format, including 3- to 8-channel images.
 - Crafted streams also decode bit-exactly for TRIM_FLEXBITS 0–15, the red/blue flag, the four VLW_ESC forms, extra RESERVED_A bytes, SPATIAL_XFRM_SUBORDINATE, and the reserved fields jxrlib does ignore (RESERVED_E/F/G/H/L). RESERVED_C, RESERVED_D, RESERVED_I_BIT and RESERVED_J_BIT are not ignored (D7).
-- jxrlib's own encoder output decodes bit-exactly in both decoders for **407 of 507** test files.
+- jxrlib's own encoder output decodes bit-exactly in both decoders for **454 of 507** test files (407 before D1 and E1 were fixed).
 
 **The other 47 suite files:**
 - **28** Chroma_Centering files differ. jxrlib ignores CHROMA_CENTERING when it upsamples 4:2:0 and 4:2:2 chroma. T.832 allows any upsampling filter; the T.834 test requires the nominal one.
@@ -64,16 +64,16 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
 
 **Real deviations are outside what the suite covers.**
 
-| | Finding | Severity |
-|---|---|---|
-| R1 | A crafted codestream (YONLY declared as 16bppYCC422) **overflows the heap through `FreeImage_Load`**. | High |
-| D1 | **Hard tiles:** column and row tile boundaries are swapped in overlap filtering, in both the decoder and the encoder. Any non-square tile grid decodes wrongly. | High, for such files |
-| D2 | **Interleaved alpha output:** the colour plane's SCALED_FLAG and SHIFT_BITS are applied to the alpha plane, so jxrlib decodes its own lossless 4:2:0 RGBA files with wrong alpha. Alpha is also rounded with 4 where the spec says 3. | Medium |
-| C1 | Every FreeImage alpha save writes ALPHA_BYTE_COUNT as an end offset. | Medium |
-| C2 | A FreeImage save with Exif Copyright and XMP **is rejected by the reference decoder**: IFD tags are out of order. | Medium |
-| C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium |
-| F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium |
-| R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium |
+| | Finding | Severity | Status |
+|---|---|---|---|
+| R1 | A crafted codestream (YONLY declared as 16bppYCC422) **overflows the heap through `FreeImage_Load`**. | High | open |
+| D1 | **Hard tiles:** column and row tile boundaries are swapped in overlap filtering, in both the decoder and the encoder. Any non-square tile grid decodes wrongly. | High, for such files | **fixed** |
+| D2 | **Interleaved alpha output:** the colour plane's SCALED_FLAG and SHIFT_BITS are applied to the alpha plane, so jxrlib decodes its own lossless 4:2:0 RGBA files with wrong alpha. Alpha is also rounded with 4 where the spec says 3. | Medium | open |
+| C1 | Every FreeImage alpha save writes ALPHA_BYTE_COUNT as an end offset. | Medium | open |
+| C2 | A FreeImage save with Exif Copyright and XMP **is rejected by the reference decoder**: IFD tags are out of order. | Medium | open |
+| C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium | open |
+| F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium | open |
+| R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium | open |
 
 **Not implemented:**
 - CMYKDIRECT and most YCC output formats;
@@ -84,7 +84,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
 - Annex E's `image/jxr` media type in FreeImage;
 - Annex F (JPEG XR stored in HEIF), and the JPX box-based file format.
 
-**In Annex B terms**, jxrlib is a Main-profile decoder, with the exceptions of D1–D5. It is not an Advanced-profile decoder.
+**In Annex B terms**, jxrlib is a Main-profile decoder, with the exceptions of D2–D5. It is not an Advanced-profile decoder.
 
 ## 1. Method
 
@@ -149,15 +149,15 @@ Each cited file:line. Every claim this report relies on was then re-checked by e
 | Reserved fields, VLW_ESC forms, PROFILE_LEVEL_INFO variants | 34 | see D7 and §8 |
 | Interleaved alpha with its own BANDS_PRESENT (32bppBGRA) | 16 | 4 equal-band files decode with alpha ±1 (D2); 6 conformant files, where alpha has fewer bands, are refused (S1); 6 non-conformant files are refused |
 | Interleaved alpha on 3–8 channel images | 6 | T.835 decodes; jxrlib fails (D12) |
-| Hard tiles, T.835-encoded lossless: 8 geometries × soft/hard × OVERLAP 0/1/2 | 48 | soft tiles and OVERLAP 0 are exact in both. Hard tiles with OVERLAP 1/2 on non-square grids: jxrlib gets 1040–6381 pixels wrong, T.835 is exact (D1). |
-| jxrlib encoder matrix | 507 | 407 bit-exact; 52 differ (47 hard tiles D1, 5 interleaved-alpha D2); 22 jxrlib cannot read back (E2); 26 T.835 rejects (WIC GUIDs, C4) |
+| Hard tiles, T.835-encoded lossless: 8 geometries × soft/hard × OVERLAP 0/1/2 | 48 | soft tiles and OVERLAP 0 are exact in both. Hard tiles with OVERLAP 1/2 on non-square grids: jxrlib gets 1040–6381 pixels wrong, T.835 is exact (D1). With D1 fixed, jxrlib is exact on all 48. |
+| jxrlib encoder matrix | 507 | 454 bit-exact; 5 differ (interleaved alpha, D2); 22 jxrlib cannot read back (E2); 26 T.835 rejects (WIC GUIDs, C4). Before D1 and E1 were fixed: 407 bit-exact, and 47 more hard-tiled files differed. |
 | `FreeImage_Save`, one per type | 12 | T.835 decodes 9. It rejects both FIT_RGBF saves (C4) and the metadata save (C2). |
 
 ## 3. Findings: decoder core
 
 | ID | Clause | Finding | Evidence | Verdict, severity |
 |---|---|---|---|---|
-| D1 | 8.3.4, 9.9.3, 9.9.6 | **Hard tiles, axes swapped.** The overlap filter compares the macroblock *column* with `uiTileY[]` (row boundaries, counted by `cNumOfSliceMinus1H`) and the *row* with `uiTileX[]` (`strInvTransform.c:1201-1229`). Everywhere else `uiTileX` holds column positions (`strdec.c:3238`, `strcodec.c:150`). So filtering is suppressed on the wrong macroblock lines; with tiles of 1, 2 and 4 MB the errors run along x≈16 and y≈16. The encoder has the identical code (`strFwdTransform.c:510-537`, E1). | ref, repro. T.835-encoded lossless files 6, 7 or 10 MB wide: jxrlib wrong in 1040–6381 pixels, T.835 exact. A jxrlib copy with the 4 conditions swapped back matches T.835 on 41 hard-tiled streams, in both directions. Square grids (the only kind in the suite) hide it. | Deviation, **high** for hard-tiled files with overlap. FreeImage never writes tiles. |
+| D1 | 8.3.4, 9.9.3, 9.9.6 | **Hard tiles, axes swapped.** The overlap filter compares the macroblock *column* with `uiTileY[]` (row boundaries, counted by `cNumOfSliceMinus1H`) and the *row* with `uiTileX[]` (`strInvTransform.c:1201-1229`). Everywhere else `uiTileX` holds column positions (`strdec.c:3238`, `strcodec.c:150`). So filtering is suppressed on the wrong macroblock lines; with tiles of 1, 2 and 4 MB the errors run along x≈16 and y≈16. The encoder has the identical code (`strFwdTransform.c:510-537`, E1). | ref, repro. T.835-encoded lossless files 6, 7 or 10 MB wide: jxrlib wrong in 1040–6381 pixels, T.835 exact. A jxrlib copy with the 4 conditions swapped back matches T.835 on 41 hard-tiled streams, in both directions. Square grids (the only kind in the suite) hide it. | Deviation, **high** for hard-tiled files with overlap. FreeImage never writes tiles. **Fixed** 2026-10-12: columns are tracked by `uiTileX`, rows by `uiTileY`. The 41 probe streams and the 48-file matrix of §2.2 match T.835; the suite results are unchanged. |
 | D2 | 9.10.5-9.10.6, Tables 188/189 | **Interleaved alpha output** (`outputMBRowAlpha`, `strdec.c:806-898`). (a) The guard at 808 tests `WMISCP.cfColorFormat`, the *internal* format, so the 8-bit RGBA alpha that `outputMBRow` wrote correctly is written again. (b) The rounding term is 4 (832, 852, 862, 872, 882) where the spec gives 3 for BD8, BD16S, BD16F, BD32S and BD32F. (c) It uses the primary plane's SCALED_FLAG, SHIFT_BITS, LEN_MANTISSA and EXP_BIAS (816, 822-823), not the alpha plane's own. (d) The BD16 bias ignores SHIFT_BITS (842). | ref, repro. (b): alpha +1 in about 2–19% of alpha samples, on T.835 and on jxrlib files. (c): jxrlib's own lossless 4:2:0 RGBA file (colour scaled, alpha not) gives alpha errors up to **111** in jxrlib; T.835 is exact. (d): harness, SHIFT_BITS 3 makes every alpha 65535. Planar alpha, which FreeImage writes, is unaffected. | Deviation, **medium** |
 | D3 | 8.7.2, 8.7.9, 8.7.19 | TRIM_FLEXBITS is only stored in the primary plane's coding contexts (`strdec.c:275, 296`), so it is never applied to an interleaved alpha plane. The encoder does trim alpha. | repro: jxrlib cannot decode its own spatial interleaved-alpha + trim file (alpha error 255). | Deviation, low |
 | D4 | 9.7.3 Table 144, 9.8.3 | A tile with USE_LP_QP_FLAG copies the LP quantizer structs, including LP's chroma shift (`strdec.c:187-192`, `strcodec.c:906`). With SCALED_FLAG=1, chroma HP is therefore dequantized at half the spec's step. | ref: a T.835 encoder patched to write tile-level USE_LP_QP gives 12074 of 12288 samples wrong (PSNR 40.7 → 19.9 dB); one remap call fixes it. The suite's only USE_LP_QP tile is unscaled. | Deviation, low (no common encoder writes it) |
@@ -187,7 +187,7 @@ FreeImage's save path avoids every item in this table except where noted. It use
 
 | ID | Finding | Evidence | Severity |
 |---|---|---|---|
-| E1 | Hard tiles use the same transposed boundaries as D1. The narrow-tile check (hard tiles, 4:2:x, OVERLAP 2) also tests tile heights against the image width (`strenc.c:1252-1260`): it accepts 1-MB tile columns and rejects legal 1-MB tile rows. | ref: jxrlib's lossless hard-tile files decode with 1093–6495 bytes wrong in T.835. The same files from an axis-fixed jxrlib decode exactly in T.835. | Deviation, medium (API only) |
+| E1 | Hard tiles use the same transposed boundaries as D1. The narrow-tile check (hard tiles, 4:2:x, OVERLAP 2) also tests tile heights against the image width (`strenc.c:1252-1260`): it accepts 1-MB tile columns and rejects legal 1-MB tile rows. | ref: jxrlib's lossless hard-tile files decode with 1093–6495 bytes wrong in T.835. The same files from an axis-fixed jxrlib decode exactly in T.835. | Deviation, medium (API only). **Fixed** 2026-10-12 with D1: the encoder's hard-tiled files decode in T.835 exactly as in jxrlib, lossless ones to their source, and the narrow-tile check tests tile widths. Files the old jxrlib wrote with hard tiles on a non-square grid now decode as T.835 decodes them, with that encoder's error along the tile edges. |
 | E2 | jxrlib writes files it cannot decode itself: interleaved alpha with 4:2:0 (D2c), with trim (D3), or on n-channel images (D12); and 12bppYCC420 / 16bppYCC422, which FreeImage's build refuses (`ValidateOutputLayout`, `strdec.c:3480-3482`). | ref: 22 of the matrix files | Deviation, low |
 | E3 | Combinations forbidden by Tables 179/183 are accepted from the API: CMYK output with internal YUV444, which is the trap of the default `cfColorFormat`; RGBE or float RGB with internal YONLY; YUV422 output with internal 4:2:0. The width ≥ 32 check for 4:2:x with OVERLAP 2 runs before YCC input forces the internal format (`strenc.c:1198` vs 1280-1283). Odd YUV420 width and height are not refused. | ref: T.835 asserts or crashes on the CMYK and RGBE ones; jxrlib refuses its own CMYK one. | Deviation, low (API only) |
 | E4 | The writer for 16 components puts NUM_COMPONENTS_MINUS1=15 plus 4 zero bits and no extension field (`strenc.c:776-777`), which misparses under 8.4.12. VLW_ESC's 8-byte form writes bits 32–47 twice (`strenc.c:523-534`); only codestreams over 4 GiB are affected, and PluginJXR refuses those. OVERLAP_MODE 3 is not range-checked. | code, review rig | Deviation, none in practice |
@@ -273,7 +273,7 @@ Beyond the suite results in §2:
 |---|---|
 | 1 | R1: refuse INTERNAL/OUTPUT pairs outside Table 179 in `ImageStrDecInit`, so YONLY can no longer be declared as YCC422. |
 | 2 | R2: check `iQIndexLP < cNumQPLP` in frequency mode (`segdec.c:796`), as spatial mode already does. |
-| 3 | D1 and E1: swap `uiTileX`/`uiTileY` and `cNumOfSliceMinus1V`/`H` in the four tests of `strInvTransform.c` and the matching tests of `strFwdTransform.c` and `strenc.c`. All 41 probe streams then match T.835. |
+| 3 | D1 and E1: swap `uiTileX`/`uiTileY` and `cNumOfSliceMinus1V`/`H` in the four tests of `strInvTransform.c` and the matching tests of `strFwdTransform.c` and `strenc.c`. All 41 probe streams then match T.835. **Done** 2026-10-12. |
 | 4 | C2 and C3: sort IFD entries by tag before writing, and pad out-of-line data to even offsets. |
 | 5 | C4: save FIT_RGBF as 128bppRGBFloat (the glue has the converter). |
 | 6 | C1: write the true ALPHA_BYTE_COUNT. |
@@ -289,4 +289,5 @@ The rig is in `.claude/scratch/jxr-spec` (untracked):
 - **Running and comparing:** `scripts/run_suite.sh SUITE OUT` decodes with both decoders; `scripts/compare.py OUT` compares.
 - **Header dumpers:** `jxrhdr.py`, `tilehdr.py`, `scan_headers.py`.
 - **Crafting:** `craft1.sh`, `mkreserved.py`, `hard_matrix.sh`, `enc_matrix.py`.
+- **Checks of the fixes:** `fixes/`, described in its `README.txt`.
 - **ITU material** (not committed; ITU's licence forbids redistribution): T.832 at https://www.itu.int/rec/T-REC-T.832, the T.834 data at https://www.itu.int/rec/T-REC-T.834-201001-S, and the T.835 software at https://www.itu.int/rec/T-REC-T.835-201608-I.

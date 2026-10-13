@@ -1250,13 +1250,14 @@ Int ValidateArgs(CWMImageInfo* pII, CWMIStrCodecParam *pSCP)
     pSCP->cNumOfSliceMinus1H = validateTiling(pSCP->uiTileY, pSCP->cNumOfSliceMinus1H + 1, (((U32)pII->cHeight + 15) >> 4)) - 1;
 
     if (pSCP->bUseHardTileBoundaries && ((pSCP->cfColorFormat == YUV_420) || (pSCP->cfColorFormat == YUV_422)) && (pSCP->olOverlap == OL_TWO)) {
-        for (i = 1; i < (int) (pSCP->cNumOfSliceMinus1H + 1); i++) {
-            if ((Int)(pSCP->uiTileY[i] - pSCP->uiTileY[i - 1]) < 2) {
+        // FreeImage: the rule is on tile widths (T.832 8.3.25)
+        for (i = 1; i < (int) (pSCP->cNumOfSliceMinus1V + 1); i++) {
+            if ((Int)(pSCP->uiTileX[i] - pSCP->uiTileX[i - 1]) < 2) {
                 bTooNarrowTile = TRUE;
                 break;
             }
         }
-        if ((Int)((((U32)pII->cWidth + 15) >> 4) - pSCP->uiTileY[pSCP->cNumOfSliceMinus1H]) < 2) 
+        if ((Int)((((U32)pII->cWidth + 15) >> 4) - pSCP->uiTileX[pSCP->cNumOfSliceMinus1V]) < 2) 
             bTooNarrowTile = TRUE;
     }
     if (bTooNarrowTile) {
