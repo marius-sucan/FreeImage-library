@@ -22,8 +22,7 @@ Fixes:
 
 - applied fixes found in the Fedora F39 repository for: CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997 found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39 ;
 - fixed buffer overflows in PluginICO.cpp, PSDParser.cpp, PluginTIFF.cpp (with the aforementioned patches)
-- fixed JXR encoder to be able to handle images over 1300 mgpx;
-- fixed BMP decoder/encoder to be able to handle images over 1300 mgpx;
+- fixed JXR and BMP decoders/encoders are able now to handle images over 1300 mgpx;
 - fixed behavior with extreme values of the tone-mapping algorithms; 
 - fixed out of bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
 - fixed integer wrap around and segmentation fault in Exif.cpp;
@@ -39,7 +38,7 @@ Fixes:
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed CMYK pages added to or changed in multi-page files being stored as RGB;
 - fixed Makefile.mingw not building with MinGW-w64 on Windows;
-- fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins and in multi-page documents opened from a handle or memory; TIFF, EXR, JXR, TGA and ICO also save correctly there;
+- fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins and in multi-page documents opened from a handle or memory;
 - fixed PCX, TGA and PSD files that are damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
@@ -49,19 +48,7 @@ Fixes:
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
-- fixed JPEG XR files that are damaged or hold a tag of an unexpected type crashing, aborting or leaking memory while loading;
-- fixed JPEG XR images stored rotated by 90 degrees failing to load;
-- fixed JPEG XR RGBE images loading as 8-bit, and opaque 32-bit ones loading transparent;
-- fixed JPEG XR CMYK, premultiplied-alpha and RGBA-ordered images loading with wrong colours;
-- fixed JPEG XR images with hard tile boundaries loading with wrong pixels along the tile edges;
-- fixed JPEG XR images with interleaved alpha loading with wrong alpha values;
-- fixed JPEG XR files saved with alpha carrying a wrong alpha data size;
-- fixed JPEG XR files saved with metadata listing their tags out of order;
-- fixed JPEG XR files saved with metadata storing it at odd offsets, which strict readers refuse;
-- fixed JPEG XR files saved from float RGB images using a pixel format the standard does not define;
-- fixed black-is-one JPEG XR bilevel images loading inverted, and min-is-white 1-bit images failing to save as JPEG XR;
-- fixed JPEG XR n-channel images loading with wrong colours, or failing to load;
-- fixed loading JPEG XR files printing "Unrecognized WMPTag" lines to the console;
+- many fixes related to JPEG XR
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
@@ -103,7 +90,7 @@ Changes:
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
 |---|---|---|---|
-| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 (zlib 1.3.2) | 1.6.39 (zlib 1.2.13) |
+| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 | 1.6.39 (zlib 1.2.13) |
 | JPEG | [libjpeg (IJG)](http://ijg.org/) | 10 (January 2026) | 9d |
 | TIFF | [libtiff](http://www.libtiff.org/) | 4.7.2 | 4.6.0 |
 | JPEG 2000 (J2K/JP2) | [OpenJPEG](https://github.com/uclouvain/openjpeg) | 2.5.4 | 2.0.0 |
