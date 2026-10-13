@@ -218,6 +218,13 @@ int main(void) {
         work = (BYTE *)malloc(s->size);
         CHECK(main_cs != 0, "%s: no codestream", s->name);
 
+        /* ALPHA_BYTE_COUNT is the alpha codestream's length; a FreeImage file ends with that codestream */
+        if (alpha_cs) {
+            const BYTE *count = entry(s->data, s->size, 0xbcc3);
+            CHECK(count && get32(count + 8) == s->size - alpha_cs, "%s: ALPHA_BYTE_COUNT %u, the alpha codestream has %u bytes",
+                  s->name, count ? get32(count + 8) : 0, (unsigned)(s->size - alpha_cs));
+        }
+
         /* the container says another pixel format, or none */
         memcpy(work, s->data, s->size);
         pf = entry(work, s->size, 0xbc01);

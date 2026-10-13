@@ -744,9 +744,8 @@ ERR WriteContainerPost(
         offPos = pDEMisc->uOffAlphaOffset;
         Call(WriteWmpDE(pWS, &offPos, &deAlphaOffset, NULL, NULL));
 
-        // note this field carries the alpha plane's END offset, not its length; sum it
-        // as U32 so the arithmetic stays defined where Long is 32-bit and signed
-        deAlphaByteCount.uValueOrOffset = (U32)pIE->WMP.nCbAlpha + (U32)pIE->WMP.nOffAlpha;
+        // FreeImage: the alpha codestream's length (T.832 A.7.30)
+        deAlphaByteCount.uValueOrOffset = (U32)pIE->WMP.nCbAlpha;
         offPos = pDEMisc->uOffAlphaByteCount;
         Call(WriteWmpDE(pWS, &offPos, &deAlphaByteCount, NULL, NULL));
     }
