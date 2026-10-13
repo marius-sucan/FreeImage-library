@@ -2,7 +2,7 @@
 
 This report checks FreeImage's JPEG XR code against the JPEG XR standard. It asks two questions: does the code follow the specification, and which parts of the specification does it not implement? The code is `Source/LibJXR`, which is Microsoft's jxrlib with FreeImage's `// FreeImage:` patches, together with `Source/FreeImage/PluginJXR.cpp`. Both were taken at qpv 3edde65 and built the way FreeImage builds them (`-D__ANSI__ -DDISABLE_PERF_MEASUREMENT`, `REENTRANT_MODE`).
 
-The report was written on 2026-10-12. **No source file was changed by this review.** R1, D1, E1, D2, C1, C2, C3, C4 and F1 have been fixed since; their rows say how.
+The report was written on 2026-10-12. **No source file was changed by this review.** R1, R2, D1, E1, D2, C1, C2, C3, C4 and F1 have been fixed since; their rows say how.
 
 ## The documents used
 
@@ -74,7 +74,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
 | C3 | A FreeImage save with metadata **is rejected by the reference decoder** when a string or XMP of odd length puts the next metadata at an odd offset. | Medium | **fixed** |
 | C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium | **fixed** |
 | F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium | **fixed** |
-| R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium | open |
+| R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium | **fixed** |
 
 **Not implemented:**
 - CMYKDIRECT and most YCC output formats;
@@ -176,7 +176,7 @@ Each cited file:line. Every claim this report relies on was then re-checked by e
 | ID | Finding | Evidence | Severity |
 |---|---|---|---|
 | R1 | Internal YONLY with OUTPUT_CLR_FMT YUV422 is forbidden (Tables 179 and 183) but not rejected. `outputNChannel` walks the full width over offset tables built for half width. That gives a **heap-buffer-overflow read** of `pOffsetX` (`strdec.c:662`) followed by a write through the garbage offset. It is reachable through `FreeImage_Load` with a 16bppYCC422 container: FreeImage maps that GUID to a 32-bit bitmap, and `ValidateOutputLayout` passes YONLY. | repro: ASan heap-buffer-overflow; the release build segfaults on a 640×480 file and loads garbage at 64×48. | **High**. **Fixed** 2026-10-12: `ValidateOutputLayout` refuses YUV420 or YUV422 output from a YONLY plane. The other pairs Table 179 forbids still load: jxrlib decodes a YONLY plane as half or float RGB bit-identically to T.835. |
-| R2 | In frequency mode LP_QP_INDEX is not range-checked (`segdec.c:796`; spatial mode checks at 1035, frequency-mode HP at 1136). A reserved QPINDEX_REF reads past the tile's quantizer array in `dequantizeMacroblock` (`strPredQuantDec.c:75`). | repro by review (ASan heap-buffer-overflow READ) | Medium |
+| R2 | In frequency mode LP_QP_INDEX is not range-checked (`segdec.c:796`; spatial mode checks at 1035, frequency-mode HP at 1136). A reserved QPINDEX_REF reads past the tile's quantizer array in `dequantizeMacroblock` (`strPredQuantDec.c:75`). | repro by review (ASan heap-buffer-overflow READ) | Medium. **Fixed** 2026-10-13: an LP QP index past the tile's LP QPs is refused, as in spatial mode. A file with two LP QPs per tile and the reserved index 2 in one macroblock overflowed through `FreeImage_Load`; it is refused now, while its twin with valid indexes, index 1 included, still decodes as T.835 does. T.835 itself decodes the bad file without complaint. The suite results are unchanged. |
 | R3 | A bad INDEX_TABLE_STARTCODE is detected but the error is dropped (`StrIODecInit`, `strdec.c:2653`), and the uninitialised offset table is then used. | code; the decode then fails at Copy | Low |
 | R4 | Reserved BANDS_PRESENT 5–15 decode silently to garbage (`strdec.c:2840`). Illegal run lengths overrun scan arrays inside their struct (`segdec.c:508`). Reserved COMPONENT_MODE 3 is treated as INDEPENDENT (`strdec.c:90`). The 8th signature byte is not checked (3163). None of 8.3.21-8.3.30's constraints (tile partition, margin parity, width ≥ 32 with 4:2:x and OVERLAP 2, format pairs) are validated, apart from the YUV420/YUV422 output pairs since the R1 fix. | code, repro | Low |
 | S1 | Stricter: FreeImage's 3edde65 refuses an interleaved alpha plane whose BANDS_PRESENT differs from the primary's (`strdec.c:3644`). Under 8.4.4 an alpha plane with *fewer* bands is conformant. | ref: 6 such T.835-made files; T.835 decodes them, jxrlib refuses. This was a deliberate trade-off against the NULL-quantizer crash. No known encoder writes such files. | Stricter, low |
@@ -273,7 +273,7 @@ Beyond the suite results in §2:
 | Order | Fix |
 |---|---|
 | 1 | R1: refuse INTERNAL/OUTPUT pairs outside Table 179 in `ImageStrDecInit`, so YONLY can no longer be declared as YCC422. **Done** 2026-10-12 for the YUV420 and YUV422 output rows only: the other forbidden pairs decode bit-identically in T.835. |
-| 2 | R2: check `iQIndexLP < cNumQPLP` in frequency mode (`segdec.c:796`), as spatial mode already does. |
+| 2 | R2: check `iQIndexLP < cNumQPLP` in frequency mode (`segdec.c:796`), as spatial mode already does. **Done** 2026-10-13. |
 | 3 | D1 and E1: swap `uiTileX`/`uiTileY` and `cNumOfSliceMinus1V`/`H` in the four tests of `strInvTransform.c` and the matching tests of `strFwdTransform.c` and `strenc.c`. All 41 probe streams then match T.835. **Done** 2026-10-12. |
 | 4 | C2 and C3: sort IFD entries by tag before writing, and pad out-of-line data to even offsets. C2 and C3 **done** 2026-10-13. |
 | 5 | C4: save FIT_RGBF as 128bppRGBFloat (the glue has the converter). **Done** 2026-10-13, in the container's PIXEL_FORMAT alone: the codestream is the same. |

@@ -8,8 +8,10 @@
    hardtiles.jxr, 96x140 24bppBGR with two levels of overlap and hard tiles 2, 2, 2 macroblocks wide and 5, 4 high;
    interleaved alpha in ileave420.jxr, 8x140 32bppBGRA with grey 4:2:0 colour scaled and its lossless alpha not, ileave16.jxr,
    9x140 64bppRGBA with SHIFT_BITS 3, and ileave_q.jxr, 9x140 32bppBGRA at QP index 40, held to the reference decoder's
-   output in ileave_q.ref (B, G, R, A); every container orientation must load the values the file was made from, and a
-   header-only load the same type and size */
+   output in ileave_q.ref (B, G, R, A); lpqp.jxr, 32x140 24bppBGR in frequency mode with 2x2 tiles of two LP QPs each and
+   an LP QP index per macroblock, held to lpqp.ref (B, G, R, 255); every container orientation must load the values the
+   file was made from, and a header-only load the same type and size. lpqp_bad.jxr, lpqp.jxr with the reserved LP QP
+   index 2 in one macroblock, must be refused */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,7 +111,7 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
         else free(r);
         fclose(f);
     }
-    CHECK(ref != NULL || strcmp(name, "ileave_q"), "%s: missing or short", path);
+    CHECK(ref != NULL || (strcmp(name, "ileave_q") && strcmp(name, "lpqp")), "%s: missing or short", path);
     ifd = get32(data + 4);
     for (k = 0; ifd + 2 <= (DWORD)size && k < get16(data + ifd) && ifd + 14 + 12 * k <= (DWORD)size; k++) {
         if (get16(data + ifd + 2 + 12 * k) == 0xbc02) orient = data + ifd + 2 + 12 * k;
@@ -172,6 +174,19 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
     free(data);
 }
 
+/* a file whose codestream breaks a rule mid-image: the header loads, the pixels are refused */
+static void refused(const char *dir, const char *name) {
+    char path[1024];
+    FIBITMAP *dib, *hdr;
+    snprintf(path, sizeof(path), "%s/%s.jxr", dir, name);
+    dib = FreeImage_Load(FIF_JXR, path, 0);
+    hdr = FreeImage_Load(FIF_JXR, path, FIF_LOAD_NOPIXELS);
+    CHECK(dib == NULL, "%s: loaded", name);
+    CHECK(hdr != NULL, "%s: header-only load refused", name);
+    FreeImage_Unload(dib);
+    FreeImage_Unload(hdr);
+}
+
 int main(int argc, char **argv) {
     const char *dir = (argc > 1) ? argv[1] : "data";
     FreeImage_Initialise(FALSE);
@@ -202,6 +217,8 @@ int main(int argc, char **argv) {
     formats(dir, "ileave420", 8, FIT_BITMAP, 32, 0);
     formats(dir, "ileave16", 9, FIT_RGBA16, 64, 0);
     formats(dir, "ileave_q", 9, FIT_BITMAP, 32, 0);
+    formats(dir, "lpqp", 32, FIT_BITMAP, 24, 0);
+    refused(dir, "lpqp_bad");
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;
