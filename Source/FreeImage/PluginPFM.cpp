@@ -285,6 +285,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		pixels_start = io->tell_proc(handle);
 
+		// rows run bottom to top, as in the dib
 		if(image_type == FIT_RGBF) {
 			const unsigned lineWidth = 3 * width;
 			lineBuffer = (float*)malloc(lineWidth * sizeof(float));
@@ -293,7 +294,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			for (int y = 0; y < height; y++) {	
-				FIRGBF *bits = (FIRGBF*)FreeImage_GetScanLine(dib, height - 1 - y);
+				FIRGBF *bits = (FIRGBF*)FreeImage_GetScanLine(dib, y);
 
 				if(io->read_proc(lineBuffer, sizeof(float), lineWidth, handle) != lineWidth) {
 					rows = y;
@@ -328,7 +329,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			for (int y = 0; y < height; y++) {	
-				float *bits = (float*)FreeImage_GetScanLine(dib, height - 1 - y);
+				float *bits = (float*)FreeImage_GetScanLine(dib, y);
 
 				if(io->read_proc(lineBuffer, sizeof(float), lineWidth, handle) != lineWidth) {
 					rows = y;
@@ -414,9 +415,9 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 	sprintf(buffer, "P%c\n%d %d\n%f\n", magic, width, height, scalefactor);
 	io->write_proc(&buffer, (unsigned int)strlen(buffer), 1, handle);
 
-	// Write the image data
+	// Write the image data, bottom row first
 	for (unsigned y = 0; y < height; y++) {	
-		BYTE *bits = FreeImage_GetScanLine(dib, height - 1 - y);
+		BYTE *bits = FreeImage_GetScanLine(dib, y);
 		io->write_proc(bits, 1, lineWidth, handle);
 	}
 
