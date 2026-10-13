@@ -3461,6 +3461,10 @@ static Int ValidateOutputLayout(const CWMImageInfo* pII, const CWMIStrCodecParam
 
 	switch (cfExt) {
 	case Y_ONLY:
+		// YUV420/YUV422 output gets subsampled offsets, a Y_ONLY plane writes every pixel
+		if (cf == YUV_420 || cf == YUV_422) {
+			return ICERR_ERROR;
+		}
 		// CF_RGB output gets the luma in all three
 		cElement = (cf == CF_RGB ? 3 : 1), cChannel = 1;
 		break;

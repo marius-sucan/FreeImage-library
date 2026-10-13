@@ -187,6 +187,28 @@ int main(void) {
         free(work);
     }
 
+    /* a Y_ONLY codestream declared as 16bppYCC422 or 12bppYCC420, in the container and the output colour format */
+    {
+        Seed *s = &seeds[2];
+        static const BYTE GUIDS[2] = { 0x45, 0x44 }, FORMATS[2] = { 0x21, 0x11 };
+        const DWORD at = codestream(s, 0xbcc0);
+        BYTE *pf;
+        FIBITMAP *dib;
+        work = (BYTE *)malloc(s->size);
+        for (j = 0; j < 2; j++) {
+            memcpy(work, s->data, s->size);
+            pf = entry(work, s->size, 0xbc01);
+            CHECK(at && pf && get32(pf + 8) + 16 <= s->size && work[at + 11] == 0x01, "%s: not a Y_ONLY 8-bit codestream", s->name);
+            if (!at || !pf || get32(pf + 8) + 16 > s->size) continue;
+            work[get32(pf + 8) + 15] = GUIDS[j];
+            work[at + 11] = FORMATS[j];
+            dib = load(work, s->size);
+            CHECK(dib == NULL, "%s as %s: loaded", s->name, j ? "12bppYCC420" : "16bppYCC422");
+            FreeImage_Unload(dib);
+        }
+        free(work);
+    }
+
     for (i = 0; i < 6; i++) {
         Seed *s = &seeds[i];
         const DWORD main_cs = codestream(s, 0xbcc0), alpha_cs = codestream(s, 0xbcc2);
