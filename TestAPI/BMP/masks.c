@@ -1,4 +1,4 @@
-/* FreeImage 3 - BMP test: colour masks, alpha and BI_ALPHABITFIELDS, on BMPs built in memory */
+/* FreeImage 3 - BMP test: colour masks, alpha, BI_ALPHABITFIELDS and pixel offsets, on BMPs built in memory */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,7 +49,7 @@ static BYTE unpack(DWORD mask, DWORD pixel) {
 
 typedef struct {
     unsigned header;    /* 12, 40, 52, 56, 64, 108, 124 */
-    unsigned bpp;       /* 16 or 32 */
+    unsigned bpp;       /* 16, 24 or 32 */
     unsigned compression;
     DWORD masks[4];     /* written for BI_BITFIELDS / BI_ALPHABITFIELDS, in the header from 52 bytes on */
     unsigned after;     /* masks written after a 40-byte header: 0, 3 or 4 */
@@ -58,6 +58,7 @@ typedef struct {
     DWORD junk;         /* set in every pixel, outside the masks */
     DWORD header_alpha; /* non-zero: the header's alpha mask, not masks[3] */
     long cut;           /* > 0: the file ends this many bytes into the pixels */
+    unsigned gap;       /* bytes between the headers and the pixels */
 } SPEC;
 
 /* the pixel value of (x, y) for this layout; BI_RGB uses the default layouts */
@@ -102,13 +103,16 @@ static BUF build(const SPEC *s) {
         const unsigned y_img = s->topdown ? i : H - 1 - i;
         for (x = 0; x < W; x++) {
             const DWORD v = pixel_value(s, x, y_img);
-            if (s->bpp == 16) put16(&bits, v); else put32(&bits, v);
+            if (s->bpp == 16) put16(&bits, v);
+            else if (s->bpp == 24) { put16(&bits, v & 0xFFFF); put8(&bits, (v >> 16) & 255); }
+            else put32(&bits, v);
         }
         for (x = W * s->bpp / 8; x < pitch; x++) put8(&bits, 0);
     }
     put8(&b, 'B'); put8(&b, 'M');
-    put32(&b, 14 + info.n + bits.n); put16(&b, 0); put16(&b, 0); put32(&b, 14 + info.n);
+    put32(&b, 14 + info.n + s->gap + bits.n); put16(&b, 0); put16(&b, 0); put32(&b, 14 + info.n + s->gap);
     put(&b, info.p, info.n);
+    for (i = 0; i < s->gap; i++) put8(&b, 0xAA);
     put(&b, bits.p, (s->cut > 0) ? (unsigned)s->cut : bits.n);
     free(info.p); free(bits.p);
     return b;
@@ -161,6 +165,29 @@ static void expect(const char *what, const SPEC *s, unsigned bpp, int alpha) {
     report(line, is(dib, bpp, alpha) && pixels_ok(dib, s, alpha) && hdr && FreeImage_GetBPP(hdr) == bpp);
     if (dib) FreeImage_Unload(dib);
     if (hdr) FreeImage_Unload(hdr);
+}
+
+/* a save to memory, the header it wrote and the image it loads back */
+typedef struct { DWORD header, compression, alpha_mask, cs_type; int sizes_ok; FIBITMAP *reloaded; } SAVED;
+
+static DWORD le32(const BYTE *p) { return (DWORD)p[0] | ((DWORD)p[1] << 8) | ((DWORD)p[2] << 16) | ((DWORD)p[3] << 24); }
+
+static SAVED save_and_load(FIBITMAP *src) {
+    SAVED r;
+    BYTE *bytes = NULL;
+    DWORD size = 0;
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    memset(&r, 0, sizeof r);
+    if (FreeImage_SaveToMemory(FIF_BMP, src, mem, 0) && FreeImage_AcquireMemory(mem, &bytes, &size) && size > 54) {
+        r.header = le32(bytes + 14);
+        r.compression = le32(bytes + 30);
+        if (r.header >= 124) { r.alpha_mask = le32(bytes + 66); r.cs_type = le32(bytes + 70); }
+        r.sizes_ok = le32(bytes + 2) == size && le32(bytes + 10) == 14 + r.header && (r.compression == 0 || le32(bytes + 34) == size - 14 - r.header);
+        FreeImage_SeekMemory(mem, 0, SEEK_SET);
+        r.reloaded = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
+    }
+    FreeImage_CloseMemory(mem);
+    return r;
 }
 
 static void DLL_CALLCONV quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
@@ -291,10 +318,18 @@ int main(void) {
         free(b.p);
     }
 
+    printf("pixel offsets\n");
+    memset(&s, 0, sizeof s); s.header = 12; s.bpp = 24; s.gap = 16;
+    expect("OS/2 1.x header, 24-bit, 16 bytes before the pixels", &s, 24, 0);
+    s.bpp = 32; s.alpha_zero = 1;
+    expect("OS/2 1.x header, 32-bit, 16 bytes before the pixels", &s, 32, 0);
+    memset(&s, 0, sizeof s); s.header = 40; s.bpp = 24; s.gap = 16;
+    expect("40-byte header, 24-bit, 16 bytes before the pixels", &s, 24, 0);
+
     printf("FreeImage's own 32-bit saves\n");
     {
         FIBITMAP *src = FreeImage_Allocate(W, H, 32, 0, 0, 0);
-        FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+        SAVED r;
         unsigned x, y;
         int ok;
         for (y = 0; y < H; y++) {
@@ -304,27 +339,38 @@ int main(void) {
                 row[x * 4 + FI_RGBA_BLUE] = chan(x, y, 2); row[x * 4 + FI_RGBA_ALPHA] = alpha8(x, y);
             }
         }
-        FreeImage_SaveToMemory(FIF_BMP, src, mem, 0);
-        FreeImage_SeekMemory(mem, 0, SEEK_SET);
-        dib = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
-        ok = dib && FreeImage_GetBPP(dib) == 32 && FreeImage_IsTransparent(dib);
-        for (y = 0; ok && y < H; y++) ok = memcmp(FreeImage_GetScanLine(dib, y), FreeImage_GetScanLine(src, y), W * 4) == 0;
-        report("alpha survives a save and a load", ok);
-        if (dib) FreeImage_Unload(dib);
-        FreeImage_CloseMemory(mem);
-        /* alpha 0 everywhere: the byte is taken as unused */
+        r = save_and_load(src);
+        report("alpha: BITMAPV5HEADER, BI_BITFIELDS, alpha mask, sRGB", r.header == 124 && r.compression == BMP_BITFIELDS &&
+               r.alpha_mask == 0xFF000000 && r.cs_type == 0x73524742 && r.sizes_ok);
+        ok = r.reloaded && FreeImage_GetBPP(r.reloaded) == 32 && FreeImage_IsTransparent(r.reloaded);
+        for (y = 0; ok && y < H; y++) ok = memcmp(FreeImage_GetScanLine(r.reloaded, y), FreeImage_GetScanLine(src, y), W * 4) == 0;
+        report("  alpha survives a save and a load", ok);
+        if (r.reloaded) FreeImage_Unload(r.reloaded);
+        /* opaque, alpha 0 everywhere (never set), CMYK: the 40-byte header as before */
+        for (y = 0; y < H; y++) {
+            BYTE *row = FreeImage_GetScanLine(src, y);
+            for (x = 0; x < W; x++) row[x * 4 + FI_RGBA_ALPHA] = 0xFF;
+        }
+        r = save_and_load(src);
+        report("alpha 0xFF everywhere: 40-byte header, BI_RGB", r.header == 40 && r.compression == 0 && r.sizes_ok &&
+               r.reloaded && !FreeImage_IsTransparent(r.reloaded));
+        if (r.reloaded) FreeImage_Unload(r.reloaded);
         for (y = 0; y < H; y++) {
             BYTE *row = FreeImage_GetScanLine(src, y);
             for (x = 0; x < W; x++) row[x * 4 + FI_RGBA_ALPHA] = 0;
         }
-        mem = FreeImage_OpenMemory(NULL, 0);
-        FreeImage_SaveToMemory(FIF_BMP, src, mem, 0);
-        FreeImage_SeekMemory(mem, 0, SEEK_SET);
-        dib = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
-        report("alpha 0 everywhere reloads opaque", dib && FreeImage_GetBPP(dib) == 32 && !FreeImage_IsTransparent(dib) &&
-               FreeImage_GetScanLine(dib, 0)[FI_RGBA_ALPHA] == 0xFF);
-        if (dib) FreeImage_Unload(dib);
-        FreeImage_CloseMemory(mem);
+        r = save_and_load(src);
+        report("alpha 0 everywhere: 40-byte header, reloads opaque", r.header == 40 && r.compression == 0 && r.reloaded &&
+               !FreeImage_IsTransparent(r.reloaded) && FreeImage_GetScanLine(r.reloaded, 0)[FI_RGBA_ALPHA] == 0xFF);
+        if (r.reloaded) FreeImage_Unload(r.reloaded);
+        for (y = 0; y < H; y++) {
+            BYTE *row = FreeImage_GetScanLine(src, y);
+            for (x = 0; x < W; x++) row[x * 4 + FI_RGBA_ALPHA] = alpha8(x, y);
+        }
+        FreeImage_GetICCProfile(src)->flags |= FIICC_COLOR_IS_CMYK;
+        r = save_and_load(src);
+        report("CMYK: 40-byte header, the fourth byte is K", r.header == 40 && r.compression == 0);
+        if (r.reloaded) FreeImage_Unload(r.reloaded);
         FreeImage_Unload(src);
     }
 

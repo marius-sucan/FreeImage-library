@@ -1,3 +1,5 @@
 masks
 masks-asan
+icc
+icc-asan
 asan-obj/

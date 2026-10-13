@@ -26,6 +26,7 @@
 
 #include "FreeImage.h"
 #include "Utilities.h"
+#include "Plugin.h"
 
 // ----------------------------------------------------------
 //   Constants + headers
@@ -43,6 +44,12 @@ static const BYTE BI_BITFIELDS      = 3;	// compression: Bit field or Huffman 1D
 static const BYTE BI_JPEG           = 4;	// compression: JPEG or RLE-24 compression for BITMAPCOREHEADER2
 static const BYTE BI_PNG            = 5;	// compression: PNG
 static const BYTE BI_ALPHABITFIELDS = 6;	// compression: Bit field (this value is valid in Windows CE .NET 4.0 and later)
+
+static const DWORD BMP_V5_HEADER_SIZE   = 124;			// sizeof(BITMAPV5HEADER)
+static const DWORD BMP_LCS_SRGB         = 0x73524742;	// bV5CSType 'sRGB'
+static const DWORD BMP_PROFILE_EMBEDDED = 0x4D424544;	// bV5CSType 'MBED': an ICC profile in the file
+static const DWORD BMP_LCS_GM_IMAGES    = 4;			// bV5Intent: perceptual
+static const DWORD BMP_MAX_PROFILE_SIZE = 64 << 20;
 
 // ----------------------------------------------------------
 
@@ -721,6 +728,65 @@ SetAlphaFromUnusedByte(FIBITMAP *dib) {
 	SetOpaque(dib);
 }
 
+// a little-endian DWORD of the file
+static BOOL
+ReadDWORD(FreeImageIO *io, fi_handle handle, DWORD *value) {
+	BYTE b[4];
+	if (io->read_proc(b, 4, 1, handle) != 1) {
+		return FALSE;
+	}
+	*value = (DWORD)b[0] | ((DWORD)b[1] << 8) | ((DWORD)b[2] << 16) | ((DWORD)b[3] << 24);
+	return TRUE;
+}
+
+/**
+Attach the ICC profile a BITMAPV5HEADER embeds: bV5ProfileSize bytes at bV5ProfileData from the header's start.
+A linked profile names a file and is not followed; only an RGB profile describes a DIB's colors.
+*/
+static void
+LoadEmbeddedProfile(FreeImageIO *io, fi_handle handle, INT64 header_start, FIBITMAP *dib) {
+	DWORD cs_type = 0, offset = 0, size = 0;
+	io->seek_proc(handle, header_start + 56, SEEK_SET);
+	if (!ReadDWORD(io, handle, &cs_type) || (cs_type != BMP_PROFILE_EMBEDDED)) {
+		return;
+	}
+	io->seek_proc(handle, header_start + 112, SEEK_SET);
+	if (!ReadDWORD(io, handle, &offset) || !ReadDWORD(io, handle, &size)) {
+		return;
+	}
+	io->seek_proc(handle, 0, SEEK_END);
+	const INT64 end = io->tell_proc(handle);
+	const INT64 start = header_start + (INT64)offset;
+	if ((offset < BMP_V5_HEADER_SIZE) || (start + (INT64)size > end)) {
+		FreeImage_OutputMessageProc(s_format_id, "The embedded ICC profile lies outside the file: ignored");
+		return;
+	}
+	if ((size < 132) || (size > BMP_MAX_PROFILE_SIZE)) {
+		FreeImage_OutputMessageProc(s_format_id, "The embedded ICC profile is damaged or not an RGB profile: ignored");
+		return;
+	}
+	BYTE *profile = (BYTE*)malloc(size);
+	if (!profile) {
+		return;
+	}
+	BOOL valid = FALSE;
+	io->seek_proc(handle, start, SEEK_SET);
+	if (io->read_proc(profile, size, 1, handle) == 1) {
+		// a profile padded past its own size keeps its own size
+		const DWORD own_size = ((DWORD)profile[0] << 24) | ((DWORD)profile[1] << 16) | ((DWORD)profile[2] << 8) | (DWORD)profile[3];
+		if ((own_size >= 132) && (own_size < size)) {
+			size = own_size;
+		}
+		valid = PNG_IsEmbeddableProfile(profile, size, TRUE);
+	}
+	if (valid) {
+		FreeImage_CreateICCProfile(dib, profile, (long)size);
+	} else {
+		FreeImage_OutputMessageProc(s_format_id, "The embedded ICC profile is damaged or not an RGB profile: ignored");
+	}
+	free(profile);
+}
+
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
@@ -1314,6 +1380,11 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 					return dib;
 				}
 
+				// the pixels start at bfOffBits; an offset inside the headers is not trusted
+				if (bitmap_bits_offset > io->tell_proc(handle)) {
+					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
+				}
+
 				// load pixel data and swap as needed if OS is Big Endian
 				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
@@ -1344,6 +1415,11 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 
 				// Skip over the optional palette 
 				// A 24 or 32 bit DIB may contain a palette for faster color reduction
+
+				// the pixels start at bfOffBits; an offset inside the headers is not trusted
+				if (bitmap_bits_offset > io->tell_proc(handle)) {
+					io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
+				}
 
 				// load pixel data and swap as needed if OS is Big Endian
 				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
@@ -1433,6 +1509,12 @@ SupportsNoPixels() {
 	return TRUE;
 }
 
+// read from BITMAPV5HEADER files; the writer embeds none
+static BOOL DLL_CALLCONV
+SupportsICCProfiles() {
+	return TRUE;
+}
+
 // ----------------------------------------------------------
 
 static FIBITMAP * DLL_CALLCONV
@@ -1484,7 +1566,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			case 56:	// BITMAPV3INFOHEADER (undocumented, partially supported)
 			case 108:	// BITMAPV4HEADER - all Windows versions since Windows 95/NT4 (partially supported)
 			case 124:	// BITMAPV5HEADER - Windows 98/2000 and newer (partially supported)
-				return LoadWindowsBMP(io, handle, flags, offset_in_file + bitmapfileheader.bfOffBits, type);
+			{
+				const INT64 header_start = io->tell_proc(handle);
+				FIBITMAP *dib = LoadWindowsBMP(io, handle, flags, offset_in_file + bitmapfileheader.bfOffBits, type);
+				if (dib && (type == BMP_V5_HEADER_SIZE)) {
+					LoadEmbeddedProfile(io, handle, header_start, dib);
+				}
+				return dib;
+			}
 
 			default:
 				break;
@@ -1647,6 +1736,29 @@ RLEEncodeLine(BYTE *target, BYTE *source, int size) {
 	return target_pos;
 }
 
+// the alpha of a 32-bit dib says something: not 0xFF everywhere (opaque), not 0 everywhere (never set); CMYK keeps K there
+static BOOL
+CarriesAlpha(FIBITMAP *dib) {
+	if ((FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) {
+		return FALSE;
+	}
+	BOOL opaque = TRUE;
+	BOOL zero = TRUE;
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	for (unsigned y = 0; y < height; y++) {
+		const BYTE *bits = FreeImage_GetScanLine(dib, y);
+		for (unsigned x = 0; x < width; x++, bits += 4) {
+			opaque = opaque && (bits[FI_RGBA_ALPHA] == 0xFF);
+			zero = zero && (bits[FI_RGBA_ALPHA] == 0);
+			if (!opaque && !zero) {
+				return TRUE;
+			}
+		}
+	}
+	return FALSE;
+}
+
 static BOOL DLL_CALLCONV
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
 	if ((dib != NULL) && (handle != NULL)) {
@@ -1668,9 +1780,13 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// ...but rows step by the dib's own pitch (a view's is its parent's)
 		const UINT64 src_pitch = FreeImage_GetPitch(dib);
 
+		// alpha needs an alpha mask, which a BITMAPV5HEADER holds; every other image keeps the 40-byte header
+		const BOOL v5 = (dst_bpp == 32) && CarriesAlpha(dib);
+		const DWORD info_size = v5 ? BMP_V5_HEADER_SIZE : (DWORD)sizeof(BITMAPINFOHEADER);
+
 		BITMAPFILEHEADER bitmapfileheader;
 		bitmapfileheader.bfType = 0x4D42;
-		bitmapfileheader.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + FreeImage_GetColorsUsed(dib) * sizeof(RGBQUAD);
+		bitmapfileheader.bfOffBits = (DWORD)(sizeof(BITMAPFILEHEADER) + info_size + FreeImage_GetColorsUsed(dib) * sizeof(RGBQUAD));
 		bitmapfileheader.bfSize = (unsigned long long)bitmapfileheader.bfOffBits + (unsigned long long)dst_height * dst_pitch;
 		bitmapfileheader.bfReserved1 = 0;
 		bitmapfileheader.bfReserved2 = 0;
@@ -1702,7 +1818,12 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		BITMAPINFOHEADER bih;
 		memcpy(&bih, FreeImage_GetInfoHeader(dib), sizeof(BITMAPINFOHEADER));
 
-		if (bit_fields) {
+		if (v5) {
+			bih.biSize = info_size;
+			bih.biCompression = BI_BITFIELDS;
+			bih.biSizeImage = (DWORD)(dst_pitch * dst_height);
+		}
+		else if (bit_fields) {
 			bih.biCompression = BI_BITFIELDS;
 		}
 		else if ((bih.biBitCount == 8) && ((flags & BMP_SAVE_RLE) == BMP_SAVE_RLE)) {
@@ -1719,6 +1840,20 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 #endif
 		if (io->write_proc(&bih, sizeof(BITMAPINFOHEADER), 1, handle) != 1) {
 			return FALSE;
+		}
+
+		if (v5) {
+			// masks of the file's B, G, R, A bytes, then sRGB: no endpoints, gammas or profile
+			DWORD tail[21] = { 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, BMP_LCS_SRGB };
+			tail[17] = BMP_LCS_GM_IMAGES;
+#ifdef FREEIMAGE_BIGENDIAN
+			for (int i = 0; i < 21; i++) {
+				SwapLong(&tail[i]);
+			}
+#endif
+			if (io->write_proc(tail, sizeof(tail), 1, handle) != 1) {
+				return FALSE;
+			}
 		}
 
 		// write the bit fields when we are dealing with a 16 bit BMP
@@ -1886,6 +2021,6 @@ InitBMP(Plugin *plugin, int format_id) {
 	plugin->mime_proc = MimeType;
 	plugin->supports_export_bpp_proc = SupportsExportDepth;
 	plugin->supports_export_type_proc = SupportsExportType;
-	plugin->supports_icc_profiles_proc = NULL;	// not implemented yet;
+	plugin->supports_icc_profiles_proc = SupportsICCProfiles;
 	plugin->supports_no_pixels_proc = SupportsNoPixels;
 }

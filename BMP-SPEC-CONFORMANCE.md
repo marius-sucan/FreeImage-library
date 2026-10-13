@@ -12,7 +12,8 @@ FreeImage **reads** every header Microsoft defines — `BITMAPCOREHEADER` (OS/2 
 Reading a V4 or V5 file is structural only. FreeImage takes the first 40 bytes and, for 16-bit images, the colour
 masks; everything V4 and V5 add — 32-bit masks, the alpha mask, the colour space, endpoints and gamma, the rendering
 intent, the ICC profile — is ignored. Since the fix of L1, L2, L3 and L7 (2026-10-13) the colour and alpha masks
-count at every depth; the colour space, intent and profile are still ignored.
+count at every depth; since the fix of L4 (same day) an embedded ICC profile is attached too. The calibrated
+colour space and the intent are still ignored.
 
 The classic content decodes exactly: 1-, 4- and 8-bit palettes, RLE4 and RLE8 with deltas, 24-bit, 16-bit 5-5-5 and
 5-6-5, top-down rows, gaps before the pixels, oversized and undersized palettes. The defects sit in 16- and 32-bit
@@ -23,9 +24,9 @@ direct colour, in colour management, and in the writer's 32-bit layout:
 | L1 | 32-bit: the byte the spec calls "not used" becomes alpha; files that hold 0 there, like the suite's baseline 32-bit file, load **fully transparent** | high | 2 of the suite's 27 "good" files; every other decoder surveyed (WIC, Chromium, Firefox, GIMP, ImageMagick, stb_image, Pillow) shows them opaque | **fixed** |
 | L2 | 32-bit `BI_BITFIELDS` masks are ignored: only the B,G,R,A byte order decodes right | high | 1 "good" + 9 "questionable" suite files | **fixed** |
 | L3 | 16-bit masks other than 5-5-5 / 5-6-5 decode as 5-5-5; 16-bit alpha masks are dropped | medium | 5 "questionable" + 1 "bad" suite files | **fixed** |
-| L4 | V5 embedded ICC profiles are not attached; `LCS_CALIBRATED_RGB` is ignored | medium | `q/rgb24prof2.bmp` shows red and green swapped | open |
-| W1 | The writer stores 32-bit alpha in `BI_RGB`'s unused byte with a 40-byte header; Windows (WIC) and Pillow read such files as opaque | medium | Pillow reloads them as RGB | open |
-| L5 | OS/2 1.x 16/24/32-bit files ignore `bfOffBits` | medium-low | crafted file: every pixel wrong | open |
+| L4 | V5 embedded ICC profiles are not attached; `LCS_CALIBRATED_RGB` is ignored | medium | `q/rgb24prof2.bmp` shows red and green swapped | **fixed** for embedded profiles; calibrated RGB open |
+| W1 | The writer stores 32-bit alpha in `BI_RGB`'s unused byte with a 40-byte header; Windows (WIC) and Pillow read such files as opaque | medium | Pillow reloads them as RGB | **fixed** |
+| L5 | OS/2 1.x 16/24/32-bit files ignore `bfOffBits` | medium-low | crafted file: every pixel wrong | **fixed** |
 | W2 | RLE8 saves write `biSizeImage` = 0 and `bfSize` = the uncompressed size | low | header bytes | open |
 | W6 | A saved `FreeImage_CreateView()` view writes its parent's pixels into the row padding, which must be zeros | low | padding bytes | open |
 
@@ -92,7 +93,7 @@ describes its codec as "Specification Support: BMP Specification v5".
 | 52 | "`BITMAPV2INFOHEADER`" | undocumented | R, G, B masks in the header | yes | no |
 | 56 | "`BITMAPV3INFOHEADER`" | undocumented | + alpha mask | yes (alpha mask ignored until the L1–L3 fix) | no |
 | 108 | `BITMAPV4HEADER` | Windows 95 / NT 4 | masks, alpha mask, colour space, endpoints, gamma | yes, extras ignored | no |
-| 124 | `BITMAPV5HEADER` | Windows 98 / 2000 | + rendering intent, embedded or linked ICC profile | yes, extras ignored | no |
+| 124 | `BITMAPV5HEADER` | Windows 98 / 2000 | + rendering intent, embedded or linked ICC profile | yes, extras ignored (embedded profile read since the L4 fix) | for 32-bit alpha since the W1 fix |
 
 `Load()` dispatches on exactly 12, 40, 52, 56, 64, 108 and 124 (`PluginBMP.cpp:1306-1324`); every other size fails
 with "Unknown bmp subtype with id N". `CheckBitmapInfoHeader()`'s `biSize >= 40` test (`:148`) is not the gate.
@@ -129,7 +130,7 @@ the hdc parameter specifies a printer device." They are a printer pass-through, 
 
 | Offset | Field | Specification ([MS-LEARN] unless noted) | FreeImage reads | FreeImage writes |
 |---|---|---|---|---|
-| 0 | `bV5Size` | 124 | dispatch | 40 |
+| 0 | `bV5Size` | 124 | dispatch | 40; 124 for 32-bit alpha since the W1 fix |
 | 4, 8 | `bV5Width`, `bV5Height` | negative height = top-down; "Top-down DIBs cannot be compressed." | yes; top-down RLE refused | positive height |
 | 12 | `bV5Planes` | "This value must be set to 1." | checked | 1 |
 | 14 | `bV5BitCount` | 0, 1, 4, 8, 16, 24, 32 | 1, 4, 8, 16, 24, 32 | same |
@@ -140,16 +141,17 @@ the hdc parameter specifies a printer device." They are a printer pass-through, 
 | 36 | `bV5ClrImportant` | 0 = all | ignored | = `ClrUsed` |
 | 40–48 | `bV5Red/Green/BlueMask` | "valid only if bV5Compression is set to BI_BITFIELDS" | 16-bit only (L2, L3); every depth since their fix | — |
 | 52 | `bV5AlphaMask` | "Color mask that specifies the alpha component of each pixel." | ignored (L1, L3); used with `BI_BITFIELDS` since their fix | — |
-| 56 | `bV5CSType` | `LCS_CALIBRATED_RGB`, `LCS_sRGB`, `LCS_WINDOWS_COLOR_SPACE`, `PROFILE_LINKED`, `PROFILE_EMBEDDED` | ignored (L4) | — |
+| 56 | `bV5CSType` | `LCS_CALIBRATED_RGB`, `LCS_sRGB`, `LCS_WINDOWS_COLOR_SPACE`, `PROFILE_LINKED`, `PROFILE_EMBEDDED` | ignored (L4); `PROFILE_EMBEDDED` read since its fix | `LCS_sRGB` in the W1 header |
 | 60 | `bV5Endpoints` | XYZ of the primaries, 2.30 fixed point, for `LCS_CALIBRATED_RGB` | ignored (L4) | — |
 | 96 | `bV5GammaRed/Green/Blue` | "unsigned fixed 16.16", for `LCS_CALIBRATED_RGB` | ignored (L4) | — |
 | 108 | `bV5Intent` | `LCS_GM_ABS_COLORIMETRIC`, `_BUSINESS`, `_GRAPHICS`, `_IMAGES` | ignored (FreeImage has no intent) | — |
-| 112 | `bV5ProfileData` | "The offset, in bytes, from the beginning of the BITMAPV5HEADER structure to the start of the profile data." | ignored (L4) | — |
-| 116 | `bV5ProfileSize` | profile size | ignored (L4) | — |
+| 112 | `bV5ProfileData` | "The offset, in bytes, from the beginning of the BITMAPV5HEADER structure to the start of the profile data." | ignored (L4); read since its fix | 0 |
+| 116 | `bV5ProfileSize` | profile size | ignored (L4); read since its fix | 0 |
 | 120 | `bV5Reserved` | "should be set to zero" | ignored | — |
 
 `plugin->supports_icc_profiles_proc = NULL; // not implemented yet;` (`PluginBMP.cpp:1722`): FreeImage reports that
-BMP carries no ICC profile, in either direction.
+BMP carries no ICC profile, in either direction. Since the L4 fix it reports TRUE ("can load or save an ICC
+profile", as the .NET wrapper documents it): profiles are read; the writer still embeds none.
 
 ## 4. Loader findings
 
@@ -279,6 +281,17 @@ start + `bV5ProfileData` and attach them with `FreeImage_CreateICCProfile()`; se
 the spec allows "any fully qualified name (including a network path)", which a library must not open
 (`q/rgb24lprof.bmp`'s reference is the plain image, so ignoring it is right).
 
+**Fixed** 2026-10-13 for embedded profiles, on load only (Marius: the writer embeds no profile and keeps its
+header): with a 124-byte header and `PROFILE_EMBEDDED`, the profile is read when it lies after the header and
+within the file, is 132 bytes to 64 MB long, and passes the checks a PNG reader applies to an RGB profile
+(`PNG_IsEmbeddableProfile()`); a profile padded in the file is cut to its own size. Anything else is ignored with
+one message, and the image loads as before. Header-only loads get the profile too, and
+`FreeImage_FIFSupportsICCProfiles(FIF_BMP)` is TRUE. Colour management then applies as for every other format:
+with the display set to sRGB, `FIF_LOAD_DISPLAY_ICC` brings `q/rgb24prof2.bmp` to within 9 levels of the
+reference (Pillow's Little CMS gives the same pixels within 1: the residual is the file's own profile), and
+`q/rgb24prof.bmp` (sRGB) is unchanged. `LCS_CALIBRATED_RGB` stays open: it is not an ICC profile, decoders
+disagree on its endpoints, and current Chromium dropped it.
+
 ### L5 — OS/2 1.x 16/24/32-bit files ignore `bfOffBits` (medium-low)
 
 **Spec.** [MS-LEARN] `bfOffBits`: "The offset, in bytes, from the beginning of the BITMAPFILEHEADER structure to the
@@ -291,6 +304,9 @@ pixels wrong; the same file without the gap is right, and Pillow reads both. Inh
 
 **Fix.** The same `io->seek_proc(handle, bitmap_bits_offset, SEEK_SET)` in both cases. (16 and 32 bpp are not legal in a
 core header — "This value must be 1, 4, 8, or 24" — accepting them is harmless.)
+
+**Fixed** 2026-10-13: both cases seek to `bfOffBits` when it lies past the headers; an offset inside them is not
+trusted, and the pixels are read where they always were. `core24_gap16` decodes exactly.
 
 ### L6 — OS/2 2.x headers of 16–36, 42–48 and 60 bytes are refused (low)
 
@@ -399,6 +415,13 @@ GUID_WICPixelFormat32bppBGRA".
 Trade-off: readers that cannot parse a V5 header lose the whole file (upstream FreeImage refuses V4/V5 since r1836, so
 `main` would). Writing the V5 header only when the image has alpha (`FIC_RGBALPHA`), and the 40-byte one otherwise,
 keeps opaque saves as compatible as they are now.
+
+**Fixed** 2026-10-13 that way, Marius's choice: a 32-bit image whose alpha says something — neither 0xFF everywhere
+nor 0 everywhere, and not CMYK — is written with a `BITMAPV5HEADER`: `BI_BITFIELDS`, masks `00FF0000`, `0000FF00`,
+`000000FF`, alpha `FF000000`, `LCS_sRGB`, intent `LCS_GM_IMAGES`, no profile, `bV5SizeImage` set. Every other
+save keeps the 40-byte header byte for byte, including an image whose alpha is 0 everywhere (never set), which
+other programs therefore still show, and FreeImage reloads opaque (L1). Pillow reads the new files as RGBA,
+identical to the source.
 
 ### W2 — RLE8 saves: `bfSize` and `biSizeImage` (low)
 
@@ -537,10 +560,11 @@ no default).
    by mask, or by the non-zero rule for `BI_RGB`, which the OS/2 loaders' 32-bit cases need too), `BI_ALPHABITFIELDS`
    accepted. Fixes the 3 wrong `g/` files, 14 of the 15 wrong `q/` files (the 15th, `rgb24prof2`, is L4) and
    `b/rgb16-880.bmp`, and makes `q/rgba32abf.bmp` load.
-2. **L5** (two seeks) and **S1** (skip the unread bytes): small and safe.
-3. **W1**: V5 header for 32-bit images with alpha. A decision for Marius (compatibility with readers that cannot
+2. **L5** (two seeks) and **S1** (skip the unread bytes): small and safe. L5 **done** 2026-10-13.
+3. **Done** 2026-10-13. **W1**: V5 header for 32-bit images with alpha. A decision for Marius (compatibility with readers that cannot
    parse V5).
-4. **L4**: embedded profiles on load, then on save (with W1's V5 header), and `supports_icc_profiles_proc`.
+4. **L4**: embedded profiles on load, then on save (with W1's V5 header), and `supports_icc_profiles_proc`. On load
+   **done** 2026-10-13; saving profiles was declined (the writer keeps its header).
 5. **W2, W3, W4, W6**: header fields, palette bytes, zero padding.
 6. **L6, L12**: OS/2 short headers and bitmap arrays (or drop "BA" from `Validate()`).
 7. **L8–L11** only if wanted: 2 bpp, JPEG/PNG pass-through, RLE24/Huffman 1D, 64 bpp.

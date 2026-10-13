@@ -42,6 +42,7 @@ Fixes:
 - fixed PCX, TGA and PSD files that are damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
 - fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
 - fixed 32-bit BMPs loading fully transparent, and 16- and 32-bit BMPs with uncommon colour masks loading with wrong colours or without their alpha channel;
+- fixed BMPs saved with transparency showing opaque in Windows, web browsers and other programs;
 - fixed 8-bit TIFFs with transparency and RGBAF TIFFs being saved without the ExtraSamples tag that marks their alpha: other readers took it for an unspecified channel, and Pillow could not open the 8-bit ones;
 - fixed bugs related to CMYK support in TIFF and JPG files;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. Added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
@@ -84,6 +85,7 @@ Changes:
 - added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
+- BMP files load with the ICC profile their V5 header embeds, for color management; saved BMPs carry none;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - the PNG, APNG, AVIF, HEIF and JPEG XL loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
 - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. Bitmaps tagged "UnscaledBits" return FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); Floating-point RGB bitmaps always return FITM_REQUIRED;
