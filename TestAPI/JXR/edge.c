@@ -1,4 +1,4 @@
-/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE */
+/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE; every save in a pixel format of T.832 Table A.6 */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,12 +24,32 @@ static FIBITMAP *mk(FREE_IMAGE_TYPE t,int w,int h,int bpp){
         for(i=0;i<c;i++){ int v=(bpp==1)?(i?255:0):i; pal[i].rgbRed=pal[i].rgbGreen=pal[i].rgbBlue=(BYTE)v; } }
     return d;
 }
+/* the PIXEL_FORMAT of a saved file is a T.832 Table A.6 one: they all share these 15 bytes, WIC's do not */
+static int t832_format(const char *path){
+    static const BYTE A6[15]={0x24,0xC3,0xDD,0x6F,0x03,0x4E,0xFE,0x4B,0xB1,0x85,0x3D,0x77,0x76,0x8D,0xC9};
+    BYTE b[16]; unsigned ifd,n,i,off=0; int ok=0;
+    FILE *f=fopen(path,"rb");
+    if(!f) return 0;
+    if(fseek(f,4,SEEK_SET)==0 && fread(b,1,4,f)==4){
+        ifd=b[0]|(b[1]<<8)|(b[2]<<16)|((unsigned)b[3]<<24);
+        if(fseek(f,(long)ifd,SEEK_SET)==0 && fread(b,1,2,f)==2){
+            n=b[0]|(b[1]<<8);
+            for(i=0;i<n && fread(b,1,12,f)==12;i++){
+                if((b[0]|(b[1]<<8))==0xBC01){ off=b[8]|(b[9]<<8)|(b[10]<<16)|((unsigned)b[11]<<24); break; }
+            }
+        }
+    }
+    if(off && fseek(f,(long)off,SEEK_SET)==0 && fread(b,1,16,f)==16) ok=!memcmp(b,A6,15);
+    fclose(f);
+    return ok;
+}
 static int rt(FREE_IMAGE_TYPE t,int bpp,int w,int h,int flags){
     FIBITMAP *d=mk(t,w,h,bpp), *b; int ok;
     if(!d) return -1;
-    ok = FreeImage_Save(FIF_JXR,d,OUT,flags);
+    ok = FreeImage_Save(FIF_JXR,d,OUT,flags) && t832_format(OUT);
     if(ok){ b=FreeImage_Load(FIF_JXR,OUT,0);
-            ok = b && FreeImage_GetWidth(b)==(unsigned)w && FreeImage_GetHeight(b)==(unsigned)h;
+            ok = b && FreeImage_GetWidth(b)==(unsigned)w && FreeImage_GetHeight(b)==(unsigned)h &&
+                 FreeImage_GetImageType(b)==t && FreeImage_GetBPP(b)==(unsigned)bpp;
             if(b) FreeImage_Unload(b); }
     FreeImage_Unload(d);
     return ok?1:0;

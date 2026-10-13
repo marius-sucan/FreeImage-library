@@ -2,7 +2,7 @@
 
 This report checks FreeImage's JPEG XR code against the JPEG XR standard. It asks two questions: does the code follow the specification, and which parts of the specification does it not implement? The code is `Source/LibJXR`, which is Microsoft's jxrlib with FreeImage's `// FreeImage:` patches, together with `Source/FreeImage/PluginJXR.cpp`. Both were taken at qpv 3edde65 and built the way FreeImage builds them (`-D__ANSI__ -DDISABLE_PERF_MEASUREMENT`, `REENTRANT_MODE`).
 
-The report was written on 2026-10-12. **No source file was changed by this review.** R1, D1, E1, D2, C1 and C2 have been fixed since; their rows say how.
+The report was written on 2026-10-12. **No source file was changed by this review.** R1, D1, E1, D2, C1, C2 and C4 have been fixed since; their rows say how.
 
 ## The documents used
 
@@ -56,7 +56,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
   - interleaved and planar alpha;
   - every Baseline and Main output format, including 3- to 8-channel images.
 - Crafted streams also decode bit-exactly for TRIM_FLEXBITS 0–15, the red/blue flag, the four VLW_ESC forms, extra RESERVED_A bytes, SPATIAL_XFRM_SUBORDINATE, and the reserved fields jxrlib does ignore (RESERVED_E/F/G/H/L). RESERVED_C, RESERVED_D, RESERVED_I_BIT and RESERVED_J_BIT are not ignored (D7).
-- jxrlib's own encoder output decodes bit-exactly in both decoders for **459 of 507** test files (407 before D1, E1 and D2 were fixed).
+- jxrlib's own encoder output decodes bit-exactly in both decoders for **485 of 507** test files (407 before D1, E1, D2 and C4 were fixed).
 
 **The other 47 suite files:**
 - **28** Chroma_Centering files differ. jxrlib ignores CHROMA_CENTERING when it upsamples 4:2:0 and 4:2:2 chroma. T.832 allows any upsampling filter; the T.834 test requires the nominal one.
@@ -72,7 +72,7 @@ Every finding gets a verdict, a layer, a severity and a note on how it was prove
 | C1 | Every FreeImage alpha save writes ALPHA_BYTE_COUNT as an end offset. | Medium | **fixed** |
 | C2 | A FreeImage save with Exif Copyright and XMP **is rejected by the reference decoder**: IFD tags are out of order. | Medium | **fixed** |
 | C3 | A FreeImage save with metadata **is rejected by the reference decoder** when a string or XMP of odd length puts the next metadata at an odd offset. | Medium | open |
-| C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium | open |
+| C4 | Every FIT_RGBF save **is rejected by the reference decoder**: it uses a WIC pixel-format GUID that is not in the spec. | Medium | **fixed** |
 | F1 | Black-is-one bilevel images (BD1BLACK1) load inverted. | Medium | open |
 | R2 | An unchecked QP index in frequency mode reads out of bounds. | Medium | open |
 
@@ -151,8 +151,8 @@ Each cited file:line. Every claim this report relies on was then re-checked by e
 | Interleaved alpha with its own BANDS_PRESENT (32bppBGRA) | 16 | 4 equal-band files decode with alpha ±1 (D2); 6 conformant files, where alpha has fewer bands, are refused (S1); 6 non-conformant files are refused. With D2 fixed, the 4 equal-band files match. |
 | Interleaved alpha on 3–8 channel images | 6 | T.835 decodes; jxrlib fails (D12) |
 | Hard tiles, T.835-encoded lossless: 8 geometries × soft/hard × OVERLAP 0/1/2 | 48 | soft tiles and OVERLAP 0 are exact in both. Hard tiles with OVERLAP 1/2 on non-square grids: jxrlib gets 1040–6381 pixels wrong, T.835 is exact (D1). With D1 fixed, jxrlib is exact on all 48. |
-| jxrlib encoder matrix | 507 | 459 bit-exact; 22 jxrlib cannot read back (E2); 26 T.835 rejects (WIC GUIDs, C4). Before D1, E1 and D2 were fixed: 407 bit-exact, and 52 more files differed (47 hard-tiled, 5 interleaved alpha). |
-| `FreeImage_Save`, one per type | 12 | T.835 decodes 9. It rejects both FIT_RGBF saves (C4) and the metadata save: for its tag order (C2), and since C2 was fixed for its odd offsets (C3). |
+| jxrlib encoder matrix | 507 | 485 bit-exact; 22 jxrlib cannot read back (E2). Before D1, E1, D2 and C4 were fixed: 407 bit-exact, 52 more files differed (47 hard-tiled, 5 interleaved alpha), and T.835 rejected 26 for their WIC GUIDs (C4). |
+| `FreeImage_Save`, one per type | 12 | T.835 decodes 11; until C4 was fixed it rejected both FIT_RGBF saves too. It rejects the metadata save: for its tag order (C2), and since C2 was fixed for its odd offsets (C3). |
 
 ## 3. Findings: decoder core
 
@@ -202,7 +202,7 @@ FreeImage's save path avoids every item in this table except where noted. It use
 | C1 | A.7.30 | ALPHA_BYTE_COUNT is written as ALPHA_OFFSET + count (`JXRGlueJxr.c:749`), which equals the file size. This hits every planar-alpha file, i.e. every FreeImage RGBA, RGBA16 and RGBAF save. The official suite files carry the true count. The one T.835-encoded planar-alpha file checked has the same end offset, and T.835's decoder ignores the count, as jxrlib's does. Readers that bound the alpha read by the count go past EOF. | repro: all 189 planar-alpha matrix files and all 4 FreeImage alpha saves | Deviation, medium. **Fixed** 2026-10-13: the count is the alpha codestream's length, as in the suite's 46 planar-alpha files; FreeImage's alpha saves change in those four bytes only. T.835's encoder measures the length and then stores its end position (`cw_emit.c`), the same slip. |
 | C2 | A.7.2 | IFD tags are not written in ascending order. The static `wmpDEs[]` table puts 0x8298 (Copyright) and 0x9C9B (Caption) before 0x02BC (XMP), 0x83BB, 0x8769, 0x8773 and 0x8825 (`JXRGlueJxr.c:314`). A FreeImage save carrying Exif Copyright and XMP, i.e. any re-saved photo that has both, is **rejected by T.835** (`ifd_tag > ifd_tag_prev`). | repro: tags written 0x13B, 0x8298, **0x2BC**, 0x8773, … | Deviation, medium. **Fixed** 2026-10-13: the entries are written in ascending tag order, and a save changes in the order of its IFD entries only. T.835 then decodes saves whose metadata starts at even offsets, such as a Caption with an ICC profile or Exif; it rejects the others for C3. |
 | C3 | A.7.5 | Out-of-line data (descriptive strings, XMP, IPTC, ICC) starts at odd offsets; only the Exif and GPS IFDs are aligned. T.835 asserts A.7.5 for every out-of-line value (`cr_parse.c:1417`), so a string or XMP of odd length followed by more metadata makes it reject the file. | repro, ref: XMP and ICC at odd offsets; with C2 fixed, T.835 rejects 16 of 28 saves with metadata, all on this check | Deviation, medium |
-| C4 | A.7.18 | Pixel-format GUIDs outside Table A.6. **Every FIT_RGBF save** uses WIC's 96bppRGBFloat {E3FED78F-…} (`PluginJXR.cpp:524-525`). On RGB colour-order builds, 32-bit saves use 32bppRGBA (`PluginJXR.cpp:501`). The codestream is fine; the conformant choices are 128bppRGBFloat and 32bppBGRA. | repro: **T.835 rejects** both RGBF saves ("_jxrc_image_pixelformat") | Deviation, medium |
+| C4 | A.7.18 | Pixel-format GUIDs outside Table A.6. **Every FIT_RGBF save** uses WIC's 96bppRGBFloat {E3FED78F-…} (`PluginJXR.cpp:524-525`). On RGB colour-order builds, 32-bit saves use 32bppRGBA (`PluginJXR.cpp:501`). The codestream is fine; the conformant choices are 128bppRGBFloat and 32bppBGRA. | repro: **T.835 rejects** both RGBF saves ("_jxrc_image_pixelformat") | Deviation, medium. **Fixed** 2026-10-13: the container names WIC's 96bppRGBFloat, 32bppRGBA, 32bppRGB and 32bppPRGBA as their Table A.6 twins 128bppRGBFloat, 32bppBGRA, 32bppBGR and 32bppPBGRA, whose codestream is the same; such a file is byte for byte the twin's encode of the same pixels, and T.835 decodes FreeImage's RGBF saves to the floats FreeImage loads. FreeImage before 2add680, 3.18 included, loads 128bppRGBFloat as FIT_RGBAF with alpha 0. |
 | C5 | Table A.4, A.7.3 | `ParsePFDEntry` ignores ELEMENT_TYPE for the core tags (`JXRGlueJxr.c:1598-1665`). A BYTE or USHORT value with non-zero padding is misread, and reserved types are used instead of ignored. The suite's IMAGE_BAND_PRESENCE entries carry non-zero padding, but jxrlib does not use that tag. | code | Deviation, low |
 | C6 | A.7.17, A.7.21, A.7.22 | COLOR_SPACE, PTM_COLOR_INFO and PROFILE_LEVEL_CONTAINER are neither read nor written. BT.2020 and PQ/HLG signalling is lost. Each unknown tag, including these and PADDING_DATA, prints `Unrecognized WMPTag` to stderr from inside the library (`JXRGlueJxr.c:1784`). | repro | Missing, low |
 | C7 | A.6.3, A.7.20 | Only the first IFD is read (A.6.3 allows that), so there are no previews or pages. A file whose first IFD is a preview loads as the preview. | code | Missing, low |
@@ -276,7 +276,7 @@ Beyond the suite results in §2:
 | 2 | R2: check `iQIndexLP < cNumQPLP` in frequency mode (`segdec.c:796`), as spatial mode already does. |
 | 3 | D1 and E1: swap `uiTileX`/`uiTileY` and `cNumOfSliceMinus1V`/`H` in the four tests of `strInvTransform.c` and the matching tests of `strFwdTransform.c` and `strenc.c`. All 41 probe streams then match T.835. **Done** 2026-10-12. |
 | 4 | C2 and C3: sort IFD entries by tag before writing, and pad out-of-line data to even offsets. C2 **done** 2026-10-13; T.835 reads most metadata saves only once C3 is done too. |
-| 5 | C4: save FIT_RGBF as 128bppRGBFloat (the glue has the converter). |
+| 5 | C4: save FIT_RGBF as 128bppRGBFloat (the glue has the converter). **Done** 2026-10-13, in the container's PIXEL_FORMAT alone: the codestream is the same. |
 | 6 | C1: write the true ALPHA_BYTE_COUNT. **Done** 2026-10-13. |
 | 7 | F1: build the palette from `bBlackWhite`, or invert the bits on load. |
 | 8 | D2-D4: rounding 3 in `outputMBRowAlpha`, the alpha plane's own parameters, fix the guard; TRIM_FLEXBITS on the alpha contexts; re-remap the copied HP quantizers. D2 **done** 2026-10-13. |

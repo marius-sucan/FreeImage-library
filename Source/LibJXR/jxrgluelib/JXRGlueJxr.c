@@ -376,7 +376,22 @@ ERR WriteContainerPre(
     //Call(pWS->Write(pWS, PI.pGUIDPixFmt, sizeof(*PI.pGUIDPixFmt))); offPos += 16;
     /** following code is endian-agnostic **/
     {
-        unsigned char *pGuid = (unsigned char *) &pIE->guidPixFormat;
+        // FreeImage: WIC's pixel formats as their T.832 Table A.6 twins, which have the same codestream
+        static const PKPixelFormatGUID *const pTwins[][2] = {
+            {&GUID_PKPixelFormat32bppRGB, &GUID_PKPixelFormat32bppBGR},
+            {&GUID_PKPixelFormat32bppRGBA, &GUID_PKPixelFormat32bppBGRA},
+            {&GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppPBGRA},
+            {&GUID_PKPixelFormat96bppRGBFloat, &GUID_PKPixelFormat128bppRGBFloat},
+        };
+        const PKPixelFormatGUID *pPixFmt = &pIE->guidPixFormat;
+        unsigned char *pGuid;
+        size_t iTwin;
+        for (iTwin = 0; iTwin < sizeof(pTwins) / sizeof(pTwins[0]); iTwin++)
+        {
+            if (IsEqualGUID(pPixFmt, pTwins[iTwin][0]))
+                pPixFmt = pTwins[iTwin][1];
+        }
+        pGuid = (unsigned char *) pPixFmt;
         Call(PutULong(pWS, offPos, ((U32 *)pGuid)[0]));
         Call(PutUShort(pWS, offPos + 4, ((U16 *)(pGuid + 4))[0]));
         Call(PutUShort(pWS, offPos + 6, ((U16 *)(pGuid + 6))[0]));
