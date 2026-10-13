@@ -155,7 +155,7 @@ CheckBitmapInfoHeader(BITMAPINFOHEADER *bih) {
 		// If biHeight is negative, indicating a top-down DIB, biCompression must be either BI_RGB or BI_BITFIELDS. 
 		// Top-down DIBs cannot be compressed.
 		// If biCompression is BI_JPEG or BI_PNG, the biHeight member specifies the height of the decompressed JPEG or PNG image file, respectively.
-		if ((bih->biCompression != BI_RGB) && (bih->biCompression != BI_BITFIELDS)) {
+		if ((bih->biCompression != BI_RGB) && (bih->biCompression != BI_BITFIELDS) && (bih->biCompression != BI_ALPHABITFIELDS)) {
 			return FALSE;
 		}
 	}
@@ -185,6 +185,12 @@ CheckBitmapInfoHeader(BITMAPINFOHEADER *bih) {
 		case BI_RLE8:
 		case BI_RLE4:
 		case BI_BITFIELDS:
+			break;
+		case BI_ALPHABITFIELDS:
+			// four masks, for 16 and 32 bits only
+			if ((bih->biBitCount != 16) && (bih->biBitCount != 32)) {
+				return FALSE;
+			}
 			break;
 		case BI_JPEG:
 		case BI_PNG:
@@ -586,6 +592,135 @@ PixelDataCanFill(FreeImageIO *io, fi_handle handle, INT64 bitmap_bits_offset, UI
 	return plausible;
 }
 
+// one channel of a BI_BITFIELDS layout
+typedef struct tagBMPCHANNEL {
+	DWORD mask;
+	unsigned shift;
+	DWORD max;
+	BYTE *table;
+} BMPCHANNEL;
+
+static void
+InitChannel(BMPCHANNEL *channel, DWORD mask) {
+	channel->mask = mask;
+	channel->shift = 0;
+	channel->max = 0;
+	channel->table = NULL;
+	if (mask) {
+		while (((mask >> channel->shift) & 1) == 0) {
+			channel->shift++;
+		}
+		channel->max = mask >> channel->shift;
+		// up to 16 bits wide, the 8-bit values come from a table
+		if ((channel->max != 0xFF) && (channel->max <= 0xFFFF)) {
+			channel->table = (BYTE*)malloc(channel->max + 1);
+			if (channel->table) {
+				for (DWORD value = 0; value <= channel->max; value++) {
+					channel->table[value] = (BYTE)((value * 255 + channel->max / 2) / channel->max);
+				}
+			}
+		}
+	}
+}
+
+// the channel scaled to 8 bits, rounded; a missing channel is 0
+static inline BYTE
+ChannelValue(const BMPCHANNEL *channel, DWORD pixel) {
+	const DWORD value = (pixel & channel->mask) >> channel->shift;
+	if (channel->table) {
+		return channel->table[value];
+	}
+	if (channel->max == 0xFF) {
+		return (BYTE)value;
+	}
+	return channel->max ? (BYTE)(((UINT64)value * 255 + channel->max / 2) / channel->max) : (BYTE)0;
+}
+
+/**
+Load 16- or 32-bit pixels in a BI_BITFIELDS layout FreeImage does not keep, into a 24- or 32-bit dib
+@param masks Red, green, blue and alpha
+@param alpha FALSE: a 32-bit dib is opaque
+@return Returns the rows read: fewer than the height for a cut file, -1 when out of memory
+*/
+static int
+LoadPixelDataBitfields(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int height, unsigned pitch, unsigned bit_count, const DWORD *masks, BOOL alpha) {
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned src_bytes = bit_count / 8;
+	const unsigned dst_bytes = FreeImage_GetBPP(dib) / 8;
+	// a row that lacks only its padding is complete
+	const unsigned used = width * src_bytes;
+	const int lines = abs(height);
+	int rows = -1;
+	BMPCHANNEL channels[4];
+	for (int i = 0; i < 4; i++) {
+		InitChannel(&channels[i], masks[i]);
+	}
+	BYTE *row = (BYTE*)malloc(pitch);
+	if (row) {
+		rows = lines;
+		for (int c = 0; c < lines; c++) {
+			const unsigned got = io->read_proc(row, 1, pitch, handle);
+			BYTE *dst = FreeImage_GetScanLine(dib, (height > 0) ? c : (lines - 1 - c));
+			const BYTE *src = row;
+			const unsigned pixels = MIN(got, used) / src_bytes;
+			for (unsigned x = 0; x < pixels; x++) {
+				DWORD pixel = src[0] | ((DWORD)src[1] << 8);
+				if (src_bytes == 4) {
+					pixel |= ((DWORD)src[2] << 16) | ((DWORD)src[3] << 24);
+				}
+				dst[FI_RGBA_RED]   = ChannelValue(&channels[0], pixel);
+				dst[FI_RGBA_GREEN] = ChannelValue(&channels[1], pixel);
+				dst[FI_RGBA_BLUE]  = ChannelValue(&channels[2], pixel);
+				if (dst_bytes == 4) {
+					dst[FI_RGBA_ALPHA] = alpha ? ChannelValue(&channels[3], pixel) : (BYTE)0xFF;
+				}
+				src += src_bytes;
+				dst += dst_bytes;
+			}
+			if (got < pitch) {
+				rows = c + ((got >= used) ? 1 : 0);
+				break;
+			}
+		}
+		free(row);
+	}
+	for (int i = 0; i < 4; i++) {
+		free(channels[i].table);
+	}
+	return rows;
+}
+
+// a 32-bit dib without alpha: every fourth byte becomes 0xFF
+static void
+SetOpaque(FIBITMAP *dib) {
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	for (unsigned y = 0; y < height; y++) {
+		BYTE *bits = FreeImage_GetScanLine(dib, y);
+		for (unsigned x = 0; x < width; x++, bits += 4) {
+			bits[FI_RGBA_ALPHA] = 0xFF;
+		}
+	}
+	FreeImage_SetTransparent(dib, FALSE);
+}
+
+// BI_RGB leaves the fourth byte "not used", yet writers store alpha there: zero everywhere means no alpha
+static void
+SetAlphaFromUnusedByte(FIBITMAP *dib) {
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	for (unsigned y = 0; y < height; y++) {
+		const BYTE *bits = FreeImage_GetScanLine(dib, y);
+		for (unsigned x = 0; x < width; x++, bits += 4) {
+			if (bits[FI_RGBA_ALPHA]) {
+				FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
+				return;
+			}
+		}
+	}
+	SetOpaque(dib);
+}
+
 // --------------------------------------------------------------------------
 
 static FIBITMAP *
@@ -709,26 +844,58 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 			break; // 1-, 4-, 8-bit
 
 			case 16 :
+			case 32 :
 			{
-				// the masks a larger header holds count only with BI_BITFIELDS
-				int use_bitfields = 0;
-				if (bih.biCompression == BI_BITFIELDS) {
-					use_bitfields = 3;
+				// the masks follow a 40-byte header and sit inside a larger one; an alpha mask needs 56 bytes or BI_ALPHABITFIELDS
+				DWORD masks[4] = { 0, 0, 0, 0 };
+				BOOL bitfields = (compression == BI_BITFIELDS) || (compression == BI_ALPHABITFIELDS);
+				if (bitfields) {
+					const unsigned count = ((compression == BI_ALPHABITFIELDS) || (bih.biSize >= 56)) ? 4 : 3;
+					if (io->read_proc(masks, count * sizeof(DWORD), 1, handle) != 1) {
+						masks[0] = masks[1] = masks[2] = masks[3] = 0;
+					}
+					for (int i = 0; i < 4; i++) {
+#ifdef FREEIMAGE_BIGENDIAN
+						SwapLong(&masks[i]);
+#endif
+						if (bit_count == 16) {
+							masks[i] &= 0xFFFF;
+						}
+					}
+					// an alpha mask that overlaps the colours is no alpha
+					if (masks[3] & (masks[0] | masks[1] | masks[2])) {
+						masks[3] = 0;
+					}
+					// no colour mask at all: the default layout
+					bitfields = (masks[0] | masks[1] | masks[2]) ? TRUE : FALSE;
 				}
-				else if (bih.biCompression == BI_ALPHABITFIELDS) {
-					use_bitfields = 4;
+				if (!bitfields) {
+					masks[0] = (bit_count == 16) ? FI16_555_RED_MASK : 0x00FF0000;
+					masks[1] = (bit_count == 16) ? FI16_555_GREEN_MASK : 0x0000FF00;
+					masks[2] = (bit_count == 16) ? FI16_555_BLUE_MASK : 0x000000FF;
+					masks[3] = 0;
 				}
-				
-				if (use_bitfields > 0) {
- 					DWORD bitfields[4];
-					io->read_proc(bitfields, use_bitfields * sizeof(DWORD), 1, handle);
-					dib = FreeImage_AllocateHeader(header_only, width, height, bit_count, bitfields[0], bitfields[1], bitfields[2]);
+				const BOOL alpha = (masks[3] != 0);
+
+				// the layouts FreeImage keeps as they are: 5-5-5 or 5-6-5 without alpha, B, G, R with or without alpha in the fourth byte
+				BOOL native = FALSE;
+				if (bit_count == 16) {
+					native = !alpha && (masks[2] == FI16_555_BLUE_MASK) &&
+						(((masks[0] == FI16_555_RED_MASK) && (masks[1] == FI16_555_GREEN_MASK)) || ((masks[0] == FI16_565_RED_MASK) && (masks[1] == FI16_565_GREEN_MASK)));
 				} else {
-					dib = FreeImage_AllocateHeader(header_only, width, height, bit_count, FI16_555_RED_MASK, FI16_555_GREEN_MASK, FI16_555_BLUE_MASK);
+					native = (masks[0] == 0x00FF0000) && (masks[1] == 0x0000FF00) && (masks[2] == 0x000000FF) && (!alpha || (masks[3] == 0xFF000000));
+				}
+
+				if (native && (bit_count == 16)) {
+					dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bit_count, masks[0], masks[1], masks[2]);
+				} else {
+					// a 32-bit layout stays 32-bit; a 16-bit one becomes 24-bit, or 32-bit with alpha
+					const int bpp = ((bit_count == 32) || alpha) ? 32 : 24;
+					dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 				}
 
 				if (dib == NULL) {
-					throw FI_MSG_ERROR_DIB_MEMORY;						
+					throw FI_MSG_ERROR_DIB_MEMORY;
 				}
 
 				// set resolution information
@@ -739,40 +906,44 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 					// header only mode
 					return dib;
 				}
-				
+
 				// seek to the actual pixel data
 				io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
 
-				// load pixel data and swap as needed if OS is Big Endian
-				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
+				if (native) {
+					// load pixel data and swap as needed if OS is Big Endian
+					WarnRows(LoadPixelData(io, handle, dib, (int)height, (unsigned)pitch, bit_count), (int)height);
+					if (bit_count == 32) {
+						if (!bitfields) {
+							SetAlphaFromUnusedByte(dib);
+						} else if (alpha) {
+							FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
+						} else {
+							SetOpaque(dib);
+						}
+					}
+				} else {
+					const int rows = LoadPixelDataBitfields(io, handle, dib, (int)height, (unsigned)pitch, bit_count, masks, alpha);
+					if (rows < 0) {
+						throw FI_MSG_ERROR_MEMORY;
+					}
+					WarnRows(rows, (int)height);
+					if (alpha) {
+						FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
+					} else if ((bit_count == 32) && (rows < abs((int)height))) {
+						// without alpha, the rows a cut file lacks are opaque too
+						SetOpaque(dib);
+					}
+				}
 
 				return dib;
 			}
-			break; // 16-bit RGB
+			break; // 16-, 32-bit
 
 			case 24 :
-			case 32 :
 			{
-				// the masks a larger header holds count only with BI_BITFIELDS
-				int use_bitfields = 0;
-				if (bih.biCompression == BI_BITFIELDS) {
-					use_bitfields = 3;
-				}
-				else if (bih.biCompression == BI_ALPHABITFIELDS) {
-					use_bitfields = 4;
-				}
-
- 				if (use_bitfields > 0) {
-					DWORD bitfields[4];
-					io->read_proc(bitfields, use_bitfields * sizeof(DWORD), 1, handle);
-					dib = FreeImage_AllocateHeader(header_only, width, height, bit_count, bitfields[0], bitfields[1], bitfields[2]);
-				} else {
-					if( bit_count == 32 ) {
-						dib = FreeImage_AllocateHeader(header_only, width, height, bit_count, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
-					} else {
-						dib = FreeImage_AllocateHeader(header_only, width, height, bit_count, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
-					}
-				}
+				// masks do not apply to 24 bits
+				dib = FreeImage_AllocateHeader(header_only, (int)width, (int)height, bit_count, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
 
 				if (dib == NULL) {
 					throw FI_MSG_ERROR_DIB_MEMORY;
@@ -798,13 +969,9 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 				// load pixel data and swap as needed if OS is Big Endian
 				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
-				// check if the bitmap contains transparency, if so enable it in the header
-
-				FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
-
 				return dib;
 			}
-			break; // 24-, 32-bit
+			break; // 24-bit
 		}
 	} catch(const char *message) {
 		if(dib) {
@@ -1028,9 +1195,9 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 				// load pixel data and swap as needed if OS is Big Endian
 				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
-				// check if the bitmap contains transparency, if so enable it in the header
-
-				FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
+				if (bit_count == 32) {
+					SetAlphaFromUnusedByte(dib);
+				}
 
 				return dib;
 			}
@@ -1181,9 +1348,9 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 				// load pixel data and swap as needed if OS is Big Endian
 				WarnRows(LoadPixelData(io, handle, dib, height, pitch, bit_count), height);
 
-				// check if the bitmap contains transparency, if so enable it in the header
-
-				FreeImage_SetTransparent(dib, (FreeImage_GetColorType(dib) == FIC_RGBALPHA));
+				if (bit_count == 32) {
+					SetAlphaFromUnusedByte(dib);
+				}
 
 				return dib;
 			}

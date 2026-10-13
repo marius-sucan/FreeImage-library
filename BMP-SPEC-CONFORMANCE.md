@@ -11,27 +11,28 @@ FreeImage **reads** every header Microsoft defines — `BITMAPCOREHEADER` (OS/2 
 
 Reading a V4 or V5 file is structural only. FreeImage takes the first 40 bytes and, for 16-bit images, the colour
 masks; everything V4 and V5 add — 32-bit masks, the alpha mask, the colour space, endpoints and gamma, the rendering
-intent, the ICC profile — is ignored.
+intent, the ICC profile — is ignored. Since the fix of L1, L2, L3 and L7 (2026-10-13) the colour and alpha masks
+count at every depth; the colour space, intent and profile are still ignored.
 
 The classic content decodes exactly: 1-, 4- and 8-bit palettes, RLE4 and RLE8 with deltas, 24-bit, 16-bit 5-5-5 and
 5-6-5, top-down rows, gaps before the pixels, oversized and undersized palettes. The defects sit in 16- and 32-bit
 direct colour, in colour management, and in the writer's 32-bit layout:
 
-| # | Finding | Severity | Evidence |
-|---|---|---|---|
-| L1 | 32-bit: the byte the spec calls "not used" becomes alpha; files that hold 0 there, like the suite's baseline 32-bit file, load **fully transparent** | high | 2 of the suite's 27 "good" files; every other decoder surveyed (WIC, Chromium, Firefox, GIMP, ImageMagick, stb_image, Pillow) shows them opaque |
-| L2 | 32-bit `BI_BITFIELDS` masks are ignored: only the B,G,R,A byte order decodes right | high | 1 "good" + 9 "questionable" suite files |
-| L3 | 16-bit masks other than 5-5-5 / 5-6-5 decode as 5-5-5; 16-bit alpha masks are dropped | medium | 5 "questionable" + 1 "bad" suite files |
-| L4 | V5 embedded ICC profiles are not attached; `LCS_CALIBRATED_RGB` is ignored | medium | `q/rgb24prof2.bmp` shows red and green swapped |
-| W1 | The writer stores 32-bit alpha in `BI_RGB`'s unused byte with a 40-byte header; Windows (WIC) and Pillow read such files as opaque | medium | Pillow reloads them as RGB |
-| L5 | OS/2 1.x 16/24/32-bit files ignore `bfOffBits` | medium-low | crafted file: every pixel wrong |
-| W2 | RLE8 saves write `biSizeImage` = 0 and `bfSize` = the uncompressed size | low | header bytes |
-| W6 | A saved `FreeImage_CreateView()` view writes its parent's pixels into the row padding, which must be zeros | low | padding bytes |
+| # | Finding | Severity | Evidence | Status |
+|---|---|---|---|---|
+| L1 | 32-bit: the byte the spec calls "not used" becomes alpha; files that hold 0 there, like the suite's baseline 32-bit file, load **fully transparent** | high | 2 of the suite's 27 "good" files; every other decoder surveyed (WIC, Chromium, Firefox, GIMP, ImageMagick, stb_image, Pillow) shows them opaque | **fixed** |
+| L2 | 32-bit `BI_BITFIELDS` masks are ignored: only the B,G,R,A byte order decodes right | high | 1 "good" + 9 "questionable" suite files | **fixed** |
+| L3 | 16-bit masks other than 5-5-5 / 5-6-5 decode as 5-5-5; 16-bit alpha masks are dropped | medium | 5 "questionable" + 1 "bad" suite files | **fixed** |
+| L4 | V5 embedded ICC profiles are not attached; `LCS_CALIBRATED_RGB` is ignored | medium | `q/rgb24prof2.bmp` shows red and green swapped | open |
+| W1 | The writer stores 32-bit alpha in `BI_RGB`'s unused byte with a 40-byte header; Windows (WIC) and Pillow read such files as opaque | medium | Pillow reloads them as RGB | open |
+| L5 | OS/2 1.x 16/24/32-bit files ignore `bfOffBits` | medium-low | crafted file: every pixel wrong | open |
+| W2 | RLE8 saves write `biSizeImage` = 0 and `bfSize` = the uncompressed size | low | header bytes | open |
+| W6 | A saved `FreeImage_CreateView()` view writes its parent's pixels into the row padding, which must be zeros | low | padding bytes | open |
 
-Everything else is either a valid but rare feature that is refused (2 bpp, `BI_ALPHABITFIELDS`, `BI_JPEG`/`BI_PNG`,
-64 bpp, OS/2 short headers, RLE24, Huffman 1D, OS/2 bitmap arrays) or a detail.
+Everything else is either a valid but rare feature that is refused (2 bpp, `BI_ALPHABITFIELDS` until its fix with
+L1–L3, `BI_JPEG`/`BI_PNG`, 64 bpp, OS/2 short headers, RLE24, Huffman 1D, OS/2 bitmap arrays) or a detail.
 
-**BMP Suite 2.8 scorecard** (the standard test set; its own reference images are the oracle, appendix A):
+**BMP Suite 2.8 scorecard** at `00abb5e` (the standard test set; its own reference images are the oracle, appendix A):
 
 | Directory | Meaning (suite README) | Files | Acceptable | Wrong, no warning | Refused |
 |---|---|---|---|---|---|
@@ -42,6 +43,9 @@ Everything else is either a valid but rare feature that is refused (2 bpp, `BI_A
 
 For contrast, Pillow 12.1.1 refuses 19 of the `q/` files instead of decoding them: **FreeImage's main risk is silent
 wrong output** (18 of the `g/` and `q/` files), not refusal.
+
+Since the fix of L1, L2, L3 and L7: `g/` 27 of 27 (the same 4 within ±1); `q/` 34 acceptable (4 more within ±1),
+1 wrong (`rgb24prof2`, L4), 8 refused; `b/rgb16-880.bmp` matches its reference.
 
 ## 2. How this was checked
 
@@ -86,7 +90,7 @@ describes its codec as "Specification Support: BMP Specification v5".
 | 16–64 | OS/2 `BITMAPINFOHEADER2` | IBM OS/2 2.x | unsigned 32-bit sizes; Huffman 1D, RLE24; halftoning fields; truncated at any field (15 lengths) | 40, 52, 56, 64 only (L6) | no |
 | 40 | `BITMAPINFOHEADER` | Windows 3.x / NT | compression; masks after the header for `BI_BITFIELDS` | yes | **always** |
 | 52 | "`BITMAPV2INFOHEADER`" | undocumented | R, G, B masks in the header | yes | no |
-| 56 | "`BITMAPV3INFOHEADER`" | undocumented | + alpha mask | yes, alpha mask ignored | no |
+| 56 | "`BITMAPV3INFOHEADER`" | undocumented | + alpha mask | yes (alpha mask ignored until the L1–L3 fix) | no |
 | 108 | `BITMAPV4HEADER` | Windows 95 / NT 4 | masks, alpha mask, colour space, endpoints, gamma | yes, extras ignored | no |
 | 124 | `BITMAPV5HEADER` | Windows 98 / 2000 | + rendering intent, embedded or linked ICC profile | yes, extras ignored | no |
 
@@ -100,10 +104,10 @@ with "Unknown bmp subtype with id N". `CheckBitmapInfoHeader()`'s `biSize >= 40`
 | 0 `BI_RGB` | uncompressed | same | all | yes | yes |
 | 1 `BI_RLE8` | RLE, 8 bpp | same | 8 bpp, bottom-up | yes | with `BMP_SAVE_RLE` |
 | 2 `BI_RLE4` | RLE, 4 bpp | same | 4 bpp, bottom-up | yes | no |
-| 3 `BI_BITFIELDS` | masks | Huffman 1D | 16 and 32 bpp / 1 bpp | 16-bit: 5-5-5 and 5-6-5 only (L3); 32-bit: masks ignored (L2); Huffman refused (L10) | 16-bit |
+| 3 `BI_BITFIELDS` | masks | Huffman 1D | 16 and 32 bpp / 1 bpp | 16-bit: 5-5-5 and 5-6-5 only (L3); 32-bit: masks ignored (L2); both **fixed**; Huffman refused (L10) | 16-bit |
 | 4 `BI_JPEG` | JPEG stream | RLE24 | printers only / 24 bpp | refused (L9, L10) | no |
 | 5 `BI_PNG` | PNG stream | — | printers only | refused (L9) | no |
-| 6 `BI_ALPHABITFIELDS` | 4 masks | — | Windows CE .NET 4.0+, 16 and 32 bpp | refused (L7) | no |
+| 6 `BI_ALPHABITFIELDS` | 4 masks | — | Windows CE .NET 4.0+, 16 and 32 bpp | refused (L7, **fixed**) | no |
 | 11–13 `BI_CMYK`, `BI_CMYKRLE8`, `BI_CMYKRLE4` | CMYK | — | listed in [MS-WMF] §2.1.1.7 | refused | no |
 
 [MS-LEARN] on `BI_JPEG`/`BI_PNG`: "These compression values are only valid for SetDIBitsToDevice and StretchDIBits when
@@ -116,9 +120,9 @@ the hdc parameter specifies a printer device." They are a printer pass-through, 
 | 0 | `BI_JPEG`/`BI_PNG` ("implied by the JPEG or PNG format") | refused | — |
 | 1, 4, 8 | all headers | yes | yes |
 | 2 | Windows CE: "The bitmap has four possible color values." | refused (L8) | — |
-| 16 | 40-byte header and later | 5-5-5 and 5-6-5 right; other masks wrong (L3) | 5-5-5 / 5-6-5 as `BI_BITFIELDS` |
+| 16 | 40-byte header and later | 5-5-5 and 5-6-5 right; other masks wrong (L3, **fixed**: 24-bit, or 32-bit with alpha) | 5-5-5 / 5-6-5 as `BI_BITFIELDS` |
 | 24 | all headers | yes | yes |
-| 32 | 40-byte header and later | B,G,R order only (L2); unused byte → alpha (L1) | `BI_RGB`, alpha in the unused byte (W1) |
+| 32 | 40-byte header and later | B,G,R order only (L2); unused byte → alpha (L1); both **fixed** | `BI_RGB`, alpha in the unused byte (W1) |
 | 64 | WIC decodes `64bppRGBAFixedPoint`; GDI+ lists 64 among BMP depths; **no layout is documented** | refused (L11) | — |
 
 ### 3.4 `BITMAPV5HEADER`, field by field
@@ -129,13 +133,13 @@ the hdc parameter specifies a printer device." They are a printer pass-through, 
 | 4, 8 | `bV5Width`, `bV5Height` | negative height = top-down; "Top-down DIBs cannot be compressed." | yes; top-down RLE refused | positive height |
 | 12 | `bV5Planes` | "This value must be set to 1." | checked | 1 |
 | 14 | `bV5BitCount` | 0, 1, 4, 8, 16, 24, 32 | 1, 4, 8, 16, 24, 32 | same |
-| 16 | `bV5Compression` | see 3.2 | 0–3 | 0, 1, 3 |
+| 16 | `bV5Compression` | see 3.2 | 0–3; 6 since the L7 fix | 0, 1, 3 |
 | 20 | `bV5SizeImage` | "This may be set to zero for BI_RGB bitmaps." | ignored (right) | always 0 (W2, W3) |
 | 24, 28 | `bV5X/YPelsPerMeter` | resolution | yes | yes |
 | 32 | `bV5ClrUsed` | palette size; for ≥16 bpp an optional palette | yes, clamped | yes |
 | 36 | `bV5ClrImportant` | 0 = all | ignored | = `ClrUsed` |
-| 40–48 | `bV5Red/Green/BlueMask` | "valid only if bV5Compression is set to BI_BITFIELDS" | 16-bit only (L2, L3) | — |
-| 52 | `bV5AlphaMask` | "Color mask that specifies the alpha component of each pixel." | ignored (L1, L3) | — |
+| 40–48 | `bV5Red/Green/BlueMask` | "valid only if bV5Compression is set to BI_BITFIELDS" | 16-bit only (L2, L3); every depth since their fix | — |
+| 52 | `bV5AlphaMask` | "Color mask that specifies the alpha component of each pixel." | ignored (L1, L3); used with `BI_BITFIELDS` since their fix | — |
 | 56 | `bV5CSType` | `LCS_CALIBRATED_RGB`, `LCS_sRGB`, `LCS_WINDOWS_COLOR_SPACE`, `PROFILE_LINKED`, `PROFILE_EMBEDDED` | ignored (L4) | — |
 | 60 | `bV5Endpoints` | XYZ of the primaries, 2.30 fixed point, for `LCS_CALIBRATED_RGB` | ignored (L4) | — |
 | 96 | `bV5GammaRed/Green/Blue` | "unsigned fixed 16.16", for `LCS_CALIBRATED_RGB` | ignored (L4) | — |
@@ -197,6 +201,12 @@ only decides for files without one. It belongs in all three loaders (`PluginBMP.
 header-only load cannot apply it: with no pixels, a 32-bit header still reports `FIC_RGBALPHA`, as for every format.
 Section 6 lists what other decoders do.
 
+**Fixed** 2026-10-13, as proposed: with `BI_RGB`, in all three loaders, the fourth byte is alpha unless it is 0
+everywhere; with `BI_BITFIELDS` it is alpha only under an alpha mask (56-byte headers and up, an alpha mask overlapping
+a colour counting as none) or with `BI_ALPHABITFIELDS`, and otherwise the image is opaque, the rows a cut file lacks
+too. `g/rgb32.bmp`, `g/rgb32bfdef.bmp` and the crafted zero and junk files load opaque; FreeImage's and Pillow's RGBA
+saves keep their alpha; `v3_rgb32_onebyte` stays transparent, the rule's known limit.
+
 ### L2 — 32-bit `BI_BITFIELDS` masks are ignored (high)
 
 **Spec.** [MS-LEARN]: "If the biCompression member of the BITMAPINFOHEADER is BI_BITFIELDS, the bmiColors member
@@ -220,6 +230,11 @@ pixels wrong). Pillow decodes the byte-aligned ones right and refuses the rest.
 to 8 bits (`v * 255 / max`, rounded), alpha by the alpha mask or 0xFF. Channels wider than 8 bits (10-10-10-2, 11-11-10)
 lose precision in a 32-bit dib; `FIT_RGBA16` would keep it, if that is ever wanted.
 
+**Fixed** 2026-10-13: B, G, R with or without alpha in the fourth byte still loads as it is; any other layout is decoded
+channel by channel into a 32-bit dib, rounded to the nearest 8-bit value, from a table for channels up to 16 bits wide.
+The ten suite files and the crafted A8B8G8R8 files match their references, four of them within one level. 24 MP takes
+155–200 ms that way, against 65 ms for a raw copy.
+
 ### L3 — 16-bit: masks other than 5-5-5 and 5-6-5, and 16-bit alpha (medium)
 
 **Spec.** The same `BI_BITFIELDS` rule as L2. The archived page limits only Windows 95/98/Me to "A 5-5-5 16-bit image
@@ -235,6 +250,9 @@ Wrong: `q/rgb16-231.bmp`, `q/rgb16-3103.bmp`, `q/rgba16-4444.bmp`, `q/rgba16-192
 
 **Fix.** Keep a 16-bit dib only for exact 5-5-5 and 5-6-5 without alpha; convert anything else to 24-bit, or 32-bit
 when there is an alpha mask, with the extraction of L2.
+
+**Fixed** 2026-10-13 that way; an alpha mask with bits beyond the 16 counts as none. The five `q/` files and
+`b/rgb16-880.bmp` match their references.
 
 **Rounding, for the record.** The four 16-bit `g/` files match their references within ±1: FreeImage scales 5-bit
 values with truncation (`v * 255 / 31`, `Conversion32.cpp:86-101`), the references round (`v = 3` gives 24, not 25; 15
@@ -300,6 +318,9 @@ masks that specify the red, green, blue, and alpha components of each pixel. Thi
 `use_bitfields = 4` branches (`:718-720`, `:761-763`) never run. `q/rgba32abf.bmp` is refused with "Invalid file format".
 
 **Fix.** Accept 6 for 16 and 32 bpp and let L2's extraction use the fourth mask.
+
+**Fixed** 2026-10-13 that way, top-down allowed as for `BI_BITFIELDS`; 1-, 4-, 8- and 24-bit files with it are still
+refused. `q/rgba32abf.bmp` matches its reference.
 
 ### L8 — 2 bits per pixel is refused (low)
 
@@ -433,10 +454,10 @@ its older C++ `BMPImageReader` now serves ICO only.
 | stb_image 2.30 | **alpha unless all zero** | `BI_BITFIELDS` | channels up to 8 bits | not supported | ignored | — |
 | WIC (documented) | ignored | V5, 32-bit, "valid alpha" (Windows 8+) | not documented | not documented | not documented | — |
 | Pillow 12.1.1 (run) | ignored | used | byte-aligned layouts; others refused | wrong on deltas | ignored | — |
-| **FreeImage** | **alpha; all zero = transparent** | not read (the fourth byte is alpha anyway) | 16-bit 5-5-5/5-6-5 and 32-bit B,G,R,A only | index 0 | ignored | OS/2 40/52/56/64-byte headers |
+| **FreeImage** at `00abb5e` | **alpha; all zero = transparent** | not read (the fourth byte is alpha anyway) | 16-bit 5-5-5/5-6-5 and 32-bit B,G,R,A only | index 0 | ignored | OS/2 40/52/56/64-byte headers |
 
 Every decoder surveyed shows a 32-bit file that has no alpha mask and a fourth byte of 0 everywhere as opaque; only
-FreeImage makes it transparent. ImageMagick and stb_image use exactly L1's rule, and say why. ImageMagick: "We should
+FreeImage made it transparent, until L1's fix, which follows ImageMagick and stb_image. ImageMagick and stb_image use exactly L1's rule, and say why. ImageMagick: "We should
 ignore the alpha value in BMP3 files but there have been reports about 32 bit files with alpha. We do a quick check to
 see if the alpha channel contains a value that is not zero (default value)." stb_image: "if alpha channel is all 0s,
 replace with all 255s". Chromium's older reader applies the same test even to a declared alpha channel: "Some BMPs
@@ -481,10 +502,11 @@ no default).
 - **R1.** A file cut before its `BI_BITFIELDS` masks loads with uninitialised masks: `DWORD bitfields[4]` is not
   initialised and the `read_proc` result is not checked (`PluginBMP.cpp:723-725`, `:766-768`, `:966-968`). Two runs of
   the crafted `cut_before_masks.bmp` after filling the stack differently gave masks `F80371F0 00007FFE 52899322` and
-  `A48214C0 00007FFC 39699322`.
+  `A48214C0 00007FFC 39699322`. **Fixed** for the Windows headers with L1–L3: masks the file cuts off give the default
+  layout. The OS/2 2.x 64-byte path (`LoadOS22XBMP()`'s 16-bit `BI_BITFIELDS`) is unchanged.
 - **R2.** The RLE8 writer does not check its `malloc` (`:1600`).
 - **R3.** Big-endian builds (`FREEIMAGE_BIGENDIAN`) byte-swap the headers and 16-bit pixels but not the masks, on load
-  (`:724`, `:767`, `:968`) or save (`:1562-1578`). Code reading only.
+  (`:724`, `:767`, `:968`) or save (`:1562-1578`). Code reading only. The Windows headers' load side swaps since L1–L3.
 
 ## 9. Correct today — keep
 
@@ -511,7 +533,7 @@ no default).
 
 ## 10. Suggested order of work
 
-1. **L1 + L2 + L3 + L7 in one change**: one mask-extraction path in `LoadWindowsBMP()` for 16- and 32-bit (alpha
+1. **Done** 2026-10-13. **L1 + L2 + L3 + L7 in one change**: one mask-extraction path in `LoadWindowsBMP()` for 16- and 32-bit (alpha
    by mask, or by the non-zero rule for `BI_RGB`, which the OS/2 loaders' 32-bit cases need too), `BI_ALPHABITFIELDS`
    accepted. Fixes the 3 wrong `g/` files, 14 of the 15 wrong `q/` files (the 15th, `rgb24prof2`, is L4) and
    `b/rgb16-880.bmp`, and makes `q/rgba32abf.bmp` load.
@@ -526,7 +548,9 @@ no default).
 ## Appendix A — BMP Suite 2.8 results
 
 FreeImage loads each file with flags 0, converts to 32-bit and compares with the suite's reference image ("Correct
-display" column of `html/bmpsuite.html`). "±1": every pixel within one level.
+display" column of `html/bmpsuite.html`). "±1": every pixel within one level. Measured at `00abb5e`: since the fix of
+L1, L2, L3 and L7, every **WRONG** row, `q/rgba32abf.bmp` and `b/rgb16-880.bmp` match their references (`q/rgb24prof2.bmp`
+is L4).
 
 | File | Hdr | bpp | Compr. | FreeImage loads | Verdict | Why |
 |---|---|---|---|---|---|---|
