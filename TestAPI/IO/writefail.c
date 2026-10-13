@@ -104,7 +104,8 @@ int main(void) {
     FIBITMAP *square = FreeImage_Rescale(rgb, 64, 64, FILTER_BOX);
 
     struct { FREE_IMAGE_FORMAT fif; FIBITMAP *dib; int flags; const char *name; } t[] = {
-        { FIF_BMP, rgb, 0, "BMP" }, { FIF_ICO, square, 0, "ICO" }, { FIF_JPEG, rgb, 0, "JPEG" }, { FIF_JNG, rgb, 0, "JNG" },
+        { FIF_BMP, rgb, 0, "BMP" }, { FIF_BMP, grey, BMP_SAVE_RLE, "BMP RLE" }, { FIF_ICO, square, 0, "ICO" },
+        { FIF_JPEG, rgb, 0, "JPEG" }, { FIF_JNG, rgb, 0, "JNG" },
         { FIF_PBM, mono, PNM_SAVE_ASCII, "PBM ascii" }, { FIF_PBMRAW, mono, PNM_SAVE_RAW, "PBM raw" },
         { FIF_PGM, grey, PNM_SAVE_ASCII, "PGM ascii" }, { FIF_PGMRAW, grey, PNM_SAVE_RAW, "PGM raw" },
         { FIF_PPM, rgb, PNM_SAVE_ASCII, "PPM ascii" }, { FIF_PPMRAW, rgb, PNM_SAVE_RAW, "PPM raw" },

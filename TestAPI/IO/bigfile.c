@@ -212,16 +212,40 @@ static void test_bigtiff_flag(void) {
 
 /* --- a BMP that would pass 4 GB ------------------------------------------------ */
 
-/* 65536 x 65600 8-bit, its rows 1 byte apart in a small buffer: the save must stop before it reads any */
+static DWORD le32(const BYTE *p) { return (DWORD)p[0] | ((DWORD)p[1] << 8) | ((DWORD)p[2] << 16) | ((DWORD)p[3] << 24); }
+
+/* a saved RLE8 BMP: bfSize is its size, biSizeImage that of its RLE data */
+static int bmp_rle_sizes_ok(const char *path) {
+    BYTE h[38];
+    INT64 size;
+    int ok;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    ok = fread(h, sizeof(h), 1, f) == 1 && fi_fseek64(f, 0, SEEK_END) == 0;
+    size = fi_ftell64(f);
+    fclose(f);
+    return ok && h[0] == 'B' && h[1] == 'M' && le32(h + 30) == 1 && le32(h + 2) == size && le32(h + 34) == size - le32(h + 10);
+}
+
+/* 65536 x 65600 8-bit, its rows 1 byte apart in a small buffer: uncompressed, the save must stop before it reads any */
 static void test_bmp_4g(void) {
     const char *path = tmppath("fi_io_big.bmp");
     BYTE *bits = (BYTE *)calloc(65536 + 65600, 1);
     FIBITMAP *dib = bits ? FreeImage_ConvertFromRawBitsEx(FALSE, bits, FIT_BITMAP, 65536, 65600, 1, 8, 0, 0, 0, FALSE) : NULL;
     FILE *f;
+    int i;
 
-    printf("fi_io_big.bmp: 65536 x 65600 8-bit, 4.3 GB as a BMP, whose size field is 32-bit\n");
+    printf("fi_io_big.bmp: 65536 x 65600 8-bit, 4.3 GB as a BMP, whose size fields are 32-bit\n");
     report("FreeImage_Save refuses it", dib && !FreeImage_Save(FIF_BMP, dib, path, BMP_DEFAULT));
-    report("  with BMP_SAVE_RLE too", dib && !FreeImage_Save(FIF_BMP, dib, path, BMP_SAVE_RLE));
+    f = fopen(path, "rb");
+    report("  and leaves no file", f == NULL);
+    if (f) fclose(f);
+    remove(path);
+    report("  blank, BMP_SAVE_RLE saves 34 MB, sizes right", dib && FreeImage_Save(FIF_BMP, dib, path, BMP_SAVE_RLE) && bmp_rle_sizes_ok(path));
+    remove(path);
+    /* no two neighbours equal: RLE8 adds to every row */
+    for (i = 0; i < 65536 + 65600; i++) bits[i] = (BYTE)((i & 1) ? 0x55 : 0xAA);
+    report("  no runs, BMP_SAVE_RLE refuses it too", dib && !FreeImage_Save(FIF_BMP, dib, path, BMP_SAVE_RLE));
     f = fopen(path, "rb");
     report("  and leaves no file", f == NULL);
     if (f) fclose(f);

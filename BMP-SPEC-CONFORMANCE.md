@@ -7,7 +7,7 @@
 
 FreeImage **reads** every header Microsoft defines — `BITMAPCOREHEADER` (OS/2 1.x), `BITMAPINFOHEADER`,
 `BITMAPV4HEADER` and `BITMAPV5HEADER`, the newest (Windows 98/2000; there is no V6) — plus the undocumented 52- and
-56-byte variants and the full 64-byte OS/2 2.x header. It **writes** only the 40-byte `BITMAPINFOHEADER`.
+56-byte variants and the full 64-byte OS/2 2.x header. It **writes** only the 40-byte `BITMAPINFOHEADER` (since the W1 fix, a `BITMAPV5HEADER` for 32-bit alpha).
 
 Reading a V4 or V5 file is structural only. FreeImage takes the first 40 bytes and, for 16-bit images, the colour
 masks; everything V4 and V5 add — 32-bit masks, the alpha mask, the colour space, endpoints and gamma, the rendering
@@ -27,8 +27,8 @@ direct colour, in colour management, and in the writer's 32-bit layout:
 | L4 | V5 embedded ICC profiles are not attached; `LCS_CALIBRATED_RGB` is ignored | medium | `q/rgb24prof2.bmp` shows red and green swapped | **fixed** for embedded profiles; calibrated RGB open |
 | W1 | The writer stores 32-bit alpha in `BI_RGB`'s unused byte with a 40-byte header; Windows (WIC) and Pillow read such files as opaque | medium | Pillow reloads them as RGB | **fixed** |
 | L5 | OS/2 1.x 16/24/32-bit files ignore `bfOffBits` | medium-low | crafted file: every pixel wrong | **fixed** |
-| W2 | RLE8 saves write `biSizeImage` = 0 and `bfSize` = the uncompressed size | low | header bytes | open |
-| W6 | A saved `FreeImage_CreateView()` view writes its parent's pixels into the row padding, which must be zeros | low | padding bytes | open |
+| W2 | RLE8 saves write `biSizeImage` = 0 and `bfSize` = the uncompressed size | low | header bytes | **fixed** |
+| W6 | A saved `FreeImage_CreateView()` view writes its parent's pixels into the row padding, which must be zeros | low | padding bytes | **fixed** |
 
 Everything else is either a valid but rare feature that is refused (2 bpp, `BI_ALPHABITFIELDS` until its fix with
 L1–L3, `BI_JPEG`/`BI_PNG`, 64 bpp, OS/2 short headers, RLE24, Huffman 1D, OS/2 bitmap arrays) or a detail.
@@ -135,7 +135,7 @@ the hdc parameter specifies a printer device." They are a printer pass-through, 
 | 12 | `bV5Planes` | "This value must be set to 1." | checked | 1 |
 | 14 | `bV5BitCount` | 0, 1, 4, 8, 16, 24, 32 | 1, 4, 8, 16, 24, 32 | same |
 | 16 | `bV5Compression` | see 3.2 | 0–3; 6 since the L7 fix | 0, 1, 3 |
-| 20 | `bV5SizeImage` | "This may be set to zero for BI_RGB bitmaps." | ignored (right) | always 0 (W2, W3) |
+| 20 | `bV5SizeImage` | "This may be set to zero for BI_RGB bitmaps." | ignored (right) | always 0 (W2, W3); since their fixes and W1's, 0 for `BI_RGB` only |
 | 24, 28 | `bV5X/YPelsPerMeter` | resolution | yes | yes |
 | 32 | `bV5ClrUsed` | palette size; for ≥16 bpp an optional palette | yes, clamped | yes |
 | 36 | `bV5ClrImportant` | 0 = all | ignored | = `ClrUsed` |
@@ -393,11 +393,11 @@ What the writer produces (`Save()`, `PluginBMP.cpp:1483-1698`), checked on 17 sa
 | Source | File written | Spec-literal decode | Pillow |
 |---|---|---|---|
 | 1, 4, 8-bit | 40-byte header, `BI_RGB`, full palette | exact | exact |
-| 8-bit + `BMP_SAVE_RLE` | `BI_RLE8`, valid stream (EOL per row, EOB at the end, even absolute runs) | exact | exact |
+| 8-bit + `BMP_SAVE_RLE` | `BI_RLE8`, valid stream (EOL per row, EOB at the end, even absolute runs); sizes true since the W2 fix | exact | exact |
 | 1, 4-bit + `BMP_SAVE_RLE` | `BI_RGB` (no RLE4 writer) | exact | exact |
-| 16-bit 5-5-5, 5-6-5 | `BI_BITFIELDS` + 3 masks | exact (±1 rounding) | exact |
-| 24-bit, views of 24/32-bit | `BI_RGB` (a view's row padding is not zero: W6) | exact | exact |
-| 32-bit with alpha | `BI_RGB`, alpha in the fourth byte | RGB exact, alpha "not used" | **mode RGB, alpha lost** |
+| 16-bit 5-5-5, 5-6-5 | `BI_BITFIELDS` + 3 masks; `biSizeImage` set since the W3 fix | exact (±1 rounding) | exact |
+| 24-bit, views of 24/32-bit | `BI_RGB` (a view's row padding is not zero: W6, fixed) | exact | exact |
+| 32-bit with alpha | `BI_RGB`, alpha in the fourth byte; since the W1 fix a `BITMAPV5HEADER` with an alpha mask | RGB exact, alpha "not used" | **mode RGB, alpha lost**; RGBA since the W1 fix |
 | 8-bit with a transparency table | palette only | RGB exact | transparency lost, no message |
 
 ### W1 — 32-bit alpha is written where the spec says nothing is (medium)
@@ -434,16 +434,29 @@ mostly ignore both fields (the suite's `q/pal8os2-sz.bmp` relies on that), but a
 RLE data from `biSizeImage`, as [MS-WMF] prescribes, finds 0 bytes. **Fix.** Encode first (or seek back), then write
 both sizes; the 4 GB guard (`:1521`) should test the encoded size too.
 
+**Fixed** 2026-10-13: an RLE8 save is encoded twice, once to count its bytes and once to write them, so `bfSize` is
+the file's size and `biSizeImage` that of the RLE data (61×23: 1908 and 830; the ramp: 2598 and 1520). The 4 GB
+check tests that size before anything is written: an image that RLE8 grows past 4 GB is refused, and a blank
+65536 × 65600 one, 4.3 GB uncompressed, is saved in 34 MB (`TestAPI/IO/bigfile`). The second pass costs time: a
+6001 × 4000 RLE8 save takes 1.8 to 1.9 times as long. Seeking back instead would only learn of the 4 GB overflow
+after writing it. The encoder's `malloc` is checked now (R2).
+
 ### W3 — `biSizeImage` = 0 for `BI_BITFIELDS` saves (low)
 
 Same sentence as W2: zero is allowed for `BI_RGB` only. 16-bit saves are `BI_BITFIELDS`. **Fix.** Write
 `pitch × height` for every uncompressed save.
+
+**Fixed** 2026-10-13 for `BI_BITFIELDS`: 16-bit saves state `pitch × height`, as W1's V5 header does. `BI_RGB`
+saves keep 0, which both specifications allow and [MS-WMF] asks for: "If the Compression value is BI_RGB, this
+value SHOULD be zero and MUST be ignored." The writer sets the field itself now, whatever the dib's header holds.
 
 ### W4 — Palette `rgbReserved` is copied from the dib (low)
 
 [MS-LEARN] `RGBQUAD`: "rgbReserved: This member is reserved and must be zero." [MS-WMF] §2.2.2.20: "MUST be 0x00".
 `Save()` writes `pal[i].rgbReserved` (`:1590`), and the loader fills it from the file, so a non-zero byte survives a
 round trip (a crafted palette with 255 non-zero bytes was written as is). **Fix.** Write 0.
+
+**Fixed** 2026-10-13: written as 0.
 
 ### W5 — Not written: colour information, transparency tables, RLE4 (info)
 
@@ -460,6 +473,10 @@ view. Measured with 33-pixel views of parents filled with 0xFF: 3 padding bytes 
 16 bpp, 1 at 24 bpp (plus 7 and 4 trailing bits at 1 and 4 bpp); a plain 33-pixel image writes zeros. Readers ignore
 padding, but a crop saved this way leaks up to 3 bytes per row of the image it was cut from. **Fix.** Write
 `FreeImage_GetLine()` bytes, mask the last byte's unused bits at 1 and 4 bpp, then zeros up to the pitch.
+
+**Fixed** 2026-10-13 that way: each row is written as its whole bytes, then the last byte's used bits and zeros up
+to the pitch; a row without padding is still one write. The views above now write zeros only. It also cleans the
+saves of ordinary images whose padding is not zero, which loaders that copy whole rows leave (BMP's among them).
 
 ## 6. What other decoders do
 
@@ -500,6 +517,12 @@ The spec does not say what a run longer than the rest of the row means. `DecodeR
 `LoadPixelDataRLE4()` reads the whole run into its linear buffer, and the RLE4 twin decodes. **Fix.** Skip the
 `status_byte - count` bytes that were not stored.
 
+**Fixed** 2026-10-13 that way: the bytes past the row end and the pad byte are read and dropped, so the run is cut at
+the row end, as RLE8 cuts its encoded runs, and decoding goes on; `rle8_literal_cross` decodes exactly. A literal
+that starts at the row end, which broke the decoding too (a read of 0 bytes), is dropped the same way. In BMP Suite,
+`b/badrle.bmp` decodes all 64 rows instead of 2 with a warning; in the salvage rig, four damaged RLE8 files match
+their original in 239 of 240 rows instead of 90 to 167.
+
 ### S2 — Runs past the end of the row: RLE8 clips, RLE4 wraps
 
 An encoded run longer than the rest of the row is clipped by RLE8 and continues on the next row in RLE4 (its buffer is
@@ -527,7 +550,12 @@ no default).
   the crafted `cut_before_masks.bmp` after filling the stack differently gave masks `F80371F0 00007FFE 52899322` and
   `A48214C0 00007FFC 39699322`. **Fixed** for the Windows headers with L1–L3: masks the file cuts off give the default
   layout. The OS/2 2.x 64-byte path (`LoadOS22XBMP()`'s 16-bit `BI_BITFIELDS`) is unchanged.
-- **R2.** The RLE8 writer does not check its `malloc` (`:1600`).
+- **R2.** The RLE8 writer does not check its `malloc` (`:1600`). **Fixed** with W2.
+- **R4.** RLE8 deltas could carry the column past 2^31. `DecodeRLE8()` added each delta's dx to an `int` without bound,
+  so 8.4 million deltas of 255 pixels on one row, a 34 MB file, overflowed it, and the next run wrote about 2 GB
+  before the image (UBSan: signed integer overflow; ASan: SEGV in `DecodeRLE8`). Found while fixing S1, **fixed**
+  the same day: a delta goes no further than one pixel past the row end, or the image's height; the commands after
+  it behave as they did for any position beyond.
 - **R3.** Big-endian builds (`FREEIMAGE_BIGENDIAN`) byte-swap the headers and 16-bit pixels but not the masks, on load
   (`:724`, `:767`, `:968`) or save (`:1562-1578`). Code reading only. The Windows headers' load side swaps since L1–L3.
 
@@ -560,12 +588,12 @@ no default).
    by mask, or by the non-zero rule for `BI_RGB`, which the OS/2 loaders' 32-bit cases need too), `BI_ALPHABITFIELDS`
    accepted. Fixes the 3 wrong `g/` files, 14 of the 15 wrong `q/` files (the 15th, `rgb24prof2`, is L4) and
    `b/rgb16-880.bmp`, and makes `q/rgba32abf.bmp` load.
-2. **L5** (two seeks) and **S1** (skip the unread bytes): small and safe. L5 **done** 2026-10-13.
+2. **L5** (two seeks) and **S1** (skip the unread bytes): small and safe. Both **done** 2026-10-13.
 3. **Done** 2026-10-13. **W1**: V5 header for 32-bit images with alpha. A decision for Marius (compatibility with readers that cannot
    parse V5).
 4. **L4**: embedded profiles on load, then on save (with W1's V5 header), and `supports_icc_profiles_proc`. On load
    **done** 2026-10-13; saving profiles was declined (the writer keeps its header).
-5. **W2, W3, W4, W6**: header fields, palette bytes, zero padding.
+5. **Done** 2026-10-13. **W2, W3, W4, W6**: header fields, palette bytes, zero padding.
 6. **L6, L12**: OS/2 short headers and bitmap arrays (or drop "BA" from `Validate()`).
 7. **L8–L11** only if wanted: 2 bpp, JPEG/PNG pass-through, RLE24/Huffman 1D, 64 bpp.
 
@@ -574,7 +602,7 @@ no default).
 FreeImage loads each file with flags 0, converts to 32-bit and compares with the suite's reference image ("Correct
 display" column of `html/bmpsuite.html`). "±1": every pixel within one level. Measured at `00abb5e`: since the fix of
 L1, L2, L3 and L7, every **WRONG** row, `q/rgba32abf.bmp` and `b/rgb16-880.bmp` match their references (`q/rgb24prof2.bmp`
-is L4).
+is L4). Since the fix of S1, `b/badrle.bmp` decodes every row, its runs cut at the row end, without a warning.
 
 | File | Hdr | bpp | Compr. | FreeImage loads | Verdict | Why |
 |---|---|---|---|---|---|---|

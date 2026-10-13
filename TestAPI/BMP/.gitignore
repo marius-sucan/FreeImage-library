@@ -2,4 +2,8 @@ masks
 masks-asan
 icc
 icc-asan
+rle
+rle-asan
+save
+save-asan
 asan-obj/

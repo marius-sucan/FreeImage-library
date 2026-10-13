@@ -452,7 +452,7 @@ DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *d
    BYTE status_byte = 0;
    BYTE second_byte = 0;
    int scanline = 0;
-   int bits = 0;
+   INT64 bits = 0;	// up to width + 1, past the row end
    int count = 0;
    BYTE delta_x = 0;
    BYTE delta_y = 0;
@@ -489,34 +489,38 @@ DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *d
                if (io->read_proc(&delta_y, sizeof(BYTE), 1, handle) != 1) {
                   return scanline;
                }
-               // apply them
-               bits += delta_x;
-               scanline += delta_y;
+               // apply them, no further than just past the row end or the last row
+               bits = MIN(bits + delta_x, (INT64)width + 1);
+               scanline = (int)MIN((INT64)scanline + delta_y, (INT64)height);
                break;
 
             default:
+            {
                // absolute mode
-               count = MIN((int)status_byte, width - bits);
+               count = (int)MIN((INT64)status_byte, width - bits);
                if (count < 0) {
                   return scanline;
                }
-               BYTE *sline = FreeImage_GetScanLine(dib, scanline);
-               if (io->read_proc((void *)(sline + bits), sizeof(BYTE) * count, 1, handle) != 1) {
-                  return scanline;
-               }
-               bits += status_byte;            
-               // align run length to even number of bytes
-               if ((status_byte & 1) == 1) {
-                  if (io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
-                     return scanline + ((bits >= width) ? 1 : 0);
+               if (count > 0) {
+                  BYTE *sline = FreeImage_GetScanLine(dib, scanline);
+                  if (io->read_proc((void *)(sline + bits), sizeof(BYTE) * count, 1, handle) != 1) {
+                     return scanline;
                   }
+                  bits += count;
+               }
+               // skip the pixels past the row end, and the pad to an even count
+               BYTE skipped[256];
+               const int rest = (status_byte - count) + (status_byte & 1);
+               if ((rest > 0) && (io->read_proc(skipped, rest, 1, handle) != 1)) {
+                  return scanline + ((bits >= width) ? 1 : 0);
                }
                break;
+            }
 
          } // switch (status_byte)
       }
       else {
-         count = MIN((int)status_byte, width - bits);
+         count = (int)MIN((INT64)status_byte, width - bits);
          if (count < 0) {
             return scanline;
          }
@@ -1736,6 +1740,38 @@ RLEEncodeLine(BYTE *target, BYTE *source, int size) {
 	return target_pos;
 }
 
+// the RLE8 data of an 8-bit dib, written to the io if one is given; returns its size (stopping past limit), 0 on failure
+static UINT64
+EncodeRLE8(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, UINT64 limit) {
+	const unsigned line = FreeImage_GetLine(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	BYTE *buffer = (BYTE*)malloc((size_t)CalculatePitch(line) * 2);
+	if (!buffer) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+		return 0;
+	}
+	UINT64 size = 0;
+	for (unsigned y = 0; (y < height) && (size <= limit); y++) {
+		const int n = RLEEncodeLine(buffer, FreeImage_GetScanLine(dib, y), (int)line);
+		if (io && (io->write_proc(buffer, (unsigned)n, 1, handle) != 1)) {
+			free(buffer);
+			return 0;
+		}
+		size += n;
+	}
+	if (size <= limit) {
+		buffer[0] = RLE_COMMAND;
+		buffer[1] = RLE_ENDOFBITMAP;
+		if (io && (io->write_proc(buffer, 2, 1, handle) != 1)) {
+			free(buffer);
+			return 0;
+		}
+		size += 2;
+	}
+	free(buffer);
+	return size;
+}
+
 // the alpha of a 32-bit dib says something: not 0xFF everywhere (opaque), not 0 everywhere (never set); CMYK keeps K there
 static BOOL
 CarriesAlpha(FIBITMAP *dib) {
@@ -1783,11 +1819,11 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// alpha needs an alpha mask, which a BITMAPV5HEADER holds; every other image keeps the 40-byte header
 		const BOOL v5 = (dst_bpp == 32) && CarriesAlpha(dib);
 		const DWORD info_size = v5 ? BMP_V5_HEADER_SIZE : (DWORD)sizeof(BITMAPINFOHEADER);
+		const BOOL rle = (dst_bpp == 8) && ((flags & BMP_SAVE_RLE) == BMP_SAVE_RLE);
 
 		BITMAPFILEHEADER bitmapfileheader;
 		bitmapfileheader.bfType = 0x4D42;
 		bitmapfileheader.bfOffBits = (DWORD)(sizeof(BITMAPFILEHEADER) + info_size + FreeImage_GetColorsUsed(dib) * sizeof(RGBQUAD));
-		bitmapfileheader.bfSize = (unsigned long long)bitmapfileheader.bfOffBits + (unsigned long long)dst_height * dst_pitch;
 		bitmapfileheader.bfReserved1 = 0;
 		bitmapfileheader.bfReserved2 = 0;
 
@@ -1796,15 +1832,24 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		bool bit_fields = (dst_bpp == 16) ? true : false;
 
 		if (bit_fields) {
-			bitmapfileheader.bfSize += 3 * sizeof(DWORD);
 			bitmapfileheader.bfOffBits += 3 * sizeof(DWORD);
 		}
 
-		// bfSize is 32-bit, and holds the size uncompressed, RLE or not
-		if ((UINT64)bitmapfileheader.bfOffBits + dst_height * dst_pitch > (UINT64)0xFFFFFFFFu) {
+		// the pixel data's size: RLE8 is encoded once to count it, then again to write it
+		UINT64 image_size = dst_height * dst_pitch;
+		if (rle) {
+			image_size = EncodeRLE8(NULL, NULL, dib, (UINT64)0xFFFFFFFFu - bitmapfileheader.bfOffBits);
+			if (image_size == 0) {
+				return FALSE;
+			}
+		}
+
+		// bfSize is 32-bit
+		if ((UINT64)bitmapfileheader.bfOffBits + image_size > (UINT64)0xFFFFFFFFu) {
 			FreeImage_OutputMessageProc(s_format_id, "A BMP file cannot pass 4 GB, the most its 32-bit size field holds");
 			return FALSE;
 		}
+		bitmapfileheader.bfSize = (DWORD)(bitmapfileheader.bfOffBits + image_size);
 
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapFileHeader(&bitmapfileheader);
@@ -1821,17 +1866,18 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		if (v5) {
 			bih.biSize = info_size;
 			bih.biCompression = BI_BITFIELDS;
-			bih.biSizeImage = (DWORD)(dst_pitch * dst_height);
 		}
 		else if (bit_fields) {
 			bih.biCompression = BI_BITFIELDS;
 		}
-		else if ((bih.biBitCount == 8) && ((flags & BMP_SAVE_RLE) == BMP_SAVE_RLE)) {
+		else if (rle) {
 			bih.biCompression = BI_RLE8;
 		}
 		else {
 			bih.biCompression = BI_RGB;
 		}
+		// only BI_RGB may leave it 0 (and should)
+		bih.biSizeImage = (bih.biCompression == BI_RGB) ? 0 : (DWORD)image_size;
 
 		// write the bitmap info header
 
@@ -1889,7 +1935,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				bgra.b = pal[i].rgbBlue;
 				bgra.g = pal[i].rgbGreen;
 				bgra.r = pal[i].rgbRed;
-				bgra.a = pal[i].rgbReserved;
+				bgra.a = 0;	// reserved, must be zero
 				if (io->write_proc(&bgra, sizeof(FILE_BGRA), 1, handle) != 1) {
 					return FALSE;
 				}
@@ -1898,27 +1944,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		// write the bitmap data... if RLE compression is enable, use it
 
-		if ((dst_bpp == 8) && ((flags & BMP_SAVE_RLE) == BMP_SAVE_RLE)) {
-			BYTE *buffer = (BYTE*)malloc((unsigned long long)dst_pitch * 2 * sizeof(BYTE));
-
-			for (unsigned i = 0; i < dst_height; ++i) {
-				int size = RLEEncodeLine(buffer, FreeImage_GetScanLine(dib, i), FreeImage_GetLine(dib));
-
-				if (io->write_proc(buffer, size, 1, handle) != 1) {
-					free(buffer);
-					return FALSE;
-				}
-			}
-
-			buffer[0] = RLE_COMMAND;
-			buffer[1] = RLE_ENDOFBITMAP;
-
-			if (io->write_proc(buffer, 2, 1, handle) != 1) {
-				free(buffer);
+		if (rle) {
+			if (EncodeRLE8(io, handle, dib, image_size) != image_size) {
 				return FALSE;
 			}
-
-			free(buffer);
 
 #ifdef FREEIMAGE_BIGENDIAN
 		} else if (dst_bpp == 16) {
@@ -1983,11 +2012,22 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			}
 #endif
 		} else {
+			// zeros past the last pixel, even inside a 1- or 4-bit row's last byte: a view's parent has pixels there
+			const unsigned whole = CalculateWholeRowBytes((unsigned)dst_width, (unsigned)dst_bpp);
+			const BYTE tail_mask = CalculateRowTailMask((unsigned)dst_width, (unsigned)dst_bpp);
+			const unsigned tail_size = (unsigned)(dst_pitch - whole);
+			BYTE tail[4] = { 0, 0, 0, 0 };
 			BYTE *dBits = FreeImage_GetBits(dib);
 			for (UINT64 y = 0; y < dst_height; y++) {
 				BYTE *line = (BYTE*)((unsigned long long)dBits + src_pitch * y);
-				if (io->write_proc(line, dst_pitch, 1, handle) != 1) {
+				if ((whole > 0) && (io->write_proc(line, whole, 1, handle) != 1)) {
 					return FALSE;
+				}
+				if (tail_size > 0) {
+					tail[0] = (BYTE)(tail_mask ? (line[whole] & tail_mask) : 0);
+					if (io->write_proc(tail, tail_size, 1, handle) != 1) {
+						return FALSE;
+					}
 				}
 			}
 		}
