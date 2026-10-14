@@ -239,6 +239,58 @@ static DWORD psd_layer_section(BYTE *p, int signal, int colours) {
     return 4 + body;
 }
 
+/* a 32x24 grey (1) PSD of 2 channels, or RGB (3) or Lab (9) of 4, at 8, 16 or 32 bits, its last channel a ramp; id: alpha
+   identifier (1053), kind: the first DisplayInfo entry's (1007, or 1077 with 0x100), -1 none; signal as make_cmyka_psd's */
+static Bytes make_extra_psd(int mode, int bits, int signal, int id, int kind, const Bytes *icc) {
+    const unsigned colours = (mode == 1) ? 1 : 3, bytes = bits / 8;
+    const DWORD prof = icc ? 12 + ((icc->size + 1) & ~1u) : 0;
+    BYTE *res = (BYTE *)calloc(1, 16 + 30 + prof), *p;
+    DWORD n = 0;
+    Bytes b;
+    unsigned c, x, y;
+    if (id >= 0) {
+        memcpy(res, "8BIM", 4); psd_be(res + 4, 1053, 2); psd_be(res + 8, 4, 4); psd_be(res + 12, (unsigned)id, 4);
+        n = 16;
+    }
+    if ((kind >= 0) && (kind < 0x100)) {
+        memcpy(res + n, "8BIM", 4); psd_be(res + n + 4, 1007, 2); psd_be(res + n + 8, 14, 4); psd_be(res + n + 22, 50, 2); res[n + 24] = (BYTE)kind;
+        n += 26;
+    } else if (kind >= 0x100) {
+        memcpy(res + n, "8BIM", 4); psd_be(res + n + 4, 1077, 2); psd_be(res + n + 8, 17, 4); psd_be(res + n + 12, 1, 4);
+        psd_be(res + n + 26, 50, 2); res[n + 28] = (BYTE)kind;
+        n += 30;
+    }
+    if (icc) {
+        memcpy(res + n, "8BIM", 4); psd_be(res + n + 4, 1039, 2); psd_be(res + n + 8, icc->size, 4); memcpy(res + n + 12, icc->data, icc->size);
+        n += prof;
+    }
+    b.size = 26 + 4 + 4 + n + psd_layer_section(NULL, signal, colours) + 2 + (colours + 1) * 24 * 32 * bytes;
+    b.data = p = (BYTE *)calloc(1, b.size);
+    memcpy(p, "8BPS", 4); psd_be(p + 4, 1, 2); psd_be(p + 12, colours + 1, 2); psd_be(p + 14, 24, 4); psd_be(p + 18, 32, 4);
+    psd_be(p + 22, bits, 2); psd_be(p + 24, mode, 2);
+    p = psd_be(p + 30, n, 4);
+    memcpy(p, res, n);
+    p += n;
+    p += psd_layer_section(p, signal, colours) + 2;   /* raw image data */
+    for (c = 0; c <= colours; c++) {
+        for (y = 0; y < 24; y++) {
+            for (x = 0; x < 32; x++) {
+                const unsigned v = (BYTE)((c < colours) ? (x * 7 + y * 5 + c * 40) : (x * 8 + y));
+                if (bytes == 4) {
+                    const float f = v / 255.0f;
+                    DWORD d;
+                    memcpy(&d, &f, 4);
+                    p = psd_be(p, d, 4);
+                } else {
+                    p = psd_be(p, (bytes == 2) ? v * 257 : v, bytes);
+                }
+            }
+        }
+    }
+    free(res);
+    return b;
+}
+
 /* CMYK + alpha PSD, alpha the transparency by signal 1: count < 0, 2: Mt16 + Lr16, 4: Lr16 count < 0, 5: Mtrn after a
    padded block; not by 0: no layers, 3: count > 0 */
 static Bytes make_cmyka_psd(FIBITMAP *cmyk, FIBITMAP *alpha, const Bytes *icc, int signal, int rle) {

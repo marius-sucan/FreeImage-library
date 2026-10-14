@@ -821,46 +821,6 @@ static void display_info_psd(void) {
     }
 }
 
-/* a 4-channel 32x24 RGB (3) or Lab (9) PSD, its 4th channel a ramp; id: alpha identifier (1053), kind: the first
-   DisplayInfo entry's (1007, or 1077 with 0x100), -1 none; signal as make_cmyka_psd's */
-static Bytes make_rgbx_psd(int mode, int deep, int signal, int id, int kind) {
-    const unsigned bytes = deep ? 2 : 1;
-    BYTE res[64], *p;
-    DWORD n = 0;
-    Bytes b;
-    unsigned c, x, y;
-    memset(res, 0, sizeof(res));
-    if (id >= 0) {
-        memcpy(res, "8BIM", 4); put16(res + 4, 1053); put32(res + 8, 4); put32(res + 12, (DWORD)id);
-        n = 16;
-    }
-    if ((kind >= 0) && (kind < 0x100)) {
-        memcpy(res + n, "8BIM", 4); put16(res + n + 4, 1007); put32(res + n + 8, 14); put16(res + n + 22, 50); res[n + 24] = (BYTE)kind;
-        n += 26;
-    } else if (kind >= 0x100) {
-        memcpy(res + n, "8BIM", 4); put16(res + n + 4, 1077); put32(res + n + 8, 17); put32(res + n + 12, 1);
-        put16(res + n + 26, 50); res[n + 28] = (BYTE)kind;
-        n += 30;
-    }
-    b.size = 26 + 4 + 4 + n + psd_layer_section(NULL, signal, 3) + 2 + 4 * 24 * 32 * bytes;
-    b.data = p = (BYTE *)calloc(1, b.size);
-    memcpy(p, "8BPS", 4); put16(p + 4, 1); put16(p + 12, 4); put32(p + 14, 24); put32(p + 18, 32); put16(p + 22, 8 * bytes); put16(p + 24, mode);
-    p += 30;
-    put32(p, n);
-    memcpy(p + 4, res, n);
-    p += 4 + n;
-    p += psd_layer_section(p, signal, 3) + 2;   /* raw image data */
-    for (c = 0; c < 4; c++) {
-        for (y = 0; y < 24; y++) {
-            for (x = 0; x < 32; x++) {
-                const unsigned v = (BYTE)((c < 3) ? (x * 7 + y * 5 + c * 40) : (x * 8 + y));
-                if (deep) { put16(p, v * 257); p += 2; } else *p++ = (BYTE)v;
-            }
-        }
-    }
-    return b;
-}
-
 /* an RGB or Lab PSD's 4th channel is its alpha when the file says so, or says nothing (FreeImage's RGBA PSDs) unless an
    alpha identifier or the DisplayInfo makes it a selection or a spot ink; FreeImage's own RGBA PSD loads back whole */
 static void rgb_extra_psd(void) {
@@ -877,8 +837,8 @@ static void rgb_extra_psd(void) {
     unsigned i, k, x, y, ok;
     for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
         const int deep = cases[i].deep;
-        Bytes file = make_rgbx_psd(cases[i].mode, deep, cases[i].signal, cases[i].id, cases[i].kind);
-        Bytes twin = make_rgbx_psd(cases[i].mode, deep, 3, -1, -1);
+        Bytes file = make_extra_psd(cases[i].mode, deep ? 16 : 8, cases[i].signal, cases[i].id, cases[i].kind, NULL);
+        Bytes twin = make_extra_psd(cases[i].mode, deep ? 16 : 8, 3, -1, -1, NULL);
         FIBITMAP *dib = load_memory(FIF_PSD, &file, PSD_DEFAULT), *rgb = load_memory(FIF_PSD, &twin, PSD_DEFAULT);
         snprintf(what, sizeof(what), "PSD, %s", cases[i].name);
         same_as_full(what, load_memory(FIF_PSD, &file, PSD_DEFAULT), load_memory(FIF_PSD, &file, FIF_LOAD_NOPIXELS));
@@ -921,6 +881,76 @@ static void rgb_extra_psd(void) {
         FreeImage_Unload(rgba);
         free(file.data);
     }
+}
+
+/* the value of a grey PSD's ramp channel, as an 8-, 16- or 32-bit plane holds it */
+static int ramp_is(FIBITMAP *a, int bits, unsigned x, unsigned y, unsigned v) {
+    const BYTE *line = FreeImage_GetScanLine(a, y);
+    if (bits == 32) return ((const float *)line)[x] == v / 255.0f;
+    if (bits == 16) return ((const WORD *)line)[x] == v * 257;
+    return line[x] == v;
+}
+
+/* a grey PSD with transparency loads as RGBA, its grey profile left out, header-only too; with no layers or a positive
+   layer count it stays grey with its profile; the alpha rows a cut file does not hold are opaque */
+static void grey_alpha_psd(void) {
+    static const struct { int bits, signal, alpha; const char *name; } cases[] = {
+        { 8, 1, 1, "8-bit, a negative layer count" }, { 16, 2, 1, "16-bit, Mt16" }, { 16, 4, 1, "16-bit, a negative layer count in Lr16" },
+        { 32, 1, 1, "32-bit, a negative layer count" }, { 8, 0, 0, "8-bit, no layers" }, { 8, 3, 0, "8-bit, a positive layer count" },
+        { 32, 3, 0, "32-bit, a positive layer count" },
+    };
+    Bytes grey = make_gray_profile(1.8);
+    char what[128];
+    unsigned i, k, x, y, ok;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const int bits = cases[i].bits;
+        const FREE_IMAGE_TYPE rgba_type = (bits == 32) ? FIT_RGBAF : (bits == 16) ? FIT_RGBA16 : FIT_BITMAP;
+        Bytes file = make_extra_psd(1, bits, cases[i].signal, -1, -1, &grey);
+        Bytes twin = make_extra_psd(1, bits, 3, -1, -1, &grey);
+        FIBITMAP *dib = load_memory(FIF_PSD, &file, PSD_DEFAULT), *g = load_memory(FIF_PSD, &twin, PSD_DEFAULT);
+        snprintf(what, sizeof(what), "grey PSD, %s", cases[i].name);
+        same_as_full(what, load_memory(FIF_PSD, &file, PSD_DEFAULT), load_memory(FIF_PSD, &file, FIF_LOAD_NOPIXELS));
+        CHECK(g && (FreeImage_GetICCProfile(g)->size == (long)grey.size) && (FreeImage_GetBPP(g) == (unsigned)bits), "%s: the grey twin is not grey with its profile", what);
+        if (cases[i].alpha) {
+            FIBITMAP *a = dib ? FreeImage_GetChannel(dib, FICC_ALPHA) : NULL;
+            CHECK(dib && FreeImage_GetImageType(dib) == rgba_type && FreeImage_GetBPP(dib) == (unsigned)(bits * 4) &&
+                FreeImage_GetColorType(dib) == FIC_RGBALPHA && !FreeImage_GetICCProfile(dib)->size, "%s: not RGBA without a profile", what);
+            for (y = 0, ok = (a != NULL); a && y < 24; y++) {
+                for (x = 0; x < 32; x++) ok &= ramp_is(a, bits, x, y, (BYTE)(x * 8 + (23 - y)));
+            }
+            CHECK(ok, "%s: the alpha is not the 2nd channel", what);
+            for (k = FICC_RED; k <= FICC_BLUE; k++) {
+                FIBITMAP *c = dib ? FreeImage_GetChannel(dib, (FREE_IMAGE_COLOR_CHANNEL)k) : NULL;
+                ok &= same_plane(c, g);
+                if (c) FreeImage_Unload(c);
+            }
+            CHECK(ok, "%s: red, green and blue are not the grey", what);
+            if (a) FreeImage_Unload(a);
+        } else {
+            CHECK(same_plane(dib, g) && (FreeImage_GetICCProfile(dib)->size == (long)grey.size), "%s: not the grey image with its profile", what);
+        }
+        if (dib) FreeImage_Unload(dib);
+        if (g) FreeImage_Unload(g);
+        free(file.data);
+        free(twin.data);
+    }
+    /* the last 5 rows of the alpha cut off */
+    for (k = 0; k < 2; k++) {
+        const int bits = k ? 32 : 8;
+        Bytes file = make_extra_psd(1, bits, 1, -1, -1, NULL);
+        FIBITMAP *dib, *a;
+        file.size -= 5 * 32 * (bits / 8);
+        dib = load_memory(FIF_PSD, &file, PSD_DEFAULT);
+        a = dib ? FreeImage_GetChannel(dib, FICC_ALPHA) : NULL;
+        for (y = 0, ok = (a != NULL); a && y < 24; y++) {
+            for (x = 0; x < 32; x++) ok &= (y < 5) ? ramp_is(a, bits, x, y, 255) : ramp_is(a, bits, x, y, (BYTE)(x * 8 + (23 - y)));
+        }
+        CHECK(ok, "grey PSD, %d-bit, cut in its alpha: the rows it holds are not its alpha, or the others not opaque", bits);
+        if (a) FreeImage_Unload(a);
+        if (dib) FreeImage_Unload(dib);
+        free(file.data);
+    }
+    free(grey.data);
 }
 
 /* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */
@@ -1104,6 +1134,7 @@ int main(int argc, char **argv) {
     cmyk_alpha_psd(&press);
     display_info_psd();
     rgb_extra_psd();
+    grey_alpha_psd();
     cmyk_pages_cached(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);

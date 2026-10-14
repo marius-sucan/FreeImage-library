@@ -382,6 +382,15 @@ static void make_fixtures(void) {
         FreeImage_Unload(a8);
         FreeImage_Unload(a16);
     }
+    /* grey PSDs with transparency: RGBA, their grey profile left out */
+    b = make_extra_psd(1, 8, 1, -1, -1, &grey18);
+    if (write_file(scratch("dsp_greya.psd"), b.data, b.size)) add("grey + alpha PSD", FIF_PSD, 0, 1, scratch("dsp_greya.psd"));
+    else fail("grey + alpha PSD: fixture not saved");
+    free(b.data);
+    b = make_extra_psd(1, 16, 2, -1, -1, &grey18);
+    if (write_file(scratch("dsp_greya16.psd"), b.data, b.size)) add("16-bit grey + alpha PSD", FIF_PSD, 0, 1, scratch("dsp_greya16.psd"));
+    else fail("16-bit grey + alpha PSD: fixture not saved");
+    free(b.data);
     /* their profile cannot be linked: device CMYK */
     if (access("../JXR/data/cmyka40.jxr", R_OK) == 0) {
         add("CMYK + alpha JPEG XR", FIF_JXR, 0, 1, "../JXR/data/cmyka40.jxr");

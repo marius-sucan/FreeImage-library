@@ -1207,14 +1207,15 @@ bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 
 	const UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
 
-	// the extra channels read: CMYK's at 8 or 16 bits, RGB's and Lab's
+	// the extra channels read: CMYK's at 8 or 16 bits, RGB's, Lab's and grey's
 	const short mode = _headerInfo._ColourMode;
 	const bool cmyka = (mode == PSDP_CMYK) && (_headerInfo._Channels > 4) &&
 		((_headerInfo._BitsPerChannel == 8) || (_headerInfo._BitsPerChannel == 16));
 	const bool rgba = ((mode == PSDP_RGB) || (mode == PSDP_LAB)) && (_headerInfo._Channels > 3);
+	const bool greya = (mode == PSDP_GRAYSCALE) && (_headerInfo._Channels > 1) && (_headerInfo._BitsPerChannel >= 8);
 
 	if (nTotalBytes > 0) {
-		const INT64 start = (cmyka || rgba) ? io->tell_proc(handle) : -1;
+		const INT64 start = (cmyka || rgba || greya) ? io->tell_proc(handle) : -1;
 		if (nTotalBytes > (UINT64)std::numeric_limits<INT64>::max()) {
 			bSuccess = false;
 		} else if ((start >= 0) && (nTotalBytes <= (UINT64)(std::numeric_limits<INT64>::max() - start))) {
@@ -1226,7 +1227,7 @@ bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 		}
 	}
 
-	if (cmyka) {
+	if (cmyka || greya) {
 		_bMergedAlpha = (merged == 1);
 	} else if (rgba) {
 		// a file saying nothing keeps its 4th channel as alpha, as FreeImage writes RGBA, unless a selection or a spot ink
@@ -1604,6 +1605,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		// CM
 		mode = PSDP_GRAYSCALE; // C as gray, M as extra channel
 	}
+	const bool greyAlpha = _bMergedAlpha && (_headerInfo._ColourMode == PSDP_GRAYSCALE);
 
 	bool needPalette = false;
 	switch (mode) {
@@ -1612,6 +1614,13 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		case PSDP_INDEXED:
 		case PSDP_GRAYSCALE:
 			dstCh = 1;
+			// grey with transparency loads as RGBA: the pixels are read as grey and alpha, a header is RGBA at once
+			if(greyAlpha && header_only) {
+				bitmap = (depth == 16) ? FreeImage_AllocateHeaderT(TRUE, FIT_RGBA16, nWidth, nHeight) :
+					(depth == 32) ? FreeImage_AllocateHeaderT(TRUE, FIT_RGBAF, nWidth, nHeight) :
+					FreeImage_AllocateHeader(TRUE, nWidth, nHeight, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+				break;
+			}
 			switch(depth) {
 				case 16:
 				bitmap = FreeImage_AllocateHeaderT(header_only, FIT_UINT16, nWidth, nHeight, depth*dstCh);
@@ -1675,10 +1684,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	}
    const UINT64 dst_buffer_size = (UINT64)dstLineSize * nHeight;
 
-	// the merged alpha, the channel after K, read into a plane: set once CMYK is RGB, or kept for FIF_LOAD_DISPLAY_ICC
+	// the merged alpha, the channel after K or grey, read into a plane: set once CMYK or grey is RGBA, or kept for FIF_LOAD_DISPLAY_ICC
 	FIBITMAP *alpha = NULL;
-	if(_bMergedAlpha && (mode == PSDP_CMYK) && (((_fi_flags & PSD_CMYK) != PSD_CMYK) || ((_fi_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC))) {
-		alpha = (bytes == 2) ? FreeImage_AllocateT(FIT_UINT16, nWidth, nHeight) : FreeImage_Allocate(nWidth, nHeight, 8);
+	if(greyAlpha || (_bMergedAlpha && (mode == PSDP_CMYK) && (((_fi_flags & PSD_CMYK) != PSD_CMYK) || ((_fi_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)))) {
+		alpha = (bytes == 4) ? FreeImage_AllocateT(FIT_FLOAT, nWidth, nHeight) :
+			(bytes == 2) ? FreeImage_AllocateT(FIT_UINT16, nWidth, nHeight) : FreeImage_Allocate(nWidth, nHeight, 8);
 		if(!alpha) {
 			FreeImage_Unload(bitmap);
 			SAFE_DELETE_ARRAY(line_start);
@@ -1892,7 +1902,14 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		}
 		if(alpha && (cut_channel <= dstChannels)) {
 			for(unsigned h = (cut_channel == dstChannels) ? cut_row : 0; h < nHeight; h++) {
-				memset(alpha_first_line - (size_t)h * alphaLineSize, 0xFF, (size_t)nWidth * bytes);
+				BYTE *row = alpha_first_line - (size_t)h * alphaLineSize;
+				if(bytes == 4) {
+					for(unsigned x = 0; x < nWidth; x++) {
+						((float*)row)[x] = 1.0F;
+					}
+				} else {
+					memset(row, 0xFF, (size_t)nWidth * bytes);
+				}
 			}
 		}
 		if((dstChannels == 1) && (cut_channel == 0)) {
@@ -1906,7 +1923,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 }
 
 /**
-Further process the bitmap: a header-only one gets the same layout, profile, palette and thumbnail; it takes alpha
+Further process the bitmap: a header-only one gets the same layout, profile, palette and thumbnail; it takes alpha,
+and returns NULL when out of memory
 */
 FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannels, bool needPalette, FIBITMAP *alpha) {
 	if((mode == PSDP_CMYK || mode == PSDP_MULTICHANNEL)) {
@@ -1965,6 +1983,21 @@ FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannel
 				}
 			}
 			// GRAYSCALE, DUOTONE - use default grayscale palette
+		}
+		// grey with transparency is RGBA, which its grey profile does not describe; no memory for it fails the load
+		if(alpha) {
+			const FREE_IMAGE_TYPE type = FreeImage_GetImageType(bitmap);
+			FIBITMAP *rgba = (type == FIT_UINT16) ? FreeImage_ConvertToRGBA16(bitmap) :
+				(type == FIT_FLOAT) ? FreeImage_ConvertToRGBAF(bitmap) : FreeImage_ConvertTo32Bits(bitmap);
+			if(rgba) {
+				FreeImage_SetChannel(rgba, alpha, FICC_ALPHA);
+			}
+			FreeImage_Unload(alpha);
+			FreeImage_Unload(bitmap);
+			bitmap = rgba;
+			_iccProfile.clear();
+		} else if(_bMergedAlpha && (_headerInfo._ColourMode == PSDP_GRAYSCALE)) {
+			_iccProfile.clear();
 		}
 	}
 
