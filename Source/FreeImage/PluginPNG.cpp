@@ -680,7 +680,12 @@ FillInterlaceGaps(FIBITMAP *dib, int pass, unsigned row) {
 }
 
 static void
-FinishImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
+FinishImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib, BOOL narrow) {
+	// FreeImage holds full-range samples
+	if (narrow) {
+		ExpandNarrowRange(dib);
+	}
+
 	// check if the bitmap contains transparency, if so enable it in the header
 
 	if (FreeImage_GetBPP(dib) == 32) {
@@ -698,7 +703,7 @@ FinishImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 
 // keeps what libpng decoded before an error; FALSE when no row was decoded
 static BOOL
-SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
+SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib, BOOL narrow) {
 	const png_uint_32 height = png_get_image_height(png_ptr, info_ptr);
 	const int pass = png_get_current_pass_number(png_ptr);
 	const png_uint_32 row = png_get_current_row_number(png_ptr);
@@ -711,7 +716,7 @@ SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 			}
 			FillInterlaceGaps(dib, pass, row);
 			FreeImage_OutputMessageProc(s_format_id, "Warning: the image data is cut short or damaged; %d of 7 interlace passes complete, the image is shown at lower detail", pass);
-			FinishImage(png_ptr, info_ptr, dib);
+			FinishImage(png_ptr, info_ptr, dib, narrow);
 			return TRUE;
 		}
 	} else if (row < height) {
@@ -719,12 +724,12 @@ SalvageImage(png_structp png_ptr, png_infop info_ptr, FIBITMAP *dib) {
 			return FALSE;
 		}
 		FreeImage_OutputMessageProc(s_format_id, "Warning: the image data is cut short or damaged; %u of %u rows decoded, the rest is blank", row, height);
-		FinishImage(png_ptr, info_ptr, dib);
+		FinishImage(png_ptr, info_ptr, dib, narrow);
 		return TRUE;
 	}
 
 	FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short or damaged, but the image is complete");
-	FinishImage(png_ptr, info_ptr, dib);
+	FinishImage(png_ptr, info_ptr, dib, narrow);
 	return TRUE;
 }
 
@@ -738,9 +743,10 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 	int bit_depth;
 	int pixel_depth = 0;	// pixel_depth = bit_depth * channels
 
-	// both change after setjmp(), so they must be volatile to be current after a longjmp
+	// these change after setjmp(), so they must be volatile to be current after a longjmp
 	FIBITMAP * volatile dib = NULL;
 	png_bytepp volatile row_pointers = NULL;
+	BOOL volatile narrow = FALSE;
 
     fi_ioStructure fio;
     fio.s_handle = handle;
@@ -803,6 +809,9 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 			BYTE cicp[4] = { 0, 0, 0, 0 };
 			const BOOL has_cicp = GetCICP(png_ptr, info_ptr, cicp);
 			const BOOL cicp_rules = has_cicp && ReadsCICP(cicp, (color_type & PNG_COLOR_MASK_COLOR) ? FALSE : TRUE);
+
+			// ITU-T H.273's narrow range holds 8- and 16-bit samples; palette entries are 8-bit
+			narrow = cicp_rules && (cicp[3] == 0) && ((color_type == PNG_COLOR_TYPE_PALETTE) || (bit_depth >= 8));
 
 			// configure the decoder
 
@@ -965,6 +974,10 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 			// --- header only mode => clean-up and return
 
 			if (header_only) {
+				// the palette and the background color
+				if (narrow) {
+					ExpandNarrowRange(dib);
+				}
 				// get possible metadata (it can be located both before and after the image data)
 				ReadMetadata(png_ptr, info_ptr, dib);
 				if (png_ptr) {
@@ -1005,7 +1018,7 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 
 			png_read_end(png_ptr, info_ptr);
 
-			FinishImage(png_ptr, info_ptr, dib);
+			FinishImage(png_ptr, info_ptr, dib, narrow);
 
 			if (png_ptr) {
 				// clean up after the read, and free any memory allocated - REQUIRED
@@ -1021,7 +1034,7 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 			} else if (NULL != text) {
 				FreeImage_OutputMessageProc(s_format_id, text);
 			}
-			const BOOL salvage = (!retry && dib && png_ptr && FreeImage_HasPixels(dib) && SalvageImage(png_ptr, info_ptr, dib)) ? TRUE : FALSE;
+			const BOOL salvage = (!retry && dib && png_ptr && FreeImage_HasPixels(dib) && SalvageImage(png_ptr, info_ptr, dib, narrow)) ? TRUE : FALSE;
 			if (png_ptr) {
 				png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)NULL);
 			}

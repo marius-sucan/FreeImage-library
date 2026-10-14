@@ -527,6 +527,300 @@ static void png_precedence(void) {
     free(gray.data);
 }
 
+/* ------------------------------------------------------------------ PNG narrow range */
+
+#define NW 64
+#define NH 16
+
+static void add_chunk(Bytes *b, const char *type, const BYTE *data, DWORD length) {
+    BYTE *c;
+    b->data = (BYTE *)realloc(b->data, b->size + 12 + length);
+    c = b->data + b->size;
+    put32(c, length);
+    memcpy(c + 4, type, 4);
+    if (length) memcpy(c + 8, data, length);
+    put32(c + 8 + length, crc32_of(c + 4, 4 + length));
+    b->size += 12 + length;
+}
+
+/* a PNG built chunk by chunk: color type, bit depth, a cICP chunk of p/t/0/range, a tRNS chunk (a grey or RGB key some
+   pixels match, or palette alphas), a bKGD chunk, an Adobe RGB iCCP chunk; cut: the IDAT chunk ends after half its data */
+typedef struct {
+    int ctype, depth;
+    int cicp;
+    BYTE p, t, range;
+    int key, background, iccp, cut;
+} PngSpec;
+
+/* every value of an 8-bit channel, 0 to 65535 in steps of 64 at 16 bits, indices and lower depths cycling */
+static unsigned sample(int depth, unsigned x, unsigned y, unsigned c) {
+    const unsigned i = y * NW + x;
+    if (depth == 16) return (i * 64 + c * 7) & 0xFFFF;
+    if (depth == 8) return (i + c * 37) & 0xFF;
+    return (i + c) & ((1u << depth) - 1);
+}
+
+static Bytes raw_png(const PngSpec *s) {
+    static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+    const unsigned channels = (s->ctype == 0 || s->ctype == 3) ? 1 : (s->ctype == 4) ? 2 : (s->ctype == 2) ? 3 : 4;
+    const unsigned row = (NW * channels * s->depth + 7) / 8;
+    const DWORD raw_size = NH * (row + 1);
+    BYTE ihdr[13], chunk[1024];
+    BYTE *raw = (BYTE *)calloc(raw_size, 1), *z = (BYTE *)malloc(raw_size * 2 + 64);
+    Bytes b = { NULL, 0 };
+    DWORD zsize;
+    unsigned x, y, c, i;
+    b.data = (BYTE *)malloc(8);
+    memcpy(b.data, signature, 8);
+    b.size = 8;
+    put32(ihdr, NW);
+    put32(ihdr + 4, NH);
+    ihdr[8] = (BYTE)s->depth; ihdr[9] = (BYTE)s->ctype; ihdr[10] = ihdr[11] = ihdr[12] = 0;
+    add_chunk(&b, "IHDR", ihdr, 13);
+    if (s->cicp) {
+        const BYTE c4[4] = { s->p, s->t, 0, s->range };
+        add_chunk(&b, "cICP", c4, 4);
+    }
+    if (s->iccp) {
+        Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
+        BYTE *iccp = (BYTE *)malloc(adobe.size * 2 + 64);
+        DWORD n;
+        memcpy(iccp, "a\0\0", 3);
+        n = FreeImage_ZLibCompress(iccp + 3, adobe.size * 2 + 61, adobe.data, adobe.size);
+        add_chunk(&b, "iCCP", iccp, n + 3);
+        free(iccp);
+    }
+    if (s->ctype == 3) {
+        const unsigned entries = 1u << s->depth;
+        for (i = 0; i < entries; i++) {
+            chunk[3 * i] = (BYTE)(i * 37 + 5);
+            chunk[3 * i + 1] = (BYTE)(255 - i * 11);
+            chunk[3 * i + 2] = (BYTE)(i * 101);
+        }
+        add_chunk(&b, "PLTE", chunk, 3 * entries);
+    }
+    if (s->key && s->ctype == 0) {
+        /* a sample below black: expanded, it would share 0 with the darker ones */
+        const unsigned key = (s->depth == 16) ? 4032 : (s->depth == 8) ? 10 : 1;
+        chunk[0] = (BYTE)(key >> 8); chunk[1] = (BYTE)key;
+        add_chunk(&b, "tRNS", chunk, 2);
+    } else if (s->key && s->ctype == 2) {
+        for (c = 0; c < 3; c++) {
+            const unsigned v = sample(s->depth, 5, 0, c);
+            chunk[2 * c] = (BYTE)(v >> 8); chunk[2 * c + 1] = (BYTE)v;
+        }
+        add_chunk(&b, "tRNS", chunk, 6);
+    } else if (s->key && s->ctype == 3) {
+        const unsigned entries = 1u << s->depth;
+        for (i = 0; i < entries; i++) chunk[i] = (BYTE)(i * 53);
+        add_chunk(&b, "tRNS", chunk, entries);
+    }
+    if (s->background && (s->ctype == 0 || s->ctype == 4)) {
+        const unsigned v = (s->depth == 16) ? 30000 : (s->depth == 8) ? 20 : 1;
+        chunk[0] = (BYTE)(v >> 8); chunk[1] = (BYTE)v;
+        add_chunk(&b, "bKGD", chunk, 2);
+    } else if (s->background && s->ctype == 3) {
+        chunk[0] = 3;
+        add_chunk(&b, "bKGD", chunk, 1);
+    } else if (s->background) {
+        const unsigned v8[3] = { 200, 30, 240 }, v16[3] = { 50000, 3000, 62000 };
+        for (c = 0; c < 3; c++) {
+            const unsigned v = (s->depth == 16) ? v16[c] : v8[c];
+            chunk[2 * c] = (BYTE)(v >> 8); chunk[2 * c + 1] = (BYTE)v;
+        }
+        add_chunk(&b, "bKGD", chunk, 6);
+    }
+    for (y = 0; y < NH; y++) {
+        BYTE *r = raw + y * (row + 1) + 1;
+        for (x = 0; x < NW; x++) {
+            for (c = 0; c < channels; c++) {
+                const unsigned v = sample(s->depth, x, y, c);
+                const unsigned bit = (x * channels + c) * s->depth;
+                if (s->depth == 16) {
+                    r[bit / 8] = (BYTE)(v >> 8);
+                    r[bit / 8 + 1] = (BYTE)v;
+                } else {
+                    r[bit / 8] |= (BYTE)(v << (8 - s->depth - bit % 8));
+                }
+            }
+        }
+    }
+    zsize = FreeImage_ZLibCompress(z, raw_size * 2 + 64, raw, raw_size);
+    add_chunk(&b, "IDAT", z, s->cut ? zsize / 2 : zsize);
+    if (!s->cut) add_chunk(&b, "IEND", NULL, 0);
+    free(raw);
+    free(z);
+    return b;
+}
+
+/* ITU-T H.273: black at 16 and white at 235 times 2^(bits - 8) */
+static double expand8(double v) {
+    v = floor((v - 16.0) * 255.0 / 219.0 + 0.5);
+    return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+static double expand16(double v) {
+    v = floor((v - 4096.0) * 65535.0 / 56064.0 + 0.5);
+    return v < 0 ? 0 : v > 65535 ? 65535 : v;
+}
+
+static unsigned long long scan_digest(FIBITMAP *dib) {
+    unsigned long long h = 1469598103934665603ull;
+    unsigned y;
+    for (y = 0; y < FreeImage_GetHeight(dib); y++) h = fnv(h, FreeImage_GetScanLine(dib, y), FreeImage_GetLine(dib));
+    return h;
+}
+
+static int same_background(FIBITMAP *a, FIBITMAP *b) {
+    RGBQUAD x, y;
+    const int ha = FreeImage_GetBackgroundColor(a, &x), hb = FreeImage_GetBackgroundColor(b, &y);
+    return ha == hb && (!ha || (x.rgbRed == y.rgbRed && x.rgbGreen == y.rgbGreen && x.rgbBlue == y.rgbBlue));
+}
+
+static int same_palette(FIBITMAP *a, FIBITMAP *b) {
+    const unsigned n = FreeImage_GetColorsUsed(a);
+    if (!FreeImage_GetPalette(a) || !FreeImage_GetPalette(b)) return !FreeImage_GetPalette(a) && !FreeImage_GetPalette(b);
+    return n == FreeImage_GetColorsUsed(b) && !memcmp(FreeImage_GetPalette(a), FreeImage_GetPalette(b), n * sizeof(RGBQUAD));
+}
+
+static int same_transparency(FIBITMAP *a, FIBITMAP *b) {
+    const unsigned n = FreeImage_GetTransparencyCount(a);
+    if (FreeImage_IsTransparent(a) != FreeImage_IsTransparent(b) || n != FreeImage_GetTransparencyCount(b)) return 0;
+    return !n || !memcmp(FreeImage_GetTransparencyTable(a), FreeImage_GetTransparencyTable(b), n);
+}
+
+/* the file against itself without its cICP and iCCP chunks: colors expanded or as they are, alpha, transparency table
+   and layout as there; a grey ramp kept, or the indices; the background expanded too; the profile of the code points
+   in the full range; tagged, the file's code points; header-only alike */
+static void narrow_case(const char *name, PngSpec s, int expand, int tagged) {
+    PngSpec stored = s, wide = s;
+    Bytes file, stored_file, wide_file;
+    FIBITMAP *dib, *head, *plain, *full;
+    BYTE c[4];
+    stored.cicp = 0;
+    stored.iccp = 0;
+    wide.range = 1;
+    file = raw_png(&s);
+    stored_file = raw_png(&stored);
+    wide_file = raw_png(&wide);
+    dib = load_bytes(FIF_PNG, file, PNG_DEFAULT);
+    head = load_bytes(FIF_PNG, file, FIF_LOAD_NOPIXELS);
+    plain = load_bytes(FIF_PNG, stored_file, PNG_DEFAULT);
+    full = load_bytes(FIF_PNG, wide_file, PNG_DEFAULT);
+    CHECK(dib && head && plain && full, "%s: not loaded", name);
+    if (dib && head && plain && full) {
+        const FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
+        const unsigned bpp = FreeImage_GetBPP(dib);
+        unsigned x, y, bad = 0;
+        CHECK(type == FreeImage_GetImageType(plain) && bpp == FreeImage_GetBPP(plain), "%s: another layout", name);
+        CHECK(tagged ? has_cicp(dib, s.p, s.t, 0, s.range) : !cicp_of(dib, c), "%s: %s", name, tagged ? "not the file's CICP tag" : "a CICP tag");
+        if (s.ctype == 0 && s.depth == 8 && s.key && expand) {
+            /* a key is matched against the indices, so the greys are expanded in a palette, which an RGB profile describes */
+            CHECK(FreeImage_GetColorType(dib) == FIC_PALETTE, "%s: color type %d", name, (int)FreeImage_GetColorType(dib));
+            described(name, dib, s.p, s.t, 0, "BT.709 primaries, BT.709 tone curve (FreeImage)");
+        } else {
+            CHECK(same_profile(dib, full), "%s: profile '%s', not the one of its full-range twin", name, description(dib));
+        }
+        CHECK(pixel_digest(full) == pixel_digest(plain), "%s: the full-range twin's samples changed", name);
+        CHECK(same_transparency(dib, plain), "%s: another transparency table", name);
+        CHECK(same_profile(dib, head) && same_tag(dib, head) && same_palette(dib, head) && same_background(dib, head),
+              "%s: the header-only load has another profile, CICP tag, palette or background", name);
+        if (type == FIT_BITMAP) {
+            FIBITMAP *a = FreeImage_ConvertTo32Bits(dib), *b = FreeImage_ConvertTo32Bits(plain);
+            RGBQUAD bd, bp;
+            for (y = 0; a && b && y < NH; y++) {
+                const BYTE *pa = FreeImage_GetScanLine(a, y), *pb = FreeImage_GetScanLine(b, y);
+                for (x = 0; x < NW * 4; x++) {
+                    const double want = (expand && (x % 4) != FI_RGBA_ALPHA) ? expand8(pb[x]) : pb[x];
+                    bad += (pa[x] != want);
+                }
+            }
+            CHECK(a && b && !bad, "%s: %u samples are not %s", name, bad, expand ? "the stored ones expanded" : "the stored ones");
+            if (bpp <= 8 && s.ctype == 0 && s.depth == 8 && !s.key) {
+                CHECK(FreeImage_GetColorType(dib) == FIC_MINISBLACK && same_palette(dib, plain), "%s: no longer a grey ramp", name);
+            } else if (bpp <= 8) {
+                CHECK(scan_digest(dib) == scan_digest(plain), "%s: other indices", name);
+            }
+            if (FreeImage_GetBackgroundColor(plain, &bp)) {
+                CHECK(FreeImage_GetBackgroundColor(dib, &bd) &&
+                      bd.rgbRed == (expand ? expand8(bp.rgbRed) : bp.rgbRed) &&
+                      bd.rgbGreen == (expand ? expand8(bp.rgbGreen) : bp.rgbGreen) &&
+                      bd.rgbBlue == (expand ? expand8(bp.rgbBlue) : bp.rgbBlue), "%s: background %u,%u,%u", name, bd.rgbRed, bd.rgbGreen, bd.rgbBlue);
+            }
+            if (a) FreeImage_Unload(a);
+            if (b) FreeImage_Unload(b);
+        } else {
+            const unsigned step = bpp / 16, colors = (step > 3) ? 3 : step;
+            for (y = 0; y < NH; y++) {
+                const WORD *pa = (const WORD *)FreeImage_GetScanLine(dib, y), *pb = (const WORD *)FreeImage_GetScanLine(plain, y);
+                for (x = 0; x < NW * step; x++) {
+                    const double want = (expand && (x % step) < colors) ? expand16(pb[x]) : pb[x];
+                    bad += (pa[x] != want);
+                }
+            }
+            CHECK(!bad, "%s: %u samples are not %s", name, bad, expand ? "the stored ones expanded" : "the stored ones");
+        }
+    }
+    if (dib) FreeImage_Unload(dib);
+    if (head) FreeImage_Unload(head);
+    if (plain) FreeImage_Unload(plain);
+    if (full) FreeImage_Unload(full);
+    free(file.data);
+    free(stored_file.data);
+    free(wide_file.data);
+}
+
+static PngSpec spec(int ctype, int depth, BYTE p, BYTE t, BYTE range) {
+    PngSpec s;
+    memset(&s, 0, sizeof(s));
+    s.ctype = ctype; s.depth = depth;
+    s.cicp = 1; s.p = p; s.t = t; s.range = range;
+    return s;
+}
+
+static PngSpec with(PngSpec s, int key, int background, int iccp, int cut) {
+    s.key = key; s.background = background; s.iccp = iccp; s.cut = cut;
+    return s;
+}
+
+static void narrow_range(void) {
+    printf("PNG narrow range\n");
+    narrow_case("RGB narrow 9/1", with(spec(2, 8, 9, 1, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("RGB with a key, narrow 1/1", with(spec(2, 8, 1, 1, 0), 1, 0, 0, 0), 1, 1);
+    narrow_case("48-bit narrow 9/16", with(spec(2, 16, 9, 16, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("48-bit with a key, narrow 9/1", with(spec(2, 16, 9, 1, 0), 1, 0, 0, 0), 1, 1);
+    narrow_case("RGBA narrow 12/13", with(spec(6, 8, 12, 13, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("RGBA16 narrow 9/18", spec(6, 16, 9, 18, 0), 1, 1);
+    narrow_case("grey narrow 1/1", with(spec(0, 8, 1, 1, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("grey with a key, narrow 1/1", with(spec(0, 8, 1, 1, 0), 1, 1, 0, 0), 1, 1);
+    narrow_case("16-bit grey narrow 1/8", spec(0, 16, 1, 8, 0), 1, 1);
+    narrow_case("16-bit grey with a key, narrow 1/1", with(spec(0, 16, 1, 1, 0), 1, 0, 0, 0), 1, 1);
+    narrow_case("grey and alpha narrow 1/13", with(spec(4, 8, 1, 13, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("16-bit grey and alpha narrow 9/1", spec(4, 16, 9, 1, 0), 1, 1);
+    narrow_case("palette narrow 12/13", with(spec(3, 8, 12, 13, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("palette with alphas, narrow 12/13", with(spec(3, 8, 12, 13, 0), 1, 0, 0, 0), 1, 1);
+    narrow_case("4-bit palette narrow 9/1", with(spec(3, 4, 9, 1, 0), 0, 1, 0, 0), 1, 1);
+    narrow_case("2-bit palette with alphas, narrow 9/1", with(spec(3, 2, 9, 1, 0), 1, 0, 0, 0), 1, 1);
+    narrow_case("1-bit palette narrow 9/1", spec(3, 1, 9, 1, 0), 1, 1);
+    /* the narrow range holds no samples of fewer than 8 bits */
+    narrow_case("4-bit grey narrow 1/1", with(spec(0, 4, 1, 1, 0), 0, 1, 0, 0), 0, 1);
+    narrow_case("2-bit grey narrow 1/1", spec(0, 2, 1, 1, 0), 0, 1);
+    narrow_case("2-bit grey with a key, narrow 1/1", with(spec(0, 2, 1, 1, 0), 1, 0, 0, 0), 0, 1);
+    narrow_case("1-bit grey narrow 1/1", spec(0, 1, 1, 1, 0), 0, 1);
+    /* the code points rule over an iCCP chunk only when FreeImage reads them */
+    narrow_case("RGB with an iCCP, narrow 9/1", with(spec(2, 8, 9, 1, 0), 0, 0, 1, 0), 1, 1);
+    narrow_case("RGB with an iCCP, narrow 2/1", with(spec(2, 8, 2, 1, 0), 0, 0, 1, 0), 0, 0);
+    /* unread code points without one stay in the tag, the samples as they are */
+    narrow_case("RGB narrow 9/2", spec(2, 8, 9, 2, 0), 0, 1);
+    /* the full range */
+    narrow_case("RGB full range 9/1", with(spec(2, 8, 9, 1, 1), 0, 1, 0, 0), 0, 1);
+    narrow_case("16-bit grey full range 1/1", spec(0, 16, 1, 1, 1), 0, 1);
+    /* cut inside the image data: the rows decoded */
+    narrow_case("RGB narrow 9/1, cut", with(spec(2, 8, 9, 1, 0), 0, 0, 0, 1), 1, 1);
+    narrow_case("16-bit grey narrow 1/1, cut", with(spec(0, 16, 1, 1, 0), 0, 0, 0, 1), 1, 1);
+    narrow_case("palette narrow 12/13, cut", with(spec(3, 8, 12, 13, 0), 0, 0, 0, 1), 1, 1);
+}
+
 static void png_chunks(void) {
     Bytes file = { NULL, 0 };
     FIBITMAP *dib;
@@ -645,6 +939,8 @@ static void display(void) {
     Bytes p3 = builtin(FICMS_PROFILE_DISPLAY_P3), srgb = builtin(FICMS_PROFILE_SRGB), adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
     Bytes avif = patched(SOFA, 9, 1), heif = patched(HEVC, 12, 8), grey = png_with_cicp(0, 1, 1), rgb = png_with_cicp(2, 9, 1);
     Bytes anim = patched(ANIMATED, 9, 1), apng = apng_with_cicp(9, 1), both = png_file(2, adobe, 1, 9, 1, 0, 1);
+    PngSpec narrow_spec = spec(2, 8, 9, 1, 0);
+    Bytes narrow = raw_png(&narrow_spec);
     printf("FIF_LOAD_DISPLAY_ICC\n");
     CHECK(FreeImage_SetDisplayICCProfile(p3.data, p3.size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION), "Display P3 not taken as the display");
     display_case("AVIF 9/1 on Display P3", FIF_AVIF, avif, 0);
@@ -652,7 +948,9 @@ static void display(void) {
     display_case("grey PNG 1/1 on Display P3", FIF_PNG, grey, 0);
     display_case("RGB PNG 9/1 on Display P3", FIF_PNG, rgb, 0);
     display_case("RGB PNG with an Adobe RGB iCCP and a 9/1 cICP on Display P3", FIF_PNG, both, 0);
+    display_case("narrow-range RGB PNG 9/1 on Display P3", FIF_PNG, narrow, 0);
     free(both.data);
+    free(narrow.data);
     display_pages("AVIF animation 9/1 on Display P3", FIF_AVIF, anim);
     display_pages("APNG 9/1 on Display P3", FIF_APNG, apng);
     free(anim.data);
@@ -709,7 +1007,7 @@ static void jxl_case(const char *name, FREE_IMAGE_FORMAT fif, Bytes file, int en
     free(jxl.data);
 }
 
-/* PNG keeps the profile as iCCP; JPEG XL writes code points as their encoding, but for narrow-range RGB */
+/* PNG keeps the profile as iCCP; JPEG XL writes code points as their encoding */
 static void saves(void) {
     Bytes avif = patched(SOFA, 9, 1), heif = patched(HEVC, 9, 1), pq = read_file("../AVIF/data/seine_hdr_rec2020.avif");
     Bytes rgb = png_with_cicp(2, 9, 1), grey = png_with_cicp(0, 1, 4), narrow = png_with_cicp(2, 9, 1);
@@ -726,8 +1024,8 @@ static void saves(void) {
     jxl_case("AVIF 9/1", FIF_AVIF, avif, 1, 9, 1);
     jxl_case("narrow-range HEIF 9/1", FIF_HEIF, heif, 1, 9, 1);
     jxl_case("PQ AVIF", FIF_AVIF, pq, 1, 9, 16);
-    /* narrow-range RGB is not expanded: its profile goes as an ICC */
-    jxl_case("narrow-range PNG 9/1", FIF_PNG, narrow, 0, 9, 1);
+    /* a PNG's narrow range is expanded */
+    jxl_case("narrow-range PNG 9/1", FIF_PNG, narrow, 1, 9, 1);
     if (a) FreeImage_Unload(a);
     if (b) FreeImage_Unload(b);
     free(png.data);
@@ -823,6 +1121,7 @@ int main(void) {
     real_files();
     png_chunks();
     png_precedence();
+    narrow_range();
     pages();
     display();
     saves();

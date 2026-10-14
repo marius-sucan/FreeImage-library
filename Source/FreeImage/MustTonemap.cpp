@@ -152,6 +152,77 @@ DescribeToneMapped(FIBITMAP *dib) {
 	}
 }
 
+void
+ExpandNarrowRange(FIBITMAP *dib) {
+	if (!dib) {
+		return;
+	}
+	BYTE lut[256];
+	for (int v = 0; v < 256; v++) {
+		const int full = ((v - 16) * 255 + 109) / 219;
+		lut[v] = (BYTE)MIN(MAX(full, 0), 255);
+	}
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_HasPixels(dib) ? FreeImage_GetHeight(dib) : 0;
+	switch (FreeImage_GetImageType(dib)) {
+		case FIT_BITMAP: {
+			const unsigned bpp = FreeImage_GetBPP(dib);
+			RGBQUAD color;
+			if (FreeImage_GetBackgroundColor(dib, &color)) {
+				color.rgbRed = lut[color.rgbRed];
+				color.rgbGreen = lut[color.rgbGreen];
+				color.rgbBlue = lut[color.rgbBlue];
+				FreeImage_SetBackgroundColor(dib, &color);
+			}
+			if ((bpp == 8) && (FreeImage_GetColorType(dib) == FIC_MINISBLACK) && !FreeImage_IsTransparent(dib)) {
+				for (unsigned y = 0; y < height; y++) {
+					BYTE *p = FreeImage_GetScanLine(dib, y);
+					for (unsigned x = 0; x < width; x++) {
+						p[x] = lut[p[x]];
+					}
+				}
+			} else if (bpp <= 8) {
+				// the indices stay: a transparency table matches them exactly
+				RGBQUAD *palette = FreeImage_GetPalette(dib);
+				for (unsigned i = 0; i < FreeImage_GetColorsUsed(dib); i++) {
+					palette[i].rgbRed = lut[palette[i].rgbRed];
+					palette[i].rgbGreen = lut[palette[i].rgbGreen];
+					palette[i].rgbBlue = lut[palette[i].rgbBlue];
+				}
+			} else if (bpp >= 24) {
+				const unsigned step = bpp / 8;
+				for (unsigned y = 0; y < height; y++) {
+					BYTE *p = FreeImage_GetScanLine(dib, y);
+					for (unsigned x = 0; x < width; x++, p += step) {
+						p[0] = lut[p[0]];
+						p[1] = lut[p[1]];
+						p[2] = lut[p[2]];
+					}
+				}
+			}
+			break;
+		}
+		case FIT_UINT16:
+		case FIT_RGB16:
+		case FIT_RGBA16: {
+			const unsigned step = FreeImage_GetBPP(dib) / 16;
+			const unsigned colors = MIN(step, 3U);
+			for (unsigned y = 0; y < height; y++) {
+				WORD *p = (WORD *)FreeImage_GetScanLine(dib, y);
+				for (unsigned x = 0; x < width; x++, p += step) {
+					for (unsigned c = 0; c < colors; c++) {
+						const INT64 full = ((INT64)p[c] - 4096) * 65535 + 28032;
+						p[c] = (WORD)((full <= 0) ? 0 : MIN(full / 56064, (INT64)65535));
+					}
+				}
+			}
+			break;
+		}
+		default:
+			break;
+	}
+}
+
 static Transfer
 TransferOfCode(BYTE transfer) {
 	switch (transfer) {

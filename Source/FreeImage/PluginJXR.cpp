@@ -962,54 +962,6 @@ ReadColorDescription(PKImageDecode *pID, const PKPixelFormatGUID &guid_format, F
 	return !full_range && (grey ? luma : (matrix == 0));
 }
 
-/**
-Expand narrow range samples, black at 16 and white at 235 times 2^(bits - 8), to the full range; alpha is left alone
-@param dib Decoded image
-*/
-static void
-ExpandNarrowRange(FIBITMAP *dib) {
-	const unsigned width = FreeImage_GetWidth(dib);
-	const unsigned height = FreeImage_GetHeight(dib);
-	switch(FreeImage_GetImageType(dib)) {
-		case FIT_BITMAP: {
-			BYTE lut[256];
-			for(int v = 0; v < 256; v++) {
-				const int full = ((v - 16) * 255 + 109) / 219;
-				lut[v] = (BYTE)MIN(MAX(full, 0), 255);
-			}
-			const unsigned step = FreeImage_GetBPP(dib) / 8;
-			const unsigned colors = MIN(step, 3U);
-			for(unsigned y = 0; y < height; y++) {
-				BYTE *p = FreeImage_GetScanLine(dib, y);
-				for(unsigned x = 0; x < width; x++, p += step) {
-					for(unsigned c = 0; c < colors; c++) {
-						p[c] = lut[p[c]];
-					}
-				}
-			}
-			break;
-		}
-		case FIT_UINT16:
-		case FIT_RGB16:
-		case FIT_RGBA16: {
-			const unsigned step = FreeImage_GetBPP(dib) / 16;
-			const unsigned colors = MIN(step, 3U);
-			for(unsigned y = 0; y < height; y++) {
-				WORD *p = (WORD*)FreeImage_GetScanLine(dib, y);
-				for(unsigned x = 0; x < width; x++, p += step) {
-					for(unsigned c = 0; c < colors; c++) {
-						const INT64 full = ((INT64)p[c] - 4096) * 65535 + 28032;
-						p[c] = (WORD)((full <= 0) ? 0 : MIN(full / 56064, (INT64)65535));
-					}
-				}
-			}
-			break;
-		}
-		default:
-			break;
-	}
-}
-
 // ==========================================================
 // Metadata saving
 // ==========================================================

@@ -258,10 +258,7 @@ CICPToEncoding(const BYTE cicp[4], BOOL grey, JxlColorEncoding *enc) {
 	enc->color_space = grey ? JXL_COLOR_SPACE_GRAY : JXL_COLOR_SPACE_RGB;
 	enc->white_point = JXL_WHITE_POINT_D65;
 	enc->rendering_intent = JXL_RENDERING_INTENT_RELATIVE;
-	if((cicp[2] == 0) && (cicp[3] == 0)) {
-		// narrow-range RGB, as a PNG may hold; a YUV file's decoder undid its matrix and range
-		return FALSE;
-	}
+	// the matrix and the range flag describe the file; a bitmap holds full-range RGB or grey
 	switch(cicp[0]) {
 		case 1:
 			enc->primaries = JXL_PRIMARIES_SRGB;

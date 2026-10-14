@@ -510,6 +510,14 @@ copied from the input keeps its primaries and takes sRGB's transfer characterist
 void DescribeToneMapped(FIBITMAP *dib);
 
 /**
+Expand narrow range samples, black at 16 and white at 235 times 2^(bits - 8), to the full range: the palette of 1-, 4- and
+8-bit images, but the pixels of 8-bit min-is-black ones without transparency; the colors of 24- and 32-bit, UINT16,
+RGB16 and RGBA16 pixels; the background color. Alpha is left alone
+@see See definition in MustTonemap.cpp
+*/
+void ExpandNarrowRange(FIBITMAP *dib);
+
+/**
 TRUE when the code points of the image - its CICP tag, else its ICC profile's cicp tag - say PQ (SMPTE ST 2084)
 @see See definition in MustTonemap.cpp
 */
