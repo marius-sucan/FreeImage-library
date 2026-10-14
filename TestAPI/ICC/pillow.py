@@ -121,6 +121,7 @@ cmyk = rng.integers(0, 256, (H, W, 4), dtype=np.uint8)
 grey = rng.integers(0, 256, (H, W, 1), dtype=np.uint8)
 B = [builtin(i) for i in range(7)]
 BPC = 0x2000
+NOOPTIMIZE = 0x0100
 
 for sname, s in [('Adobe RGB', B[4]), ('ProPhoto', B[6])]:
     for dname, d in [('sRGB', B[0]), ('Display P3', B[5])]:
@@ -131,10 +132,11 @@ for sname, s in [('Adobe RGB', B[4]), ('ProPhoto', B[6])]:
                 compare('%s -> %s, intent %d, bpc %d' % (sname, dname, intent, bpc), from_dib(out, H, W, 3), pil(rgb, 'RGB', s, d, intent, BPC if bpc else 0))
                 Unload(out); Unload(dib)
 
+# grey is computed exactly: Little CMS's optimized grey tables are coarse next to black
 for dname, d in [('sRGB', B[0]), ('Adobe RGB', B[4])]:
     dib = to_dib(grey, 'grey')
     out = call(ConvertToICCProfile, dib, d, 0)
-    compare('grey -> %s' % dname, from_dib(out, H, W, 3), pil(grey, 'L', B[2], d, 0, 0, 'RGB'))
+    compare('grey -> %s' % dname, from_dib(out, H, W, 3), pil(grey, 'L', B[2], d, 0, NOOPTIMIZE, 'RGB'))
     Unload(out); Unload(dib)
 
 press = [p for p in ['/usr/share/color/icc/colord/FOGRA39L_coated.icc', '/usr/share/color/icc/colord/SWOP_TR005_coated_5.icc'] if os.path.exists(p)]

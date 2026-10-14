@@ -653,16 +653,19 @@ int main(void) {
         err = reference_error(dib, 9, TRANSFERS[i], 0);
         CHECK(err <= 32, "%s: %d steps off", name, err);
         FreeImage_Unload(dib);
-        /* 16-bit grey: Little CMS's 8-bit grey tables are coarse next to black, with FreeImage's own profiles too */
+        /* grey at 8 and 16 bits */
         if (TRANSFERS[i] != 13) {
-            ptm(e, 1, TRANSFERS[i], 1, 1);
-            snprintf(name, sizeof(name), "grey16 1/%u against the reference", TRANSFERS[i]);
-            dib = loaded1(name, f_grey16, e, NULL);
-            if (!dib) continue;
-            CHECK(has_profile(dib) && space(dib) == FICMS_COLORSPACE_GRAY, "%s: no grey profile", name);
-            err = reference_error(dib, 1, TRANSFERS[i], 1);
-            CHECK(err <= 32, "%s: %d steps off", name, err);
-            FreeImage_Unload(dib);
+            int deep;
+            for (deep = 0; deep < 2; deep++) {
+                ptm(e, 1, TRANSFERS[i], 1, 1);
+                snprintf(name, sizeof(name), "grey%s 1/%u against the reference", deep ? "16" : "", TRANSFERS[i]);
+                dib = loaded1(name, deep ? f_grey16 : f_grey8, e, NULL);
+                if (!dib) continue;
+                CHECK(has_profile(dib) && space(dib) == FICMS_COLORSPACE_GRAY, "%s: no grey profile", name);
+                err = reference_error(dib, 1, TRANSFERS[i], 1);
+                CHECK(err <= (deep ? 32 : 1), "%s: %d steps off", name, err);
+                FreeImage_Unload(dib);
+            }
         }
     }
 

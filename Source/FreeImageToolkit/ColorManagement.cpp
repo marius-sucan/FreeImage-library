@@ -966,8 +966,8 @@ CreateTransform(bool same_buffer) {
 	if (!same_buffer && T_EXTRA(m_in_format) && T_EXTRA(m_out_format)) {
 		flags |= cmsFLAGS_COPY_ALPHA;
 	}
-	// Little CMS's precalculated 16-bit tables are coarser than its 8-bit path: 16 bits are computed exactly
-	if ((T_BYTES(m_in_format) == 2) || (T_BYTES(m_out_format) == 2)) {
+	// Little CMS's precalculated tables are coarse at 16 bits, and next to black for grey: those are computed exactly
+	if ((T_BYTES(m_in_format) == 2) || (T_BYTES(m_out_format) == 2) || (T_CHANNELS(m_in_format) == 1) || (T_CHANNELS(m_out_format) == 1)) {
 		flags |= cmsFLAGS_NOOPTIMIZE;
 	}
 	const cmsUInt32Number intent = (cmsUInt32Number)(m_flags & 0xFF);

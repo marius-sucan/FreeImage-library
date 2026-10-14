@@ -387,8 +387,8 @@ static int reference_init(Reference *r, int kind, const Eff *src, const Eff *dst
     hout = open_bytes(&out_bytes);
     if (flags & FICMS_BLACKPOINT_COMPENSATION) lflags |= cmsFLAGS_BLACKPOINTCOMPENSATION;
     if (r->stage.in_alpha) lflags |= cmsFLAGS_COPY_ALPHA;
-    /* 16 bits are computed exactly */
-    if (r->stage.in_depth == 16 || r->stage.out_depth == 16) lflags |= cmsFLAGS_NOOPTIMIZE;
+    /* 16 bits, and grey on either side, are computed exactly */
+    if (r->stage.in_depth == 16 || r->stage.out_depth == 16 || r->stage.in_model == M_GRAY || r->stage.out_model == M_GRAY) lflags |= cmsFLAGS_NOOPTIMIZE;
     {
         int rev_in = (kind == K_GRAY16R);
         int rev_out = rev_in && r->stage.out_model == M_GRAY && !r->device_out;
@@ -796,6 +796,70 @@ static void special_cases(const Bytes *adobe, const Bytes *press) {
     }
 }
 
+/* ------------------------------------------------------------------ 8-bit grey against the curves */
+
+static double srgb_to_light(double v) { return (v <= 0.04045) ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
+static double light_to_srgb(double l) { return (l <= 0.0031308) ? 12.92 * l : 1.055 * pow(l, 1 / 2.4) - 0.055; }
+
+/* every 8-bit grey value, as a grey ramp, a grey palette and RGB greys, through curve-only conversions: within one
+   step of the curves next to black too, where Little CMS's 33-point tables were up to 31 steps off */
+static void grey_precision(void) {
+    const Bytes srgb = builtin(FICMS_PROFILE_SRGB), lsrgb = builtin(FICMS_PROFILE_LINEAR_SRGB);
+    const Bytes grey = builtin(FICMS_PROFILE_GRAY), lgrey = builtin(FICMS_PROFILE_LINEAR_GRAY);
+    Bytes g18 = make_gray_profile(1.8), g30 = make_gray_profile(3.0);
+    struct { const char *name; int as; const Bytes *src, *dst; double sg, dg; } C[] = {
+        /* sg, dg: the source's and destination's curve, 0 for sRGB's */
+        { "grey ramp, linear grey -> grey", 0, &lgrey, &grey, 1.0, 0 },
+        { "grey ramp, grey -> linear grey", 0, &grey, &lgrey, 0, 1.0 },
+        { "grey ramp, gamma 1.8 -> grey", 0, &g18, &grey, 1.8, 0 },
+        { "grey ramp, grey -> gamma 3.0", 0, &grey, &g30, 0, 3.0 },
+        { "grey ramp, linear grey -> sRGB", 0, &lgrey, &srgb, 1.0, 0 },
+        { "grey palette, linear grey -> gamma 3.0", 1, &lgrey, &g30, 1.0, 3.0 },
+        { "RGB palette of greys, linear sRGB -> grey", 2, &lsrgb, &grey, 1.0, 0 },
+        { "24-bit greys, linear sRGB -> gamma 3.0", 3, &lsrgb, &g30, 1.0, 3.0 },
+        { "24-bit greys, linear sRGB -> grey", 3, &lsrgb, &grey, 1.0, 0 }
+    };
+    unsigned i, v;
+    for (i = 0; i < sizeof(C) / sizeof(C[0]); i++) {
+        const int rgb = (C[i].as == 3);
+        FIBITMAP *img = FreeImage_Allocate(256, 1, rgb ? 24 : 8, 0, 0, 0), *res;
+        int worst = 0, at = 0;
+        if (!rgb) {
+            RGBQUAD *pal = FreeImage_GetPalette(img);
+            for (v = 0; v < 256; v++) {
+                /* the grey palette runs backwards, so that it is no ramp */
+                const unsigned e = (C[i].as == 1) ? 255 - v : v;
+                pal[v].rgbRed = pal[v].rgbGreen = pal[v].rgbBlue = (BYTE)e;
+                FreeImage_GetScanLine(img, 0)[v] = (BYTE)v;
+            }
+            if (C[i].as == 2) pal[0].rgbRed = 1;
+        } else {
+            for (v = 0; v < 256; v++) memset(FreeImage_GetScanLine(img, 0) + 3 * v, (int)v, 3);
+        }
+        FreeImage_CreateICCProfile(img, C[i].src->data, C[i].src->size);
+        res = FreeImage_ConvertToICCProfile(img, C[i].dst->data, C[i].dst->size, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+        CHECK(res != NULL, "%s: not converted", C[i].name);
+        if (!res) { FreeImage_Unload(img); continue; }
+        for (v = 1; v < 256; v++) {
+            const unsigned e = (C[i].as == 1) ? 255 - v : v;
+            const double in = e / 255.0, light = (C[i].sg > 0) ? pow(in, C[i].sg) : srgb_to_light(in);
+            const double out = (C[i].dg > 0) ? pow(light, 1 / C[i].dg) : light_to_srgb(light);
+            const int want = (int)floor(out * 255 + 0.5);
+            const unsigned bpp = FreeImage_GetBPP(res);
+            const BYTE *line = FreeImage_GetScanLine(res, 0);
+            int got;
+            if (bpp == 8) got = FreeImage_GetPalette(res) ? FreeImage_GetPalette(res)[line[v]].rgbGreen : line[v];
+            else got = line[(bpp / 8) * v + FI_RGBA_GREEN];
+            if (abs(got - want) > worst) { worst = abs(got - want); at = (int)e; }
+        }
+        CHECK(worst <= 1, "%s: %d steps off at %d", C[i].name, worst, at);
+        FreeImage_Unload(res);
+        FreeImage_Unload(img);
+    }
+    free(g18.data);
+    free(g30.data);
+}
+
 static void set_cicp(FIBITMAP *dib, BYTE primaries, BYTE transfer) {
     BYTE value[4];
     FITAG *tag = FreeImage_CreateTag();
@@ -891,6 +955,7 @@ int main(int argc, char **argv) {
         views(&dsts[3].bytes);
         special_cases(&dsts[2].bytes, &press);
         cicp_tag(&dsts[2].bytes, &dsts[3].bytes, &press);
+        grey_precision();
     }
 
     free(gray18.data); free(press.data); free(test3.data); free(test5.data);
