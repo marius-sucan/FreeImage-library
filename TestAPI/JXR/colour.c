@@ -358,8 +358,33 @@ static void display_check(const char *name, Bytes file, const void *display, DWO
 
 /* ------------------------------------------------------------------ the cases */
 
-/* loads with these entries: full and header-only describe the same; the pixels are the untagged file's */
-static FIBITMAP *loaded(const char *name, Bytes base, const BYTE (*added)[12], unsigned count, Bytes *file) {
+/* narrow range samples, black at 16 and white at 235 times 2^(bits - 8), in the full range, alpha left alone */
+static FIBITMAP *expanded(FIBITMAP *src) {
+    FIBITMAP *dst = FreeImage_Clone(src);
+    const int deep = (FreeImage_GetImageType(dst) != FIT_BITMAP);
+    const unsigned step = FreeImage_GetBPP(dst) / (deep ? 16 : 8), colors = (step > 3) ? 3 : step;
+    unsigned x, y, c;
+    for (y = 0; y < FreeImage_GetHeight(dst); y++) {
+        BYTE *p8 = FreeImage_GetScanLine(dst, y);
+        WORD *p16 = (WORD *)p8;
+        for (x = 0; x < FreeImage_GetWidth(dst); x++) {
+            for (c = 0; c < colors; c++) {
+                if (deep) {
+                    const double v = floor((p16[x * step + c] - 4096.0) * 65535.0 / 56064.0 + 0.5);
+                    p16[x * step + c] = (WORD)(v < 0 ? 0 : v > 65535 ? 65535 : v);
+                } else {
+                    const double v = floor((p8[x * step + c] - 16.0) * 255.0 / 219.0 + 0.5);
+                    p8[x * step + c] = (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v);
+                }
+            }
+        }
+    }
+    return dst;
+}
+
+/* loads with these entries: full and header-only describe the same; the pixels are the untagged file's, or with
+   expand, those expanded from the narrow range */
+static FIBITMAP *loaded_as(const char *name, Bytes base, const BYTE (*added)[12], unsigned count, int expand, Bytes *file) {
     Bytes tagged;
     FIBITMAP *plain, *dib, *head;
     if (file) file->data = NULL;
@@ -370,12 +395,30 @@ static FIBITMAP *loaded(const char *name, Bytes base, const BYTE (*added)[12], u
     tagged = with_entries(base, added, count);
     plain = load(base, 0), dib = load(tagged, 0), head = load(tagged, FIF_LOAD_NOPIXELS);
     CHECK(plain && dib && head, "%s: not loaded", name);
-    if (plain && dib) CHECK(pixel_digest(plain) == pixel_digest(dib), "%s: other pixels", name);
+    if (plain && dib) {
+        FIBITMAP *want = expand ? expanded(plain) : plain;
+        CHECK(pixel_digest(want) == pixel_digest(dib), "%s: other pixels", name);
+        if (want != plain) FreeImage_Unload(want);
+    }
     if (dib && head) CHECK(same_profile(dib, head) && same_cicp(dib, head), "%s: the header-only load differs", name);
     if (plain) FreeImage_Unload(plain);
     if (head) FreeImage_Unload(head);
     if (file) *file = tagged; else free(tagged.data);
     return dib;
+}
+
+static FIBITMAP *loaded(const char *name, Bytes base, const BYTE (*added)[12], unsigned count, Bytes *file) {
+    return loaded_as(name, base, added, count, 0, file);
+}
+
+/* PTM_COLOR_INFO p, t, m and the narrow range: the CICP tag and the pixels, expanded or not */
+static void narrow(const char *name, Bytes base, BYTE p, BYTE t, BYTE m, int expand) {
+    BYTE e[12];
+    FIBITMAP *dib;
+    ptm(e, p, t, m, 0);
+    dib = loaded_as(name, base, (const BYTE (*)[12])e, 1, expand, NULL);
+    CHECK(dib && has_cicp(dib, p, t, m, 0), "%s: CICP tag", name);
+    if (dib) FreeImage_Unload(dib);
 }
 
 static FIBITMAP *loaded1(const char *name, Bytes base, const BYTE e[12], Bytes *file) {
@@ -488,8 +531,36 @@ int main(void) {
     CHECK(dib && has_cicp(dib, 9, 1, 0, 1), "RESERVED_K: CICP tag");
     if (dib) FreeImage_Unload(dib);
     ptm(e, 9, 1, 0, 0xFE);
-    dib = loaded1("RESERVED_K, narrow", f_rgb24, e, NULL);
+    dib = loaded_as("RESERVED_K, narrow", f_rgb24, (const BYTE (*)[12])e, 1, 1, NULL);
     CHECK(dib && has_cicp(dib, 9, 1, 0, 0), "RESERVED_K, narrow: CICP tag");
+    if (dib) FreeImage_Unload(dib);
+
+    /* FULL_RANGE_FLAG 0: RGB by matrix 0 and grey by a luma matrix are expanded, alpha not (A.7.21.5) */
+    narrow("narrow RGB 9/1/0", f_rgb24, 9, 1, 0, 1);
+    narrow("narrow RGBA 1/13/0", f_rgba32, 1, 13, 0, 1);
+    narrow("narrow RGB16 1/1/0", f_rgb16, 1, 1, 0, 1);
+    narrow("narrow RGBA16 9/16/0", f_rgba16, 9, 16, 0, 1);
+    narrow("narrow grey 1/1/1", f_grey8, 1, 1, 1, 1);
+    narrow("narrow grey 1/13/8", f_grey8, 1, 13, 8, 1);
+    narrow("narrow grey16 9/18/9", f_grey16, 9, 18, 9, 1);
+    narrow("narrow grey16 9/1/14", f_grey16, 9, 1, 14, 1);
+    {
+        Bytes b = read_file("data/rgb101010.jxr");
+        if (b.data) narrow("narrow 32bppRGB101010 9/1/0", b, 9, 1, 0, 1);
+        free(b.data);
+    }
+    /* no range: an unspecified, reserved or non-conformant matrix */
+    narrow("narrow RGB 9/1/2", f_rgb24, 9, 1, 2, 0);
+    narrow("narrow RGB 9/1/3", f_rgb24, 9, 1, 3, 0);
+    narrow("narrow RGB 9/1/1", f_rgb24, 9, 1, 1, 0);
+    narrow("narrow RGB16 9/1/9", f_rgb16, 9, 1, 9, 0);
+    narrow("narrow grey 1/1/0", f_grey8, 1, 1, 0, 0);
+    narrow("narrow grey 1/1/2", f_grey8, 1, 1, 2, 0);
+    narrow("narrow grey16 1/1/11", f_grey16, 1, 1, 11, 0);
+    /* nor with the file's ICC profile */
+    ptm(e, 9, 1, 0, 0);
+    dib = loaded1("narrow, with an ICC profile", f_adobe, e, NULL);
+    CHECK(dib && !has_cicp(dib, 9, 1, 0, 0), "narrow, with an ICC profile: CICP tag");
     if (dib) FreeImage_Unload(dib);
 
     /* entries of another type or count are ignored (Table A.4) */
@@ -647,15 +718,16 @@ int main(void) {
             if (g) FreeImage_Unload(g);
             CHECK(grey != NULL, "display %d: no grey profile", d);
             {
-                static const struct { const char *name; int file; BYTE p, t, m; } CASES[] = {
-                    { "RGB 9/1", 0, 9, 1, 0 }, { "RGBA 12/13", 1, 12, 13, 0 }, { "RGB16 9/16 PQ", 2, 9, 16, 0 },
-                    { "RGB16 9/18 HLG", 2, 9, 18, 0 }, { "RGB16 5/6", 2, 5, 6, 0 }, { "RGBA16 7/7", 3, 7, 7, 0 },
-                    { "grey 1/1", 4, 1, 1, 1 }, { "grey16 5/8", 5, 5, 8, 5 }, { "RGB 1/13", 0, 1, 13, 0 }
+                static const struct { const char *name; int file; BYTE p, t, m, last; } CASES[] = {
+                    { "RGB 9/1", 0, 9, 1, 0, 1 }, { "RGBA 12/13", 1, 12, 13, 0, 1 }, { "RGB16 9/16 PQ", 2, 9, 16, 0, 1 },
+                    { "RGB16 9/18 HLG", 2, 9, 18, 0, 1 }, { "RGB16 5/6", 2, 5, 6, 0, 1 }, { "RGBA16 7/7", 3, 7, 7, 0, 1 },
+                    { "grey 1/1", 4, 1, 1, 1, 1 }, { "grey16 5/8", 5, 5, 8, 5, 1 }, { "RGB 1/13", 0, 1, 13, 0, 1 },
+                    { "narrow RGB 9/1", 0, 9, 1, 0, 0 }, { "narrow grey16 1/1", 5, 1, 1, 1, 0 }
                 };
                 const Bytes *files[6] = { &f_rgb24, &f_rgba32, &f_rgb16, &f_rgba16, &f_grey8, &f_grey16 };
                 for (i = 0; i < sizeof(CASES) / sizeof(CASES[0]); i++) {
                     Bytes file;
-                    ptm(e, CASES[i].p, CASES[i].t, CASES[i].m, 1);
+                    ptm(e, CASES[i].p, CASES[i].t, CASES[i].m, CASES[i].last);
                     file = with1(*files[CASES[i].file], e);
                     snprintf(name, sizeof(name), "%s display, %s", d ? "Display P3" : "sRGB", CASES[i].name);
                     display_check(name, file, display, size, grey, grey_size);

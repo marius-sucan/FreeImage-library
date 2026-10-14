@@ -829,35 +829,89 @@ a profile of them, else COLOR_SPACE's sRGB. Both only describe unsigned RGB and 
 @param pID Decoder handle
 @param guid_format Decoded pixel format
 @param dib Image loaded from it
+@return Returns TRUE when PTM_COLOR_INFO puts the samples in the narrow range
 */
-static void
+static BOOL
 ReadColorDescription(PKImageDecode *pID, const PKPixelFormatGUID &guid_format, FIBITMAP *dib) {
 	const WmpDEMisc *wmiDEMisc = &pID->WMP.wmiDEMisc;
 	if(FreeImage_GetICCProfile(dib)->data || (!wmiDEMisc->fPTMColorInfo && (wmiDEMisc->uColorSpace != 1))) {
-		return;
+		return FALSE;
 	}
 	PKPixelInfo pixelInfo;
 	pixelInfo.pGUIDPixFmt = &guid_format;
 	if(PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD) != WMP_errSuccess) {
-		return;
+		return FALSE;
 	}
 	const BOOL grey = (pixelInfo.cfColorFormat == Y_ONLY);
 	if((!grey && (pixelInfo.cfColorFormat != CF_RGB)) || ((pixelInfo.bdBitDepth != BD_8) && (pixelInfo.bdBitDepth != BD_10) && (pixelInfo.bdBitDepth != BD_16))) {
-		return;
+		return FALSE;
 	}
 	if(!wmiDEMisc->fPTMColorInfo) {
 		SetCICPMetadata(dib, 1, 13, 0, TRUE);
-		return;
+		return FALSE;
 	}
 	// COLOR_PRIMARIES, TRANSFER_CHARACTERISTICS, MATRIX_COEFFICIENTS, then FULL_RANGE_FLAG in the last byte's lowest bit
 	const U32 ptm = wmiDEMisc->uPTMColorInfo;
 	const BYTE primaries = (BYTE)ptm;
 	const BYTE transfer = (BYTE)(ptm >> 8);
-	SetCICPMetadata(dib, primaries, transfer, (BYTE)(ptm >> 16), (ptm >> 24) & 1);
+	const BYTE matrix = (BYTE)(ptm >> 16);
+	const BOOL full_range = (ptm >> 24) & 1;
+	SetCICPMetadata(dib, primaries, transfer, matrix, full_range);
 	unsigned size = 0;
 	const void *profile = GetCICPProfile(primaries, transfer, grey, &size);
 	if(profile) {
 		FreeImage_CreateICCProfile(dib, (void*)profile, (long)size);
+	}
+	// A.7.21.5 gives a range to RGB by matrix 0, to grey by a luma matrix
+	const BOOL luma = (matrix == 1) || ((matrix >= 4) && (matrix <= 10)) || (matrix == 14);
+	return !full_range && (grey ? luma : (matrix == 0));
+}
+
+/**
+Expand narrow range samples, black at 16 and white at 235 times 2^(bits - 8), to the full range; alpha is left alone
+@param dib Decoded image
+*/
+static void
+ExpandNarrowRange(FIBITMAP *dib) {
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	switch(FreeImage_GetImageType(dib)) {
+		case FIT_BITMAP: {
+			BYTE lut[256];
+			for(int v = 0; v < 256; v++) {
+				const int full = ((v - 16) * 255 + 109) / 219;
+				lut[v] = (BYTE)MIN(MAX(full, 0), 255);
+			}
+			const unsigned step = FreeImage_GetBPP(dib) / 8;
+			const unsigned colors = MIN(step, 3U);
+			for(unsigned y = 0; y < height; y++) {
+				BYTE *p = FreeImage_GetScanLine(dib, y);
+				for(unsigned x = 0; x < width; x++, p += step) {
+					for(unsigned c = 0; c < colors; c++) {
+						p[c] = lut[p[c]];
+					}
+				}
+			}
+			break;
+		}
+		case FIT_UINT16:
+		case FIT_RGB16:
+		case FIT_RGBA16: {
+			const unsigned step = FreeImage_GetBPP(dib) / 16;
+			const unsigned colors = MIN(step, 3U);
+			for(unsigned y = 0; y < height; y++) {
+				WORD *p = (WORD*)FreeImage_GetScanLine(dib, y);
+				for(unsigned x = 0; x < width; x++, p += step) {
+					for(unsigned c = 0; c < colors; c++) {
+						const INT64 full = ((INT64)p[c] - 4096) * 65535 + 28032;
+						p[c] = (WORD)((full <= 0) ? 0 : MIN(full / 56064, (INT64)65535));
+					}
+				}
+			}
+			break;
+		}
+		default:
+			break;
 	}
 }
 
@@ -1769,7 +1823,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
 			}
 		}
-		ReadColorDescription(pDecoder, in_guid_format, dib);
+		const BOOL narrow = ReadColorDescription(pDecoder, in_guid_format, dib);
 
 		if(header_only) {
 			// header only mode ...
@@ -1789,6 +1843,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			error_code = CopyBandedPixels(pDecoder, guid_format, dib);
 		}
 		JXR_CHECK(error_code);
+		if(narrow) {
+			ExpandNarrowRange(dib);
+		}
 
 		// free the decoder
 		pDecoder->Release(&pDecoder);
