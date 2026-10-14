@@ -590,42 +590,73 @@ static void display(void) {
 
 /* ------------------------------------------------------------------ saving */
 
-/* PNG keeps the profile as iCCP; JPEG XL writes a profile made of RGB code points as their encoding */
-static void saves(void) {
-    Bytes avif = patched(SOFA, 9, 1), rgb = png_with_cicp(2, 9, 1), grey = png_with_cicp(0, 1, 4);
-    FIBITMAP *a = load_bytes(FIF_AVIF, avif, 0), *r = load_bytes(FIF_PNG, rgb, 0), *g = load_bytes(FIF_PNG, grey, 0);
-    printf("saving\n");
-    CHECK(a && r && g, "saving: not loaded");
-    if (a && r && g) {
-        Bytes png = save_bytes(FIF_PNG, a, PNG_DEFAULT);
-        Bytes jxl_a = save_bytes(FIF_JXL, a, JXL_LOSSLESS), jxl_r = save_bytes(FIF_JXL, r, JXL_LOSSLESS), jxl_g = save_bytes(FIF_JXL, g, JXL_LOSSLESS);
-        FIBITMAP *b;
-        b = png.size ? load_bytes(FIF_PNG, png, PNG_DEFAULT) : NULL;
-        CHECK(b && same_profile(a, b) && pixel_digest(a) == pixel_digest(b), "AVIF 9/1 saved as PNG: profile '%s'", description(b));
-        if (b) FreeImage_Unload(b);
-        /* YCbCr code points have no JPEG XL encoding: the profile goes as an ICC */
-        b = jxl_a.size ? load_bytes(FIF_JXL, jxl_a, 0) : NULL;
-        CHECK(b && same_profile(a, b) && pixel_digest(a) == pixel_digest(b), "AVIF 9/1 saved as JPEG XL: profile '%s'", description(b));
-        if (b) FreeImage_Unload(b);
-        b = jxl_r.size ? load_bytes(FIF_JXL, jxl_r, 0) : NULL;
-        CHECK(b && has_cicp(b, 9, 1, 0, 1) && pixel_digest(r) == pixel_digest(b), "RGB PNG 9/1 saved as JPEG XL: not encoded as 9/1");
-        CHECK(b && !strstr(description(b), "(FreeImage)"), "RGB PNG 9/1 saved as JPEG XL: the ICC profile was written ('%s')", description(b));
-        if (b) FreeImage_Unload(b);
-        b = jxl_g.size ? load_bytes(FIF_JXL, jxl_g, 0) : NULL;
-        CHECK(b && has_cicp(b, 1, 4, 0, 1) && pixel_digest(g) == pixel_digest(b), "grey PNG 1/4 saved as JPEG XL: not encoded as 1/4");
-        CHECK(b && !strstr(description(b), "(FreeImage)"), "grey PNG 1/4 saved as JPEG XL: the ICC profile was written ('%s')", description(b));
-        if (b) FreeImage_Unload(b);
-        free(png.data);
-        free(jxl_a.data);
-        free(jxl_r.data);
-        free(jxl_g.data);
+/* the nclx boxes' full range flag cleared */
+static void narrow_nclx(Bytes b) {
+    DWORD i;
+    for (i = 0; i + 16 <= b.size; i++) {
+        if (!memcmp(b.data + i, "colrnclx", 8)) b.data[i + 14] &= 0x7F;
     }
+}
+
+/* the cICP chunk's full range flag cleared */
+static void narrow_cicp(Bytes png) {
+    DWORD i;
+    for (i = 33; i + 12 <= png.size; i++) {
+        if (!memcmp(png.data + i, "cICP", 4)) {
+            png.data[i + 7] = 0;
+            put32(png.data + i + 8, crc32_of(png.data + i, 8));
+            return;
+        }
+    }
+}
+
+/* the file's image saved as a lossless JPEG XL keeps its pixels, its colors as the encoding of p/t or as its profile */
+static void jxl_case(const char *name, FREE_IMAGE_FORMAT fif, Bytes file, int encoded, BYTE p, BYTE t) {
+    FIBITMAP *dib = file.size ? load_bytes(fif, file, 0) : NULL;
+    Bytes jxl = dib ? save_bytes(FIF_JXL, dib, JXL_LOSSLESS) : (Bytes){ NULL, 0 };
+    FIBITMAP *b = jxl.size ? load_bytes(FIF_JXL, jxl, 0) : NULL;
+    CHECK(dib && b && pixel_digest(dib) == pixel_digest(b), "%s saved as JPEG XL: not loaded back with its pixels", name);
+    if (dib && b) {
+        if (encoded) {
+            CHECK(has_cicp(b, p, t, 0, 1), "%s saved as JPEG XL: not encoded as %u/%u", name, p, t);
+            CHECK(!strstr(description(b), "(FreeImage)"), "%s saved as JPEG XL: the ICC profile was written ('%s')", name, description(b));
+        } else {
+            CHECK(has_profile(dib) && same_profile(dib, b), "%s saved as JPEG XL: profile '%s'", name, description(b));
+        }
+    }
+    if (dib) FreeImage_Unload(dib);
+    if (b) FreeImage_Unload(b);
+    free(jxl.data);
+}
+
+/* PNG keeps the profile as iCCP; JPEG XL writes code points as their encoding, but for narrow-range RGB */
+static void saves(void) {
+    Bytes avif = patched(SOFA, 9, 1), heif = patched(HEVC, 9, 1), pq = read_file("../AVIF/data/seine_hdr_rec2020.avif");
+    Bytes rgb = png_with_cicp(2, 9, 1), grey = png_with_cicp(0, 1, 4), narrow = png_with_cicp(2, 9, 1);
+    FIBITMAP *a = load_bytes(FIF_AVIF, avif, 0);
+    Bytes png = a ? save_bytes(FIF_PNG, a, PNG_DEFAULT) : (Bytes){ NULL, 0 };
+    FIBITMAP *b = png.size ? load_bytes(FIF_PNG, png, PNG_DEFAULT) : NULL;
+    printf("saving\n");
+    CHECK(a && b && same_profile(a, b) && pixel_digest(a) == pixel_digest(b), "AVIF 9/1 saved as PNG: profile '%s'", description(b));
+    narrow_nclx(heif);
+    narrow_cicp(narrow);
+    jxl_case("RGB PNG 9/1", FIF_PNG, rgb, 1, 9, 1);
+    jxl_case("grey PNG 1/4", FIF_PNG, grey, 1, 1, 4);
+    /* a YUV file's decoder undid its matrix and range */
+    jxl_case("AVIF 9/1", FIF_AVIF, avif, 1, 9, 1);
+    jxl_case("narrow-range HEIF 9/1", FIF_HEIF, heif, 1, 9, 1);
+    jxl_case("PQ AVIF", FIF_AVIF, pq, 1, 9, 16);
+    /* narrow-range RGB is not expanded: its profile goes as an ICC */
+    jxl_case("narrow-range PNG 9/1", FIF_PNG, narrow, 0, 9, 1);
     if (a) FreeImage_Unload(a);
-    if (r) FreeImage_Unload(r);
-    if (g) FreeImage_Unload(g);
+    if (b) FreeImage_Unload(b);
+    free(png.data);
     free(avif.data);
+    free(heif.data);
+    free(pq.data);
     free(rgb.data);
     free(grey.data);
+    free(narrow.data);
 }
 
 static const char *scratch(const char *name) {
