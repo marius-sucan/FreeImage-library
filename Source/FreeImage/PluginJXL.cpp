@@ -1373,6 +1373,7 @@ typedef struct tagJXLWriter {
 	JxlPixelFormat format;
 	BOOL swap_rb;
 	BOOL alpha;
+	BOOL cmyk;						// CMY as the colour samples, K as the black channel
 	uint32_t canvas_width;
 	uint32_t canvas_height;
 	BOOL animation;
@@ -1462,6 +1463,21 @@ FlushOutput(JXLWriter *writer, FreeImageIO *io, fi_handle handle) {
 	}
 }
 
+// JPEG XL describes CMYK only by an ICC profile
+static BOOL
+HasCMYKProfile(FIBITMAP *dib) {
+	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	const BYTE *data = (const BYTE*)icc->data;
+	if(!data || (icc->size < 132) || (memcmp(data + 16, "CMYK", 4) != 0)) {
+		return FALSE;
+	}
+	const JxlCmsInterface *cms = JxlGetDefaultCms();
+	JxlColorEncoding enc;
+	JXL_BOOL cmyk = JXL_FALSE;
+	memset(&enc, 0, sizeof(enc));
+	return (cms && cms->set_fields_from_icc(cms->set_fields_data, data, (size_t)icc->size, &enc, &cmyk) && cmyk) ? TRUE : FALSE;
+}
+
 // the layout a bitmap is written in; an animation is always written with alpha
 static BOOL
 ChooseLayout(FIBITMAP *dib, BOOL animation, JXLWriter *writer) {
@@ -1471,11 +1487,28 @@ ChooseLayout(FIBITMAP *dib, BOOL animation, JXLWriter *writer) {
 	memset(&writer->format, 0, sizeof(writer->format));
 	writer->format.endianness = JXL_NATIVE_ENDIAN;
 	writer->swap_rb = FALSE;
+	writer->cmyk = FALSE;
+
+	// CMYK written as RGB: its rendering has no alpha
+	BOOL rendered = FALSE;
+	if(!animation && ((type == FIT_RGBA16) || ((type == FIT_BITMAP) && (bpp == 32))) && (FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK)) {
+		if(HasCMYKProfile(dib)) {
+			writer->cmyk = TRUE;
+			writer->type = type;
+			writer->bpp = bpp;
+			writer->format.data_type = (type == FIT_RGBA16) ? JXL_TYPE_UINT16 : JXL_TYPE_UINT8;
+			writer->format.num_channels = 3;
+			writer->alpha = FALSE;
+			return TRUE;
+		}
+		FreeImage_OutputMessageProc(s_format_id, "Warning: a CMYK image without a CMYK ICC profile is written as RGB");
+		rendered = TRUE;
+	}
 
 	switch(type) {
 		case FIT_BITMAP:
 			writer->format.data_type = JXL_TYPE_UINT8;
-			if(animation || (bpp == 32) || FreeImage_IsTransparent(dib)) {
+			if(animation || ((bpp == 32) && !rendered) || FreeImage_IsTransparent(dib)) {
 				writer->bpp = 32;
 			} else if((bpp <= 8) && ((FreeImage_GetColorType(dib) == FIC_MINISBLACK) || (FreeImage_GetColorType(dib) == FIC_MINISWHITE))) {
 				writer->bpp = 8;
@@ -1491,10 +1524,10 @@ ChooseLayout(FIBITMAP *dib, BOOL animation, JXLWriter *writer) {
 		case FIT_RGB16:
 		case FIT_RGBA16:
 			writer->format.data_type = JXL_TYPE_UINT16;
-			if(animation || (type == FIT_RGBA16)) {
+			if(animation || ((type == FIT_RGBA16) && !rendered)) {
 				writer->type = FIT_RGBA16;
 			} else {
-				writer->type = type;
+				writer->type = rendered ? FIT_RGB16 : type;
 			}
 			break;
 		case FIT_FLOAT:
@@ -1536,9 +1569,12 @@ ChooseLayout(FIBITMAP *dib, BOOL animation, JXLWriter *writer) {
 static BOOL
 ConvertToLayout(FIBITMAP *dib, const JXLWriter *writer, FIBITMAP **converted) {
 	*converted = NULL;
+	if(writer->cmyk) {
+		return TRUE;
+	}
 	FIBITMAP *rgb = NULL;
 	if(FreeImage_GetColorType(dib) == FIC_CMYK) {
-		// JPEG XL CMYK is not written: the colours go through the profile
+		// CMYK written as RGB: the colours go through the profile
 		rgb = FreeImage_ConvertCMYKToRGB(dib, NULL, 0, 0);
 		if(!rgb) {
 			return FALSE;
@@ -1627,6 +1663,40 @@ FrameSamples(FIBITMAP *dib, const JXLWriter *writer, uint32_t width, uint32_t he
 						*clamped = TRUE;
 					}
 				}
+			}
+		}
+	}
+}
+
+// top-down CMY samples and K plane of a CMYK bitmap, 0 meaning full ink as JPEG XL stores them
+static void
+CMYKSamples(FIBITMAP *dib, std::vector<BYTE>& cmy, std::vector<BYTE>& black) {
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const BOOL deep = (FreeImage_GetImageType(dib) == FIT_RGBA16) ? TRUE : FALSE;
+	const size_t plane = (size_t)width * height * (deep ? 2 : 1);
+	cmy.resize(plane * 3);
+	black.resize(plane);
+	for(unsigned y = 0; y < height; y++) {
+		const BYTE *src = FreeImage_GetScanLine(dib, height - 1 - y);
+		if(deep) {
+			const WORD *s = (const WORD*)src;
+			WORD *c = (WORD*)&cmy[0] + (size_t)y * width * 3;
+			WORD *k = (WORD*)&black[0] + (size_t)y * width;
+			for(unsigned x = 0; x < width; x++, s += 4, c += 3) {
+				c[0] = (WORD)(65535 - s[0]);
+				c[1] = (WORD)(65535 - s[1]);
+				c[2] = (WORD)(65535 - s[2]);
+				k[x] = (WORD)(65535 - s[3]);
+			}
+		} else {
+			BYTE *c = &cmy[(size_t)y * width * 3];
+			BYTE *k = &black[(size_t)y * width];
+			for(unsigned x = 0; x < width; x++, src += 4, c += 3) {
+				c[0] = (BYTE)(255 - src[0]);
+				c[1] = (BYTE)(255 - src[1]);
+				c[2] = (BYTE)(255 - src[2]);
+				k[x] = (BYTE)(255 - src[3]);
 			}
 		}
 	}
@@ -1738,6 +1808,11 @@ SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
 	BOOL to_srgb = FALSE;
 	writer->has_profile = FALSE;
 	writer->frame_mode = JXL_FRAMES_LAYERED;
+	if(writer->cmyk) {
+		writer->profile.assign((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
+		writer->has_profile = TRUE;
+		return (JxlEncoderSetICCProfile(writer->encoder, &writer->profile[0], writer->profile.size()) == JXL_ENC_SUCCESS) ? TRUE : FALSE;
+	}
 	JxlColorEncoding enc;
 	BYTE cicp[4];
 	const BOOL coded = (GetCICPMetadata(dib, cicp) && CICPToEncoding(cicp, grey, &enc)) ? TRUE : FALSE;
@@ -1822,7 +1897,11 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 		info.alpha_exponent_bits = info.exponent_bits_per_sample;
 		info.num_extra_channels = 1;
 	}
-	info.uses_original_profile = lossless ? JXL_TRUE : JXL_FALSE;
+	if(writer->cmyk) {
+		info.num_extra_channels = 1;
+	}
+	// libjxl's XYB codes CMY samples as if they were RGB
+	info.uses_original_profile = (lossless || writer->cmyk) ? JXL_TRUE : JXL_FALSE;
 	if(animation) {
 		info.have_animation = JXL_TRUE;
 		info.animation.tps_numerator = 1000;
@@ -1843,6 +1922,15 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 			return FALSE;
 		}
 	}
+	if(writer->cmyk) {
+		JxlExtraChannelInfo black;
+		JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_BLACK, &black);
+		black.bits_per_sample = info.bits_per_sample;
+		if(JxlEncoderSetExtraChannelInfo(writer->encoder, 0, &black) != JXL_ENC_SUCCESS) {
+			ReportEncoderError(writer->encoder, "Cannot encode the black channel");
+			return FALSE;
+		}
+	}
 	if(!SetColors(writer, dib, (animation && !lossless) ? TRUE : FALSE)) {
 		ReportEncoderError(writer->encoder, "Cannot encode the colors");
 		return FALSE;
@@ -1857,9 +1945,17 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 		return FALSE;
 	}
+	const float distance = (quality > 0) ? JxlEncoderDistanceFromQuality((float)quality) : 1.0f;
 	if((JxlEncoderFrameSettingsSetOption(writer->settings, JXL_ENC_FRAME_SETTING_EFFORT, effort) != JXL_ENC_SUCCESS) ||
 		(lossless && (JxlEncoderSetFrameLossless(writer->settings, JXL_TRUE) != JXL_ENC_SUCCESS)) ||
-		(!lossless && (JxlEncoderSetFrameDistance(writer->settings, (quality > 0) ? JxlEncoderDistanceFromQuality((float)quality) : 1.0f) != JXL_ENC_SUCCESS))) {
+		(!lossless && (JxlEncoderSetFrameDistance(writer->settings, distance) != JXL_ENC_SUCCESS))) {
+		ReportEncoderError(writer->encoder, "Cannot set the encoding options");
+		return FALSE;
+	}
+	// lossy CMYK: VarDCT without XYB codes it poorly, and K would stay lossless
+	if(writer->cmyk && !lossless &&
+		((JxlEncoderFrameSettingsSetOption(writer->settings, JXL_ENC_FRAME_SETTING_MODULAR, 1) != JXL_ENC_SUCCESS) ||
+		(JxlEncoderSetExtraChannelDistance(writer->settings, 0, distance) != JXL_ENC_SUCCESS))) {
 		ReportEncoderError(writer->encoder, "Cannot set the encoding options");
 		return FALSE;
 	}
@@ -2093,6 +2189,15 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 				if(clamped) {
 					FreeImage_OutputMessageProc(s_format_id, "Warning: NaN and infinite samples are written as 0 and the largest float");
 				}
+			}
+		} else if(writer->cmyk) {
+			std::vector<BYTE> samples, black;
+			CMYKSamples(frame, samples, black);
+			const JxlPixelFormat plane = { 1, writer->format.data_type, writer->format.endianness, 0 };
+			if((JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) ||
+				(JxlEncoderSetExtraChannelBuffer(writer->settings, &plane, &black[0], black.size(), 0) != JXL_ENC_SUCCESS)) {
+				ReportEncoderError(writer->encoder, "Cannot encode the image");
+				throw (int)0;
 			}
 		} else {
 			std::vector<BYTE> samples;

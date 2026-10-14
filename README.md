@@ -82,7 +82,7 @@ Changes:
 - added animated HEIC/HEIF reading (HEIF image sequences);
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
 - added full support for MNG animations (FIF_MNG=6), reader and write;
-- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well;
+- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well; CMYK images with a CMYK profile are saved as CMYK;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - BMP files load and save the ICC profile a V5 header embeds, for color management; images without one are saved as before;

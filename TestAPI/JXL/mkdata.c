@@ -157,6 +157,62 @@ static void sampled_profile(BYTE **data, DWORD *size) {
     cmsCloseProfile(p); cmsFreeToneCurve(curve);
 }
 
+/* a printer profile: CMYK -> sRGB with dot gain, a raised black and a grey paper; 60% grey component replacement back */
+typedef struct { cmsHTRANSFORM to_lab, from_lab; } Press;
+
+static double gain(double x) { return 1.0 - pow(1.0 - x, 1.3); }
+static double ungain(double x) { return 1.0 - pow(1.0 - x, 1.0 / 1.3); }
+
+static cmsInt32Number press_forward(const cmsUInt16Number in[], cmsUInt16Number out[], void *cargo) {
+    double k = gain(in[3] / 65535.0), rgb[3];
+    for (int i = 0; i < 3; i++) rgb[i] = 0.12 + 0.85 * (1.0 - gain(in[i] / 65535.0)) * (1.0 - k);
+    cmsDoTransform(((const Press *)cargo)->to_lab, rgb, out, 1);
+    return TRUE;
+}
+
+static cmsInt32Number press_reverse(const cmsUInt16Number in[], cmsUInt16Number out[], void *cargo) {
+    double rgb[3], cmy[3], k;
+    cmsDoTransform(((const Press *)cargo)->from_lab, in, rgb, 1);
+    for (int i = 0; i < 3; i++) {
+        double v = (rgb[i] - 0.12) / 0.85;
+        cmy[i] = 1.0 - (v < 0 ? 0 : v > 1 ? 1 : v);
+    }
+    k = 0.6 * fmin(cmy[0], fmin(cmy[1], cmy[2]));
+    for (int i = 0; i < 3; i++) out[i] = (cmsUInt16Number)floor(ungain(k < 1.0 ? (cmy[i] - k) / (1.0 - k) : 0.0) * 65535.0 + 0.5);
+    out[3] = (cmsUInt16Number)floor(ungain(k) * 65535.0 + 0.5);
+    return TRUE;
+}
+
+static void press_profile(BYTE **data, DWORD *size) {
+    cmsHPROFILE srgb = cmsCreate_sRGBProfile(), lab = cmsCreateLab4Profile(NULL);
+    Press m = { cmsCreateTransform(srgb, TYPE_RGB_DBL, lab, TYPE_Lab_16, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE),
+                cmsCreateTransform(lab, TYPE_Lab_16, srgb, TYPE_RGB_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE) };
+    cmsPipeline *a2b = cmsPipelineAlloc(NULL, 4, 3), *b2a = cmsPipelineAlloc(NULL, 3, 4);
+    cmsStage *clut = cmsStageAllocCLut16bit(NULL, 5, 4, 3, NULL);
+    cmsStageSampleCLut16bit(clut, press_forward, &m, 0);
+    cmsPipelineInsertStage(a2b, cmsAT_END, clut);
+    clut = cmsStageAllocCLut16bit(NULL, 9, 3, 4, NULL);
+    cmsStageSampleCLut16bit(clut, press_reverse, &m, 0);
+    cmsPipelineInsertStage(b2a, cmsAT_END, clut);
+    cmsHPROFILE p = cmsCreateProfilePlaceholder(NULL);
+    cmsMLU *mlu = cmsMLUalloc(NULL, 1);
+    cmsSetProfileVersion(p, 2.1);
+    cmsSetDeviceClass(p, cmsSigOutputClass);
+    cmsSetColorSpace(p, cmsSigCmykData);
+    cmsSetPCS(p, cmsSigLabData);
+    cmsMLUsetASCII(mlu, "en", "US", "Test press, CMYK");
+    cmsWriteTag(p, cmsSigProfileDescriptionTag, mlu);
+    cmsWriteTag(p, cmsSigMediaWhitePointTag, cmsD50_XYZ());
+    cmsWriteTag(p, cmsSigAToB0Tag, a2b);
+    cmsWriteTag(p, cmsSigBToA0Tag, b2a);
+    cmsUInt32Number n = 0;
+    cmsSaveProfileToMem(p, NULL, &n);
+    *data = malloc(n); cmsSaveProfileToMem(p, *data, &n); *size = n;
+    memset(*data + 24, 0, 12);  /* the creation date, so the file is the same every time */
+    cmsMLUfree(mlu); cmsCloseProfile(p); cmsPipelineFree(a2b); cmsPipelineFree(b2a);
+    cmsDeleteTransform(m.to_lab); cmsDeleteTransform(m.from_lab); cmsCloseProfile(srgb); cmsCloseProfile(lab);
+}
+
 /* lossy frames whose colours are an ICC profile, cropped and blended over the frame before */
 static void icc_blended(const char *name) {
     static const struct { uint32_t w, h; int32_t x, y; } fr[] = { {48, 40, 0, 0}, {20, 16, 5, 6}, {24, 12, 20, 20} };
@@ -231,6 +287,14 @@ int main(int argc, char **argv) {
         FreeImage_CreateICCProfile(d, icc, size);
         save(d, "icc_sampled_lossy.jxl", 0);
         FreeImage_Unload(d); free(icc);
+    }
+    {
+        /* CMYK with the press profile: CMY samples and a black channel */
+        BYTE *icc; DWORD size;
+        press_profile(&icc, &size);
+        d = cmyk_pattern(FIT_BITMAP, 40, 30, 9, icc, (long)size); save(d, "cmyk8_lossless.jxl", JXL_LOSSLESS); FreeImage_Unload(d);
+        d = cmyk_pattern(FIT_RGBA16, 40, 30, 10, icc, (long)size); save(d, "cmyk16_lossy.jxl", 0); FreeImage_Unload(d);
+        free(icc);
     }
     if (wanted("anim_lossless.jxl")) {
         /* frames at offsets, every disposal, both blends */

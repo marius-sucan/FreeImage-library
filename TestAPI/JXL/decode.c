@@ -44,6 +44,8 @@ static const Expected EXPECTED[] = {
     {"brob_exif.jxl",           1, 20, 10, FIT_BITMAP,  24,    0, "1 13",  1, 0,  -1, -1, 0x0947e8c58d733f0cULL},
     {"test-jxl.jxl",           22, 1170, 1455, FIT_BITMAP, 32, 524, NULL, 0, 0, 400,  0, 0},
     {"anim_icc_lossy.jxl",      3, 48, 40, FIT_BITMAP,  32, 1076, NULL,    0, 0, 100,  0, 0},
+    {"cmyk8_lossless.jxl",      1, 40, 30, FIT_BITMAP,  24,    0, NULL,    0, 0,  -1, -1, 0xb5130a8127fefae0ULL},
+    {"cmyk16_lossy.jxl",        1, 40, 30, FIT_RGB16,   48,    0, NULL,    0, 0,  -1, -1, 0},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
 
@@ -188,6 +190,20 @@ static double psnr(FIBITMAP *a, FIBITMAP *b, double range) {
     return se == 0 ? 99 : 10 * log10(range * range / (se / n));
 }
 
+/* the inks of a CMYK page, bytes or words 0-3 */
+static double ink(FIBITMAP *d, unsigned x, unsigned y, int c) {
+    const BYTE *row = FreeImage_GetScanLine(d, FreeImage_GetHeight(d) - 1 - y);
+    return FreeImage_GetImageType(d) == FIT_RGBA16 ? ((const WORD *)row)[4 * x + c] / 65535.0 : row[4 * x + c] / 255.0;
+}
+
+static double ink_psnr(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y, w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a);
+    double se = 0; int c;
+    if (w != FreeImage_GetWidth(b) || h != FreeImage_GetHeight(b)) return 0;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) for (c = 0; c < 4; c++) { double e = ink(a, x, y, c) - ink(b, x, y, c); se += e * e; }
+    return se == 0 ? 99 : 10 * log10(4.0 * w * h / se);
+}
+
 /* a header-only load describes what the full load returns */
 static void check_header(const char *file, int page, FIBITMAP *full) {
     FIBITMAP *h = load_page(file, page, FIF_LOAD_NOPIXELS);
@@ -271,6 +287,29 @@ int main(int argc, char **argv) {
         }
         if (d) FreeImage_Unload(d);
         if (ref) FreeImage_Unload(ref);
+    }
+
+    /* the CMYK files with JXL_CMYK: the inks they were made from, the profile flagged CMYK, header-only alike */
+    {
+        static const struct { const char *file; FREE_IMAGE_TYPE type; unsigned bpp; int seed; double min_psnr; } CMYK[] = {
+            {"cmyk8_lossless.jxl", FIT_BITMAP, 32, 9, 99}, {"cmyk16_lossy.jxl", FIT_RGBA16, 64, 10, 38},
+        };
+        for (i = 0; i < sizeof(CMYK) / sizeof(CMYK[0]); i++) {
+            FIBITMAP *d = load_page(CMYK[i].file, 0, JXL_CMYK), *h = load_page(CMYK[i].file, 0, JXL_CMYK | FIF_LOAD_NOPIXELS);
+            FIBITMAP *ref = cmyk_pattern(CMYK[i].type, 40, 30, CMYK[i].seed, NULL, 0);
+            int cmyk = d && FreeImage_GetImageType(d) == CMYK[i].type && FreeImage_GetBPP(d) == CMYK[i].bpp && FreeImage_GetColorType(d) == FIC_CMYK && icc_size(d) > 0;
+            double p = cmyk ? ink_psnr(ref, d) : 0;
+            if (!cmyk) fail(CMYK[i].file, "JXL_CMYK: not CMYK with its profile");
+            else if (p < CMYK[i].min_psnr && !g_record) fail(CMYK[i].file, "JXL_CMYK: not the inks it was made from");
+            else if (!h || FreeImage_HasPixels(h) || FreeImage_GetImageType(h) != CMYK[i].type || FreeImage_GetBPP(h) != CMYK[i].bpp ||
+                     FreeImage_GetColorType(h) != FIC_CMYK || icc_size(h) != icc_size(d))
+                fail(CMYK[i].file, "JXL_CMYK: the header-only load differs from the full load");
+            else
+                printf("%s %s with JXL_CMYK: inks PSNR %.1f dB (min %.0f)\n", g_record ? "    " : "ok  ", CMYK[i].file, p, CMYK[i].min_psnr);
+            if (d) FreeImage_Unload(d);
+            if (h) FreeImage_Unload(h);
+            FreeImage_Unload(ref);
+        }
     }
 
     /* an animation page out of order, then back: the decoder rewinds */

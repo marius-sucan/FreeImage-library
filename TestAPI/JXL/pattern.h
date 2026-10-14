@@ -50,4 +50,23 @@ static FIBITMAP *pattern(FREE_IMAGE_TYPE type, unsigned bpp, unsigned w, unsigne
     return d;
 }
 
+/* CMYK inks of 8 or 16 bits in bytes or words 0-3, 0 meaning no ink, flagged CMYK; icc may be NULL */
+static FIBITMAP *cmyk_pattern(FREE_IMAGE_TYPE type, unsigned w, unsigned h, int seed, const void *icc, long icc_size) {
+    FIBITMAP *d = (type == FIT_BITMAP) ? FreeImage_Allocate(w, h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK)
+                                       : FreeImage_AllocateT(FIT_RGBA16, w, h, 64, 0, 0, 0);
+    unsigned x, y; int c;
+    for (y = 0; y < h; y++) {
+        BYTE *row = FreeImage_GetScanLine(d, h - 1 - y);
+        for (x = 0; x < w; x++) for (c = 0; c < 4; c++) {
+            double v = wave(x, y, w, h, c, seed) * (c == 3 ? 0.6 : 1.0);
+            v = v < 0 ? 0 : v > 1 ? 1 : v;
+            if (type == FIT_BITMAP) row[4 * x + c] = (BYTE)(v * 255 + 0.5);
+            else ((WORD *)row)[4 * x + c] = (WORD)(v * 65535 + 0.5);
+        }
+    }
+    if (icc) FreeImage_CreateICCProfile(d, (void *)icc, icc_size);
+    FreeImage_GetICCProfile(d)->flags |= FIICC_COLOR_IS_CMYK;
+    return d;
+}
+
 #endif

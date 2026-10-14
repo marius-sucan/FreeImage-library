@@ -18,6 +18,7 @@ static const char *FILES[] = {
     "data/layers_still.jxl",        /* layers blended into one image     */
     "data/brob_exif.jxl",           /* a Brotli-compressed Exif box      */
     "data/anim_icc_lossy.jxl",      /* XYB frames blended in ICC colours */
+    "data/cmyk16_lossy.jxl",        /* CMYK: modular, a black channel    */
 };
 #define NFILES ((int)(sizeof(FILES) / sizeof(FILES[0])))
 

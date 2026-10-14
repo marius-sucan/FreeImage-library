@@ -356,6 +356,8 @@ FreeImage_GetCacheLoadFlags(FREE_IMAGE_FORMAT fif) {
 			return TIFF_CMYK;
 		case FIF_PSD:
 			return PSD_CMYK;
+		case FIF_JXL:
+			return JXL_CMYK;
 		default:
 			return 0;
 	}

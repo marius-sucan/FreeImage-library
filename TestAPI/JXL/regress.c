@@ -298,7 +298,7 @@ static void composite(Px *canvas, unsigned cw, unsigned ch, FIBITMAP *frame, uns
 
 #ifdef JXL_TEST_LIBJXL
 /* a file's frames as libjxl stores them; stock libjxl refuses lossy frames that blend in ICC colours */
-typedef struct { int xyb, icc, frames, cropped, blended, kept, timeless; } Layout;
+typedef struct { int xyb, icc, frames, cropped, blended, kept, timeless, black; } Layout;
 
 static int layout(const char *path, Layout *l) {
     FILE *f = fopen(path, "rb");
@@ -319,8 +319,13 @@ static int layout(const char *path, Layout *l) {
             JxlDecoderStatus st = JxlDecoderProcessInput(dec);
             if (st == JXL_DEC_BASIC_INFO) {
                 JxlBasicInfo info;
+                uint32_t i;
                 JxlDecoderGetBasicInfo(dec, &info);
                 l->xyb = !info.uses_original_profile;
+                for (i = 0; i < info.num_extra_channels; i++) {
+                    JxlExtraChannelInfo ec;
+                    if (JxlDecoderGetExtraChannelInfo(dec, i, &ec) == JXL_DEC_SUCCESS && ec.type == JXL_CHANNEL_BLACK) l->black++;
+                }
             } else if (st == JXL_DEC_COLOR_ENCODING) {
                 JxlColorEncoding enc;
                 l->icc = JxlDecoderGetColorAsEncodedProfile(dec, JXL_COLOR_PROFILE_TARGET_ORIGINAL, &enc) != JXL_DEC_SUCCESS;
@@ -473,6 +478,136 @@ static void test_animation_float(void) {
     printf("float animation: done\n");
 }
 
+/* the inks of a CMYK bitmap, bytes or words 0-3 */
+static double ink(FIBITMAP *d, unsigned x, unsigned y, int c) {
+    const BYTE *row = FreeImage_GetScanLine(d, FreeImage_GetHeight(d) - 1 - y);
+    return FreeImage_GetImageType(d) == FIT_RGBA16 ? ((const WORD *)row)[4 * x + c] / 65535.0 : row[4 * x + c] / 255.0;
+}
+
+static double ink_psnr(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y, w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a);
+    double se = 0; int c;
+    if (!b || FreeImage_GetImageType(a) != FreeImage_GetImageType(b) || FreeImage_GetBPP(a) != FreeImage_GetBPP(b) ||
+        w != FreeImage_GetWidth(b) || h != FreeImage_GetHeight(b)) return 0;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) for (c = 0; c < 4; c++) { double e = ink(a, x, y, c) - ink(b, x, y, c); se += e * e; }
+    return se == 0 ? 99 : 10 * log10(4.0 * w * h / se);
+}
+
+/* r is CMYK with a's profile */
+static int cmyk_kept(FIBITMAP *a, FIBITMAP *r) {
+    FIICCPROFILE *p = FreeImage_GetICCProfile(a), *q = r ? FreeImage_GetICCProfile(r) : NULL;
+    return q && FreeImage_GetColorType(r) == FIC_CMYK && p->size > 0 && q->size == p->size && !memcmp(q->data, p->data, p->size);
+}
+
+/* CMYK with a CMYK profile is written as CMYK: CMY samples, a black channel and the profile, never XYB */
+static void test_cmyk(void) {
+    static const struct { FREE_IMAGE_TYPE type; const char *name; } T[] = { {FIT_BITMAP, "8-bit CMYK"}, {FIT_RGBA16, "16-bit CMYK"} };
+    static const unsigned sizes[][2] = { {1, 1}, {7, 3}, {257, 131} };
+    FIBITMAP *press = FreeImage_Load(FIF_JXL, "data/cmyk8_lossless.jxl", FIF_LOAD_NOPIXELS | JXL_CMYK), *d, *r, *want;
+    FIICCPROFILE *icc = press ? FreeImage_GetICCProfile(press) : NULL;
+    FIMULTIBITMAP *m;
+    DWORD small = 0, big = 0;
+    unsigned t, s;
+    double p;
+
+    CHECK(icc && icc->size > 0 && (icc->flags & FIICC_COLOR_IS_CMYK), "data/cmyk8_lossless.jxl: no CMYK profile");
+    if (!icc || !icc->size) { if (press) FreeImage_Unload(press); return; }
+    for (t = 0; t < 2; t++) for (s = 0; s < 3; s++) {
+        d = cmyk_pattern(T[t].type, sizes[s][0], sizes[s][1], 90 + (int)(3 * t + s), icc->data, icc->size);
+        r = roundtrip(d, JXL_LOSSLESS, JXL_CMYK, NULL);
+        CHECK(same_pixels(d, r) && cmyk_kept(d, r), "lossless %s %ux%u: not the inks and the profile (%s)", T[t].name, sizes[s][0], sizes[s][1], g_last);
+        if (r) FreeImage_Unload(r);
+        /* a plain load renders the inks through the profile */
+        r = roundtrip(d, JXL_LOSSLESS, 0, NULL);
+        want = FreeImage_ConvertCMYKToRGB(d, NULL, 0, 0);
+        CHECK(same_pixels(want, r), "lossless %s %ux%u: a plain load is not the profile's rendering", T[t].name, sizes[s][0], sizes[s][1]);
+        if (r) FreeImage_Unload(r);
+        FreeImage_Unload(want);
+        /* lossy: CMYK with the profile at every size; modular codes a few pixels coarsely, so PSNR at 257x131 */
+        r = roundtrip(d, 0, JXL_CMYK, NULL);
+        p = ink_psnr(d, r);
+        CHECK(cmyk_kept(d, r) && (s < 2 || p > 40), "lossy %s %ux%u: not CMYK within 40 dB (%.1f)", T[t].name, sizes[s][0], sizes[s][1], p);
+        if (getenv("JXL_TEST_VERBOSE")) printf("    lossy %s %ux%u: PSNR %.1f dB\n", T[t].name, sizes[s][0], sizes[s][1], p);
+        if (r) FreeImage_Unload(r);
+        FreeImage_Unload(d);
+    }
+
+    /* the file: CMY samples and a black channel in the CMYK profile, a level 10 codestream */
+    d = cmyk_pattern(FIT_BITMAP, 64, 48, 97, icc->data, icc->size);
+    {
+        FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+        BYTE *data = NULL; DWORD n = 0, i;
+        int level = 0;
+        if (FreeImage_SaveToMemory(FIF_JXL, d, mem, 0) && FreeImage_AcquireMemory(mem, &data, &n))
+            for (i = 0; i + 4 < n && i < 64; i++) if (!memcmp(data + i, "jxll", 4)) { level = data[i + 4]; break; }
+        CHECK(level == 10, "lossy CMYK: no jxll box of level 10");
+        FreeImage_CloseMemory(mem);
+    }
+#ifdef JXL_TEST_LIBJXL
+    {
+        Layout l;
+        CHECK(FreeImage_Save(FIF_JXL, d, tmppath("fi_jxl_cmyk.jxl"), 0) && layout(tmppath("fi_jxl_cmyk.jxl"), &l) && !l.xyb && l.icc && l.black == 1,
+              "lossy CMYK: not CMY and a black channel in the CMYK profile");
+    }
+#endif
+    r = roundtrip(d, 30, 0, &small); if (r) FreeImage_Unload(r);
+    r = roundtrip(d, 95, 0, &big); if (r) FreeImage_Unload(r);
+    CHECK(small > 0 && small < big, "lossy CMYK: quality 30 gives %u bytes, quality 95 %u", (unsigned)small, (unsigned)big);
+
+    /* one page through the multi-page functions: the page cache keeps it CMYK */
+    m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_cmyk_page.jxl"), TRUE, FALSE, FALSE, 0);
+    FreeImage_AppendPage(m, d);
+    r = FreeImage_LockPage(m, 0);
+    CHECK(same_pixels(d, r) && cmyk_kept(d, r), "a CMYK page comes out of the page cache changed");
+    if (r) FreeImage_UnlockPage(m, r, FALSE);
+    CHECK(FreeImage_CloseMultiBitmap(m, JXL_LOSSLESS), "one CMYK page: close failed (%s)", g_last);
+    r = FreeImage_Load(FIF_JXL, tmppath("fi_jxl_cmyk_page.jxl"), JXL_CMYK);
+    CHECK(same_pixels(d, r) && cmyk_kept(d, r), "one CMYK page through the multi-page functions: not written as CMYK");
+    if (r) FreeImage_Unload(r);
+
+    /* an animation is written in RGB, its frames rendered through the profile */
+    want = FreeImage_ConvertCMYKToRGB(d, NULL, 0, 0);
+    m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_cmyk_anim.jxl"), TRUE, FALSE, TRUE, 0);
+    FreeImage_AppendPage(m, d);
+    FreeImage_AppendPage(m, d);
+    CHECK(FreeImage_CloseMultiBitmap(m, JXL_LOSSLESS), "CMYK animation: close failed (%s)", g_last);
+    m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_cmyk_anim.jxl"), FALSE, TRUE, TRUE, JXL_CMYK);
+    r = m ? FreeImage_LockPage(m, 1) : NULL;
+    p = r ? psnr(want, r, 3, 1) : 0;
+    CHECK(m && FreeImage_GetPageCount(m) == 2 && r && FreeImage_GetColorType(r) != FIC_CMYK && p > 50, "CMYK animation: page 1 is not the RGB rendering (%.1f dB)", p);
+    if (r) FreeImage_UnlockPage(m, r, FALSE);
+    if (m) FreeImage_CloseMultiBitmap(m, 0);
+    FreeImage_Unload(want);
+    FreeImage_Unload(d);
+
+    /* without a CMYK profile: its RGB rendering, without alpha, and a warning */
+    d = cmyk_pattern(FIT_BITMAP, 40, 30, 98, NULL, 0);
+    g_last[0] = 0;
+    CHECK(FreeImage_Save(FIF_JXL, d, tmppath("fi_jxl_cmyk_rgb.jxl"), JXL_LOSSLESS) && strstr(g_last, "without a CMYK ICC profile"), "CMYK without a profile: no warning (%s)", g_last);
+    r = FreeImage_Load(FIF_JXL, tmppath("fi_jxl_cmyk_rgb.jxl"), JXL_CMYK);
+    want = FreeImage_ConvertCMYKToRGB(d, NULL, 0, 0);
+    CHECK(same_pixels(want, r), "CMYK without a profile: not its 24-bit rendering");
+    if (r) FreeImage_Unload(r);
+    FreeImage_Unload(want);
+    FreeImage_Unload(d);
+    d = cmyk_pattern(FIT_RGBA16, 40, 30, 99, NULL, 0);
+    r = roundtrip(d, JXL_LOSSLESS, JXL_CMYK, NULL);
+    want = FreeImage_ConvertCMYKToRGB(d, NULL, 0, 0);
+    CHECK(r && FreeImage_GetImageType(r) == FIT_RGB16 && psnr(want, r, 3, 1) == 99, "16-bit CMYK without a profile: not its RGB16 rendering");
+    if (r) FreeImage_Unload(r);
+    FreeImage_Unload(want);
+    FreeImage_Unload(d);
+
+    /* float CMYK has no rendering: refused */
+    d = FreeImage_AllocateT(FIT_RGBAF, 4, 4, 128, 0, 0, 0);
+    FreeImage_CreateICCProfile(d, icc->data, icc->size);
+    FreeImage_GetICCProfile(d)->flags |= FIICC_COLOR_IS_CMYK;
+    CHECK(!FreeImage_Save(FIF_JXL, d, tmppath("fi_jxl_bad.jxl"), 0), "float CMYK was written");
+    FreeImage_Unload(d);
+    FreeImage_Unload(press);
+    printf("CMYK: done\n");
+}
+
 static void test_pages(void) {
     FIMULTIBITMAP *m;
     FIBITMAP *d = pattern(FIT_RGB16, 48, 50, 40, 70), *r;
@@ -583,6 +718,7 @@ int main(void) {
     test_metadata();
     test_animation();
     test_animation_float();
+    test_cmyk();
     test_pages();
     test_refusals();
     test_offset();

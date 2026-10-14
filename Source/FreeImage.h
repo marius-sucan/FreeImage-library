@@ -788,7 +788,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define HEIF_PLAYBACK		2		//! image sequence: every frame as 32bpp
 #define JXL_DEFAULT			0		//! load every frame in its own pixel format; save lossy at quality 90, effort 7; or pass a quality 1-100 (100 = lossless) plus an effort 1-10 times 0x10000
 #define JXL_PLAYBACK		2		//! animation: every frame as 32bpp
-#define JXL_CMYK			0x0004	//! load CMYK images as CMYK, not converted to RGB
+#define JXL_CMYK			0x0004	//! load CMYK images as CMYK, not converted to RGB (load only: CMYK images with a CMYK profile are saved as CMYK)
 #define JXL_LOSSLESS		0x100	//! save lossless
 
 // Background filling options ---------------------------------------------------------
