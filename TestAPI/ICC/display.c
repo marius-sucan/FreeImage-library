@@ -361,6 +361,27 @@ static void make_fixtures(void) {
     else fail("16-bit planar CMYK + alpha TIFF: fixture not saved");
     if (write_cmyka_jxl(scratch("dsp_cmyka.jxl"), &press)) add("CMYK + alpha JPEG XL", FIF_JXL, 0, 1, scratch("dsp_cmyka.jxl"));
     else fail("CMYK + alpha JPEG XL: fixture not saved");
+    /* an 8-bit RLE PSD with a negative layer count, a 16-bit one with Photoshop's Mt16 */
+    {
+        FIBITMAP *a8 = FreeImage_Allocate(W, H, 8, 0, 0, 0), *a16 = FreeImage_AllocateT(FIT_UINT16, W, H, 16, 0, 0, 0);
+        unsigned x, y;
+        for (y = 0; y < H; y++) {
+            for (x = 0; x < W; x++) {
+                FreeImage_GetScanLine(a8, y)[x] = (BYTE)(x * 3 + y * 5);
+                ((WORD *)FreeImage_GetScanLine(a16, y))[x] = (WORD)(x * 409 + y * 541);
+            }
+        }
+        b = make_cmyka_psd(cmyk, a8, &press, 1, 1);
+        if (write_file(scratch("dsp_cmyka.psd"), b.data, b.size)) add("CMYK + alpha PSD", FIF_PSD, 0, 1, scratch("dsp_cmyka.psd"));
+        else fail("CMYK + alpha PSD: fixture not saved");
+        free(b.data);
+        b = make_cmyka_psd(cmyk16, a16, &press, 2, 0);
+        if (write_file(scratch("dsp_cmyka16.psd"), b.data, b.size)) add("16-bit CMYK + alpha PSD", FIF_PSD, 0, 1, scratch("dsp_cmyka16.psd"));
+        else fail("16-bit CMYK + alpha PSD: fixture not saved");
+        free(b.data);
+        FreeImage_Unload(a8);
+        FreeImage_Unload(a16);
+    }
     /* their profile cannot be linked: device CMYK */
     if (access("../JXR/data/cmyka40.jxr", R_OK) == 0) {
         add("CMYK + alpha JPEG XR", FIF_JXR, 0, 1, "../JXR/data/cmyka40.jxr");

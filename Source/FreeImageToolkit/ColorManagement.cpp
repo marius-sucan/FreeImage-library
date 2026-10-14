@@ -2419,7 +2419,7 @@ DisplayICCLoadFlags(FREE_IMAGE_FORMAT fif, int flags) {
 		case FIF_TIFF:
 			return flags | TIFF_CMYK | FIF_LOAD_DISPLAY_ICC;
 		case FIF_PSD:
-			return (flags | PSD_CMYK) & ~PSD_LAB;
+			return (flags | PSD_CMYK | FIF_LOAD_DISPLAY_ICC) & ~PSD_LAB;
 		case FIF_JXL:
 			return flags | JXL_CMYK | FIF_LOAD_DISPLAY_ICC;
 		case FIF_JXR:

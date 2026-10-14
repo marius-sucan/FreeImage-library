@@ -1064,6 +1064,7 @@ psdParser::psdParser() {
 	_bResolutionInfoFilled = false;
 	_bResolutionInfoFilled_v2 = false;
 	_bCopyright = false;
+	_bMergedAlpha = false;
 	_GlobalAngle = 30;
 	_ColourCount = -1;
 	_TransparentIndex = -1;
@@ -1087,13 +1088,123 @@ unsigned psdParser::GetChannelOffset(FIBITMAP* bitmap, unsigned c) const {
 	return channelOffset;
 }
 
+// in a PSB, these tagged blocks have an 8-byte length
+static bool
+psdHasLongBlockLength(const BYTE *key) {
+	static const char keys[][5] = { "LMsk", "Lr16", "Lr32", "Layr", "Mt16", "Mt32", "Mtrn", "Alph", "FMsk", "lnk2", "FEid", "FXid", "PxSD" };
+	for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+		if (memcmp(key, keys[i], 4) == 0) {
+			return true;
+		}
+	}
+	return false;
+}
+
+// transparency in the first extra channel: a negative layer count (also in 'Layr', 'Lr16', 'Lr32') or an 'Mt*' block
+static bool
+psdHasMergedAlpha(FreeImageIO *io, fi_handle handle, bool psb, INT64 pos, INT64 end) {
+	const INT64 sizeBytes = psb ? 8 : 4;
+	BYTE b[8];
+
+	// layer info: its length, then the layer count
+	if ((end - pos < sizeBytes) || (io->read_proc(b, (unsigned)sizeBytes, 1, handle) != 1)) {
+		return false;
+	}
+	const UINT64 layerInfo = psb ? psdGetLongValue(b, 8) : psdGetValue(b, 4);
+	pos += sizeBytes;
+	if (layerInfo > (UINT64)(end - pos)) {
+		return false;
+	}
+	if (layerInfo >= 2) {
+		if (io->read_proc(b, 2, 1, handle) != 1) {
+			return false;
+		}
+		if ((short)psdGetValue(b, 2) < 0) {
+			return true;
+		}
+	}
+	pos += (INT64)layerInfo;
+
+	// global layer mask info
+	if ((end - pos < 4) || (io->seek_proc(handle, pos, SEEK_SET) != 0) || (io->read_proc(b, 4, 1, handle) != 1)) {
+		return false;
+	}
+	const DWORD mask = psdGetValue(b, 4);
+	pos += 4;
+	if (mask > (UINT64)(end - pos)) {
+		return false;
+	}
+	pos += mask;
+
+	// tagged blocks
+	while (end - pos >= 12) {
+		if ((io->seek_proc(handle, pos, SEEK_SET) != 0) || (io->read_proc(b, 8, 1, handle) != 1)) {
+			return false;
+		}
+		if ((memcmp(b, "8BIM", 4) != 0) && (memcmp(b, "8B64", 4) != 0)) {
+			return false;
+		}
+		BYTE key[4];
+		memcpy(key, b + 4, 4);
+		const INT64 lengthBytes = (psb && psdHasLongBlockLength(key)) ? 8 : 4;
+		if ((end - pos - 8 < lengthBytes) || (io->read_proc(b, (unsigned)lengthBytes, 1, handle) != 1)) {
+			return false;
+		}
+		const UINT64 length = (lengthBytes == 8) ? psdGetLongValue(b, 8) : psdGetValue(b, 4);
+		const INT64 data = pos + 8 + lengthBytes;
+		const UINT64 room = (UINT64)(end - data);
+		if (length > room) {
+			return false;
+		}
+		if (!memcmp(key, "Mtrn", 4) || !memcmp(key, "Mt16", 4) || !memcmp(key, "Mt32", 4)) {
+			return true;
+		}
+		if ((!memcmp(key, "Layr", 4) || !memcmp(key, "Lr16", 4) || !memcmp(key, "Lr32", 4)) && (length >= 2)) {
+			if (io->read_proc(b, 2, 1, handle) != 1) {
+				return false;
+			}
+			if ((short)psdGetValue(b, 2) < 0) {
+				return true;
+			}
+		}
+		// the next block, past the data padded to 4 bytes (Photoshop), to 2, or not at all
+		const UINT64 padded[3] = { (length + 3) & ~(UINT64)3, length, (length + 1) & ~(UINT64)1 };
+		INT64 found = -1;
+		for (int i = 0; (i < 3) && (found < 0); i++) {
+			if ((padded[i] > room) || (room - padded[i] < 12)) {
+				continue;
+			}
+			const INT64 next = data + (INT64)padded[i];
+			if ((io->seek_proc(handle, next, SEEK_SET) == 0) && (io->read_proc(b, 4, 1, handle) == 1) &&
+				(!memcmp(b, "8BIM", 4) || !memcmp(b, "8B64", 4))) {
+				found = next;
+			}
+		}
+		if (found < 0) {
+			return false;
+		}
+		pos = found;
+	}
+	return false;
+}
+
 bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 	bool bSuccess = true;
 
 	const UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
 
 	if (nTotalBytes > 0) {
-		if ((nTotalBytes > (UINT64)std::numeric_limits<INT64>::max()) || (io->seek_proc(handle, (INT64)nTotalBytes, SEEK_CUR) != 0)) {
+		// only a CMYK merged image's transparency is read
+		const bool cmyka = (_headerInfo._ColourMode == PSDP_CMYK) && (_headerInfo._Channels > 4) &&
+			((_headerInfo._BitsPerChannel == 8) || (_headerInfo._BitsPerChannel == 16));
+		const INT64 start = cmyka ? io->tell_proc(handle) : -1;
+		if (nTotalBytes > (UINT64)std::numeric_limits<INT64>::max()) {
+			bSuccess = false;
+		} else if ((start >= 0) && (nTotalBytes <= (UINT64)(std::numeric_limits<INT64>::max() - start))) {
+			const INT64 end = start + (INT64)nTotalBytes;
+			_bMergedAlpha = psdHasMergedAlpha(io, handle, (_headerInfo._Version == 2), start, end);
+			bSuccess = (io->seek_proc(handle, end, SEEK_SET) == 0);
+		} else if (io->seek_proc(handle, (INT64)nTotalBytes, SEEK_CUR) != 0) {
 			bSuccess = false;
 		}
 	}
@@ -1488,7 +1599,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	// @todo Add some metadata model
 
 	if(header_only) {
-		return FinishImage(bitmap, mode, nChannels, needPalette);
+		return FinishImage(bitmap, mode, nChannels, needPalette, NULL);
 	}
 
 	// Load pixels data
@@ -1501,6 +1612,19 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	BYTE* line_start = new BYTE[lineSize]; //< fileline cache
    const UINT64 dst_buffer_size = (UINT64)dstLineSize * nHeight;
 
+	// the merged alpha, the channel after K, read into a plane: set once CMYK is RGB, or kept for FIF_LOAD_DISPLAY_ICC
+	FIBITMAP *alpha = NULL;
+	if(_bMergedAlpha && (((_fi_flags & PSD_CMYK) != PSD_CMYK) || ((_fi_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC))) {
+		alpha = (bytes == 2) ? FreeImage_AllocateT(FIT_UINT16, nWidth, nHeight) : FreeImage_Allocate(nWidth, nHeight, 8);
+		if(!alpha) {
+			FreeImage_Unload(bitmap);
+			SAFE_DELETE_ARRAY(line_start);
+			throw FI_MSG_ERROR_DIB_MEMORY;
+		}
+	}
+	BYTE* const alpha_first_line = alpha ? FreeImage_GetScanLine(alpha, nHeight - 1) : NULL;//<*** flipped
+	const unsigned alphaLineSize = alpha ? FreeImage_GetPitch(alpha) : 0;
+
 	// a cut file keeps what it holds: the first channel row the data does not reach
 	bool cut = false;
 	unsigned cut_channel = 0, cut_row = 0;
@@ -1509,21 +1633,26 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		case PSDP_COMPRESSION_NONE: // raw data
 		{
 			for(unsigned c = 0; c < nChannels; c++) {
-				if(c >= dstChannels) {
+				const bool toAlpha = alpha && (c == dstChannels);
+				if((c >= dstChannels) && !toAlpha) {
 					// @todo write extra channels
 					break;
 				}
 
-				const unsigned channelOffset = GetChannelOffset(bitmap, c) * bytes;
-				const unsigned limitLineSize = MIN(dstLineSize, lineSize);
+				const unsigned channelOffset = toAlpha ? 0 : GetChannelOffset(bitmap, c) * bytes;
+				const unsigned pitch = toAlpha ? alphaLineSize : dstLineSize;
+				const unsigned limitLineSize = MIN(pitch, lineSize);
 
-				BYTE* dst_line_start = dst_first_line + channelOffset;
-				if ((UINT64)channelOffset + lineSize > dst_buffer_size) {
+				BYTE* dst_line_start = (toAlpha ? alpha_first_line : dst_first_line) + channelOffset;
+				if (!toAlpha && ((UINT64)channelOffset + lineSize > dst_buffer_size)) {
 					// Fix for CVE-2020-24295 from https://src.fedoraproject.org/rpms/freeimage/blob/f39/f/CVE-2020-24295.patch 
+					FreeImage_Unload(alpha);
+					FreeImage_Unload(bitmap);
+					SAFE_DELETE_ARRAY(line_start);
 					throw "Invalid PSD image";
 				}
 
-				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= dstLineSize) {//<*** flipped
+				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= pitch) {//<*** flipped
 					const unsigned got = io->read_proc(line_start, 1, lineSize, handle);
 					if((got < lineSize) && !cut) {
 						cut = true;
@@ -1531,8 +1660,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 						cut_row = h;
 					}
 					memset(line_start + got, 0, lineSize - got);
-					ReadImageLine(dst_line_start, line_start, limitLineSize, dstBpp, bytes,
-					              dst_line_start - channelOffset + dstLineSize);
+					ReadImageLine(dst_line_start, line_start, limitLineSize, toAlpha ? bytes : dstBpp, bytes,
+					              dst_line_start - channelOffset + pitch);
 				} //< h
 			}//< ch
 
@@ -1552,6 +1681,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 			DWORD *rleLineSizeList = new (std::nothrow) DWORD[nChannels*nHeight];
 
 			if(!rleLineSizeList) {
+				FreeImage_Unload(alpha);
 				FreeImage_Unload(bitmap);
 				SAFE_DELETE_ARRAY(line_start);
 				throw std::bad_alloc();
@@ -1559,8 +1689,10 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 			if(_headerInfo._Version == 1) {
 				WORD *rleLineSizeList2 = new (std::nothrow) WORD[nChannels*nHeight];
 				if(!rleLineSizeList2) {
+					FreeImage_Unload(alpha);
 					FreeImage_Unload(bitmap);
 					SAFE_DELETE_ARRAY(line_start);
+					SAFE_DELETE_ARRAY(rleLineSizeList);
 					throw std::bad_alloc();
 				}
 				// counts past the end of the file are 0
@@ -1606,6 +1738,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 			BYTE* rle_line_start = new (std::nothrow) BYTE[largestRLELine];
 			if(!rle_line_start) {
+				FreeImage_Unload(alpha);
 				FreeImage_Unload(bitmap);
 				SAFE_DELETE_ARRAY(line_start);
 				SAFE_DELETE_ARRAY(rleLineSizeList);
@@ -1614,16 +1747,18 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 			// Read the RLE data
 			for (unsigned ch = 0; ch < nChannels; ch++) {
-				if(ch >= dstChannels) {
+				const bool toAlpha = alpha && (ch == dstChannels);
+				if((ch >= dstChannels) && !toAlpha) {
 					// @todo write to extra channels
 					break;
 				}
 				const BYTE* const line_end = line_start + lineSize;
 
-				const unsigned channelOffset = GetChannelOffset(bitmap, ch) * bytes;
+				const unsigned channelOffset = toAlpha ? 0 : GetChannelOffset(bitmap, ch) * bytes;
+				const unsigned pitch = toAlpha ? alphaLineSize : dstLineSize;
 
-				BYTE* dst_line_start = dst_first_line + channelOffset;
-				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= dstLineSize) {//<*** flipped
+				BYTE* dst_line_start = (toAlpha ? alpha_first_line : dst_first_line) + channelOffset;
+				for(unsigned h = 0; h < nHeight; ++h, dst_line_start -= pitch) {//<*** flipped
 					const unsigned index = ch * nHeight + h;
 
 					// - read and uncompress line -
@@ -1639,8 +1774,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 					// - write line to destination -
 
 					UnpackRLE(line_start, rle_line_start, line_start + lineSize, rleLineSize);
-					ReadImageLine(dst_line_start, line_start, lineSize, dstBpp, bytes,
-					              dst_line_start - channelOffset + dstLineSize);
+					ReadImageLine(dst_line_start, line_start, lineSize, toAlpha ? bytes : dstBpp, bytes,
+					              dst_line_start - channelOffset + pitch);
 				}//< h
 			}//< ch
 
@@ -1692,6 +1827,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 				}
 			}
 		}
+		if(alpha && (cut_channel <= dstChannels)) {
+			for(unsigned h = (cut_channel == dstChannels) ? cut_row : 0; h < nHeight; h++) {
+				memset(alpha_first_line - (size_t)h * alphaLineSize, 0xFF, (size_t)nWidth * bytes);
+			}
+		}
 		if((dstChannels == 1) && (cut_channel == 0)) {
 			PartialImageWarning(_fi_format_id, cut_row, nHeight);
 		} else {
@@ -1699,13 +1839,13 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		}
 	}
 
-	return FinishImage(bitmap, mode, nChannels, needPalette);
+	return FinishImage(bitmap, mode, nChannels, needPalette, alpha);
 }
 
 /**
-Further process the bitmap: a header-only one gets the same layout, profile, palette and thumbnail
+Further process the bitmap: a header-only one gets the same layout, profile, palette and thumbnail; it takes alpha
 */
-FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannels, bool needPalette) {
+FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannels, bool needPalette, FIBITMAP *alpha) {
 	if((mode == PSDP_CMYK || mode == PSDP_MULTICHANNEL)) {
 		// CMYK values are "inverted", invert them back
 
@@ -1720,6 +1860,8 @@ FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannel
 		if((_fi_flags & PSD_CMYK) == PSD_CMYK) {
 			// keep as CMYK
 			FreeImage_GetICCProfile(bitmap)->flags |= FIICC_COLOR_IS_CMYK;
+			// FIF_LOAD_DISPLAY_ICC makes it RGBA with this alpha
+			SetCMYKAlpha(bitmap, alpha);
 		}
 		else {
 			// convert to RGB
@@ -1729,8 +1871,12 @@ FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannel
 			// The ICC Profile is no longer valid
 			_iccProfile.clear();
 
+			if(alpha) {
+				FreeImage_SetChannel(bitmap, alpha, FICC_ALPHA);
+				FreeImage_Unload(alpha);
+			}
 			// remove the pending A if not present in source
-			if(nChannels == 4 || nChannels == 3 ) {
+			else if((mode == PSDP_CMYK) ? !_bMergedAlpha : (nChannels == 4 || nChannels == 3)) {
 				FIBITMAP* t = RemoveAlphaChannel(bitmap);
 				if(t) {
 					FreeImage_Unload(bitmap);

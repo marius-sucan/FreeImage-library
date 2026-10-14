@@ -631,7 +631,7 @@ static Bytes save_memory(FREE_IMAGE_FORMAT fif, FIBITMAP *dib) {
 static void header_only_psd(const Bytes *press) {
     Bytes files[11];
     const char *names[11] = { "8-bit CMYK", "16-bit CMYK", "indexed", "bitmap", "3-channel multichannel", "4-channel multichannel",
-        "CMYK + alpha", "RGB", "untagged CMYK", "untagged CMYK + alpha", "2-channel multichannel" };
+        "CMYK + extra channel", "RGB", "untagged CMYK", "untagged CMYK + extra channel", "2-channel multichannel" };
     FIBITMAP *dib, *thumb = FreeImage_Allocate(10, 6, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
     char what[128];
     unsigned i, x, y;
@@ -700,6 +700,86 @@ static void header_only_psd(const Bytes *press) {
         if (dib) FreeImage_Unload(dib);
     }
     for (i = 0; i < 11; i++) free(files[i].data);
+}
+
+/* a CMYK PSD's fifth channel is its alpha when the layer and mask section says so: kept loaded as RGB, header-only too,
+   dropped with PSD_CMYK, opaque where the file is cut */
+static void cmyk_alpha_psd(const Bytes *press) {
+    static const struct { int deep, signal, rle, alpha; const char *name; } cases[] = {
+        { 0, 1, 0, 1, "8-bit, negative layer count" }, { 0, 1, 1, 1, "8-bit RLE, negative layer count" },
+        { 1, 2, 0, 1, "16-bit, Mt16" }, { 1, 2, 1, 1, "16-bit RLE, Mt16" }, { 1, 1, 0, 1, "16-bit, negative layer count" },
+        { 1, 4, 0, 1, "16-bit, negative layer count in Lr16" }, { 0, 5, 1, 1, "8-bit RLE, Mtrn after a padded block" },
+        { 0, 0, 0, 0, "8-bit, no layers" }, { 0, 3, 1, 0, "8-bit RLE, positive layer count" }, { 1, 3, 0, 0, "16-bit, positive layer count" },
+    };
+    FIBITMAP *ink[2], *alpha[2];
+    unsigned i, x, y, k, ok;
+    char what[128];
+    for (k = 0; k < 2; k++) {
+        ink[k] = k ? FreeImage_AllocateT(FIT_RGBA16, 40, 24, 64, 0, 0, 0) : FreeImage_Allocate(40, 24, 32, 0, 0, 0);
+        alpha[k] = k ? FreeImage_AllocateT(FIT_UINT16, 40, 24, 16, 0, 0, 0) : FreeImage_Allocate(40, 24, 8, 0, 0, 0);
+        for (y = 0; y < 24; y++) {
+            BYTE *p = FreeImage_GetScanLine(ink[k], y), *a = FreeImage_GetScanLine(alpha[k], y);
+            for (x = 0; x < FreeImage_GetLine(ink[k]); x++) p[x] = (BYTE)(x * 7 + y * 13);
+            for (x = 0; x < 40; x++) {
+                const unsigned v = (x < 3) ? 0 : (x > 36) ? 65535 : x * 1543 + y * 257;
+                if (k) ((WORD *)a)[x] = (WORD)v;
+                else a[x] = (BYTE)((x > 36) ? 255 : v);
+            }
+        }
+    }
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const int deep = cases[i].deep;
+        Bytes file = make_cmyka_psd(ink[deep], alpha[deep], deep ? NULL : press, cases[i].signal, cases[i].rle);
+        Bytes twin = make_cmyka_psd(ink[deep], alpha[deep], deep ? NULL : press, 0, cases[i].rle);
+        FIBITMAP *plain = load_memory(FIF_PSD, &file, PSD_DEFAULT), *rgb = load_memory(FIF_PSD, &twin, PSD_DEFAULT);
+        FIBITMAP *cmyk = load_memory(FIF_PSD, &file, PSD_CMYK), *cmyk_twin = load_memory(FIF_PSD, &twin, PSD_CMYK);
+        snprintf(what, sizeof(what), "CMYK + alpha PSD, %s", cases[i].name);
+        same_as_full(what, load_memory(FIF_PSD, &file, PSD_DEFAULT), load_memory(FIF_PSD, &file, FIF_LOAD_NOPIXELS));
+        CHECK(rgb && FreeImage_GetBPP(rgb) == (deep ? 48u : 24u), "%s: without layers, not %s RGB", what, deep ? "48-bit" : "24-bit");
+        if (cases[i].alpha) {
+            FIBITMAP *a = plain ? FreeImage_GetChannel(plain, FICC_ALPHA) : NULL;
+            CHECK(plain && FreeImage_GetBPP(plain) == (deep ? 64u : 32u) && FreeImage_GetColorType(plain) == FIC_RGBALPHA, "%s: not RGBA", what);
+            CHECK(same_plane(a, alpha[deep]), "%s: the alpha is not the file's fifth channel", what);
+            for (k = FICC_RED, ok = 1; k <= FICC_BLUE; k++) {
+                FIBITMAP *c1 = plain ? FreeImage_GetChannel(plain, (FREE_IMAGE_COLOR_CHANNEL)k) : NULL;
+                FIBITMAP *c2 = rgb ? FreeImage_GetChannel(rgb, (FREE_IMAGE_COLOR_CHANNEL)k) : NULL;
+                ok &= same_plane(c1, c2);
+                if (c1) FreeImage_Unload(c1);
+                if (c2) FreeImage_Unload(c2);
+            }
+            CHECK(ok, "%s: the colours are not those of the file without layers", what);
+            if (a) FreeImage_Unload(a);
+        } else {
+            CHECK(same_plane(plain, rgb), "%s: not the image of the file without layers", what);
+        }
+        CHECK(cmyk && cmyk_twin && FreeImage_GetColorType(cmyk) == FIC_CMYK && digest(cmyk) == digest(cmyk_twin), "%s, PSD_CMYK: not the CMYK of the file without layers", what);
+        if (plain) FreeImage_Unload(plain);
+        if (rgb) FreeImage_Unload(rgb);
+        if (cmyk) FreeImage_Unload(cmyk);
+        if (cmyk_twin) FreeImage_Unload(cmyk_twin);
+        free(file.data);
+        free(twin.data);
+    }
+    /* the last 5 rows of the alpha cut off */
+    for (k = 0; k < 2; k++) {
+        Bytes file = make_cmyka_psd(ink[k], alpha[k], NULL, k ? 2 : 1, 0);
+        FIBITMAP *dib, *a;
+        file.size -= 5 * 40 * (k + 1);
+        dib = load_memory(FIF_PSD, &file, PSD_DEFAULT);
+        a = dib ? FreeImage_GetChannel(dib, FICC_ALPHA) : NULL;
+        for (y = 0, ok = (a != NULL); a && y < 24; y++) {
+            for (x = 0; x < 40; x++) {
+                const unsigned got = k ? ((WORD *)FreeImage_GetScanLine(a, y))[x] : FreeImage_GetScanLine(a, y)[x];
+                const unsigned want = (y < 5) ? (k ? 65535u : 255u) : k ? ((WORD *)FreeImage_GetScanLine(alpha[k], y))[x] : FreeImage_GetScanLine(alpha[k], y)[x];
+                ok &= (got == want);
+            }
+        }
+        CHECK(ok, "CMYK + alpha PSD, %d-bit, cut in its alpha: the rows it holds are not its alpha, or the others not opaque", k ? 16 : 8);
+        if (a) FreeImage_Unload(a);
+        if (dib) FreeImage_Unload(dib);
+        free(file.data);
+    }
+    for (k = 0; k < 2; k++) { FreeImage_Unload(ink[k]); FreeImage_Unload(alpha[k]); }
 }
 
 /* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */
@@ -880,6 +960,7 @@ int main(int argc, char **argv) {
     tiled_layouts_refused(&press);
     grey_alpha_float_strips();
     header_only_psd(&press);
+    cmyk_alpha_psd(&press);
     cmyk_pages_cached(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);

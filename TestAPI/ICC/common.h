@@ -192,4 +192,78 @@ static Bytes make_press_profile(void) {
     return b;
 }
 
+/* same size, type and pixels; palette and profile aside */
+static int same_plane(FIBITMAP *a, FIBITMAP *b) {
+    unsigned y;
+    if (!a || !b || FreeImage_GetImageType(a) != FreeImage_GetImageType(b) || FreeImage_GetBPP(a) != FreeImage_GetBPP(b) ||
+        FreeImage_GetWidth(a) != FreeImage_GetWidth(b) || FreeImage_GetHeight(a) != FreeImage_GetHeight(b)) return 0;
+    for (y = 0; y < FreeImage_GetHeight(a); y++) {
+        if (memcmp(FreeImage_GetScanLine(a, y), FreeImage_GetScanLine(b, y), FreeImage_GetLine(a))) return 0;
+    }
+    return 1;
+}
+
+static BYTE *psd_be(BYTE *p, unsigned v, int n) {
+    while (n--) *p++ = (BYTE)(v >> (8 * n));
+    return p;
+}
+
+/* CMYK + alpha PSD, alpha the transparency by signal 1: count < 0, 2: Mt16 + Lr16, 4: Lr16 count < 0, 5: Mtrn after a
+   padded block; not by 0: no layers, 3: count > 0 */
+static Bytes make_cmyka_psd(FIBITMAP *cmyk, FIBITMAP *alpha, const Bytes *icc, int signal, int rle) {
+    static const DWORD section[6] = { 0, 96, 120, 96, 108, 40 };
+    const unsigned w = FreeImage_GetWidth(cmyk), h = FreeImage_GetHeight(cmyk);
+    const unsigned bytes = (FreeImage_GetImageType(cmyk) == FIT_RGBA16) ? 2 : 1, line = w * bytes;
+    const DWORD res = icc ? 12 + ((icc->size + 1) & ~1u) : 0;
+    BYTE info[88], *p, *counts = NULL, *row = (BYTE *)malloc(line);
+    Bytes b;
+    unsigned c, x, y, i;
+    /* one layer of no pixels, its five channels holding only their compression */
+    memset(info, 0, sizeof(info));
+    p = psd_be(info, (signal == 1 || signal == 4) ? 0xFFFF : 1, 2) + 16;
+    p = psd_be(p, 5, 2);
+    for (c = 0; c < 5; c++) { p = psd_be(p, c ? c - 1 : 0xFFFF, 2); p = psd_be(p, 2, 4); }
+    memcpy(p, "8BIMnorm", 8); p[8] = 255; p += 12;
+    p = psd_be(p, 12, 4) + 8;
+    p[0] = 1; p[1] = 'a';
+    b.size = 26 + 4 + 4 + res + 4 + section[signal] + 2 + 5 * h * (rle ? 2 + line + (line + 127) / 128 : line);
+    b.data = p = (BYTE *)calloc(1, b.size);
+    memcpy(p, "8BPS", 4); psd_be(p + 4, 1, 2); psd_be(p + 12, 5, 2); psd_be(p + 14, h, 4); psd_be(p + 18, w, 4);
+    psd_be(p + 22, 8 * bytes, 2); psd_be(p + 24, 4, 2);
+    p = psd_be(p + 30, res, 4);
+    if (icc) { memcpy(p, "8BIM", 4); psd_be(p + 4, 1039, 2); psd_be(p + 8, icc->size, 4); memcpy(p + 12, icc->data, icc->size); p += res; }
+    p = psd_be(p, section[signal], 4);
+    if (signal == 1 || signal == 3) {
+        p = psd_be(p, 88, 4);
+        memcpy(p, info, 88); p += 88 + 4;
+    } else if (signal) {
+        p += 8;
+        if (signal == 5) { memcpy(p, "8BIMzzzz", 8); p = psd_be(p + 8, 5, 4) + 8; memcpy(p, "8BIMMtrn", 8); p += 12; }
+        if (signal == 2) { memcpy(p, "8BIMMt16", 8); p += 12; }
+        if (signal != 5) { memcpy(p, "8BIMLr16", 8); p = psd_be(p + 8, 88, 4); memcpy(p, info, 88); p += 88; }
+    }
+    p = psd_be(p, rle, 2);
+    if (rle) { counts = p; p += 5 * h * 2; }
+    for (c = 0; c < 5; c++) {
+        for (y = 0; y < h; y++) {
+            const BYTE *src = FreeImage_GetScanLine(c < 4 ? cmyk : alpha, h - 1 - y);
+            for (x = 0; x < w; x++) {
+                if (bytes == 2) psd_be(row + 2 * x, c < 4 ? 65535u - ((const WORD *)src)[4 * x + c] : ((const WORD *)src)[x], 2);
+                else row[x] = (BYTE)(c < 4 ? 255 - src[4 * x + c] : src[x]);
+            }
+            if (!rle) { memcpy(p, row, line); p += line; continue; }
+            psd_be(counts + 2 * (c * h + y), line + (line + 127) / 128, 2);
+            /* literal packets of up to 128 bytes */
+            for (i = 0; i < line; i += 128) {
+                const unsigned n = (line - i < 128) ? line - i : 128;
+                *p++ = (BYTE)(n - 1);
+                memcpy(p, row + i, n); p += n;
+            }
+        }
+    }
+    free(row);
+    b.size = (DWORD)(p - b.data);
+    return b;
+}
+
 #endif
