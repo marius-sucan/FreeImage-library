@@ -676,7 +676,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 // Load / Save flag constants -----------------------------------------------
 
 #define FIF_LOAD_NOPIXELS 0x8000	//! loading: load the image header only (not supported by all plugins, default to full loading)
-#define FIF_LOAD_DISPLAY_ICC 0x4000	//! loading: convert to the display's ICC profile (sRGB when unknown), CMYK JPEG, TIFF, PSD and JPEG XL read as CMYK first; ignored with FIF_LOAD_NOPIXELS
+#define FIF_LOAD_DISPLAY_ICC 0x4000	//! loading: convert to the display's ICC profile (sRGB when unknown), CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR read as CMYK first; ignored with FIF_LOAD_NOPIXELS
 
 #define APNG_DEFAULT		0
 #define APNG_PLAYBACK		2		//! 'Play' the APNG: each frame composited, as 32bpp
