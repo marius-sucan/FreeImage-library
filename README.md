@@ -86,7 +86,7 @@ Changes:
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - BMP files load with the ICC profile their V5 header embeds, for color management; saved BMPs carry none;
-- JPEG XR files that state their colors with PTM_COLOR_INFO instead of an ICC profile load with a profile of those colors, for color management;
+- JPEG XR files that state their colors with PTM_COLOR_INFO instead of an ICC profile load with a profile of those colors, for color management, and 8-bit YCC 4:4:4 ones load as RGB through its matrix;
 - fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;

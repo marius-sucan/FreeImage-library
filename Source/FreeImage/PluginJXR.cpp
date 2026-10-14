@@ -264,7 +264,8 @@ typedef enum {
 	ROWS_CMYK_KEPT_16,
 	ROWS_PREMULTIPLIED_8,	// premultiplied alpha undone
 	ROWS_PREMULTIPLIED_16,
-	ROWS_PREMULTIPLIED_FLOAT
+	ROWS_PREMULTIPLIED_FLOAT,
+	ROWS_YCC444_8			// Y, Cb, Cr: BGR by PTM_COLOR_INFO's matrix
 } JXRRowLayout;
 
 /** CMYK converted to RGB, or kept as CMYK with JXR_CMYK */
@@ -299,8 +300,96 @@ static const struct {
 	{ &GUID_PKPixelFormat32bppPBGRA, &GUID_PKPixelFormat32bppBGRA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
 	{ &GUID_PKPixelFormat32bppPRGBA, &GUID_PKPixelFormat32bppRGBA, FIT_BITMAP, 32, ROWS_PREMULTIPLIED_8, CMYK_NONE },
 	{ &GUID_PKPixelFormat64bppPRGBA, &GUID_PKPixelFormat64bppRGBA, FIT_RGBA16, 64, ROWS_PREMULTIPLIED_16, CMYK_NONE },
-	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT, CMYK_NONE }
+	{ &GUID_PKPixelFormat128bppPRGBAFloat, &GUID_PKPixelFormat128bppRGBAFloat, FIT_RGBAF, 128, ROWS_PREMULTIPLIED_FLOAT, CMYK_NONE },
+	{ &GUID_PKPixelFormat24bppYCC444, &GUID_PKPixelFormat24bppBGR, FIT_BITMAP, 24, ROWS_YCC444_8, CMYK_NONE }
 };
+
+/** PTM_COLOR_INFO's matrix from YCC to RGB (T.832 A.7.21.3, A.7.21.5) */
+typedef struct tagJXRYCCMatrix {
+	BYTE matrix;		// MATRIX_COEFFICIENTS
+	BOOL full_range;	// FULL_RANGE_FLAG
+	double kr;			// luma weights of red and blue, none for YCgCo
+	double kb;
+} JXRYCCMatrix;
+
+/** 8-bit YCC to RGB: each of R', G' and B' a sum of terms of Y, Cb and Cr */
+typedef struct tagJXRYCCTables {
+	BOOL ycgco;
+	BOOL full_range;
+	double y[256];		// E'Y
+	double r_cr[256];	// 2 (1 - Kr) E'PR
+	double b_cb[256];	// 2 (1 - Kb) E'PB
+	double g_cb[256];	// -2 Kb (1 - Kb) / Kg E'PB
+	double g_cr[256];	// -2 Kr (1 - Kr) / Kg E'PR
+} JXRYCCTables;
+
+/**
+Get the matrix PTM_COLOR_INFO gives YCC samples: luma weights of Table A.10, or YCgCo
+@param pID Decoder handle
+@param ycc (returned value) The matrix, or NULL
+@return Returns FALSE without PTM_COLOR_INFO, or for another matrix: 0, unspecified, BT.2020 constant luminance, ICtCp
+*/
+static BOOL
+GetYCCMatrix(const PKImageDecode *pID, JXRYCCMatrix *ycc) {
+	static const JXRYCCMatrix MATRICES[] = {
+		{ 1, FALSE, 0.2126, 0.0722 }, { 4, FALSE, 0.30, 0.11 }, { 5, FALSE, 0.299, 0.114 }, { 6, FALSE, 0.299, 0.114 },
+		{ 7, FALSE, 0.212, 0.087 }, { 8, FALSE, 0, 0 }, { 9, FALSE, 0.2627, 0.0593 }
+	};
+	const WmpDEMisc *wmiDEMisc = &pID->WMP.wmiDEMisc;
+	if(!wmiDEMisc->fPTMColorInfo) {
+		return FALSE;
+	}
+	const BYTE matrix = (BYTE)(wmiDEMisc->uPTMColorInfo >> 16);
+	for(size_t i = 0; i < sizeof(MATRICES) / sizeof(*MATRICES); i++) {
+		if(MATRICES[i].matrix == matrix) {
+			if(ycc) {
+				*ycc = MATRICES[i];
+				ycc->full_range = (wmiDEMisc->uPTMColorInfo >> 24) & 1;
+			}
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/**
+Say why YCC samples are refused: PTM_COLOR_INFO's matrix is missing, or not one converted here
+@param pID Decoder handle
+@return Returns TRUE for an image in 24bppYCC444
+*/
+static BOOL
+ReportYCCRefusal(PKImageDecode *pID) {
+	PKPixelFormatGUID guid_format;
+	if((pID->GetPixelFormat(pID, &guid_format) != WMP_errSuccess) || !IsEqualGUID(guid_format, GUID_PKPixelFormat24bppYCC444)) {
+		return FALSE;
+	}
+	const WmpDEMisc *wmiDEMisc = &pID->WMP.wmiDEMisc;
+	if(!wmiDEMisc->fPTMColorInfo) {
+		FreeImage_OutputMessageProc(s_format_id, "YCC samples load as RGB only with the matrix of PTM_COLOR_INFO");
+	} else {
+		FreeImage_OutputMessageProc(s_format_id, "YCC samples with PTM_COLOR_INFO's matrix %u are not supported", (unsigned)((wmiDEMisc->uPTMColorInfo >> 16) & 0xFF));
+	}
+	return TRUE;
+}
+
+/**
+Tabulate the terms of a matrix for 8-bit samples (T.832 A.7.21.5): narrow range puts Y at 16..235 and Cb, Cr at 16..240
+*/
+static void
+BuildYCCTables(const JXRYCCMatrix &m, JXRYCCTables *t) {
+	const double kg = 1 - m.kr - m.kb;
+	t->ycgco = (m.matrix == 8);
+	t->full_range = m.full_range;
+	for(int v = 0; v < 256; v++) {
+		const double y = m.full_range ? v / 255.0 : (v - 16) / 219.0;
+		const double c = m.full_range ? (v - 128) / 255.0 : (v - 128) / 224.0;
+		t->y[v] = y;
+		t->r_cr[v] = 2 * (1 - m.kr) * c;
+		t->b_cb[v] = 2 * (1 - m.kb) * c;
+		t->g_cb[v] = -2 * m.kb * (1 - m.kb) / kg * c;
+		t->g_cr[v] = -2 * m.kr * (1 - m.kr) / kg * c;
+	}
+}
 
 /**
 Get the pixel format the rows of an n-channel format stand for: three channels are RGB, four or more CMYK followed by
@@ -360,6 +449,7 @@ GetRowLayout(const PKPixelFormatGUID &in_guid_format, const PKPixelFormatGUID &o
 Scan input pixelInfo specifications and return the equivalent FreeImage info for loading
 @param pixelInfo Image specifications
 @param keep_cmyk TRUE with JXR_CMYK
+@param ycc TRUE when PTM_COLOR_INFO gives YCC a matrix to RGB
 @param out_guid_format (returned value) output pixel format
 @param image_type (returned value) Image type
 @param bpp (returned value) Image bit depth
@@ -370,7 +460,7 @@ Scan input pixelInfo specifications and return the equivalent FreeImage info for
 @see GetInputPixelFormat
 */
 static ERR
-GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormatGUID *out_guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
+GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, BOOL ycc, PKPixelFormatGUID *out_guid_format, FREE_IMAGE_TYPE *image_type, unsigned *bpp, unsigned *red_mask, unsigned *green_mask, unsigned *blue_mask) {
 	const unsigned s_FreeImagePixelInfoSize = (unsigned)sizeof(s_FreeImagePixelInfo) / sizeof(*(s_FreeImagePixelInfo));
 	const PKPixelFormatGUID &guid_format = *pixelInfo->pGUIDPixFmt;
 
@@ -378,9 +468,11 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormat
 	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
 		return WMP_errFail;
 	}
-	// YCC: refused, its matrix to RGB is not applied
+	// YCC: 8-bit 4:4:4 converted by PTM_COLOR_INFO's matrix, the rest refused
 	if((pixelInfo->cfColorFormat == YUV_444) || (pixelInfo->cfColorFormat == YUV_422) || (pixelInfo->cfColorFormat == YUV_420)) {
-		return WMP_errFail;
+		if(!ycc || !IsEqualGUID(guid_format, GUID_PKPixelFormat24bppYCC444)) {
+			return WMP_errFail;
+		}
 	}
 	const PKPixelFormatGUID &rows_format = GetRowsFormat(guid_format);
 	if(!IsEqualGUID(rows_format, guid_format)) {
@@ -389,7 +481,7 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormat
 		if(PixelFormatLookup(&rowsInfo, LOOKUP_FORWARD) != WMP_errSuccess) {
 			return WMP_errFail;
 		}
-		return GetNativePixelFormat(&rowsInfo, keep_cmyk, out_guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
+		return GetNativePixelFormat(&rowsInfo, keep_cmyk, ycc, out_guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 	}
 	const int layout = FindRowLayout(guid_format, keep_cmyk);
 	if(layout >= 0) {
@@ -447,7 +539,8 @@ GetInputPixelFormat(PKImageDecode *pDecoder, BOOL keep_cmyk, PKPixelFormatGUID *
 		JXR_CHECK(error_code);
 
 		// search for an equivalent native FreeImage format
-		error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
+		const BOOL ycc = GetYCCMatrix(pDecoder, NULL);
+		error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, ycc, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 
 		if(error_code != WMP_errSuccess) {
 			// try to find a suitable conversion function ...
@@ -460,7 +553,7 @@ GetInputPixelFormat(PKImageDecode *pDecoder, BOOL keep_cmyk, PKPixelFormatGUID *
 					pixelInfo.pGUIDPixFmt = ppguidTargetPF;
 					error_code = PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD);
 					JXR_CHECK(error_code);
-					error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
+					error_code = GetNativePixelFormat(&pixelInfo, keep_cmyk, ycc, guid_format, image_type, bpp, red_mask, green_mask, blue_mask);
 					if(error_code == WMP_errSuccess) {
 						break;
 					}
@@ -825,7 +918,7 @@ ReadMetadata(PKImageDecode *pID, FIBITMAP *dib) {
 
 /**
 Describe the colors of an image without an ICC profile in the file: PTM_COLOR_INFO's code points as the CICP tag, with
-a profile of them, else COLOR_SPACE's sRGB. Both only describe unsigned RGB and grey of 8, 10 or 16 bits (T.832 A.7.17, A.7.21)
+a profile of them, else COLOR_SPACE's sRGB. Both only describe unsigned RGB, YCC and grey of 8, 10 or 16 bits (T.832 A.7.17, A.7.21)
 @param pID Decoder handle
 @param guid_format Decoded pixel format
 @param dib Image loaded from it
@@ -842,8 +935,10 @@ ReadColorDescription(PKImageDecode *pID, const PKPixelFormatGUID &guid_format, F
 	if(PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD) != WMP_errSuccess) {
 		return FALSE;
 	}
+	// YCC reaches here only converted to RGB
 	const BOOL grey = (pixelInfo.cfColorFormat == Y_ONLY);
-	if((!grey && (pixelInfo.cfColorFormat != CF_RGB)) || ((pixelInfo.bdBitDepth != BD_8) && (pixelInfo.bdBitDepth != BD_10) && (pixelInfo.bdBitDepth != BD_16))) {
+	const BOOL rgb = (pixelInfo.cfColorFormat == CF_RGB) || (pixelInfo.cfColorFormat == YUV_444);
+	if((!grey && !rgb) || ((pixelInfo.bdBitDepth != BD_8) && (pixelInfo.bdBitDepth != BD_10) && (pixelInfo.bdBitDepth != BD_16))) {
 		return FALSE;
 	}
 	if(!wmiDEMisc->fPTMColorInfo) {
@@ -862,7 +957,7 @@ ReadColorDescription(PKImageDecode *pID, const PKPixelFormatGUID &guid_format, F
 	if(profile) {
 		FreeImage_CreateICCProfile(dib, (void*)profile, (long)size);
 	}
-	// A.7.21.5 gives a range to RGB by matrix 0, to grey by a luma matrix
+	// A.7.21.5 gives a range to RGB by matrix 0, to grey by a luma matrix; YCC's goes into its conversion
 	const BOOL luma = (matrix == 1) || ((matrix >= 4) && (matrix <= 10)) || (matrix == 14);
 	return !full_range && (grey ? luma : (matrix == 0));
 }
@@ -1467,15 +1562,52 @@ UnpremultiplyRowFloat(float *row, unsigned width) {
 	}
 }
 
+/** a signal of 0..1 as 0..255 */
+static inline BYTE
+SignalToByte(double v) {
+	return (v <= 0) ? 0 : (v >= 1) ? 255 : (BYTE)(v * 255 + 0.5);
+}
+
+/**
+Y, Cb and Cr samples to BGR in place, by PTM_COLOR_INFO's matrix (T.832 A.7.21.5)
+*/
+static void
+YCCRow8(BYTE *row, unsigned width, const JXRYCCTables *t) {
+	for(unsigned x = 0; x < width; x++, row += 3) {
+		const int y = row[0], cb = row[1], cr = row[2];
+		if(t->ycgco) {
+			// NOTE 2's inverse gives the code values of R, G and B
+			const int g = y + (cb - 128);
+			const int b = y - (cb - 128) - (cr - 128);
+			const int r = b + 2 * (cr - 128);
+			if(t->full_range) {
+				row[0] = (BYTE)MIN(MAX(b, 0), 255);
+				row[1] = (BYTE)MIN(MAX(g, 0), 255);
+				row[2] = (BYTE)MIN(MAX(r, 0), 255);
+			} else {
+				row[0] = SignalToByte((b - 16) / 219.0);
+				row[1] = SignalToByte((g - 16) / 219.0);
+				row[2] = SignalToByte((r - 16) / 219.0);
+			}
+		} else {
+			const double luma = t->y[y];
+			row[0] = SignalToByte(luma + t->b_cb[cb]);
+			row[1] = SignalToByte(luma + t->g_cb[cb] + t->g_cr[cr]);
+			row[2] = SignalToByte(luma + t->r_cr[cr]);
+		}
+	}
+}
+
 /**
 Give a decoded row the layout of the dib's rows, in place
 @param row Row of pixels
 @param width Row width (in pixels)
 @param layout What the row needs
 @param in_channels Channels of a decoded pixel
+@param ycc ROWS_YCC444_8's tables, else NULL
 */
 static void
-TransformRow(BYTE *row, unsigned width, JXRRowLayout layout, unsigned in_channels) {
+TransformRow(BYTE *row, unsigned width, JXRRowLayout layout, unsigned in_channels, const JXRYCCTables *ycc) {
 	switch(layout) {
 		case ROWS_PADDED_8:
 			for(unsigned x = 1; x < width; x++) {
@@ -1501,6 +1633,7 @@ TransformRow(BYTE *row, unsigned width, JXRRowLayout layout, unsigned in_channel
 		case ROWS_PREMULTIPLIED_8: UnpremultiplyRow8(row, width); break;
 		case ROWS_PREMULTIPLIED_16: UnpremultiplyRow16((WORD*)row, width); break;
 		case ROWS_PREMULTIPLIED_FLOAT: UnpremultiplyRowFloat((float*)row, width); break;
+		case ROWS_YCC444_8: YCCRow8(row, width, ycc); break;
 		default: break;
 	}
 }
@@ -1664,6 +1797,15 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 			error_code = pConverter->Initialize(pConverter, pDecoder, NULL, out_guid_format);
 			JXR_CHECK(error_code);
 		}
+		JXRYCCTables ycc;
+		if(layout == ROWS_YCC444_8) {
+			JXRYCCMatrix matrix;
+			if(!GetYCCMatrix(pDecoder, &matrix)) {
+				error_code = WMP_errUnsupportedFormat;
+				JXR_CHECK(error_code);
+			}
+			BuildYCCTables(matrix, &ycc);
+		}
 
 		unsigned cbStride = 0;
 		error_code = GetConverterStride(in_guid_format, out_guid_format, (int)width, &cbStride);
@@ -1696,7 +1838,7 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 			}
 			if(layout != ROWS_AS_DECODED) {
 				for(unsigned r = 0; r < rows; r++) {
-					TransformRow(pb + (size_t)r * cbStride, width, layout, (unsigned)inInfo.cChannel);
+					TransformRow(pb + (size_t)r * cbStride, width, layout, (unsigned)inInfo.cChannel, &ycc);
 				}
 			}
 			if(turn) {
@@ -1767,6 +1909,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// get dst image format specifications
 		unsigned red_mask = 0, green_mask = 0, blue_mask = 0;
 		error_code = GetInputPixelFormat(pDecoder, keep_cmyk, &guid_format, &image_type, &bpp, &red_mask, &green_mask, &blue_mask);
+		if((error_code != WMP_errSuccess) && ReportYCCRefusal(pDecoder)) {
+			throw (const char*)NULL;
+		}
 		JXR_CHECK(error_code);
 
 		// get image dimensions
@@ -1821,6 +1966,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				FreeImage_DestroyICCProfile(dib);
 			} else if((layout >= 0) && (s_FreeImageRowLayouts[layout].cmyk == CMYK_KEPT)) {
 				FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
+			} else if((layout >= 0) && (s_FreeImageRowLayouts[layout].layout == ROWS_YCC444_8)) {
+				// YCC loads as RGB, which only an RGB profile describes
+				const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+				if(!icc->data || (icc->size < 128) || memcmp((const BYTE*)icc->data + 16, "RGB ", 4)) {
+					FreeImage_DestroyICCProfile(dib);
+				}
 			}
 		}
 		const BOOL narrow = ReadColorDescription(pDecoder, in_guid_format, dib);

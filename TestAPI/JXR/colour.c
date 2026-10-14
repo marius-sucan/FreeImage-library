@@ -4,7 +4,8 @@
    of sRGB. Only unsigned RGB and grey of 8, 10 and 16 bits take either, an entry of another type or count is ignored,
    and a file's own ICC profile wins. Header-only loads describe the same. Each profile converts to sRGB as an
    independent reference does, the spec's curves and primaries through RP 177 matrices and Bradford adaptation;
-   FIF_LOAD_DISPLAY_ICC converts as FreeImage_ApplyICCProfile does, and leaves PQ alone */
+   FIF_LOAD_DISPLAY_ICC converts as FreeImage_ApplyICCProfile does, and leaves PQ alone. YCC 4:4:4 loads as RGB through
+   PTM_COLOR_INFO's matrix, which A.7.21.5's forward equations take back to the file's samples */
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -325,6 +326,218 @@ static void *load_many(void *arg) {
     return NULL;
 }
 
+/* ------------------------------------------------------------------ YCC 4:4:4 */
+
+/* data/ycc444.jxr, 9 x 140 lossless 24bppYCC444: Y, Cb and Cr of upright pixel (x, y) are 2k, k = (3x + 5y + 17c) % 97 */
+enum { YW = 9, YH = 140 };
+static int ycc_sample(unsigned x, unsigned y, unsigned c) { return 2 * (int)((3 * x + 5 * y + 17 * c) % 97); }
+
+static char last_message[256];
+static void catching(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; snprintf(last_message, sizeof(last_message), "%s", msg); }
+
+/* T.832 Table A.10's luma weights, or 0 for YCgCo */
+static int luma_weights(BYTE m, double *kr, double *kb) {
+    switch (m) {
+        case 1: *kr = 0.2126; *kb = 0.0722; return 1;
+        case 4: *kr = 0.30; *kb = 0.11; return 1;
+        case 5: case 6: *kr = 0.299; *kb = 0.114; return 1;
+        case 7: *kr = 0.212; *kb = 0.087; return 1;
+        case 9: *kr = 0.2627; *kb = 0.0593; return 1;
+        default: *kr = *kb = 0; return 0;
+    }
+}
+
+/* the loaded RGB of every pixel with no channel at 0 or 255, back through A.7.21.5's forward equations (BD8): the largest
+   difference from the file's Y, Cb and Cr, and how many pixels were checked */
+static double ycc_forward_error(FIBITMAP *dib, BYTE m, int full, unsigned *checked) {
+    double kr, kb, worst = 0;
+    const int weights = luma_weights(m, &kr, &kb);
+    unsigned x, y;
+    *checked = 0;
+    for (y = 0; y < YH; y++) {
+        const BYTE *line = FreeImage_GetScanLine(dib, YH - 1 - y);
+        for (x = 0; x < YW; x++) {
+            const BYTE *p = line + 3 * x;
+            const double r = p[FI_RGBA_RED], g = p[FI_RGBA_GREEN], b = p[FI_RGBA_BLUE];
+            double got[3], d;
+            int c;
+            if (r == 0 || r == 255 || g == 0 || g == 255 || b == 0 || b == 255) continue;
+            if (weights) {
+                const double ey = (kr * r + (1 - kr - kb) * g + kb * b) / 255, pb = 0.5 * (b / 255 - ey) / (1 - kb), pr = 0.5 * (r / 255 - ey) / (1 - kr);
+                got[0] = full ? 255 * ey : 219 * ey + 16;
+                got[1] = (full ? 255 : 224) * pb + 128;
+                got[2] = (full ? 255 : 224) * pr + 128;
+            } else {
+                /* YCgCo: the range-scaled code values RS, GS and BS first */
+                const double rs = full ? r : 219 * r / 255 + 16, gs = full ? g : 219 * g / 255 + 16, bs = full ? b : 219 * b / 255 + 16;
+                got[0] = 0.5 * gs + 0.25 * (rs + bs);
+                got[1] = 0.5 * gs - 0.25 * (rs + bs) + 128;
+                got[2] = 0.5 * (rs - bs) + 128;
+            }
+            for (c = 0; c < 3; c++) {
+                d = fabs(got[c] - ycc_sample(x, y, (unsigned)c));
+                if (d > worst) worst = d;
+            }
+            (*checked)++;
+        }
+    }
+    return worst;
+}
+
+/* the value of an entry of the first IFD, in place */
+static void set_entry(Bytes b, unsigned tag, BYTE value) {
+    const DWORD ifd = get32(b.data + 4);
+    unsigned i;
+    for (i = 0; i < get16(b.data + ifd); i++) {
+        BYTE *e = b.data + ifd + 2 + 12 * i;
+        if (get16(e) == tag) e[8] = value;
+    }
+}
+
+/* a copy with an ICC profile stored past its data, and these entries; the first IFD points to the profile */
+static Bytes with_profile(Bytes in, const void *icc, DWORD size, const BYTE (*added)[12], unsigned count) {
+    const DWORD at = (in.size + 1) & ~1u;
+    Bytes grown, out;
+    BYTE (*entries)[12] = (BYTE (*)[12])calloc(count + 1, 12);
+    unsigned i, k = 0;
+    grown.size = at + size;
+    grown.data = (BYTE *)calloc(grown.size, 1);
+    memcpy(grown.data, in.data, in.size);
+    memcpy(grown.data + at, icc, size);
+    for (i = 0; i <= count; i++) {
+        /* 0x8773 among the others in tag order */
+        if (k == i && (i == count || get16(added[i]) > 0x8773)) {
+            entry(entries[k++], 0x8773, 7, size, (BYTE)at, (BYTE)(at >> 8), (BYTE)(at >> 16), (BYTE)(at >> 24));
+        }
+        if (i < count) memcpy(entries[k++], added[i], 12);
+    }
+    out = with_entries(grown, (const BYTE (*)[12])entries, count + 1);
+    free(entries);
+    free(grown.data);
+    return out;
+}
+
+/* YCC 4:4:4 with PTM_COLOR_INFO: RGB that A.7.21.5's forward equations take back to the samples; refused without a
+   matrix converted here */
+static void ycc_cases(Bytes base) {
+    static const BYTE MATRICES[] = { 1, 4, 5, 6, 7, 8, 9 };
+    static const BYTE REFUSED[] = { 0, 2, 3, 10, 14 };
+    char name[160], want[160];
+    BYTE e[12];
+    unsigned i;
+    int full;
+    FIBITMAP *dib, *head;
+    Bytes file;
+    if (!base.data) { CHECK(0, "data/ycc444.jxr not read"); return; }
+
+    for (i = 0; i < sizeof(MATRICES); i++) {
+        for (full = 0; full < 2; full++) {
+            unsigned checked = 0;
+            double err;
+            ptm(e, 1, 13, MATRICES[i], (BYTE)full);
+            file = with1(base, e);
+            snprintf(name, sizeof(name), "YCC444 matrix %u, %s range", MATRICES[i], full ? "full" : "narrow");
+            dib = load(file, 0);
+            head = load(file, FIF_LOAD_NOPIXELS);
+            CHECK(dib && FreeImage_GetImageType(dib) == FIT_BITMAP && FreeImage_GetBPP(dib) == 24 && FreeImage_GetWidth(dib) == YW && FreeImage_GetHeight(dib) == YH,
+                  "%s: not loaded as 9x140 24-bit", name);
+            CHECK(head && FreeImage_GetBPP(head) == 24 && FreeImage_GetWidth(head) == YW && same_cicp(head, dib) && same_profile(head, dib),
+                  "%s: the header-only load differs", name);
+            if (dib) {
+                err = ycc_forward_error(dib, MATRICES[i], full, &checked);
+                CHECK(err <= 0.5 + 1e-9, "%s: %.3f code values from the samples", name, err);
+                CHECK(checked >= 300, "%s: only %u pixels unclipped", name, checked);
+                CHECK(has_cicp(dib, 1, 13, MATRICES[i], (BYTE)full) && !has_profile(dib), "%s: not described as sRGB", name);
+            }
+            if (dib) FreeImage_Unload(dib);
+            if (head) FreeImage_Unload(head);
+            free(file.data);
+        }
+    }
+
+    /* the RESERVED_K bits are ignored: 0xFE is the narrow range, 0xFF the full one */
+    for (full = 0; full < 2; full++) {
+        unsigned checked = 0;
+        ptm(e, 1, 13, 1, (BYTE)(full ? 0xFF : 0xFE));
+        file = with1(base, e);
+        dib = load(file, 0);
+        snprintf(name, sizeof(name), "YCC444 with RESERVED_K set, %s range", full ? "full" : "narrow");
+        CHECK(dib != NULL, "%s: not loaded", name);
+        if (dib) {
+            const double err = ycc_forward_error(dib, 1, full, &checked);
+            CHECK(err <= 0.5 + 1e-9 && checked >= 300, "%s: %.3f code values from the samples", name, err);
+            CHECK(has_cicp(dib, 1, 13, 1, (BYTE)full), "%s: CICP tag", name);
+            FreeImage_Unload(dib);
+        }
+        free(file.data);
+    }
+
+    /* BT.2020: the RGB gets its profile */
+    ptm(e, 9, 1, 9, 1);
+    file = with1(base, e);
+    dib = load(file, 0);
+    CHECK(dib && has_cicp(dib, 9, 1, 9, 1) && !strcmp(description(dib), "BT.2020 primaries, BT.709 tone curve (FreeImage)"), "YCC444 BT.2020: not described");
+    /* a quarter turn: the same pixels, turned */
+    set_entry(file, 0xbc02, 4);
+    head = load(file, 0);
+    CHECK(dib && head && FreeImage_GetWidth(head) == YH && FreeImage_GetHeight(head) == YW, "YCC444 turned: not loaded as 140x9");
+    if (dib && head && FreeImage_GetWidth(head) == YH) {
+        unsigned x, y, bad = 0;
+        for (y = 0; y < YH; y++)
+            for (x = 0; x < YW; x++)
+                bad += memcmp(FreeImage_GetScanLine(head, YW - 1 - x) + 3 * (YH - 1 - y), FreeImage_GetScanLine(dib, YH - 1 - y) + 3 * x, 3) != 0;
+        CHECK(bad == 0, "YCC444 turned: %u pixels not the upright ones", bad);
+    }
+    if (dib) FreeImage_Unload(dib);
+    if (head) FreeImage_Unload(head);
+    free(file.data);
+
+    /* the file's profile: an RGB one is kept, another one dropped for PTM_COLOR_INFO's description */
+    {
+        DWORD size = 0;
+        const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &size);
+        BYTE c[4];
+        ptm(e, 9, 1, 1, 1);
+        file = with_profile(base, adobe, size, (const BYTE (*)[12])e, 1);
+        dib = load(file, 0);
+        CHECK(dib && FreeImage_GetICCProfile(dib)->size == size && !memcmp(FreeImage_GetICCProfile(dib)->data, adobe, size) && !cicp(dib, c),
+              "YCC444 with an RGB profile: not the file's profile alone");
+        if (dib) FreeImage_Unload(dib);
+        free(file.data);
+        adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &size);
+        file = with_profile(base, adobe, size, (const BYTE (*)[12])e, 1);
+        dib = load(file, 0);
+        head = load(file, FIF_LOAD_NOPIXELS);
+        CHECK(dib && has_cicp(dib, 9, 1, 1, 1) && !strcmp(description(dib), "BT.2020 primaries, BT.709 tone curve (FreeImage)"),
+              "YCC444 with a grey profile: not dropped for PTM_COLOR_INFO's description");
+        CHECK(dib && head && same_profile(dib, head) && same_cicp(dib, head), "YCC444 with a grey profile: the header-only load differs");
+        if (dib) FreeImage_Unload(dib);
+        if (head) FreeImage_Unload(head);
+        free(file.data);
+    }
+
+    /* refused: no matrix converted here, or none at all */
+    FreeImage_SetOutputMessage(catching);
+    for (i = 0; i < sizeof(REFUSED); i++) {
+        ptm(e, 1, 13, REFUSED[i], 1);
+        file = with1(base, e);
+        last_message[0] = 0;
+        dib = load(file, 0);
+        snprintf(want, sizeof(want), "YCC samples with PTM_COLOR_INFO's matrix %u are not supported", REFUSED[i]);
+        CHECK(!dib && !strcmp(last_message, want), "YCC444 matrix %u: not refused as unsupported (\"%s\")", REFUSED[i], last_message);
+        head = load(file, FIF_LOAD_NOPIXELS);
+        CHECK(!head, "YCC444 matrix %u: header-only load not refused", REFUSED[i]);
+        if (dib) FreeImage_Unload(dib);
+        if (head) FreeImage_Unload(head);
+        free(file.data);
+    }
+    last_message[0] = 0;
+    dib = load(base, 0);
+    CHECK(!dib && !strcmp(last_message, "YCC samples load as RGB only with the matrix of PTM_COLOR_INFO"), "YCC444 without PTM_COLOR_INFO: not refused (\"%s\")", last_message);
+    if (dib) FreeImage_Unload(dib);
+    FreeImage_SetOutputMessage(quiet);
+}
+
 /* ------------------------------------------------------------------ FIF_LOAD_DISPLAY_ICC */
 
 /* the flag's load is the load without it, converted by FreeImage_ApplyICCProfile; header-only loads ignore the flag */
@@ -455,7 +668,7 @@ int main(void) {
     static const BYTE TRANSFERS[] = { 1, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15 };
     static const BYTE PRIMARIES[] = { 1, 4, 5, 6, 7, 8, 9, 11, 12, 22 };
     FIBITMAP *rgb24, *rgba32, *grey8, *rgb16, *grey16, *rgba16, *rgbf, *bw, *rgb555, *dib;
-    Bytes f_rgb24, f_rgba32, f_grey8, f_rgb16, f_grey16, f_rgba16, f_rgbf, f_bw, f_rgb555, f_adobe, tagged;
+    Bytes f_rgb24, f_rgba32, f_grey8, f_rgb16, f_grey16, f_rgba16, f_rgbf, f_bw, f_rgb555, f_adobe, tagged, f_ycc = read_file("data/ycc444.jxr");
     BYTE e[12], two[2][12];
     char name[160];
     unsigned i;
@@ -701,6 +914,8 @@ int main(void) {
     }
     free(tagged.data);
 
+    ycc_cases(f_ycc);
+
     /* FIF_LOAD_DISPLAY_ICC on an sRGB and a Display P3 display */
     {
         static const int DISPLAYS[2] = { FICMS_PROFILE_SRGB, FICMS_PROFILE_DISPLAY_P3 };
@@ -741,6 +956,13 @@ int main(void) {
                 snprintf(name, sizeof(name), "%s display, COLOR_SPACE 1", d ? "Display P3" : "sRGB");
                 display_check(name, tagged, display, size, grey, grey_size);
                 free(tagged.data);
+                if (f_ycc.data) {
+                    ptm(e, 9, 1, 9, 0);
+                    tagged = with1(f_ycc, e);
+                    snprintf(name, sizeof(name), "%s display, YCC444 BT.2020", d ? "Display P3" : "sRGB");
+                    display_check(name, tagged, display, size, grey, grey_size);
+                    free(tagged.data);
+                }
             }
             free(grey);
         }
@@ -750,7 +972,7 @@ int main(void) {
     FreeImage_Unload(rgb24); FreeImage_Unload(rgba32); FreeImage_Unload(grey8); FreeImage_Unload(rgb16);
     FreeImage_Unload(grey16); FreeImage_Unload(rgba16); FreeImage_Unload(rgbf); FreeImage_Unload(bw); FreeImage_Unload(rgb555);
     free(f_rgb24.data); free(f_rgba32.data); free(f_grey8.data); free(f_rgb16.data); free(f_grey16.data);
-    free(f_rgba16.data); free(f_rgbf.data); free(f_bw.data); free(f_rgb555.data); free(f_adobe.data);
+    free(f_rgba16.data); free(f_rgbf.data); free(f_bw.data); free(f_rgb555.data); free(f_adobe.data); free(f_ycc.data);
 
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();

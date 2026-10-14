@@ -14,7 +14,7 @@
    index 2 in one macroblock, must be refused. n-channel images, 9x140 lossless, alpha planar and last: nch3 24bpp3Channels,
    nch3a 32bpp3ChannelsAlpha and nch3ax16 64bpp3ChannelsAlpha load as RGB(A), channel 0 red; nch4 32bpp4Channels,
    nch4a 40bpp4ChannelsAlpha, nch5a 48bpp5ChannelsAlpha and nch8x16 128bpp8Channels as CMYK, their first four channels,
-   loaded as the CMYK files are, the further channels dropped. ycc444, 24bppYCC444, must be refused, header only too */
+   loaded as the CMYK files are, the further channels dropped. ycc444, 24bppYCC444, must be refused without PTM_COLOR_INFO, header only too */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
