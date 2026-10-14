@@ -10,7 +10,8 @@
    9x140 64bppRGBA with SHIFT_BITS 3, and ileave_q.jxr, 9x140 32bppBGRA at QP index 40, held to the reference decoder's
    output in ileave_q.ref (B, G, R, A); lpqp.jxr, 32x140 24bppBGR in frequency mode with 2x2 tiles of two LP QPs each and
    an LP QP index per macroblock, held to lpqp.ref (B, G, R, 255); every container orientation must load the values the
-   file was made from, and a header-only load the same type and size. lpqp_bad.jxr, lpqp.jxr with the reserved LP QP
+   file was made from, and a header-only load the same type and size; FIF_LOAD_DISPLAY_ICC on an sRGB display, through device CMYK
+   as the CMYK profiles cannot be linked, the pixels of a plain load, alpha included. lpqp_bad.jxr, lpqp.jxr with the reserved LP QP
    index 2 in one macroblock, must be refused. n-channel images, 9x140 lossless, alpha planar and last: nch3 24bpp3Channels,
    nch3a 32bpp3ChannelsAlpha and nch3ax16 64bpp3ChannelsAlpha load as RGB(A), channel 0 red; nch4 32bpp4Channels,
    nch4a 40bpp4ChannelsAlpha, nch5a 48bpp5ChannelsAlpha and nch8x16 128bpp8Channels as CMYK, their first four channels,
@@ -81,6 +82,17 @@ static double made_cmyk(const char *name, unsigned x, unsigned y, unsigned c) {
     const int deep = (strstr(name, "64") != NULL) || (strstr(name, "80") != NULL) || (strstr(name, "x16") != NULL);
     if (c == 3) return deep ? 256.0 * k : k;
     return deep ? 512.0 * k : 2.0 * k;
+}
+
+/* the same pixel type, size and samples */
+static int same_pixels(FIBITMAP *a, FIBITMAP *b) {
+    unsigned y;
+    if (FreeImage_GetImageType(a) != FreeImage_GetImageType(b) || FreeImage_GetBPP(a) != FreeImage_GetBPP(b) ||
+        FreeImage_GetWidth(a) != FreeImage_GetWidth(b) || FreeImage_GetHeight(a) != FreeImage_GetHeight(b)) return 0;
+    for (y = 0; y < FreeImage_GetHeight(a); y++) {
+        if (memcmp(FreeImage_GetScanLine(a, y), FreeImage_GetScanLine(b, y), FreeImage_GetLine(a))) return 0;
+    }
+    return 1;
 }
 
 /* channel c (R, G, B, A) of pixel x of a scanline */
@@ -177,6 +189,14 @@ static void formats(const char *dir, const char *name, unsigned w, FREE_IMAGE_TY
             if (kept) CHECK(FreeImage_GetICCProfile(dib)->size == 132 && (FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK),
                             "%s JXR_CMYK orientation %d: without its profile marked CMYK", name, o);
         }
+        if (cmyk && !kept) {
+            FIBITMAP *shown;
+            mem = FreeImage_OpenMemory(data, (DWORD)size);
+            shown = FreeImage_LoadFromMemory(FIF_JXR, mem, flags | FIF_LOAD_DISPLAY_ICC);
+            FreeImage_CloseMemory(mem);
+            CHECK(shown && dib && same_pixels(shown, dib), "%s orientation %d: FIF_LOAD_DISPLAY_ICC does not give the pixels of a plain load", name, o);
+            FreeImage_Unload(shown);
+        }
         FreeImage_Unload(dib);
     }
     free((void *)ref);
@@ -212,8 +232,12 @@ static void unsupported(const char *dir, const char *name) {
 
 int main(int argc, char **argv) {
     const char *dir = (argc > 1) ? argv[1] : "data";
+    DWORD srgb_size = 0;
+    const void *srgb;
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(quiet);
+    srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_size);
+    FreeImage_SetDisplayICCProfile(srgb, srgb_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
     formats(dir, "rgb64half", 8, FIT_RGBF, 96, 0);
     formats(dir, "rgb64fixed", 8, FIT_RGBF, 96, 0);
     formats(dir, "rgba64half", 8, FIT_RGBAF, 128, 0);

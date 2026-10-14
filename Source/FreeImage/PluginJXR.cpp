@@ -1722,13 +1722,15 @@ Decode an image a band at a time, converting its pixel format if needed, and cop
 @param pDecoder Decoder handle
 @param out_guid_format Target guid format
 @param dib Output dib
+@param alpha Output for the last sample of each pixel, an 8-bit or FIT_UINT16 image of the dib's size, or NULL
 @return Returns 0 if successful, returns ERR otherwise
 */
 static ERR
-CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_format, FIBITMAP *dib) {
+CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_format, FIBITMAP *dib, FIBITMAP *alpha) {
 	PKFormatConverter *pConverter = NULL;	// pixel format converter
 	ERR error_code = 0;	// error code as returned by the interface
 	BYTE *pb = NULL;	// band buffer, also used for pixel format conversion
+	BYTE *ab = NULL;	// alpha band buffer
 
 	// jxrlib flips rows left to right: a quarter turn, or upside down, is done here
 	const ORIENTATION oOrientation = pDecoder->WMP.wmiI.oOrientation;
@@ -1783,6 +1785,12 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 
 		error_code = PKAllocAligned((void **) &pb, (size_t)cbStride * band, 128);
 		JXR_CHECK(error_code);
+		const unsigned alpha_Bpp = alpha ? FreeImage_GetBPP(alpha) / 8 : 0;
+		const size_t alpha_line = (size_t)width * alpha_Bpp;
+		if(alpha) {
+			error_code = PKAllocAligned((void **) &ab, alpha_line * band, 128);
+			JXR_CHECK(error_code);
+		}
 
 		for(unsigned y = 0; y < height; y += band) {
 			const unsigned rows = MIN(band, height - y);
@@ -1798,6 +1806,17 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 				error_code = WMP_errFail;
 				JXR_CHECK(error_code);
 			}
+			if(alpha) {
+				// before the rows lose it
+				const size_t step = (size_t)inInfo.cChannel * alpha_Bpp;
+				for(unsigned r = 0; r < rows; r++) {
+					const BYTE *src = pb + (size_t)r * cbStride + step - alpha_Bpp;
+					BYTE *dst = ab + (size_t)r * alpha_line;
+					for(unsigned x = 0; x < width; x++, src += step, dst += alpha_Bpp) {
+						memcpy(dst, src, alpha_Bpp);
+					}
+				}
+			}
 			if(layout != ROWS_AS_DECODED) {
 				for(unsigned r = 0; r < rows; r++) {
 					TransformRow(pb + (size_t)r * cbStride, width, layout, (unsigned)inInfo.cChannel, &ycc);
@@ -1806,17 +1825,24 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 			if(turn) {
 				for(unsigned r = 0; r < rows; r += BAND_ROWS) {
 					TurnRows(pb + (size_t)r * cbStride, cbStride, y + r, y + MIN(rows, r + BAND_ROWS), dib, oOrientation);
+					if(alpha) {
+						TurnRows(ab + (size_t)r * alpha_line, alpha_line, y + r, y + MIN(rows, r + BAND_ROWS), alpha, oOrientation);
+					}
 				}
 			} else {
 				// scanlines run bottom-up
 				const size_t line_size = FreeImage_GetLine(dib);
 				for(unsigned r = y; r < y + rows; r++) {
 					memcpy(FreeImage_GetScanLine(dib, flip_v ? r : height - 1 - r), pb + (size_t)(r - y) * cbStride, line_size);
+					if(alpha) {
+						memcpy(FreeImage_GetScanLine(alpha, flip_v ? r : height - 1 - r), ab + (size_t)(r - y) * alpha_line, alpha_line);
+					}
 				}
 			}
 		}
 
 		PKFreeAligned((void **) &pb);
+		PKFreeAligned((void **) &ab);
 		PKFormatConverter_Release(&pConverter);
 
 		SwapRedBlueAsNeeded(dib, out_guid_format);
@@ -1825,6 +1851,7 @@ CopyBandedPixels(PKImageDecode *pDecoder, const PKPixelFormatGUID &out_guid_form
 
 	} catch(...) {
 		PKFreeAligned((void **) &pb);
+		PKFreeAligned((void **) &ab);
 		PKFormatConverter_Release(&pConverter);
 
 		return error_code;
@@ -1948,12 +1975,24 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 		}
 
+		// with FIF_LOAD_DISPLAY_ICC, CMYK keeps its alpha
+		FIBITMAP *alpha = NULL;
+		if(keep_cmyk && ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
+			const PKPixelFormatGUID &rows_format = GetRowsFormat(in_guid_format);
+			if(IsEqualGUID(rows_format, GUID_PKPixelFormat40bppCMYKAlpha)) {
+				alpha = FreeImage_Allocate(width, height, 8);
+			} else if(IsEqualGUID(rows_format, GUID_PKPixelFormat80bppCMYKAlpha)) {
+				alpha = FreeImage_AllocateT(FIT_UINT16, width, height);
+			}
+			SetCMYKAlpha(dib, alpha);
+		}
+
 		// copy pixels into the dib, perform pixel conversion if needed
 		if((pDecoder->WMP.wmiI.oOrientation < O_RCW) && IsEqualGUID(guid_format, in_guid_format)) {
 			error_code = CopyPixels(pDecoder, guid_format, dib, width, height);
 		} else {
 			// jxrlib cannot turn an image a quarter, and converts pixels in a buffer: decode a band at a time
-			error_code = CopyBandedPixels(pDecoder, guid_format, dib);
+			error_code = CopyBandedPixels(pDecoder, guid_format, dib, alpha);
 		}
 		JXR_CHECK(error_code);
 		if(narrow) {

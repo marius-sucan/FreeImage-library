@@ -1256,7 +1256,7 @@ FreeImage_SetDisplayICCProfile(pProfile:=0, profileSize:=0, flags:=0x101) {
 ; the profile the FIF_LOAD_DISPLAY_ICC load flag converts images to; images carry it afterwards
 ; pProfile - an RGB profile, e.g. of the monitor showing the images; 0 - detect it: on Windows the primary monitor's profile,
 ;   on Linux the X11 screen's; sRGB when there is none, or when Windows' HDR or Auto Color Management is on
-; CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as RGB; grey images stay grey; float images are not changed
+; CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as RGB, or RGBA with their alpha channel; grey images stay grey; float images are not changed
 ; flags - a rendering intent, with FICMS_BLACKPOINT_COMPENSATION or not; see FreeImage_ConvertToICCProfile()
 ; Return value: 1 -- success; 0 -- not an RGB profile Little CMS can convert to, the last one stays
    Return DllCall(getFIMfunc("SetDisplayICCProfile"), "UPtr", pProfile, "UInt", profileSize, "Int", flags)

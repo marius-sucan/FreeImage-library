@@ -2138,9 +2138,9 @@ GetDisplayCache() {
 // ----------------------------------------------------------
 
 // dib in the display's colors, in place or as a replacement; false when a needed replacement could not be
-// made, or, with in_place, would be needed
+// made, or, with in_place, would be needed. alpha: the one SetCMYKAlpha kept, or NULL
 static bool
-ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement, bool in_place) {
+ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement, bool in_place, FIBITMAP *alpha = NULL) {
 	*replacement = NULL;
 	switch (FreeImage_GetImageType(dib)) {
 		case FIT_BITMAP:
@@ -2171,6 +2171,9 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement, bo
 	if (target.empty()) {
 		return !convert;
 	}
+	// CMYK with an alpha becomes RGBA in place, its alpha then set
+	const bool with_alpha = (px.model == MODEL_CMYK) && alpha && (FreeImage_GetBPP(alpha) == px.depth) &&
+		(FreeImage_GetWidth(alpha) == FreeImage_GetWidth(dib)) && (FreeImage_GetHeight(alpha) == FreeImage_GetHeight(dib));
 	// a profile sRGB or grey in all but name converts as FreeImage's: on an sRGB display, not at all
 	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
 	const bool twin = icc->data && (px.model != MODEL_CMYK) && GetTwinCache().IsTwin(icc->data, (DWORD)icc->size);
@@ -2183,12 +2186,15 @@ ToDisplay(const DisplayState &display, FIBITMAP *dib, FIBITMAP **replacement, bo
 			converter.IgnoreEmbedded();
 		}
 		if (converter.SetSource(dib) && converter.SetDestination(&target[0], (DWORD)target.size(), grey ? MODEL_GRAY : MODEL_RGB, MODEL_NONE)) {
-			if (convert) {
+			if (convert && !with_alpha) {
 				*replacement = converter.Convert();
 				if (*replacement) {
 					return true;
 				}
 			} else if (converter.Apply()) {
+				if (with_alpha) {
+					FreeImage_SetChannel(dib, alpha, FICC_ALPHA);
+				}
 				return true;
 			}
 		}
@@ -2406,17 +2412,18 @@ DisplayICCLoadFlags(FREE_IMAGE_FORMAT fif, int flags) {
 		return flags;
 	}
 	// CMYK stays CMYK, converted with its profile; Lab is converted by the loader
+	// the flag stays for the loaders that keep a CMYK image's alpha (SetCMYKAlpha)
 	switch (fif) {
 		case FIF_JPEG:
 			return flags | JPEG_CMYK;
 		case FIF_TIFF:
-			return flags | TIFF_CMYK;
+			return flags | TIFF_CMYK | FIF_LOAD_DISPLAY_ICC;
 		case FIF_PSD:
 			return (flags | PSD_CMYK) & ~PSD_LAB;
 		case FIF_JXL:
-			return flags | JXL_CMYK;
+			return flags | JXL_CMYK | FIF_LOAD_DISPLAY_ICC;
 		case FIF_JXR:
-			return flags | JXR_CMYK;
+			return flags | JXR_CMYK | FIF_LOAD_DISPLAY_ICC;
 		default:
 			return flags;
 	}
@@ -2431,10 +2438,14 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 	if ((fif == FIF_RAW) && ((flags & RAW_UNPROCESSED) == RAW_UNPROCESSED)) {
 		return dib;
 	}
+	FIBITMAP *alpha = TakeCMYKAlpha(dib);
 	try {
 		const std::shared_ptr<const DisplayState> display = GetDisplayCache().Current();
 		FIBITMAP *replacement = NULL;
-		if (!ToDisplay(*display, dib, &replacement, false)) {
+		const bool shown = ToDisplay(*display, dib, &replacement, false, alpha);
+		FreeImage_Unload(alpha);
+		alpha = NULL;
+		if (!shown) {
 			FreeImage_Unload(dib);
 			return NULL;
 		}
@@ -2448,6 +2459,7 @@ ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib) {
 		return dib;
 	} catch (std::bad_alloc &) {
 		FreeImage_OutputMessageProc(fif, FI_MSG_ERROR_MEMORY);
+		FreeImage_Unload(alpha);
 		FreeImage_Unload(dib);
 		return NULL;
 	}

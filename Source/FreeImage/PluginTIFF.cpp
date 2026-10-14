@@ -1785,7 +1785,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BYTE *alpha_bits = NULL;
 			unsigned alpha_Bpp = 0;
 
-			if(isCMYKA && !asCMYK && !header_only) {
+			// CMYK keeps it for FIF_LOAD_DISPLAY_ICC
+			if(isCMYKA && (!asCMYK || ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) && !header_only) {
 				if(bitspersample == 16) {
 					alpha = FreeImage_AllocateT(FIT_UINT16, width, height);
 				} else if (bitspersample == 8) {
@@ -2000,6 +2001,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
 					}
 				}
+			} else if(alpha) {
+				SetCMYKAlpha(dib, alpha);
+				alpha = NULL;
 			}
 
 		} else if(loadMethod == LoadAsGenericStrip) {

@@ -6,7 +6,7 @@ include ../../Makefile.openmp
 
 TESTS   = convert profiles robust display cicp
 CFLAGS ?= -O2 -g -w
-INC     = -I../../Dist
+INC     = -I../../Dist -I../../Source/LibJXL/lib/include
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS)
 
 default: all

@@ -110,6 +110,9 @@ FI_STRUCT (FREEIMAGEHEADER) {
 	/** optionally contains a thumbnail attached to the bitmap */
 	FIBITMAP *thumbnail;
 
+	/** a CMYK image's alpha, which its pixels cannot hold, kept by its loader for FIF_LOAD_DISPLAY_ICC */
+	FIBITMAP *cmyk_alpha;
+
 	/**@name external pixel buffer management */
 	//@{
 	/** pointer to user provided pixels, NULL otherwise */
@@ -434,6 +437,7 @@ FreeImage_AllocateBitmap(BOOL header_only, BYTE *ext_bits, unsigned ext_pitch, F
 			// initialize attached thumbnail
 
 			fih->thumbnail = NULL;
+			fih->cmyk_alpha = NULL;
 
 			// store a pointer to user provided pixel buffer (if any)
 
@@ -535,6 +539,7 @@ FreeImage_Unload(FIBITMAP *dib) {
 
 			// delete embedded thumbnail
 			FreeImage_Unload(FreeImage_GetThumbnail(dib));
+			FreeImage_Unload(((FREEIMAGEHEADER *)dib->data)->cmyk_alpha);
 
 			// delete bitmap ...
 			FreeImage_Aligned_Free(dib->data);
@@ -630,6 +635,7 @@ FreeImage_Clone(FIBITMAP *dib) {
 
 		// reset thumbnail link for new_dib
 		((FREEIMAGEHEADER *)new_dib->data)->thumbnail = NULL;
+		((FREEIMAGEHEADER *)new_dib->data)->cmyk_alpha = NULL;
 
 		// reset external wrapped buffer link for new_dib
 		((FREEIMAGEHEADER *)new_dib->data)->external_bits = NULL;
@@ -712,6 +718,29 @@ FreeImage_SetThumbnail(FIBITMAP *dib, FIBITMAP *thumbnail) {
 	((FREEIMAGEHEADER *)dib->data)->thumbnail = FreeImage_HasPixels(thumbnail) ? FreeImage_Clone(thumbnail) : NULL;
 
 	return TRUE;
+}
+
+void
+SetCMYKAlpha(FIBITMAP *dib, FIBITMAP *alpha) {
+	if (!dib) {
+		FreeImage_Unload(alpha);
+		return;
+	}
+	FIBITMAP *&kept = ((FREEIMAGEHEADER *)dib->data)->cmyk_alpha;
+	if (kept != alpha) {
+		FreeImage_Unload(kept);
+		kept = alpha;
+	}
+}
+
+FIBITMAP *
+TakeCMYKAlpha(FIBITMAP *dib) {
+	if (!dib) {
+		return NULL;
+	}
+	FIBITMAP *alpha = ((FREEIMAGEHEADER *)dib->data)->cmyk_alpha;
+	((FREEIMAGEHEADER *)dib->data)->cmyk_alpha = NULL;
+	return alpha;
 }
 
 // ----------------------------------------------------------

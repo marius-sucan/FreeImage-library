@@ -2,6 +2,7 @@
 /* ./display -x11 tests the X11 detection against xcbstub.c (make x11) */
 #include "common.h"
 #include "../../Source/LibTIFF4/tiffio.h"
+#include <jxl/encode.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
@@ -193,6 +194,73 @@ static int write_two_page_tiff(const char *path, const Bytes *cmyk_icc, const By
     return 1;
 }
 
+/* CMYK, an alpha and one more extra sample with the press profile, written by libtiff: 8-bit contiguous or 16-bit planar */
+static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep) {
+    static BYTE row[W * 6 * 2];
+    uint16_t extra[2] = { EXTRASAMPLE_UNASSALPHA, EXTRASAMPLE_UNSPECIFIED };
+    const int planes = deep ? 6 : 1, line = deep ? W * 2 : W * 6;
+    FILE *f = fopen(path, "w+b");
+    TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    int s, y, x, ok = 1;
+    if (!t) { if (f) fclose(f); return 0; }
+    TIFFSetField(t, TIFFTAG_IMAGEWIDTH, W); TIFFSetField(t, TIFFTAG_IMAGELENGTH, H);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, deep ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 6);
+    TIFFSetField(t, TIFFTAG_EXTRASAMPLES, 2, extra);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED); TIFFSetField(t, TIFFTAG_INKSET, INKSET_CMYK);
+    TIFFSetField(t, TIFFTAG_PLANARCONFIG, deep ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG); TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 16);
+    TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
+    for (s = 0; s < planes; s++) {
+        for (y = 0; y < H; y++) {
+            for (x = 0; x < line; x++) row[x] = (BYTE)(rnd() & 255);
+            if (TIFFWriteScanline(t, row, y, (uint16_t)s) < 0) ok = 0;
+        }
+    }
+    TIFFClose(t);
+    return ok;
+}
+
+/* CMYK and an alpha with the press profile, written by libjxl, whose samples are 1 - ink */
+static int write_cmyka_jxl(const char *path, const Bytes *icc) {
+    static BYTE px[W * H * 4], k[W * H];
+    JxlPixelFormat pf = { 4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 }, pk = { 1, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 };
+    JxlEncoder *enc = JxlEncoderCreate(NULL);
+    JxlEncoderFrameSettings *fs = NULL;
+    JxlBasicInfo bi;
+    JxlExtraChannelInfo alpha, black;
+    size_t cap = 1 << 16, pos = 0, i;
+    int ok = 0;
+    if (!enc) return 0;
+    for (i = 0; i < sizeof(px); i++) px[i] = (BYTE)(rnd() & 255);
+    for (i = 0; i < sizeof(k); i++) k[i] = (BYTE)(rnd() & 255);
+    JxlEncoderInitBasicInfo(&bi);
+    bi.xsize = W; bi.ysize = H; bi.bits_per_sample = 8; bi.num_color_channels = 3;
+    bi.alpha_bits = 8; bi.num_extra_channels = 2; bi.uses_original_profile = JXL_TRUE;
+    JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &alpha);
+    JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_BLACK, &black);
+    alpha.bits_per_sample = black.bits_per_sample = 8;
+    if (JxlEncoderSetBasicInfo(enc, &bi) == JXL_ENC_SUCCESS && JxlEncoderSetExtraChannelInfo(enc, 0, &alpha) == JXL_ENC_SUCCESS &&
+        JxlEncoderSetExtraChannelInfo(enc, 1, &black) == JXL_ENC_SUCCESS && JxlEncoderSetICCProfile(enc, icc->data, icc->size) == JXL_ENC_SUCCESS) {
+        fs = JxlEncoderFrameSettingsCreate(enc, NULL);
+    }
+    if (fs && JxlEncoderSetFrameLossless(fs, JXL_TRUE) == JXL_ENC_SUCCESS && JxlEncoderAddImageFrame(fs, &pf, px, sizeof(px)) == JXL_ENC_SUCCESS &&
+        JxlEncoderSetExtraChannelBuffer(fs, &pk, k, sizeof(k), 1) == JXL_ENC_SUCCESS) {
+        BYTE *out = (BYTE *)malloc(cap);
+        JxlEncoderCloseInput(enc);
+        for (;;) {
+            uint8_t *next = out + pos;
+            size_t avail = cap - pos;
+            JxlEncoderStatus st = JxlEncoderProcessOutput(enc, &next, &avail);
+            pos = (size_t)(next - out);
+            if (st == JXL_ENC_NEED_MORE_OUTPUT) { cap *= 2; out = (BYTE *)realloc(out, cap); continue; }
+            ok = (st == JXL_ENC_SUCCESS) && write_file(path, out, pos);
+            break;
+        }
+        free(out);
+    }
+    JxlEncoderDestroy(enc);
+    return ok;
+}
+
 /* grey with the sRGB tone curve as a 256-entry table: FreeImage's grey within a fraction of a step */
 static Bytes make_srgb_grey_profile(void) {
     cmsUInt16Number table[256];
@@ -287,6 +355,19 @@ static void make_fixtures(void) {
     save_fixture("unlinkable profile TIFF", FIF_TIFF, broken, TIFF_DEFAULT, 0, "dsp_broken.tif");
     if (write_two_page_tiff(scratch("dsp_2p.tif"), &press, &adobe)) add("2-page TIFF", FIF_TIFF, 0, 2, scratch("dsp_2p.tif"));
     else fail("2-page TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka.tif"), &press, 0)) add("CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka.tif"));
+    else fail("CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka16.tif"), &press, 1)) add("16-bit planar CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka16.tif"));
+    else fail("16-bit planar CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_jxl(scratch("dsp_cmyka.jxl"), &press)) add("CMYK + alpha JPEG XL", FIF_JXL, 0, 1, scratch("dsp_cmyka.jxl"));
+    else fail("CMYK + alpha JPEG XL: fixture not saved");
+    /* their profile cannot be linked: device CMYK */
+    if (access("../JXR/data/cmyka40.jxr", R_OK) == 0) {
+        add("CMYK + alpha JPEG XR", FIF_JXR, 0, 1, "../JXR/data/cmyka40.jxr");
+        add("16-bit CMYK + alpha JPEG XR", FIF_JXR, 0, 1, "../JXR/data/cmyka80.jxr");
+    } else {
+        printf("  (no ../JXR/data/cmyka40.jxr: JPEG XR skipped)\n");
+    }
     save_fixture("palette PNG with tRNS", FIF_PNG, pal, PNG_DEFAULT, 0, "dsp_pal.png");
     save_fixture("grey 1.8 PNG", FIF_PNG, g18, PNG_DEFAULT, 0, "dsp_grey.png");
     save_fixture("RGB16 PNG", FIF_PNG, rgb16, PNG_DEFAULT, 0, "dsp_rgb16.png");
@@ -457,7 +538,7 @@ typedef struct {
 } Display;
 
 static int cmyk_flag(FREE_IMAGE_FORMAT fif) {
-    return (fif == FIF_JPEG) ? JPEG_CMYK : (fif == FIF_TIFF) ? TIFF_CMYK : (fif == FIF_PSD) ? PSD_CMYK : 0;
+    return (fif == FIF_JPEG) ? JPEG_CMYK : (fif == FIF_TIFF) ? TIFF_CMYK : (fif == FIF_PSD) ? PSD_CMYK : (fif == FIF_JXL) ? JXL_CMYK : (fif == FIF_JXR) ? JXR_CMYK : 0;
 }
 
 static int base_flags(const Fixture *f) {
@@ -521,13 +602,13 @@ static int is_twin_profile(const FIICCPROFILE *icc) {
 }
 
 /* the public API's version of one image; an embedded profile that cannot be linked is left out the second time,
-   one sRGB or grey in all but name the first time */
-static FIBITMAP *expect_one(FIBITMAP *src, const Display *d) {
+   one sRGB or grey in all but name the first time. CMYK with an alpha becomes RGBA in place, the alpha then set */
+static FIBITMAP *expect_one(FIBITMAP *src, const Display *d, FIBITMAP *alpha) {
     const Bytes *to;
     int widen, attempt, twin;
     if (!is_managed(src)) return FreeImage_Clone(src);
     to = is_grey(src) ? &d->grey : &d->rgb;
-    widen = is_cmyk(src) || (FreeImage_GetImageType(src) == FIT_BITMAP && FreeImage_GetBPP(src) == 16);
+    widen = (is_cmyk(src) && !alpha) || (FreeImage_GetImageType(src) == FIT_BITMAP && FreeImage_GetBPP(src) == 16);
     twin = !is_cmyk(src) && is_twin_profile(FreeImage_GetICCProfile(src));
     for (attempt = 0; attempt < 2; attempt++) {
         FIBITMAP *img = FreeImage_Clone(src);
@@ -537,22 +618,35 @@ static FIBITMAP *expect_one(FIBITMAP *src, const Display *d) {
             FreeImage_Unload(img);
             if (out) return out;
         } else if (FreeImage_ApplyICCProfile(img, to->data, to->size, d->flags)) {
+            if (alpha) FreeImage_SetChannel(img, alpha, FICC_ALPHA);
             return img;
         } else {
             FreeImage_Unload(img);
         }
         if (!FreeImage_GetICCProfile(src)->data) break;
     }
-    return widen ? NULL : FreeImage_Clone(src);
+    return (widen || alpha) ? NULL : FreeImage_Clone(src);
 }
 
-static FIBITMAP *expected(FIBITMAP *base, const Fixture *f, const Display *d) {
-    FIBITMAP *out, *thumb;
+/* the alpha of a CMYK file, as a load without the CMYK flag gives it; NULL without one */
+static FIBITMAP *cmyk_alpha(const Fixture *f, int page) {
+    FIBITMAP *plain = load(f, page, f->flags, page ? BY_PAGE_FILE : BY_FILE), *alpha = NULL;
+    if (plain && (FreeImage_GetImageType(plain) == FIT_RGBA16 || (FreeImage_GetImageType(plain) == FIT_BITMAP && FreeImage_GetBPP(plain) == 32))) {
+        alpha = FreeImage_GetChannel(plain, FICC_ALPHA);
+    }
+    if (plain) FreeImage_Unload(plain);
+    return alpha;
+}
+
+static FIBITMAP *expected(FIBITMAP *base, const Fixture *f, int page, const Display *d) {
+    FIBITMAP *out, *thumb, *alpha;
     if (f->fif == FIF_RAW && (f->flags & RAW_UNPROCESSED)) return FreeImage_Clone(base);
-    out = expect_one(base, d);
+    alpha = is_cmyk(base) ? cmyk_alpha(f, page) : NULL;
+    out = expect_one(base, d, alpha);
+    if (alpha) FreeImage_Unload(alpha);
     thumb = FreeImage_GetThumbnail(base);
     if (out) {
-        FIBITMAP *t = thumb ? expect_one(thumb, d) : NULL;
+        FIBITMAP *t = thumb ? expect_one(thumb, d, NULL) : NULL;
         FreeImage_SetThumbnail(out, t);
         if (t) FreeImage_Unload(t);
     }
@@ -567,7 +661,7 @@ static void check_display(const Display *d) {
         for (page = 0; page < f->pages; page++) {
             FIBITMAP *base = load(f, page, base_flags(f), page ? BY_PAGE_FILE : BY_FILE), *want;
             if (!base) { fail("%s, %s page %d: no base image", d->name, f->name, page); continue; }
-            want = expected(base, f, d);
+            want = expected(base, f, page, d);
             if (!want) { fail("%s, %s page %d: no expected image", d->name, f->name, page); FreeImage_Unload(base); continue; }
             for (how = page ? BY_PAGE_FILE : BY_FILE; how < LOADERS; how++) {
                 FIBITMAP *got = load(f, page, f->flags | FIF_LOAD_DISPLAY_ICC, how);
@@ -752,7 +846,7 @@ static void header_only(void) {
     printf("header-only            %d loads unchanged\n", same);
 }
 
-/* PSD_LAB gives way; RAW_UNPROCESSED is left alone; floats are untouched; CMYK becomes RGB; linear RAW and playback canvases convert from their profiles */
+/* PSD_LAB gives way; RAW_UNPROCESSED is left alone; floats are untouched; CMYK becomes RGB, or RGBA with an alpha; linear RAW and playback canvases convert from their profiles */
 static void flag_rules(void) {
     const Fixture *lab = find("Lab PSD"), *raw = find("DNG, RAW_UNPROCESSED"), *fl = find("float TIFF"), *c;
     FIBITMAP *a, *b;
@@ -779,9 +873,10 @@ static void flag_rules(void) {
     }
     for (c = fixtures; c < fixtures + fixture_count; c++) {
         if (strstr(c->name, "CMYK") && !strstr(c->name, "2-page")) {
+            const int alpha = strstr(c->name, "+ alpha") != NULL;
             a = FreeImage_Load(c->fif, c->path, c->flags | FIF_LOAD_DISPLAY_ICC);
-            CHECK(a && !(FreeImage_GetICCProfile(a)->flags & FIICC_COLOR_IS_CMYK) && FreeImage_GetColorType(a) == FIC_RGB &&
-                (FreeImage_GetBPP(a) == 24 || FreeImage_GetImageType(a) == FIT_RGB16), "%s: RGB with the flag", c->name);
+            CHECK(a && !(FreeImage_GetICCProfile(a)->flags & FIICC_COLOR_IS_CMYK) && FreeImage_GetColorType(a) == (alpha ? FIC_RGBALPHA : FIC_RGB) &&
+                (FreeImage_GetBPP(a) == (alpha ? 32 : 24) || FreeImage_GetImageType(a) == (alpha ? FIT_RGBA16 : FIT_RGB16)), "%s: RGB%s with the flag", c->name, alpha ? "A" : "");
             if (a) FreeImage_Unload(a);
         }
     }
@@ -991,7 +1086,7 @@ static void intents(void) {
     Display d;
     if (!f || !use_display(&d, "P3, perceptual", p3.data, p3.size, FICMS_INTENT_PERCEPTUAL)) return;
     {
-        FIBITMAP *base = load(f, 0, base_flags(f), BY_FILE), *want = base ? expected(base, f, &d) : NULL;
+        FIBITMAP *base = load(f, 0, base_flags(f), BY_FILE), *want = base ? expected(base, f, 0, &d) : NULL;
         FIBITMAP *got = FreeImage_Load(f->fif, f->path, FIF_LOAD_DISPLAY_ICC);
         CHECK(want && got && digest(want) == digest(got), "perceptual intent from the setter");
         if (base) FreeImage_Unload(base);

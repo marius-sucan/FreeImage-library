@@ -704,7 +704,7 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 
 							// load the original source data, with pixels even if the bitmap was opened header-only, never in the display's colors
 							dib = (header->node->m_plugin->load_proc != NULL) ?
-								header->node->m_plugin->load_proc(&header->io, header->handle, j, DisplayICCLoadFlags(header->fif, header->load_flags) & ~FIF_LOAD_NOPIXELS, data_read) : NULL;
+								header->node->m_plugin->load_proc(&header->io, header->handle, j, DisplayICCLoadFlags(header->fif, header->load_flags) & ~(FIF_LOAD_NOPIXELS | FIF_LOAD_DISPLAY_ICC), data_read) : NULL;
 
 							if (dib == NULL) {
 								success = FALSE;

@@ -1212,7 +1212,7 @@ AttachCMYKProfile(FIBITMAP *cmyk, const JXLReader *reader) {
 }
 
 static FIBITMAP *
-LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk) {
+LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk, BOOL keep_alpha) {
 	if(header_only) {
 		FIBITMAP *dib = AllocateCMYKResult(TRUE, reader, keep_cmyk);
 		if(dib && keep_cmyk) {
@@ -1222,7 +1222,7 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk) {
 	}
 
 	const BOOL deep = (reader->info.bits_per_sample > 8) ? TRUE : FALSE;
-	const BOOL alpha = (!keep_cmyk && (reader->info.alpha_bits > 0)) ? TRUE : FALSE;
+	const BOOL alpha = ((!keep_cmyk || keep_alpha) && (reader->info.alpha_bits > 0)) ? TRUE : FALSE;
 	std::vector<BYTE> black;
 	std::vector<BYTE> alpha_plane;
 
@@ -1305,6 +1305,14 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk) {
 		}
 	}
 	if(keep_cmyk) {
+		FIBITMAP *plane = !alpha ? NULL : deep ? FreeImage_AllocateT(FIT_UINT16, width, height) : FreeImage_Allocate(width, height, 8);
+		if(plane) {
+			const size_t line = (size_t)width * (deep ? 2 : 1);
+			for(unsigned y = 0; y < height; y++) {
+				memcpy(FreeImage_GetScanLine(plane, height - 1 - y), &alpha_plane[y * line], line);
+			}
+			SetCMYKAlpha(cmyk, plane);
+		}
 		return cmyk;
 	}
 
@@ -2341,7 +2349,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	FIBITMAP *dib = NULL;
 	try {
 		if(reader->cmyk) {
-			dib = LoadCMYK(reader, page, header_only, ((flags & JXL_CMYK) == JXL_CMYK) ? TRUE : FALSE);
+			dib = LoadCMYK(reader, page, header_only, ((flags & JXL_CMYK) == JXL_CMYK) ? TRUE : FALSE, ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC) ? TRUE : FALSE);
 		} else if(header_only) {
 			dib = LoadHeader(reader, playback);
 		} else {

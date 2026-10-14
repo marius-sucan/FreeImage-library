@@ -475,6 +475,18 @@ FIF_LOAD_DISPLAY_ICC: the loaded image in the display's colors; NULL, the image 
 FIBITMAP* ConvertToDisplayICC(FREE_IMAGE_FORMAT fif, int flags, FIBITMAP *dib);
 
 /**
+FIF_LOAD_DISPLAY_ICC: a CMYK image's alpha, an 8-bit or FIT_UINT16 image of its size, which dib takes
+@see See definition in BitmapAccess.cpp
+*/
+void SetCMYKAlpha(FIBITMAP *dib, FIBITMAP *alpha);
+
+/**
+The alpha SetCMYKAlpha gave dib, or NULL; the caller unloads it
+@see See definition in BitmapAccess.cpp
+*/
+FIBITMAP* TakeCMYKAlpha(FIBITMAP *dib);
+
+/**
 A frame of a file with one ICC profile for every frame, in that profile's colors (NULL: sRGB) as *converted;
 *converted is NULL when the frame already has them, and FALSE is returned when they cannot be converted.
 size is unsigned, not DWORD: MinGW's DWORD depends on whether windows.h came first
