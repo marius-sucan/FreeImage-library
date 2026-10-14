@@ -120,9 +120,9 @@ static unsigned crc32_of(const BYTE *p, size_t n) {
 
 static void put32(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v; }
 
-/* the PNG with a cICP chunk right after IHDR */
-static Bytes with_cicp(Bytes png, BYTE p, BYTE t) {
-    const BYTE data[4] = { p, t, 0, 1 };
+/* the PNG with a cICP chunk of all four code points right after IHDR */
+static Bytes with_cicp4(Bytes png, BYTE p, BYTE t, BYTE m, BYTE f) {
+    const BYTE data[4] = { p, t, m, f };
     Bytes out = { NULL, 0 };
     BYTE *c;
     if (png.size < 33 || memcmp(png.data + 12, "IHDR", 4)) return out;
@@ -136,6 +136,10 @@ static Bytes with_cicp(Bytes png, BYTE p, BYTE t) {
     put32(c + 12, crc32_of(c + 4, 8));
     memcpy(c + 16, png.data + 33, png.size - 33);
     return out;
+}
+
+static Bytes with_cicp(Bytes png, BYTE p, BYTE t) {
+    return with_cicp4(png, p, t, 0, 1);
 }
 
 /* ------------------------------------------------------------------ a reference made without the library */
@@ -434,8 +438,97 @@ static void png_case(const char *name, int kind, BYTE p, BYTE t, BYTE tp, BYTE t
     free(file.data);
 }
 
+/* kinds as png_image(), with an iCCP chunk of profile when it is given and a cICP chunk of p/t/m/f when cicp is set */
+static Bytes png_file(int kind, Bytes profile, int cicp, BYTE p, BYTE t, BYTE m, BYTE f) {
+    FIBITMAP *dib = png_image(kind);
+    Bytes png = { NULL, 0 }, out;
+    if (dib && profile.size) FreeImage_CreateICCProfile(dib, profile.data, profile.size);
+    if (dib) png = save_bytes(FIF_PNG, dib, PNG_DEFAULT);
+    if (dib) FreeImage_Unload(dib);
+    if (!cicp || !png.size) return png;
+    out = with_cicp4(png, p, t, m, f);
+    free(png.data);
+    return out;
+}
+
+static int same_tag(FIBITMAP *a, FIBITMAP *b) {
+    BYTE x[4], y[4];
+    const int ha = cicp_of(a, x), hb = cicp_of(b, y);
+    return ha == hb && (!ha || !memcmp(x, y, 4));
+}
+
+/* PNG 3, 4.3: a cICP chunk FreeImage reads outranks the iCCP chunk, one it cannot read gives way to it; the file loads
+   as the PNG of the winning chunk alone, header-only too. expected names the code points' profile, NULL none */
+static void precedence_case(const char *name, int kind, Bytes profile, BYTE p, BYTE t, BYTE m, BYTE f, int outranks,
+                            BYTE tp, BYTE tt, int grey, const char *expected) {
+    const Bytes none = { NULL, 0 };
+    Bytes both = png_file(kind, profile, 1, p, t, m, f);
+    Bytes alone = outranks ? png_file(kind, none, 1, p, t, m, f) : png_file(kind, profile, 0, 0, 0, 0, 0);
+    FIBITMAP *dib = both.size ? load_bytes(FIF_PNG, both, PNG_DEFAULT) : NULL;
+    FIBITMAP *head = both.size ? load_bytes(FIF_PNG, both, FIF_LOAD_NOPIXELS) : NULL;
+    FIBITMAP *want = alone.size ? load_bytes(FIF_PNG, alone, PNG_DEFAULT) : NULL;
+    BYTE c[4];
+    CHECK(dib && head && want, "%s: not loaded", name);
+    if (dib && head && want) {
+        const char *winner = outranks ? "cICP" : "iCCP";
+        CHECK(pixel_digest(dib) == pixel_digest(want), "%s: pixels differ from the PNG of its %s alone", name, winner);
+        CHECK(same_profile(dib, want), "%s: profile '%s', not the one of the PNG of its %s alone", name, description(dib), winner);
+        CHECK(same_tag(dib, want), "%s: another CICP tag than the PNG of its %s alone", name, winner);
+        CHECK(same_profile(dib, head) && same_tag(dib, head), "%s: the header-only load has another profile or CICP tag", name);
+        if (outranks) {
+            CHECK(has_cicp(dib, p, t, m, f), "%s: no CICP tag %u/%u/%u/%u", name, p, t, m, f);
+            if (expected) {
+                described(name, dib, tp, tt, grey, expected);
+            } else {
+                CHECK(!has_profile(dib), "%s: a profile '%s'", name, description(dib));
+            }
+        } else {
+            CHECK(!cicp_of(dib, c), "%s: a CICP tag beside the iCCP profile", name);
+            CHECK(profile_is(dib, profile.data, profile.size), "%s: the profile is not the iCCP one ('%s')", name, description(dib));
+        }
+    }
+    if (dib) FreeImage_Unload(dib);
+    if (head) FreeImage_Unload(head);
+    if (want) FreeImage_Unload(want);
+    free(both.data);
+    free(alone.data);
+}
+
+static void png_precedence(void) {
+    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB), gray = make_gray_profile(1.8);
+    printf("PNG cICP and iCCP chunks\n");
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/1", 2, adobe, 9, 1, 0, 1, 1, 9, 1, 0, "BT.2020 primaries, BT.709 tone curve (FreeImage)");
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 12/13", 2, adobe, 12, 13, 0, 1, 1, 12, 13, 0, "Display P3 primaries, sRGB tone curve (FreeImage)");
+    precedence_case("palette PNG, Adobe RGB iCCP, cICP 12/1", 3, adobe, 12, 1, 0, 1, 1, 12, 1, 0, "Display P3 primaries, BT.709 tone curve (FreeImage)");
+    precedence_case("48-bit PNG, Adobe RGB iCCP, cICP 9/8", 4, adobe, 9, 8, 0, 1, 1, 9, 8, 0, "BT.2020 primaries, linear tone curve (FreeImage)");
+    precedence_case("RGBA PNG, Adobe RGB iCCP, cICP 9/4", 5, adobe, 9, 4, 0, 1, 1, 9, 4, 0, "BT.2020 primaries, gamma 2.2 tone curve (FreeImage)");
+    precedence_case("grey PNG, grey iCCP, cICP 1/1", 0, gray, 1, 1, 0, 1, 1, 0, 1, 1, "Gray, BT.709 tone curve (FreeImage)");
+    precedence_case("16-bit grey PNG, grey iCCP, cICP 1/8", 1, gray, 1, 8, 0, 1, 1, 0, 8, 1, "Gray, linear tone curve (FreeImage)");
+    precedence_case("black and white PNG, grey iCCP, cICP 1/4", 6, gray, 1, 4, 0, 1, 1, 0, 4, 1, "Gray, gamma 2.2 tone curve (FreeImage)");
+    /* a grey's primaries do not matter */
+    precedence_case("grey PNG, grey iCCP, cICP 2/1", 0, gray, 2, 1, 0, 1, 1, 0, 1, 1, "Gray, BT.709 tone curve (FreeImage)");
+    /* sRGB, PQ and HLG outrank it too, and leave no profile */
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 1/13", 2, adobe, 1, 13, 0, 1, 1, 0, 0, 0, NULL);
+    precedence_case("grey PNG, grey iCCP, cICP 9/13", 0, gray, 9, 13, 0, 1, 1, 0, 0, 1, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/16", 2, adobe, 9, 16, 0, 1, 1, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/18", 2, adobe, 9, 18, 0, 1, 1, 0, 0, 0, NULL);
+    /* a matrix (libpng drops such a chunk), a range flag or code points FreeImage cannot read */
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/1 with matrix 1", 2, adobe, 9, 1, 1, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/1 with range flag 2", 2, adobe, 9, 1, 0, 2, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 2/1", 2, adobe, 2, 1, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 3/1", 2, adobe, 3, 1, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 10/17", 2, adobe, 10, 17, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/2", 2, adobe, 9, 2, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/0", 2, adobe, 9, 0, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("RGB PNG, Adobe RGB iCCP, cICP 9/19", 2, adobe, 9, 19, 0, 1, 0, 0, 0, 0, NULL);
+    precedence_case("grey PNG, grey iCCP, cICP 1/2", 0, gray, 1, 2, 0, 1, 0, 0, 0, 0, NULL);
+    /* without an iCCP chunk, such code points stay in the CICP tag */
+    png_case("RGB PNG 2/1", 2, 2, 1, 1, 1, 0, "BT.709 primaries, BT.709 tone curve (FreeImage)");
+    free(gray.data);
+}
+
 static void png_chunks(void) {
-    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB), png = { NULL, 0 }, file = { NULL, 0 };
+    Bytes file = { NULL, 0 };
     FIBITMAP *dib;
     printf("PNG cICP chunks\n");
     png_case("grey PNG 1/1", 0, 1, 1, 0, 1, 1, "Gray, BT.709 tone curve (FreeImage)");
@@ -457,21 +550,6 @@ static void png_chunks(void) {
     png_case("grey PNG 9/13", 0, 9, 13, 0, 0, 1, NULL);
     png_case("RGB PNG 1/13", 2, 1, 13, 0, 0, 0, NULL);
     png_case("RGB PNG 9/16", 2, 9, 16, 0, 0, 0, NULL);
-
-    /* iCCP and cICP: the ICC profile stays */
-    dib = png_image(2);
-    if (dib && adobe.size) {
-        FreeImage_CreateICCProfile(dib, adobe.data, adobe.size);
-        png = save_bytes(FIF_PNG, dib, PNG_DEFAULT);
-        file = png.size ? with_cicp(png, 9, 1) : png;
-    }
-    if (dib) FreeImage_Unload(dib);
-    dib = file.size ? load_bytes(FIF_PNG, file, PNG_DEFAULT) : NULL;
-    CHECK(dib && has_cicp(dib, 9, 1, 0, 1), "PNG with iCCP and cICP: not loaded with its CICP tag");
-    CHECK(dib && profile_is(dib, adobe.data, adobe.size), "PNG with iCCP and cICP: the profile is not the iCCP one ('%s')", description(dib));
-    if (dib) FreeImage_Unload(dib);
-    free(png.data);
-    free(file.data);
 }
 
 /* ------------------------------------------------------------------ pages of multi-page files */
@@ -564,15 +642,17 @@ static void display_pages(const char *name, FREE_IMAGE_FORMAT fif, Bytes file) {
 static Bytes apng_with_cicp(BYTE p, BYTE t);
 
 static void display(void) {
-    Bytes p3 = builtin(FICMS_PROFILE_DISPLAY_P3), srgb = builtin(FICMS_PROFILE_SRGB);
+    Bytes p3 = builtin(FICMS_PROFILE_DISPLAY_P3), srgb = builtin(FICMS_PROFILE_SRGB), adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
     Bytes avif = patched(SOFA, 9, 1), heif = patched(HEVC, 12, 8), grey = png_with_cicp(0, 1, 1), rgb = png_with_cicp(2, 9, 1);
-    Bytes anim = patched(ANIMATED, 9, 1), apng = apng_with_cicp(9, 1);
+    Bytes anim = patched(ANIMATED, 9, 1), apng = apng_with_cicp(9, 1), both = png_file(2, adobe, 1, 9, 1, 0, 1);
     printf("FIF_LOAD_DISPLAY_ICC\n");
     CHECK(FreeImage_SetDisplayICCProfile(p3.data, p3.size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION), "Display P3 not taken as the display");
     display_case("AVIF 9/1 on Display P3", FIF_AVIF, avif, 0);
     display_case("HEIF 12/8 on Display P3", FIF_HEIF, heif, 0);
     display_case("grey PNG 1/1 on Display P3", FIF_PNG, grey, 0);
     display_case("RGB PNG 9/1 on Display P3", FIF_PNG, rgb, 0);
+    display_case("RGB PNG with an Adobe RGB iCCP and a 9/1 cICP on Display P3", FIF_PNG, both, 0);
+    free(both.data);
     display_pages("AVIF animation 9/1 on Display P3", FIF_AVIF, anim);
     display_pages("APNG 9/1 on Display P3", FIF_APNG, apng);
     free(anim.data);
@@ -742,6 +822,7 @@ int main(void) {
     nclx_boxes();
     real_files();
     png_chunks();
+    png_precedence();
     pages();
     display();
     saves();

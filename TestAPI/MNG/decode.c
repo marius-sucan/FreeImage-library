@@ -867,6 +867,16 @@ static int same_profile(FIBITMAP *dib, const void *profile, DWORD size) {
 	return icc->data && icc->size == size && !memcmp(icc->data, profile, size);
 }
 
+static int profile_named(FIBITMAP *dib, const char *name) {
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	char text[256];
+	text[0] = 0;
+	if (icc->data) {
+		FreeImage_GetICCProfileDescription(icc->data, icc->size, text, sizeof(text));
+	}
+	return !strcmp(text, name);
+}
+
 static int same_cicp(FIBITMAP *dib, const BYTE *cicp) {
 	FITAG *tag = NULL;
 	if (!FreeImage_GetMetadata(FIMD_CUSTOM, dib, "CICP", &tag) || !tag) {
@@ -877,7 +887,8 @@ static int same_cicp(FIBITMAP *dib, const BYTE *cicp) {
 
 /* every canvas carries page 0's RGB profile and CICP tag, whatever the page shows; none for a grey page 0 */
 static void test_color_description(void) {
-	const BYTE cicp[4] = { 9, 16, 0, 1 };	/* BT.2020, PQ */
+	const BYTE cicp[4] = { 12, 13, 0, 1 };	/* Display P3, which outranks page 0's iCCP */
+	const char *made = "Display P3 primaries, sRGB tone curve (FreeImage)";
 	DWORD adobe_size = 0, p3_size = 0, grey_size = 0;
 	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
 	const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
@@ -893,7 +904,7 @@ static void test_color_description(void) {
 		FreeImage_GetPalette(mono)[i].rgbRed = FreeImage_GetPalette(mono)[i].rgbGreen = FreeImage_GetPalette(mono)[i].rgbBlue = (BYTE)i;
 	}
 
-	/* file 0: Adobe RGB with a cICP, P3, the global Adobe RGB, grey; file 1: grey, then P3 */
+	/* file 0: Adobe RGB outranked by a cICP, P3, the global Adobe RGB, grey; file 1: grey, then P3 */
 	for (file = 0; file < 2; file++) {
 		const int pages = file ? 2 : 4;
 		buf_init(&mng);
@@ -941,7 +952,7 @@ static void test_color_description(void) {
 				const int page = (i < 0) ? -i : i;
 				FIBITMAP *dib = FreeImage_LockPage(mb, page);
 				if (!dib) { fail("page %d could not be locked", page); ok_all = 0; continue; }
-				if (!same_profile(dib, file ? NULL : adobe, file ? 0 : adobe_size)) {
+				if (file ? !same_profile(dib, NULL, 0) : !profile_named(dib, made)) {
 					fail("file %d, %s canvas %d: a %u-byte profile", file, mode ? "header-only" : "the", page, (unsigned)FreeImage_GetICCProfile(dib)->size);
 					ok_all = 0;
 				}

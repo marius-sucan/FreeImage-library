@@ -389,6 +389,30 @@ SupportsNoPixels() {
 
 // --------------------------------------------------------------------------
 
+// the cICP chunk's code points; FALSE without one
+static BOOL
+GetCICP(png_structp png_ptr, png_infop info_ptr, BYTE cicp[4]) {
+#ifdef PNG_cICP_SUPPORTED
+	png_byte primaries = 0, transfer = 0, matrix = 0, full_range = 0;
+	if (png_get_cICP(png_ptr, info_ptr, &primaries, &transfer, &matrix, &full_range)) {
+		cicp[0] = primaries;
+		cicp[1] = transfer;
+		cicp[2] = matrix;
+		cicp[3] = full_range;
+		return TRUE;
+	}
+#endif
+	return FALSE;
+}
+
+// code points FreeImage reads: RGB (matrix 0), a valid range flag, a known tone curve and, but for grey, known primaries
+static BOOL
+ReadsCICP(const BYTE cicp[4], BOOL grey) {
+	double params[5];
+	double xy[8];
+	return (cicp[2] == 0) && (cicp[3] <= 1) && (GetCICPToneCurve(cicp[1], params) != 0) && (grey || GetCICPChromaticities(cicp[0], xy));
+}
+
 /**
 Configure the decoder so that decoded pixels are compatible with a FREE_IMAGE_TYPE format. 
 Set conversion instructions as needed. 
@@ -775,6 +799,11 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 			png_read_info(png_ptr, info_ptr);
 			png_get_IHDR(png_ptr, info_ptr, &width, &height, &bit_depth, &color_type, NULL, NULL, NULL);
 
+			// PNG 3 ranks a cICP chunk the decoder reads above iCCP
+			BYTE cicp[4] = { 0, 0, 0, 0 };
+			const BOOL has_cicp = GetCICP(png_ptr, info_ptr, cicp);
+			const BOOL cicp_rules = has_cicp && ReadsCICP(cicp, (color_type & PNG_COLOR_MASK_COLOR) ? FALSE : TRUE);
+
 			// configure the decoder
 
 			FREE_IMAGE_TYPE image_type = FIT_BITMAP;
@@ -913,7 +942,9 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 
 			// get possible ICC profile
 
-			if (png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP)) {
+			const BOOL has_iccp = png_get_valid(png_ptr, info_ptr, PNG_INFO_iCCP) ? TRUE : FALSE;
+
+			if (has_iccp && !cicp_rules) {
 				png_charp profile_name = NULL;
 				png_bytep profile_data = NULL;
 				png_uint_32 profile_length = 0;
@@ -926,15 +957,10 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 				FreeImage_CreateICCProfile(dib, profile_data, profile_length);
 			}
 
-#ifdef PNG_cICP_SUPPORTED
-			// the PNG 3 color description, which outranks the ICC profile
-			{
-				png_byte primaries = 0, transfer = 0, matrix = 0, full_range = 0;
-				if (png_get_cICP(png_ptr, info_ptr, &primaries, &transfer, &matrix, &full_range)) {
-					SetCICPMetadata(dib, primaries, transfer, matrix, full_range);
-				}
+			// code points FreeImage cannot read give way to the ICC profile
+			if (has_cicp && (cicp_rules || !has_iccp)) {
+				SetCICPMetadata(dib, cicp[0], cicp[1], cicp[2], cicp[3]);
 			}
-#endif
 
 			// --- header only mode => clean-up and return
 

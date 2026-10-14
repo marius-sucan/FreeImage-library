@@ -621,6 +621,14 @@ static int has_profile(FIBITMAP *dib, const void *profile, DWORD size) {
 	return icc->data && icc->size == size && !memcmp(icc->data, profile, size);
 }
 
+static int profile_named(FIBITMAP *dib, const char *name) {
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	char text[256];
+	text[0] = 0;
+	if (icc->data) FreeImage_GetICCProfileDescription(icc->data, icc->size, text, sizeof(text));
+	return !strcmp(text, name);
+}
+
 static int has_cicp(FIBITMAP *dib, const BYTE cicp[4]) {
 	FITAG *tag = NULL;
 	return FreeImage_GetMetadata(FIMD_CUSTOM, dib, "CICP", &tag) && tag && FreeImage_GetTagCount(tag) == 4 &&
@@ -1154,10 +1162,11 @@ static void test_linear_blend(void) {
 	remove(path);
 }
 
-/* the composited canvas carries the profile and CICP tag every frame carries */
+/* the composited canvas carries the profile and CICP tag every frame carries: its cICP's, which outranks its iCCP */
 static void test_color_description(void) {
 	const char *path = scratch("apng_color.png");
 	const BYTE cicp[4] = { 12, 13, 0, 1 };	/* Display P3 primaries, sRGB curve */
+	const char *made = "Display P3 primaries, sRGB tone curve (FreeImage)";
 	DWORD size = 0;
 	const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &size);
 	FIBITMAP *frames[2];
@@ -1180,11 +1189,11 @@ static void test_color_description(void) {
 		for (i = 1; i >= 0; i--) {
 			FIBITMAP *page = FreeImage_LockPage(mb, i);
 			if (!page) { fail("%s %d did not load", what, i); bad++; continue; }
-			if (!has_profile(page, adobe, size)) { fail("%s %d: a %u-byte profile, not Adobe RGB", what, i, (unsigned)FreeImage_GetICCProfile(page)->size); bad++; }
+			if (!profile_named(page, made)) { fail("%s %d: a %u-byte profile, not the cICP's", what, i, (unsigned)FreeImage_GetICCProfile(page)->size); bad++; }
 			if (!has_cicp(page, cicp)) { fail("%s %d: no CICP tag 12/13/0/1", what, i); bad++; }
 			FreeImage_UnlockPage(mb, page, FALSE);
 		}
-		if (!bad) ok("every %s carries the Adobe RGB profile and the CICP tag", what);
+		if (!bad) ok("every %s carries the cICP's profile, not the iCCP's Adobe RGB, and the CICP tag", what);
 		FreeImage_CloseMultiBitmap(mb, 0);
 	}
 
