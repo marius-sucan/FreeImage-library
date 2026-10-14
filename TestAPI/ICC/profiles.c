@@ -210,7 +210,7 @@ static void round_trip(const char *what, FREE_IMAGE_FORMAT fif, FIBITMAP *dib, i
     remove(path);
     if (!back) { fail("%s: not loaded", what); return; }
     b = FreeImage_GetICCProfile(back);
-    CHECK(b->size == a->size && b->data && !memcmp(a->data, b->data, a->size), "%s: the profile did not come back", what);
+    CHECK(b->size == a->size && (!a->size || (b->data && !memcmp(a->data, b->data, a->size))), "%s: the profile did not come back", what);
     CHECK((a->flags & FIICC_COLOR_IS_CMYK) == (b->flags & FIICC_COLOR_IS_CMYK), "%s: the CMYK flag did not come back", what);
     CHECK(FreeImage_GetBPP(back) == FreeImage_GetBPP(dib) && FreeImage_GetImageType(back) == FreeImage_GetImageType(dib), "%s: pixel format", what);
     if (exact) {
@@ -231,9 +231,20 @@ static void files(const Bytes *press) {
     cmyk = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
     round_trip("CMYK TIFF", FIF_TIFF, cmyk, TIFF_DEFAULT, TIFF_CMYK, 1);
     round_trip("CMYK JPEG", FIF_JPEG, cmyk, JPEG_QUALITYSUPERB, JPEG_CMYK, 0);
+    round_trip("CMYK PSD", FIF_PSD, cmyk, PSD_DEFAULT, PSD_CMYK, 1);
     rgb16 = FreeImage_ConvertToRGB16(rgb);
     cmyk16 = FreeImage_ConvertToCMYK(rgb16, press->data, press->size, 0);
     round_trip("16-bit CMYK TIFF", FIF_TIFF, cmyk16, TIFF_DEFAULT, TIFF_CMYK, 1);
+    round_trip("16-bit CMYK PSD", FIF_PSD, cmyk16, PSD_DEFAULT, PSD_CMYK, 1);
+    {
+        /* without a profile, the CMYK flag alone comes back */
+        FIBITMAP *bare = FreeImage_Clone(cmyk), *bare16 = FreeImage_Clone(cmyk16);
+        FreeImage_DestroyICCProfile(bare);
+        FreeImage_DestroyICCProfile(bare16);
+        round_trip("untagged CMYK PSD", FIF_PSD, bare, PSD_DEFAULT, PSD_CMYK, 1);
+        round_trip("untagged 16-bit CMYK PSD", FIF_PSD, bare16, PSD_DEFAULT, PSD_CMYK, 1);
+        FreeImage_Unload(bare); FreeImage_Unload(bare16);
+    }
     adobe = FreeImage_ConvertToICCProfile(rgb, a.data, a.size, 0);
     round_trip("Adobe RGB PNG", FIF_PNG, adobe, PNG_DEFAULT, PNG_DEFAULT, 1);
     round_trip("Adobe RGB TIFF", FIF_TIFF, adobe, TIFF_DEFAULT, TIFF_DEFAULT, 1);
@@ -618,9 +629,9 @@ static Bytes save_memory(FREE_IMAGE_FORMAT fif, FIBITMAP *dib) {
 }
 
 static void header_only_psd(const Bytes *press) {
-    Bytes files[8];
-    const char *names[8] = { "8-bit CMYK", "16-bit CMYK", "indexed", "bitmap", "3-channel multichannel", "4-channel multichannel",
-        "CMYK + alpha", "RGB" };
+    Bytes files[11];
+    const char *names[11] = { "8-bit CMYK", "16-bit CMYK", "indexed", "bitmap", "3-channel multichannel", "4-channel multichannel",
+        "CMYK + alpha", "RGB", "untagged CMYK", "untagged CMYK + alpha", "2-channel multichannel" };
     FIBITMAP *dib, *thumb = FreeImage_Allocate(10, 6, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
     char what[128];
     unsigned i, x, y;
@@ -648,9 +659,12 @@ static void header_only_psd(const Bytes *press) {
     files[5] = make_psd(7, 4, NULL);
     files[6] = make_psd(4, 5, press);
     files[7] = make_psd(3, 3, NULL);
+    files[8] = make_psd(4, 4, NULL);
+    files[9] = make_psd(4, 5, NULL);
+    files[10] = make_psd(7, 2, press);
     FreeImage_Unload(thumb);
 
-    for (i = 0; i < 8; i++) {
+    for (i = 0; i < 11; i++) {
         if (!files[i].data) { fail("PSD, %s: not written", names[i]); continue; }
         for (k = 0; k < 2; k++) {
             const int flags = k ? PSD_CMYK : PSD_DEFAULT;
@@ -665,7 +679,27 @@ static void header_only_psd(const Bytes *press) {
         CHECK(dib && FreeImage_GetThumbnail(dib) && FreeImage_GetWidth(FreeImage_GetThumbnail(dib)) == 10, "PSD, %s loaded as RGB: the thumbnail is lost", names[i]);
         if (dib) FreeImage_Unload(dib);
     }
-    for (i = 0; i < 8; i++) free(files[i].data);
+    /* PSD_CMYK without a profile: CMYK all the same, the file's inks inverted */
+    for (i = 8; i < 10; i++) {
+        unsigned wrong = 0;
+        if (!files[i].data) continue;
+        dib = load_memory(FIF_PSD, &files[i], PSD_CMYK);
+        CHECK(dib && FreeImage_GetColorType(dib) == FIC_CMYK && !FreeImage_GetICCProfile(dib)->size && !FreeImage_IsTransparent(dib),
+            "PSD, %s, PSD_CMYK: not loaded as CMYK", names[i]);
+        if (dib && FreeImage_GetBPP(dib) == 32) {
+            for (y = 0; y < 24; y++) for (x = 0; x < 32 * 4; x++)
+                wrong += FreeImage_GetScanLine(dib, 23 - y)[x] != (BYTE)(255 - (BYTE)(((x & 3) * 768 + y * 32 + x / 4) * 13 + 1));
+        }
+        CHECK(wrong == 0, "PSD, %s, PSD_CMYK: %u samples are not the file's", names[i], wrong);
+        if (dib) FreeImage_Unload(dib);
+    }
+    /* multichannel of fewer than 3 channels loads grey: no CMYK flag, profile or not */
+    if (files[10].data) {
+        dib = load_memory(FIF_PSD, &files[10], PSD_CMYK);
+        CHECK(dib && FreeImage_GetBPP(dib) == 8 && !(FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK), "PSD, %s, PSD_CMYK: grey flagged CMYK", names[10]);
+        if (dib) FreeImage_Unload(dib);
+    }
+    for (i = 0; i < 11; i++) free(files[i].data);
 }
 
 /* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */

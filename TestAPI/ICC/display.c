@@ -315,6 +315,7 @@ static void make_fixtures(void) {
     FreeImage_SetThumbnail(cmyk, thumb);
     save_fixture("CMYK PSD + thumbnail", FIF_PSD, cmyk, PSD_DEFAULT, 0, "dsp_cmyk.psd");
     FreeImage_SetThumbnail(cmyk, NULL);
+    save_fixture("untagged CMYK PSD", FIF_PSD, dcmyk, PSD_DEFAULT, 0, "dsp_dcmyk.psd");
     save_fixture("Adobe RGB WebP", FIF_WEBP, adobe24, WEBP_LOSSLESS, 0, "dsp_adobe.webp");
     save_fixture("float PFM", FIF_PFM, rgbf, PFM_DEFAULT, 0, "dsp_float.pfm");
     b = make_psd(9, 3);

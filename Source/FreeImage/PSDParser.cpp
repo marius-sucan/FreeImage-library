@@ -1719,13 +1719,7 @@ FIBITMAP* psdParser::FinishImage(FIBITMAP *bitmap, short mode, unsigned nChannel
 
 		if((_fi_flags & PSD_CMYK) == PSD_CMYK) {
 			// keep as CMYK
-
-			if(mode == PSDP_MULTICHANNEL) {
-				//### we force CMY to be CMYK, but CMY has no ICC.
-				// Create empty profile and add the flag.
-				FreeImage_CreateICCProfile(bitmap, NULL, 0);
-				FreeImage_GetICCProfile(bitmap)->flags |= FIICC_COLOR_IS_CMYK;
-			}
+			FreeImage_GetICCProfile(bitmap)->flags |= FIICC_COLOR_IS_CMYK;
 		}
 		else {
 			// convert to RGB
@@ -2070,15 +2064,9 @@ FIBITMAP* psdParser::Load(FreeImageIO *io, fi_handle handle, int s_format_id, in
 			FreeImage_SetDotsPerMeterY(Bitmap, res_y);
 		}
 
-		// set ICC profile
+		// set ICC profile, keeping the CMYK flag FinishImage set
 		if(NULL != _iccProfile._ProfileData) {
 			FreeImage_CreateICCProfile(Bitmap, _iccProfile._ProfileData, _iccProfile._ProfileSize);
-			if ((flags & PSD_CMYK) == PSD_CMYK) {
-				short mode = _headerInfo._ColourMode;
-				if((mode == PSDP_CMYK) || (mode == PSDP_MULTICHANNEL)) {
-					FreeImage_GetICCProfile(Bitmap)->flags |= FIICC_COLOR_IS_CMYK;
-				}
-			}
 		}
 
 		// Metadata
