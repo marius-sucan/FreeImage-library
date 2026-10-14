@@ -49,23 +49,34 @@ static int should_fail(void) {
     return armed && (++seen == fail_at);
 }
 
+/* blocks allocated and not freed: a load that fails has to give back what it took */
+static long live = 0;
+
 extern "C" {
 void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t s);
 void *__real_realloc(void *p, size_t n);
-void *__wrap_malloc(size_t n) { return should_fail() ? NULL : __real_malloc(n); }
-void *__wrap_calloc(size_t n, size_t s) { return should_fail() ? NULL : __real_calloc(n, s); }
-void *__wrap_realloc(void *p, size_t n) { return should_fail() ? NULL : __real_realloc(p, n); }
+void __real_free(void *p);
+void *__wrap_malloc(size_t n) { void *p = should_fail() ? NULL : __real_malloc(n); if (p) live++; return p; }
+void *__wrap_calloc(size_t n, size_t s) { void *p = should_fail() ? NULL : __real_calloc(n, s); if (p) live++; return p; }
+void *__wrap_realloc(void *p, size_t n) { void *q = should_fail() ? NULL : __real_realloc(p, n); if (!p && q) live++; return q; }
+void __wrap_free(void *p) { if (p) live--; __real_free(p); }
 }
 
 /* new(std::nothrow) too: the code that uses it checks for NULL */
-void *operator new(size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
-void *operator new[](size_t n, const std::nothrow_t &) noexcept { return should_fail() ? NULL : __real_malloc(n ? n : 1); }
+static void *counted(void *p) { if (p) live++; return p; }
+void *operator new(size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? NULL : __real_malloc(n ? n : 1)); }
+void *operator new[](size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? NULL : __real_malloc(n ? n : 1)); }
 
 /* the throwing operator new, failed only for the cases that set fail_new (STL nodes, plugin state) */
 static int fail_new = 0;
-void *operator new(size_t n) { if (fail_new && should_fail()) throw std::bad_alloc(); void *p = __real_malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return p; }
+void *operator new(size_t n) { if (fail_new && should_fail()) throw std::bad_alloc(); void *p = __real_malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return counted(p); }
 void *operator new[](size_t n) { return operator new(n); }
+/* through the wrapped free, so that deletes are counted */
+void operator delete(void *p) noexcept { free(p); }
+void operator delete[](void *p) noexcept { free(p); }
+void operator delete(void *p, size_t) noexcept { free(p); }
+void operator delete[](void *p, size_t) noexcept { free(p); }
 
 enum { CASE_OK = 0, CASE_BROKEN = 1, NOT_REACHED = 2 };
 
@@ -257,18 +268,22 @@ static int exr_save(void) { return save_case(FIF_EXR, FIT_RGBF, 40, 24, 96); }
 static int jng_save(void) { return save_case(FIF_JNG, FIT_BITMAP, 40, 24, 24); }
 static int tiff_load(void) { return load_case(FIF_TIFF, FIT_BITMAP, 40, 24, 24); }
 
-/* a PSD with IPTC keywords, categories and a caption: the IPTC reader's strings fail too */
+/* a PSD with IPTC keywords, categories and a caption: the IPTC reader's strings fail too; nothing is left allocated */
 static int psd_iptc_case(void) {
     FIBITMAP *dib = pattern(FIT_BITMAP, 40, 24, 24), *back;
     const char *dir = getenv("IO_TEST_TMP");
     char path[512];
     int whole;
+    long before;
     if (!dib) return CASE_BROKEN;
     snprintf(path, sizeof(path), "%s/fi_io_psd_%d.psd", (dir && *dir) ? dir : ".", (int)getpid());
     FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "Keywords", "first;second;third");
     FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "SupplementalCategories", "one;two");
     FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "Caption-Abstract", "a caption longer than a short string holds");
     if (!FreeImage_Save(FIF_PSD, dib, path, 0)) { FreeImage_Unload(dib); return CASE_BROKEN; }
+    /* a first load fills what stays allocated */
+    FreeImage_Unload(FreeImage_Load(FIF_PSD, path, 0));
+    before = live;
 
     armed = 1; fail_new = 1;
     back = FreeImage_Load(FIF_PSD, path, 0);
@@ -276,6 +291,7 @@ static int psd_iptc_case(void) {
 
     whole = !back || (((int)FreeImage_GetWidth(back) == 40) && ((int)FreeImage_GetHeight(back) == 24) && tags_whole(back));
     FreeImage_Unload(back);
+    whole = whole && (live == before);
     FreeImage_Unload(dib);
     remove(path);
     if (seen < fail_at) return NOT_REACHED;
@@ -772,7 +788,7 @@ int main(void) {
     sweep("EXR save: TRUE only for a file that loads", exr_save);
     sweep("JNG save: TRUE only for a file that loads", jng_save);
     sweep("TIFF load: no crash", tiff_load);
-    sweep("PSD load with IPTC: no crash, no tag without its value", psd_iptc_case);
+    sweep("PSD load with IPTC: no crash, no tag without its value, no leak", psd_iptc_case);
     if (!icc_setup()) {
         report("color management: the test profiles", 0);
     } else {

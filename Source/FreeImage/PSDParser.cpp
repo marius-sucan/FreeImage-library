@@ -1609,7 +1609,11 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 	const unsigned dstBpp =  (depth == 1) ? 1 : FreeImage_GetBPP(bitmap)/8;
 	const unsigned dstLineSize = FreeImage_GetPitch(bitmap);
 	BYTE* const dst_first_line = FreeImage_GetScanLine(bitmap, nHeight - 1);//<*** flipped
-	BYTE* line_start = new BYTE[lineSize]; //< fileline cache
+	BYTE* line_start = new (std::nothrow) BYTE[lineSize]; //< fileline cache
+	if(!line_start) {
+		FreeImage_Unload(bitmap);
+		throw std::bad_alloc();
+	}
    const UINT64 dst_buffer_size = (UINT64)dstLineSize * nHeight;
 
 	// the merged alpha, the channel after K, read into a plane: set once CMYK is RGB, or kept for FIF_LOAD_DISPLAY_ICC
