@@ -409,6 +409,31 @@ static int meta_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* GetMetadata, removing a tag and DestroyICCProfile copy keys too long for a short string: no exception, no tag freed twice */
+static int meta_longkey_case(void) {
+    FIBITMAP *dib = FreeImage_Allocate(4, 4, 24, 0, 0, 0);
+    static BYTE profile[132];
+    FITAG *tag = NULL;
+    int whole;
+    if (!dib) return CASE_BROKEN;
+    FreeImage_SetMetadataKeyValue(FIMD_COMMENTS, dib, "A comment key of some length", "first");
+    FreeImage_SetMetadataKeyValue(FIMD_COMMENTS, dib, "Another long comment key", "second");
+    FreeImage_SetMetadataKeyValue(FIMD_EXIF_MAIN, dib, "ImageDescription", "a description");
+    FreeImage_SetMetadataKeyValue(FIMD_EXIF_MAIN, dib, "InterColorProfile", "a profile");
+    FreeImage_CreateICCProfile(dib, profile, sizeof(profile));
+
+    armed = 1; fail_new = 1;
+    FreeImage_GetMetadata(FIMD_COMMENTS, dib, "A comment key of some length", &tag);
+    FreeImage_SetMetadata(FIMD_COMMENTS, dib, "Another long comment key", NULL);
+    FreeImage_DestroyICCProfile(dib);
+    armed = 0; fail_new = 0;
+
+    whole = tags_whole(dib);
+    FreeImage_Unload(dib);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 /* FreeImage_LoadMultiBitmapFromMemory of a 2-page MNG: a plugin that throws while counting must not escape */
 static int loadmem_case(void) {
     char path[512];
@@ -779,6 +804,7 @@ int main(void) {
     sweep("WebP save: TRUE only for a file that loads", webp_case);
     sweep("multi-page mutators: no crash, stays consistent", mpage_case);
     sweep("SetMetadata/Clone/CloneMetadata: no crash, tags kept", meta_case);
+    sweep("long keys looked up and removed, a profile destroyed: no exception", meta_longkey_case);
     sweep("LoadMultiBitmapFromMemory: a throwing page count does not escape", loadmem_case);
     sweep("GIF save: TRUE only for a file that loads", gif_save);
     sweep("GIF load: no crash", gif_load);

@@ -1471,12 +1471,15 @@ FreeImage_SetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 			}
 		}
 		else {
-			// delete existing tag
-			TAGMAP::iterator i = tagmap->find(key);
-			if(i != tagmap->end()) {
-				FITAG *old_tag = (*i).second;
-				FreeImage_DeleteTag(old_tag);
-				tagmap->erase(key);
+			// delete existing tag: looking up a key too long for a short string allocates
+			try {
+				TAGMAP::iterator i = tagmap->find(key);
+				if(i != tagmap->end()) {
+					FreeImage_DeleteTag((*i).second);
+					tagmap->erase(i);
+				}
+			} catch(std::bad_alloc &) {
+				return FALSE;
 			}
 		}
 	}
@@ -1512,11 +1515,16 @@ FreeImage_GetMetadata(FREE_IMAGE_MDMODEL model, FIBITMAP *dib, const char *key, 
 		if (model_iterator != metadata->end() ) {
 			// this model exists : try to get the requested tag
 			tagmap = model_iterator->second;
-			TAGMAP::iterator tag_iterator = tagmap->find(key);
-			if (tag_iterator != tagmap->end() ) {
-				// get the requested tag
-				*tag = tag_iterator->second;
-			} 
+			// looking up a key too long for a short string allocates
+			try {
+				TAGMAP::iterator tag_iterator = tagmap->find(key);
+				if (tag_iterator != tagmap->end() ) {
+					// get the requested tag
+					*tag = tag_iterator->second;
+				}
+			} catch(std::bad_alloc &) {
+				return FALSE;
+			}
 		}
 	}
 
