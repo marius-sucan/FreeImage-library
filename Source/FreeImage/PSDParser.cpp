@@ -1281,6 +1281,7 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 			if ( 0 < oResource._Size ) {
 				BYTE IntValue[4];
 				BYTE ShortValue[2];
+				const int nStart = nBytes;
 
 				switch( oResource._ID ) {
 					case PSDP_RES_RESOLUTION_INFO_V2:
@@ -1295,10 +1296,12 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 						nBytes += _resolutionInfo.Read(io, handle);
 						break;
 
-					// DisplayInfo structure
+					// DisplayInfo structure, one per extra channel: the first is read
 					case PSDP_RES_DISPLAY_INFO:
-						_bDisplayInfoFilled = true;
-						nBytes += _displayInfo.Read(io, handle);
+						if(oResource._Size >= 14) {
+							_bDisplayInfoFilled = true;
+							nBytes += _displayInfo.Read(io, handle);
+						}
 						break;
 
 					// IPTC-NAA record
@@ -1374,6 +1377,12 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 						nBytes += skip_length;
 					}
 					break;
+				}
+				// what a resource holds past the part read is skipped
+				if((nBytes - nStart < oResource._Size) && (nBytes < nTotalBytes)) {
+					unsigned skip_length = MIN(oResource._Size - (nBytes - nStart), nTotalBytes - nBytes);
+					io->seek_proc(handle, skip_length, SEEK_CUR);
+					nBytes += skip_length;
 				}
 			}
 		}

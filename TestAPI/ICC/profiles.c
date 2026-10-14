@@ -782,6 +782,45 @@ static void cmyk_alpha_psd(const Bytes *press) {
     for (k = 0; k < 2; k++) { FreeImage_Unload(ink[k]); FreeImage_Unload(alpha[k]); }
 }
 
+/* an RGB PSD whose DisplayInfo of n extra channels comes before its profile and a 300 dpi resolution */
+static Bytes make_psd_display_info(int entries, const Bytes *icc) {
+    const DWORD info = 14 * entries, prof = (icc->size + 1) & ~1u, resources = 12 + info + 12 + prof + 28;
+    Bytes b;
+    BYTE *p;
+    int i;
+    b.size = 26 + 4 + 4 + resources + 4 + 2 + 3 * 32 * 24;
+    b.data = p = (BYTE *)calloc(1, b.size);
+    memcpy(p, "8BPS", 4); put16(p + 4, 1); put16(p + 12, 3); put32(p + 14, 24); put32(p + 18, 32); put16(p + 22, 8); put16(p + 24, 3);
+    p += 30;
+    put32(p, resources);
+    p += 4;
+    memcpy(p, "8BIM", 4); put16(p + 4, 1007); put32(p + 8, info);
+    p += 12;
+    for (i = 0; i < entries; i++, p += 14) { put16(p + 2, 65535); put16(p + 10, 50); }
+    memcpy(p, "8BIM", 4); put16(p + 4, 1039); put32(p + 8, icc->size); memcpy(p + 12, icc->data, icc->size);
+    p += 12 + prof;
+    memcpy(p, "8BIM", 4); put16(p + 4, 1005); put32(p + 8, 16);
+    put16(p + 12, 300); put16(p + 16, 1); put16(p + 18, 1); put16(p + 20, 300); put16(p + 24, 1); put16(p + 26, 1);
+    p += 28 + 4 + 2;                            /* no layers, raw image data */
+    for (i = 0; i < 3 * 32 * 24; i++) p[i] = (BYTE)(i * 13 + 1);
+    return b;
+}
+
+/* the resources after a DisplayInfo of several extra channels are read: the profile and the resolution come back */
+static void display_info_psd(void) {
+    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
+    int entries;
+    for (entries = 1; entries <= 4; entries++) {
+        Bytes b = make_psd_display_info(entries, &adobe);
+        FIBITMAP *dib = load_memory(FIF_PSD, &b, PSD_DEFAULT);
+        const FIICCPROFILE *icc = dib ? FreeImage_GetICCProfile(dib) : NULL;
+        CHECK(dib && (icc->size == (long)adobe.size) && !memcmp(icc->data, adobe.data, adobe.size) && FreeImage_GetDotsPerMeterX(dib) == 11811,
+            "PSD, DisplayInfo of %d entries: %s", entries, dib ? "the profile or the resolution after it is lost" : "not loaded");
+        if (dib) FreeImage_Unload(dib);
+        free(b.data);
+    }
+}
+
 /* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */
 static unsigned long long page_digest(FIMULTIBITMAP *mb, int page) {
     FIBITMAP *p = FreeImage_LockPage(mb, page);
@@ -961,6 +1000,7 @@ int main(int argc, char **argv) {
     grey_alpha_float_strips();
     header_only_psd(&press);
     cmyk_alpha_psd(&press);
+    display_info_psd();
     cmyk_pages_cached(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
