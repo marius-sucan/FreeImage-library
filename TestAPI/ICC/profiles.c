@@ -821,6 +821,108 @@ static void display_info_psd(void) {
     }
 }
 
+/* a 4-channel 32x24 RGB (3) or Lab (9) PSD, its 4th channel a ramp; id: alpha identifier (1053), kind: the first
+   DisplayInfo entry's (1007, or 1077 with 0x100), -1 none; signal as make_cmyka_psd's */
+static Bytes make_rgbx_psd(int mode, int deep, int signal, int id, int kind) {
+    const unsigned bytes = deep ? 2 : 1;
+    BYTE res[64], *p;
+    DWORD n = 0;
+    Bytes b;
+    unsigned c, x, y;
+    memset(res, 0, sizeof(res));
+    if (id >= 0) {
+        memcpy(res, "8BIM", 4); put16(res + 4, 1053); put32(res + 8, 4); put32(res + 12, (DWORD)id);
+        n = 16;
+    }
+    if ((kind >= 0) && (kind < 0x100)) {
+        memcpy(res + n, "8BIM", 4); put16(res + n + 4, 1007); put32(res + n + 8, 14); put16(res + n + 22, 50); res[n + 24] = (BYTE)kind;
+        n += 26;
+    } else if (kind >= 0x100) {
+        memcpy(res + n, "8BIM", 4); put16(res + n + 4, 1077); put32(res + n + 8, 17); put32(res + n + 12, 1);
+        put16(res + n + 26, 50); res[n + 28] = (BYTE)kind;
+        n += 30;
+    }
+    b.size = 26 + 4 + 4 + n + psd_layer_section(NULL, signal, 3) + 2 + 4 * 24 * 32 * bytes;
+    b.data = p = (BYTE *)calloc(1, b.size);
+    memcpy(p, "8BPS", 4); put16(p + 4, 1); put16(p + 12, 4); put32(p + 14, 24); put32(p + 18, 32); put16(p + 22, 8 * bytes); put16(p + 24, mode);
+    p += 30;
+    put32(p, n);
+    memcpy(p + 4, res, n);
+    p += 4 + n;
+    p += psd_layer_section(p, signal, 3) + 2;   /* raw image data */
+    for (c = 0; c < 4; c++) {
+        for (y = 0; y < 24; y++) {
+            for (x = 0; x < 32; x++) {
+                const unsigned v = (BYTE)((c < 3) ? (x * 7 + y * 5 + c * 40) : (x * 8 + y));
+                if (deep) { put16(p, v * 257); p += 2; } else *p++ = (BYTE)v;
+            }
+        }
+    }
+    return b;
+}
+
+/* an RGB or Lab PSD's 4th channel is its alpha when the file says so, or says nothing (FreeImage's RGBA PSDs) unless an
+   alpha identifier or the DisplayInfo makes it a selection or a spot ink; FreeImage's own RGBA PSD loads back whole */
+static void rgb_extra_psd(void) {
+    static const struct { int mode, deep, signal, id, kind, alpha; const char *name; } cases[] = {
+        { 3, 0, 0, -1, -1, 1, "RGB, no layers" }, { 3, 0, 3, -1, -1, 0, "RGB, a positive layer count" },
+        { 3, 0, 1, -1, -1, 1, "RGB, a negative layer count" }, { 3, 0, 0, 5, -1, 0, "RGB, no layers, alpha identifier 5" },
+        { 3, 0, 0, 0, -1, 1, "RGB, no layers, alpha identifier 0" }, { 3, 0, 0, -1, 2, 0, "RGB, no layers, a spot channel (1007)" },
+        { 3, 0, 0, -1, 0x102, 0, "RGB, no layers, a spot channel (1077)" }, { 3, 0, 0, -1, 1, 1, "RGB, no layers, an alpha channel (1007)" },
+        { 3, 1, 2, -1, -1, 1, "16-bit RGB, Mt16" }, { 3, 1, 3, -1, -1, 0, "16-bit RGB, a positive layer count" },
+        { 3, 1, 4, -1, -1, 1, "16-bit RGB, a negative layer count in Lr16" }, { 9, 0, 3, -1, -1, 0, "Lab, a positive layer count" },
+        { 9, 0, 0, -1, -1, 1, "Lab, no layers" },
+    };
+    char what[128];
+    unsigned i, k, x, y, ok;
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        const int deep = cases[i].deep;
+        Bytes file = make_rgbx_psd(cases[i].mode, deep, cases[i].signal, cases[i].id, cases[i].kind);
+        Bytes twin = make_rgbx_psd(cases[i].mode, deep, 3, -1, -1);
+        FIBITMAP *dib = load_memory(FIF_PSD, &file, PSD_DEFAULT), *rgb = load_memory(FIF_PSD, &twin, PSD_DEFAULT);
+        snprintf(what, sizeof(what), "PSD, %s", cases[i].name);
+        same_as_full(what, load_memory(FIF_PSD, &file, PSD_DEFAULT), load_memory(FIF_PSD, &file, FIF_LOAD_NOPIXELS));
+        if (cases[i].alpha) {
+            FIBITMAP *a = dib ? FreeImage_GetChannel(dib, FICC_ALPHA) : NULL;
+            CHECK(dib && FreeImage_GetBPP(dib) == (deep ? 64u : 32u) && FreeImage_GetColorType(dib) == FIC_RGBALPHA, "%s: not RGBA", what);
+            for (y = 0, ok = (a != NULL); a && y < 24; y++) {
+                for (x = 0; x < 32; x++) {
+                    const unsigned want = (BYTE)(x * 8 + (23 - y));
+                    ok &= deep ? (((WORD *)FreeImage_GetScanLine(a, y))[x] == want * 257) : (FreeImage_GetScanLine(a, y)[x] == want);
+                }
+            }
+            CHECK(ok, "%s: the alpha is not the 4th channel", what);
+            for (k = FICC_RED; k <= FICC_BLUE; k++) {
+                FIBITMAP *c1 = dib ? FreeImage_GetChannel(dib, (FREE_IMAGE_COLOR_CHANNEL)k) : NULL;
+                FIBITMAP *c2 = rgb ? FreeImage_GetChannel(rgb, (FREE_IMAGE_COLOR_CHANNEL)k) : NULL;
+                ok &= same_plane(c1, c2);
+                if (c1) FreeImage_Unload(c1);
+                if (c2) FreeImage_Unload(c2);
+            }
+            CHECK(ok, "%s: the colours are not those of the file without its 4th channel", what);
+            if (a) FreeImage_Unload(a);
+        } else {
+            CHECK(rgb && FreeImage_GetBPP(rgb) == (deep ? 48u : 24u) && same_plane(dib, rgb), "%s: not the image without its 4th channel", what);
+        }
+        if (dib) FreeImage_Unload(dib);
+        if (rgb) FreeImage_Unload(rgb);
+        free(file.data);
+        free(twin.data);
+    }
+    /* FreeImage's RGBA PSD: no layers, a DisplayInfo of kind 0 */
+    {
+        FIBITMAP *rgba = FreeImage_Allocate(32, 24, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *back;
+        Bytes file;
+        for (y = 0; y < 24; y++) for (x = 0; x < 128; x++) FreeImage_GetScanLine(rgba, y)[x] = (BYTE)(x * 5 + y * 11);
+        file = save_memory(FIF_PSD, rgba);
+        back = file.data ? load_memory(FIF_PSD, &file, PSD_DEFAULT) : NULL;
+        CHECK(back && same_plane(back, rgba), "PSD, FreeImage's RGBA: does not load back whole");
+        if (back) FreeImage_Unload(back);
+        FreeImage_Unload(rgba);
+        free(file.data);
+    }
+}
+
 /* CMYK pages keep CMYK through the multi-page cache: appended, inserted, changed, saved to a file and to memory */
 static unsigned long long page_digest(FIMULTIBITMAP *mb, int page) {
     FIBITMAP *p = FreeImage_LockPage(mb, page);
@@ -1001,6 +1103,7 @@ int main(int argc, char **argv) {
     header_only_psd(&press);
     cmyk_alpha_psd(&press);
     display_info_psd();
+    rgb_extra_psd();
     cmyk_pages_cached(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);

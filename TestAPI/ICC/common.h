@@ -208,40 +208,53 @@ static BYTE *psd_be(BYTE *p, unsigned v, int n) {
     return p;
 }
 
-/* CMYK + alpha PSD, alpha the transparency by signal 1: count < 0, 2: Mt16 + Lr16, 4: Lr16 count < 0, 5: Mtrn after a
-   padded block; not by 0: no layers, 3: count > 0 */
-static Bytes make_cmyka_psd(FIBITMAP *cmyk, FIBITMAP *alpha, const Bytes *icc, int signal, int rle) {
-    static const DWORD section[6] = { 0, 96, 120, 96, 108, 40 };
-    const unsigned w = FreeImage_GetWidth(cmyk), h = FreeImage_GetHeight(cmyk);
-    const unsigned bytes = (FreeImage_GetImageType(cmyk) == FIT_RGBA16) ? 2 : 1, line = w * bytes;
-    const DWORD res = icc ? 12 + ((icc->size + 1) & ~1u) : 0;
-    BYTE info[88], *p, *counts = NULL, *row = (BYTE *)malloc(line);
-    Bytes b;
-    unsigned c, x, y, i;
-    /* one layer of no pixels, its five channels holding only their compression */
-    memset(info, 0, sizeof(info));
-    p = psd_be(info, (signal == 1 || signal == 4) ? 0xFFFF : 1, 2) + 16;
-    p = psd_be(p, 5, 2);
-    for (c = 0; c < 5; c++) { p = psd_be(p, c ? c - 1 : 0xFFFF, 2); p = psd_be(p, 2, 4); }
+/* a layer and mask section with one empty layer of colours + 1 channels, signals as make_cmyka_psd's; NULL p: its size */
+static DWORD psd_layer_section(BYTE *p, int signal, int colours) {
+    const unsigned n = colours + 1, info = 2 + 16 + 2 + 6 * n + 12 + 4 + 12 + 2 * n;
+    const DWORD body = (signal == 1 || signal == 3) ? 4 + info + 4 : (signal == 2) ? 8 + 12 + 12 + info :
+        (signal == 4) ? 8 + 12 + info : (signal == 5) ? 40 : 0;
+    unsigned c;
+    if (!p) return 4 + body;
+    memset(p, 0, 4 + body);
+    p = psd_be(p, body, 4);
+    if (signal == 0) return 4;
+    if (signal == 5) {
+        memcpy(p + 8, "8BIMzzzz", 8); psd_be(p + 16, 5, 4); memcpy(p + 28, "8BIMMtrn", 8);
+        return 4 + body;
+    }
+    if (signal == 1 || signal == 3) {
+        p = psd_be(p, info, 4);
+    } else {
+        p += 8;
+        if (signal == 2) { memcpy(p, "8BIMMt16", 8); p += 12; }
+        memcpy(p, "8BIMLr16", 8); p = psd_be(p + 8, info, 4);
+    }
+    /* one layer of no pixels, its channels holding only their compression */
+    p = psd_be(p, (signal == 1 || signal == 4) ? 0xFFFF : 1, 2) + 16;
+    p = psd_be(p, n, 2);
+    for (c = 0; c < n; c++) { p = psd_be(p, c ? c - 1 : 0xFFFF, 2); p = psd_be(p, 2, 4); }
     memcpy(p, "8BIMnorm", 8); p[8] = 255; p += 12;
     p = psd_be(p, 12, 4) + 8;
     p[0] = 1; p[1] = 'a';
-    b.size = 26 + 4 + 4 + res + 4 + section[signal] + 2 + 5 * h * (rle ? 2 + line + (line + 127) / 128 : line);
+    return 4 + body;
+}
+
+/* CMYK + alpha PSD, alpha the transparency by signal 1: count < 0, 2: Mt16 + Lr16, 4: Lr16 count < 0, 5: Mtrn after a
+   padded block; not by 0: no layers, 3: count > 0 */
+static Bytes make_cmyka_psd(FIBITMAP *cmyk, FIBITMAP *alpha, const Bytes *icc, int signal, int rle) {
+    const unsigned w = FreeImage_GetWidth(cmyk), h = FreeImage_GetHeight(cmyk);
+    const unsigned bytes = (FreeImage_GetImageType(cmyk) == FIT_RGBA16) ? 2 : 1, line = w * bytes;
+    const DWORD res = icc ? 12 + ((icc->size + 1) & ~1u) : 0;
+    BYTE *p, *counts = NULL, *row = (BYTE *)malloc(line);
+    Bytes b;
+    unsigned c, x, y, i;
+    b.size = 26 + 4 + 4 + res + psd_layer_section(NULL, signal, 4) + 2 + 5 * h * (rle ? 2 + line + (line + 127) / 128 : line);
     b.data = p = (BYTE *)calloc(1, b.size);
     memcpy(p, "8BPS", 4); psd_be(p + 4, 1, 2); psd_be(p + 12, 5, 2); psd_be(p + 14, h, 4); psd_be(p + 18, w, 4);
     psd_be(p + 22, 8 * bytes, 2); psd_be(p + 24, 4, 2);
     p = psd_be(p + 30, res, 4);
     if (icc) { memcpy(p, "8BIM", 4); psd_be(p + 4, 1039, 2); psd_be(p + 8, icc->size, 4); memcpy(p + 12, icc->data, icc->size); p += res; }
-    p = psd_be(p, section[signal], 4);
-    if (signal == 1 || signal == 3) {
-        p = psd_be(p, 88, 4);
-        memcpy(p, info, 88); p += 88 + 4;
-    } else if (signal) {
-        p += 8;
-        if (signal == 5) { memcpy(p, "8BIMzzzz", 8); p = psd_be(p + 8, 5, 4) + 8; memcpy(p, "8BIMMtrn", 8); p += 12; }
-        if (signal == 2) { memcpy(p, "8BIMMt16", 8); p += 12; }
-        if (signal != 5) { memcpy(p, "8BIMLr16", 8); p = psd_be(p + 8, 88, 4); memcpy(p, info, 88); p += 88; }
-    }
+    p += psd_layer_section(p, signal, 4);
     p = psd_be(p, rle, 2);
     if (rle) { counts = p; p += 5 * h * 2; }
     for (c = 0; c < 5; c++) {

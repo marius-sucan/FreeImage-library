@@ -80,6 +80,8 @@ enum {
 	PSDP_RES_INDEXED_COLORS			= 1046,
 	//! (Photoshop 6.0) Transparency Index. 2 bytes for the index of transparent color, if any.
 	PSDP_RES_TRANSPARENCY_INDEX		= 1047,
+	//! (Photoshop 6.0) Alpha Identifiers, 4 bytes for each extra channel
+	PSDP_RES_ALPHA_IDENTIFIERS		= 1053,
 	//! (Photoshop 7.0) EXIF data 1
 	PSDP_RES_EXIF1					= 1058,
 	//! (Photoshop 7.0) EXIF data 3
@@ -1065,6 +1067,8 @@ psdParser::psdParser() {
 	_bResolutionInfoFilled_v2 = false;
 	_bCopyright = false;
 	_bMergedAlpha = false;
+	_bAlphaIdsNonZero = false;
+	_ExtraKind = -1;
 	_GlobalAngle = 30;
 	_ColourCount = -1;
 	_TransparentIndex = -1;
@@ -1100,71 +1104,80 @@ psdHasLongBlockLength(const BYTE *key) {
 	return false;
 }
 
-// transparency in the first extra channel: a negative layer count (also in 'Layr', 'Lr16', 'Lr32') or an 'Mt*' block
-static bool
-psdHasMergedAlpha(FreeImageIO *io, fi_handle handle, bool psb, INT64 pos, INT64 end) {
+// 1: transparency in the first extra channel (a negative layer count, Lr16/Lr32's too, or Mt*); 0: layers alone; -1: none
+static int
+psdMergedTransparency(FreeImageIO *io, fi_handle handle, bool psb, INT64 pos, INT64 end) {
 	const INT64 sizeBytes = psb ? 8 : 4;
 	BYTE b[8];
+	int said = -1;
 
 	// layer info: its length, then the layer count
 	if ((end - pos < sizeBytes) || (io->read_proc(b, (unsigned)sizeBytes, 1, handle) != 1)) {
-		return false;
+		return said;
 	}
 	const UINT64 layerInfo = psb ? psdGetLongValue(b, 8) : psdGetValue(b, 4);
 	pos += sizeBytes;
 	if (layerInfo > (UINT64)(end - pos)) {
-		return false;
+		return said;
 	}
 	if (layerInfo >= 2) {
 		if (io->read_proc(b, 2, 1, handle) != 1) {
-			return false;
+			return said;
 		}
-		if ((short)psdGetValue(b, 2) < 0) {
-			return true;
+		const short count = (short)psdGetValue(b, 2);
+		if (count < 0) {
+			return 1;
+		}
+		if (count > 0) {
+			said = 0;
 		}
 	}
 	pos += (INT64)layerInfo;
 
 	// global layer mask info
 	if ((end - pos < 4) || (io->seek_proc(handle, pos, SEEK_SET) != 0) || (io->read_proc(b, 4, 1, handle) != 1)) {
-		return false;
+		return said;
 	}
 	const DWORD mask = psdGetValue(b, 4);
 	pos += 4;
 	if (mask > (UINT64)(end - pos)) {
-		return false;
+		return said;
 	}
 	pos += mask;
 
 	// tagged blocks
 	while (end - pos >= 12) {
 		if ((io->seek_proc(handle, pos, SEEK_SET) != 0) || (io->read_proc(b, 8, 1, handle) != 1)) {
-			return false;
+			return said;
 		}
 		if ((memcmp(b, "8BIM", 4) != 0) && (memcmp(b, "8B64", 4) != 0)) {
-			return false;
+			return said;
 		}
 		BYTE key[4];
 		memcpy(key, b + 4, 4);
 		const INT64 lengthBytes = (psb && psdHasLongBlockLength(key)) ? 8 : 4;
 		if ((end - pos - 8 < lengthBytes) || (io->read_proc(b, (unsigned)lengthBytes, 1, handle) != 1)) {
-			return false;
+			return said;
 		}
 		const UINT64 length = (lengthBytes == 8) ? psdGetLongValue(b, 8) : psdGetValue(b, 4);
 		const INT64 data = pos + 8 + lengthBytes;
 		const UINT64 room = (UINT64)(end - data);
 		if (length > room) {
-			return false;
+			return said;
 		}
 		if (!memcmp(key, "Mtrn", 4) || !memcmp(key, "Mt16", 4) || !memcmp(key, "Mt32", 4)) {
-			return true;
+			return 1;
 		}
 		if ((!memcmp(key, "Layr", 4) || !memcmp(key, "Lr16", 4) || !memcmp(key, "Lr32", 4)) && (length >= 2)) {
 			if (io->read_proc(b, 2, 1, handle) != 1) {
-				return false;
+				return said;
 			}
-			if ((short)psdGetValue(b, 2) < 0) {
-				return true;
+			const short count = (short)psdGetValue(b, 2);
+			if (count < 0) {
+				return 1;
+			}
+			if (count > 0) {
+				said = 0;
 			}
 		}
 		// the next block, past the data padded to 4 bytes (Photoshop), to 2, or not at all
@@ -1181,32 +1194,44 @@ psdHasMergedAlpha(FreeImageIO *io, fi_handle handle, bool psb, INT64 pos, INT64 
 			}
 		}
 		if (found < 0) {
-			return false;
+			return said;
 		}
 		pos = found;
 	}
-	return false;
+	return said;
 }
 
 bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 	bool bSuccess = true;
+	int merged = -1;
 
 	const UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
 
+	// the extra channels read: CMYK's at 8 or 16 bits, RGB's and Lab's
+	const short mode = _headerInfo._ColourMode;
+	const bool cmyka = (mode == PSDP_CMYK) && (_headerInfo._Channels > 4) &&
+		((_headerInfo._BitsPerChannel == 8) || (_headerInfo._BitsPerChannel == 16));
+	const bool rgba = ((mode == PSDP_RGB) || (mode == PSDP_LAB)) && (_headerInfo._Channels > 3);
+
 	if (nTotalBytes > 0) {
-		// only a CMYK merged image's transparency is read
-		const bool cmyka = (_headerInfo._ColourMode == PSDP_CMYK) && (_headerInfo._Channels > 4) &&
-			((_headerInfo._BitsPerChannel == 8) || (_headerInfo._BitsPerChannel == 16));
-		const INT64 start = cmyka ? io->tell_proc(handle) : -1;
+		const INT64 start = (cmyka || rgba) ? io->tell_proc(handle) : -1;
 		if (nTotalBytes > (UINT64)std::numeric_limits<INT64>::max()) {
 			bSuccess = false;
 		} else if ((start >= 0) && (nTotalBytes <= (UINT64)(std::numeric_limits<INT64>::max() - start))) {
 			const INT64 end = start + (INT64)nTotalBytes;
-			_bMergedAlpha = psdHasMergedAlpha(io, handle, (_headerInfo._Version == 2), start, end);
+			merged = psdMergedTransparency(io, handle, (_headerInfo._Version == 2), start, end);
 			bSuccess = (io->seek_proc(handle, end, SEEK_SET) == 0);
 		} else if (io->seek_proc(handle, (INT64)nTotalBytes, SEEK_CUR) != 0) {
 			bSuccess = false;
 		}
+	}
+
+	if (cmyka) {
+		_bMergedAlpha = (merged == 1);
+	} else if (rgba) {
+		// a file saying nothing keeps its 4th channel as alpha, as FreeImage writes RGBA, unless a selection or a spot ink
+		const int kind = (_ExtraKind >= 0) ? _ExtraKind : (_bDisplayInfoFilled ? _displayInfo._Kind : -1);
+		_bMergedAlpha = (merged == 1) || ((merged == -1) && !_bAlphaIdsNonZero && (kind != 2));
 	}
 
 	return bSuccess;
@@ -1355,6 +1380,31 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 						n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
 						nBytes += n * sizeof(ShortValue);
 						_TransparentIndex = (short)psdGetValue(ShortValue, sizeof(ShortValue) );
+						break;
+
+					// (Photoshop 6.0) Alpha Identifiers: Photoshop's merged transparency is 0
+					case PSDP_RES_ALPHA_IDENTIFIERS:
+						_bAlphaIdsNonZero = (oResource._Size >= 4);
+						for(int i = 0; i < oResource._Size / 4; i++) {
+							if(io->read_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
+								break;
+							}
+							nBytes += sizeof(IntValue);
+							if(psdGetValue(IntValue, sizeof(IntValue)) == 0) {
+								_bAlphaIdsNonZero = false;
+							}
+						}
+						break;
+
+					// (Photoshop CS3) DisplayInfo: a version, then 13 bytes per extra channel, its kind the last
+					case PSDP_RES_DISPLAY_INFO_FLT:
+						if(oResource._Size >= 17) {
+							BYTE first[17];
+							if(io->read_proc(first, sizeof(first), 1, handle) == 1) {
+								nBytes += sizeof(first);
+								_ExtraKind = first[16];
+							}
+						}
 						break;
 
 					// (Photoshop 7.0) EXIF data 1
@@ -1579,8 +1629,8 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		case PSDP_LAB:
 		case PSDP_CMYK	:
 		case PSDP_MULTICHANNEL	:
-			// force PSDP_MULTICHANNEL CMY as CMYK
-			dstCh = (mode == PSDP_MULTICHANNEL) ? 4 : MIN<unsigned>(nChannels, 4);
+			// force PSDP_MULTICHANNEL CMY as CMYK; an RGB or Lab extra channel is read as transparency only
+			dstCh = (mode == PSDP_MULTICHANNEL) ? 4 : MIN<unsigned>(nChannels, ((mode == PSDP_CMYK) || _bMergedAlpha) ? 4 : 3);
 			if(dstCh < 3) {
 				throw "Invalid number of channels";
 			}
@@ -1627,7 +1677,7 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 
 	// the merged alpha, the channel after K, read into a plane: set once CMYK is RGB, or kept for FIF_LOAD_DISPLAY_ICC
 	FIBITMAP *alpha = NULL;
-	if(_bMergedAlpha && (((_fi_flags & PSD_CMYK) != PSD_CMYK) || ((_fi_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC))) {
+	if(_bMergedAlpha && (mode == PSDP_CMYK) && (((_fi_flags & PSD_CMYK) != PSD_CMYK) || ((_fi_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC))) {
 		alpha = (bytes == 2) ? FreeImage_AllocateT(FIT_UINT16, nWidth, nHeight) : FreeImage_Allocate(nWidth, nHeight, 8);
 		if(!alpha) {
 			FreeImage_Unload(bitmap);

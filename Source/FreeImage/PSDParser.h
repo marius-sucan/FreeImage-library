@@ -307,14 +307,16 @@ private:
 	bool _bDisplayInfoFilled;
 	bool _bThumbnailFilled;
 	bool _bCopyright;
-	bool _bMergedAlpha;		//! a CMYK merged image's first extra channel is its transparency
+	bool _bMergedAlpha;		//! the merged image's first extra channel is its transparency
+	bool _bAlphaIdsNonZero;	//! every extra channel has a non-zero alpha identifier: selections and spot inks
+	short _ExtraKind;		//! DisplayInfo kind of the first extra channel (1077): 0 or 1 alpha, 2 spot, -1 unknown
 
 	int _fi_flags;
 	int _fi_format_id;
 	
 private:
 	unsigned GetChannelOffset(FIBITMAP* bitmap, unsigned c) const;
-	/**	Skipped, but for whether a CMYK merged image has transparency */
+	/**	Skipped, but for whether the merged image has transparency */
 	bool ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle);
 	void ReadImageLine(BYTE* dst, const BYTE* src, unsigned lineSize, unsigned dstBpp, unsigned bytes, const BYTE* dst_line_end);
 	void UnpackRLE(BYTE* dst, const BYTE* src, BYTE* dst_end, unsigned srcSize);
