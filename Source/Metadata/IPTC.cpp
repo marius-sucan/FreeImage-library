@@ -32,11 +32,10 @@
 // ----------------------------------------------------------
 
 static const char* IPTC_DELIMITER = ";";	// keywords/supplemental category delimiter
-/**
-	Read and decode IPTC binary data
-*/
-BOOL 
-read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
+
+// the profile's tags, read into tag; iptc_value holds the value being read, freed by the caller when a string throws
+static BOOL
+read_iptc_tags(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen, FITAG *tag, BYTE *&iptc_value) {
 	char defaultKey[16];
 	size_t length = datalen;
 	BYTE *profile = (BYTE*)dataptr;
@@ -61,10 +60,6 @@ read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
 		}
 	}
 
-
-	// create a tag
-
-	FITAG *tag = FreeImage_CreateTag();
 
 	TagLib& tag_lib = TagLib::instance();
 
@@ -113,8 +108,10 @@ read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
 		FreeImage_SetTagLength(tag, tagByteCount);
 
 		// allocate a buffer to store the tag value
-		BYTE *iptc_value = (BYTE*)malloc((tagByteCount + 1) * sizeof(BYTE));
-		memset(iptc_value, 0, (tagByteCount + 1) * sizeof(BYTE));
+		iptc_value = (BYTE*)calloc(tagByteCount + 1, sizeof(BYTE));
+		if(!iptc_value) {
+			return FALSE;
+		}
 
 		// get the tag value
 
@@ -182,6 +179,7 @@ read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
 		}
 
 		free(iptc_value);
+		iptc_value = NULL;
 
         // next tag
 		offset += tagByteCount;
@@ -212,11 +210,28 @@ read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
 		FreeImage_SetMetadata(FIMD_IPTC, dib, FreeImage_GetTagKey(tag), tag);
 	}
 
-	// delete the tag
-
-	FreeImage_DeleteTag(tag);
-
 	return TRUE;
+}
+
+/**
+	Read and decode IPTC binary data
+*/
+BOOL
+read_iptc_profile(FIBITMAP *dib, const BYTE *dataptr, unsigned int datalen) {
+	FITAG *tag = FreeImage_CreateTag();
+	if(!tag) {
+		return FALSE;
+	}
+	BYTE *iptc_value = NULL;
+	BOOL bSuccess = FALSE;
+	try {
+		bSuccess = read_iptc_tags(dib, dataptr, datalen, tag, iptc_value);
+	} catch(std::bad_alloc &) {
+		// out of memory: the tags stored so far stay
+	}
+	free(iptc_value);
+	FreeImage_DeleteTag(tag);
+	return bSuccess;
 }
 
 // --------------------------------------------------------------------------

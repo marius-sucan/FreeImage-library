@@ -257,6 +257,31 @@ static int exr_save(void) { return save_case(FIF_EXR, FIT_RGBF, 40, 24, 96); }
 static int jng_save(void) { return save_case(FIF_JNG, FIT_BITMAP, 40, 24, 24); }
 static int tiff_load(void) { return load_case(FIF_TIFF, FIT_BITMAP, 40, 24, 24); }
 
+/* a PSD with IPTC keywords, categories and a caption: the IPTC reader's strings fail too */
+static int psd_iptc_case(void) {
+    FIBITMAP *dib = pattern(FIT_BITMAP, 40, 24, 24), *back;
+    const char *dir = getenv("IO_TEST_TMP");
+    char path[512];
+    int whole;
+    if (!dib) return CASE_BROKEN;
+    snprintf(path, sizeof(path), "%s/fi_io_psd_%d.psd", (dir && *dir) ? dir : ".", (int)getpid());
+    FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "Keywords", "first;second;third");
+    FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "SupplementalCategories", "one;two");
+    FreeImage_SetMetadataKeyValue(FIMD_IPTC, dib, "Caption-Abstract", "a caption longer than a short string holds");
+    if (!FreeImage_Save(FIF_PSD, dib, path, 0)) { FreeImage_Unload(dib); return CASE_BROKEN; }
+
+    armed = 1; fail_new = 1;
+    back = FreeImage_Load(FIF_PSD, path, 0);
+    armed = 0; fail_new = 0;
+
+    whole = !back || (((int)FreeImage_GetWidth(back) == 40) && ((int)FreeImage_GetHeight(back) == 24) && tags_whole(back));
+    FreeImage_Unload(back);
+    FreeImage_Unload(dib);
+    remove(path);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 /* --------------------------------------------------------------- multi-page and metadata under a failing throwing new */
 
 static const char *mpage_path(char *buf, size_t size) {
@@ -747,6 +772,7 @@ int main(void) {
     sweep("EXR save: TRUE only for a file that loads", exr_save);
     sweep("JNG save: TRUE only for a file that loads", jng_save);
     sweep("TIFF load: no crash", tiff_load);
+    sweep("PSD load with IPTC: no crash, no tag without its value", psd_iptc_case);
     if (!icc_setup()) {
         report("color management: the test profiles", 0);
     } else {
