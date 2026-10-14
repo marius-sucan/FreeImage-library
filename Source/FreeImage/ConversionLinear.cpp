@@ -186,6 +186,39 @@ CurveOfCode(BYTE transfer) {
 	}
 }
 
+// CurveOfCode's curves as Little CMS parametric curves
+int
+GetCICPToneCurve(BYTE transfer, double params[5]) {
+	static const double BT709[5] = { 1 / 0.45, 1 / 1.099, 0.099 / 1.099, 1 / 4.5, 0.081 };
+	static const double SMPTE240[5] = { 1 / 0.45, 1 / 1.1115, 0.1115 / 1.1115, 1 / 4.0, 0.0913 };
+	static const double SRGB[5] = { 2.4, 1 / 1.055, 0.055 / 1.055, 1 / 12.92, 0.04045 };
+	const double *curve = NULL;
+	switch (transfer) {
+		case 1: case 6: case 11: case 12: case 14: case 15:
+			curve = BT709;
+			break;
+		case 4:
+			params[0] = 2.2;
+			return 1;
+		case 5:
+			params[0] = 2.8;
+			return 1;
+		case 7:
+			curve = SMPTE240;
+			break;
+		case 8:
+			params[0] = 1.0;
+			return 1;
+		case 13:
+			curve = SRGB;
+			break;
+		default:
+			return CurveOfCode(transfer) ? -1 : 0;
+	}
+	memcpy(params, curve, 5 * sizeof(double));
+	return 4;
+}
+
 // ----------------------------------------------------------
 //   Primaries
 // ----------------------------------------------------------
@@ -211,6 +244,17 @@ ChromaticitiesOfCode(BYTE code) {
 		}
 	}
 	return NULL;
+}
+
+BOOL
+GetCICPChromaticities(BYTE primaries, double xy[8]) {
+	const Chromaticities *c = ChromaticitiesOfCode(primaries);
+	if (!c) {
+		return FALSE;
+	}
+	const double values[8] = { c->red[0], c->red[1], c->green[0], c->green[1], c->blue[0], c->blue[1], c->white[0], c->white[1] };
+	memcpy(xy, values, sizeof(values));
+	return TRUE;
 }
 
 static cmsHPROFILE

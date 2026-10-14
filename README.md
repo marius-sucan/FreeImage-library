@@ -86,8 +86,9 @@ Changes:
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - BMP files load with the ICC profile their V5 header embeds, for color management; saved BMPs carry none;
+- JPEG XR files that state their colors with PTM_COLOR_INFO instead of an ICC profile load with a profile of those colors, for color management;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
-- the PNG, APNG, AVIF, HEIF and JPEG XL loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
+- the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
 - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. Bitmaps tagged "UnscaledBits" return FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); Floating-point RGB bitmaps always return FITM_REQUIRED;
 - added FreeImage_ConvertToLinear();
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
@@ -121,6 +122,6 @@ Color management:
 - FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use the image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
 
 Bugs or limitations identified:
-- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
+- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG XR files whose PTM_COLOR_INFO says PQ or HLG, get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

@@ -69,10 +69,13 @@
 
 #define WMP_tagCaption              0x9c9b  // Descriptive metadata tag
 
+#define WMP_tagColorSpace 0xa001 // FreeImage: T.832 A.7.17
+
 #define WMP_tagPixelFormat 0xbc01
 #define WMP_tagTransformation 0xbc02
 #define WMP_tagCompression 0xbc03
 #define WMP_tagImageType 0xbc04
+#define WMP_tagPTMColorInfo 0xbc05 // FreeImage: T.832 A.7.21
 
 #define WMP_tagImageWidth 0xbc80
 #define WMP_tagImageHeight 0xbc81
@@ -190,6 +193,9 @@ typedef struct tagWmpDEMisc
     U32 uPhotoshopMetadataByteCount;
     U32 uDescMetadataOffset;
     U32 uDescMetadataByteCount;
+    U32 uColorSpace; // FreeImage: COLOR_SPACE, 1 or 0xFFFF, 0 when absent
+    U32 uPTMColorInfo; // FreeImage: PTM_COLOR_INFO, its first byte the lowest
+    Bool fPTMColorInfo; // FreeImage: PTM_COLOR_INFO is present
 } WmpDEMisc;
 
 

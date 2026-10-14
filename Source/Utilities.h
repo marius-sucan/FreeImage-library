@@ -515,6 +515,28 @@ TRUE when the code points of the image - its CICP tag, else its ICC profile's ci
 */
 bool IsPQEncoded(FIBITMAP *dib);
 
+/**
+The CIE 1931 xy of an ITU-T H.273 color primaries code point: red, green, blue and white; FALSE without them
+@see See definition in ConversionLinear.cpp
+*/
+BOOL GetCICPChromaticities(BYTE primaries, double xy[8]);
+
+/**
+The tone curve FreeImage_ConvertToLinear reads an ITU-T H.273 transfer characteristics code point by, as a Little CMS
+parametric curve: its type, 1 or 4, and params; 0 for an unspecified or unknown code point, -1 for a curve no
+parametric curve holds (PQ, HLG, the logarithmic ones)
+@see See definition in ConversionLinear.cpp
+*/
+int GetCICPToneCurve(BYTE transfer, double params[5]);
+
+/**
+An ICC profile of the colors ITU-T H.273 code points describe, RGB or grey, sRGB's primaries or tone curve standing
+in for unspecified ones; NULL when they describe sRGB, nothing, or a tone curve no parametric curve holds.
+The bytes stay valid until the process ends. size is unsigned, not DWORD: see ConvertToFileProfile
+@see See definition in ColorManagement.cpp
+*/
+const void* GetCICPProfile(BYTE primaries, BYTE transfer, BOOL grey, unsigned *size);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

@@ -1719,6 +1719,22 @@ ERR ParsePFDEntry(
             pID->WMP.wmiDEMisc.uPhotoshopMetadataOffset = uValue;
             break;
 
+        // FreeImage: an entry of another type or count is ignored (Table A.4), a COLOR_SPACE but 1 read as 0xFFFF (A.7.17)
+        case WMP_tagColorSpace:
+            if (WMP_typSHORT == uType && 1 == uCount)
+            {
+                pID->WMP.wmiDEMisc.uColorSpace = (1 == (uValue & 0xFFFF)) ? 1 : 0xFFFF;
+            }
+            break;
+
+        case WMP_tagPTMColorInfo:
+            if (WMP_typBYTE == uType && 4 == uCount)
+            {
+                pID->WMP.wmiDEMisc.uPTMColorInfo = uValue;
+                pID->WMP.wmiDEMisc.fPTMColorInfo = TRUE;
+            }
+            break;
+
         case WMP_tagCompression:
         case WMP_tagImageType:
         case WMP_tagImageDataDiscard:

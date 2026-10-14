@@ -19,6 +19,7 @@
 // ==========================================================
 
 #include <chrono>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -1862,6 +1863,115 @@ GetTwinCache() {
 	return *cache;
 }
 
+// ----------------------------------------------------------
+//   Profiles of ITU-T H.273 code points
+// ----------------------------------------------------------
+
+static const char *
+PrimariesName(BYTE code) {
+	switch (code) {
+		case 1:		return "BT.709";
+		case 4:		return "BT.470 System M";
+		case 5:		return "BT.601 625-line";
+		case 6:		return "BT.601 525-line";
+		case 7:		return "SMPTE 240M";
+		case 8:		return "Generic film";
+		case 9:		return "BT.2020";
+		case 11:	return "DCI-P3";
+		case 12:	return "Display P3";
+		case 22:	return "EBU Tech 3213-E";
+		default:	return "ITU-T H.273";
+	}
+}
+
+static const char *
+TransferName(BYTE code) {
+	switch (code) {
+		case 1:		return "BT.709";
+		case 4:		return "gamma 2.2";
+		case 5:		return "gamma 2.8";
+		case 6:		return "BT.601";
+		case 7:		return "SMPTE 240M";
+		case 8:		return "linear";
+		case 11:	return "xvYCC";
+		case 12:	return "BT.1361";
+		case 13:	return "sRGB";
+		case 14:
+		case 15:	return "BT.2020";
+		default:	return "ITU-T H.273";
+	}
+}
+
+// an RGB profile of the primaries and tone curve, with their code points as its cicp tag, or a grey one of the curve
+static void
+MakeCICPProfile(BYTE primaries, BYTE transfer, bool grey, std::vector<BYTE> &bytes) {
+	double xy[8];
+	double params[5];
+	const int type = GetCICPToneCurve(transfer, params);
+	if ((type <= 0) || (!grey && !GetCICPChromaticities(primaries, xy))) {
+		return;
+	}
+	Context context;
+	context.mute = true;
+	cmsToneCurve *curve = context.id ? cmsBuildParametricToneCurve(context.id, type, params) : NULL;
+	if (!curve) {
+		return;
+	}
+	cmsHPROFILE profile = NULL;
+	std::string name;
+	if (grey) {
+		profile = cmsCreateGrayProfileTHR(context.id, cmsD50_xyY(), curve);
+		name = std::string("Gray, ") + TransferName(transfer) + " tone curve (FreeImage)";
+	} else {
+		const cmsCIExyY white = { xy[6], xy[7], 1.0 };
+		const cmsCIExyYTRIPLE rgb = { { xy[0], xy[1], 1.0 }, { xy[2], xy[3], 1.0 }, { xy[4], xy[5], 1.0 } };
+		cmsToneCurve *curves[3] = { curve, curve, curve };
+		profile = cmsCreateRGBProfileTHR(context.id, &white, &rgb, curves);
+		name = std::string(PrimariesName(primaries)) + " primaries, " + TransferName(transfer) + " tone curve (FreeImage)";
+	}
+	cmsFreeToneCurve(curve);
+	if (!profile) {
+		return;
+	}
+	cmsVideoSignalType cicp = { primaries, transfer, 0, 1 };
+	if (SetDescription(profile, name.c_str()) && (grey || cmsWriteTag(profile, cmsSigcicpTag, &cicp))) {
+		DWORD size = 0;
+		BYTE *data = SaveBuiltInProfile(profile, &size);
+		if (data) {
+			bytes.assign(data, data + size);
+			free(data);
+		}
+	}
+	cmsCloseProfile(profile);
+}
+
+// each profile of code points is made once
+class CICPProfiles {
+public:
+	const std::vector<BYTE> &Get(BYTE primaries, BYTE transfer, bool grey) {
+		const unsigned key = ((unsigned)primaries << 9) | ((unsigned)transfer << 1) | (grey ? 1u : 0u);
+		std::lock_guard<std::mutex> guard(m_lock);
+		std::map<unsigned, std::vector<BYTE> >::iterator entry = m_made.find(key);
+		if (entry == m_made.end()) {
+			std::vector<BYTE> bytes;
+			MakeCICPProfile(primaries, transfer, grey, bytes);
+			entry = m_made.insert(std::make_pair(key, bytes)).first;
+		}
+		return entry->second;
+	}
+
+private:
+	std::mutex m_lock;
+	std::map<unsigned, std::vector<BYTE> > m_made;
+};
+
+static CICPProfiles &
+GetCICPProfiles() {
+	// never destroyed: a load may still run while the process ends
+	static CICPProfiles *profiles = new CICPProfiles;
+	return *profiles;
+}
+
 // a grey profile whose tone curve is the luminance the display shows for (v, v, v)
 static bool
 DisplayGrey(const Context &context, cmsHPROFILE display, std::vector<BYTE> &grey) {
@@ -2385,5 +2495,42 @@ ConvertToFileProfile(FIBITMAP *dib, const void *profile, unsigned size, FIBITMAP
 	} catch (std::bad_alloc &) {
 		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
 		return FALSE;
+	}
+}
+
+// ==========================================================
+//   Profiles of ITU-T H.273 code points
+// ==========================================================
+
+const void*
+GetCICPProfile(BYTE primaries, BYTE transfer, BOOL grey, unsigned *size) {
+	*size = 0;
+	double xy[8];
+	double params[5];
+	const int type = GetCICPToneCurve(transfer, params);
+	if (type < 0) {
+		return NULL;
+	}
+	// unspecified code points mean what they mean without a profile: sRGB
+	if (type == 0) {
+		transfer = 13;
+	}
+	if (grey) {
+		primaries = 0;
+	} else if (!GetCICPChromaticities(primaries, xy)) {
+		primaries = 1;
+	}
+	if ((transfer == 13) && (grey || (primaries == 1))) {
+		return NULL;
+	}
+	try {
+		const std::vector<BYTE> &bytes = GetCICPProfiles().Get(primaries, transfer, grey ? true : false);
+		if (bytes.empty()) {
+			return NULL;
+		}
+		*size = (unsigned)bytes.size();
+		return &bytes[0];
+	} catch (...) {
+		return NULL;
 	}
 }

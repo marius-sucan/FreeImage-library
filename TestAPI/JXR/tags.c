@@ -1,7 +1,7 @@
 /* FreeImage 3 - JPEG XR descriptive tags: every Exif-Main tag the container holds, alone, together and of a
    wrong type, saved losslessly and loaded back; the pixels must survive and the tags come back or be left out;
    every save has its IFD entries in ascending tag order (T.832 A.7.2), the values past them at even offsets (A.7.5).
-   Entries jxrlib has no use for, Annex A's and a private one, are ignored without a line on stderr (A.7.1) */
+   Entries that change nothing, Annex A's and a private one, are ignored without a line on stderr (A.7.1) */
 /* argv[1]: a TIFF with a PageNumber tag, default ../../Wrapper/FreeImagePlus/test/test.tif */
 #include <stdio.h>
 #include <stdlib.h>

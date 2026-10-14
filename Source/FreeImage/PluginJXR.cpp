@@ -378,7 +378,7 @@ GetNativePixelFormat(const PKPixelInfo *pixelInfo, BOOL keep_cmyk, PKPixelFormat
 	if(IsEqualGUID(guid_format, GUID_PKPixelFormat32bppRGBE) || IsEqualGUID(guid_format, GUID_PKPixelFormat128bppRGBFloat)) {
 		return WMP_errFail;
 	}
-	// YCC: only PTM_COLOR_INFO, which is not read, could say which matrix gives its RGB
+	// YCC: refused, its matrix to RGB is not applied
 	if((pixelInfo->cfColorFormat == YUV_444) || (pixelInfo->cfColorFormat == YUV_422) || (pixelInfo->cfColorFormat == YUV_420)) {
 		return WMP_errFail;
 	}
@@ -820,6 +820,44 @@ ReadMetadata(PKImageDecode *pID, FIBITMAP *dib) {
 			pStream->SetPos(pStream, currentPos);
 		}
 		return error_code;
+	}
+}
+
+/**
+Describe the colors of an image without an ICC profile in the file: PTM_COLOR_INFO's code points as the CICP tag, with
+a profile of them, else COLOR_SPACE's sRGB. Both only describe unsigned RGB and grey of 8, 10 or 16 bits (T.832 A.7.17, A.7.21)
+@param pID Decoder handle
+@param guid_format Decoded pixel format
+@param dib Image loaded from it
+*/
+static void
+ReadColorDescription(PKImageDecode *pID, const PKPixelFormatGUID &guid_format, FIBITMAP *dib) {
+	const WmpDEMisc *wmiDEMisc = &pID->WMP.wmiDEMisc;
+	if(FreeImage_GetICCProfile(dib)->data || (!wmiDEMisc->fPTMColorInfo && (wmiDEMisc->uColorSpace != 1))) {
+		return;
+	}
+	PKPixelInfo pixelInfo;
+	pixelInfo.pGUIDPixFmt = &guid_format;
+	if(PixelFormatLookup(&pixelInfo, LOOKUP_FORWARD) != WMP_errSuccess) {
+		return;
+	}
+	const BOOL grey = (pixelInfo.cfColorFormat == Y_ONLY);
+	if((!grey && (pixelInfo.cfColorFormat != CF_RGB)) || ((pixelInfo.bdBitDepth != BD_8) && (pixelInfo.bdBitDepth != BD_10) && (pixelInfo.bdBitDepth != BD_16))) {
+		return;
+	}
+	if(!wmiDEMisc->fPTMColorInfo) {
+		SetCICPMetadata(dib, 1, 13, 0, TRUE);
+		return;
+	}
+	// COLOR_PRIMARIES, TRANSFER_CHARACTERISTICS, MATRIX_COEFFICIENTS, then FULL_RANGE_FLAG in the last byte's lowest bit
+	const U32 ptm = wmiDEMisc->uPTMColorInfo;
+	const BYTE primaries = (BYTE)ptm;
+	const BYTE transfer = (BYTE)(ptm >> 8);
+	SetCICPMetadata(dib, primaries, transfer, (BYTE)(ptm >> 16), (ptm >> 24) & 1);
+	unsigned size = 0;
+	const void *profile = GetCICPProfile(primaries, transfer, grey, &size);
+	if(profile) {
+		FreeImage_CreateICCProfile(dib, (void*)profile, (long)size);
 	}
 }
 
@@ -1731,6 +1769,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
 			}
 		}
+		ReadColorDescription(pDecoder, in_guid_format, dib);
 
 		if(header_only) {
 			// header only mode ...
