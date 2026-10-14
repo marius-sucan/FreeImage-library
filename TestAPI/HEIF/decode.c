@@ -42,7 +42,7 @@ static const Expected EXPECTED[] = {
     {"avif32.heif",                     FIF_AVIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
     /* one 32x32 image, five codecs; avc refused; j2k32 is a flat fuzz file */
     {"avc32.heif",                      FIF_HEIF, 0,    0,    0, FIT_BITMAP,  0,   0,  0, 0,   0,   0, 0x0ULL},
-    {"jpeg32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xdf80f91a274d4f7eULL},
+    {"jpeg32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24, 696,  0, 0,   0,   0, 0xdf80f91a274d4f7eULL},
     {"j2k32.heif",                      FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x720697d25f1aa223ULL},
     {"j2k32-lossless.heif",             FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0x9b94024bd588a8bbULL},
     {"unci32.heif",                     FIF_HEIF, 1,   32,   32, FIT_BITMAP, 24,   0,  0, 0,   0,   0, 0xb0cc9d934f8f9eaeULL},

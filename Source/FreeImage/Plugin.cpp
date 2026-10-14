@@ -412,6 +412,8 @@ FreeImage_LoadFromHandle(FREE_IMAGE_FORMAT fif, FreeImageIO *io, fi_handle handl
 					FreeImage_Close(node, io, handle, data);
 				}
 
+				AttachCICPProfile(bitmap);
+
 				if (bitmap && ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
 					bitmap = ConvertToDisplayICC(fif, flags, bitmap);
 				}

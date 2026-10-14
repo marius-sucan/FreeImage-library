@@ -86,7 +86,7 @@ Changes:
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - BMP files load with the ICC profile their V5 header embeds, for color management; saved BMPs carry none;
-- JPEG XR files that state their colors with PTM_COLOR_INFO instead of an ICC profile load with a profile of those colors, for color management, and 8-bit YCC 4:4:4 ones load as RGB through its matrix;
+- AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors, for color management; 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
 - fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
@@ -123,6 +123,6 @@ Color management:
 - FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use the image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
 
 Bugs or limitations identified:
-- AVIF and HEIF images that describe their colours with CICP (nclx) instead of an ICC profile, and JPEG XR files whose PTM_COLOR_INFO says PQ or HLG, get no profile attached: color management takes them as sRGB; the code points are in the CICP tag;
+- AVIF, HEIF, PNG and JPEG XR files without an ICC profile whose code points say PQ, HLG, SMPTE 428 or a logarithmic curve get no profile: color management takes them as sRGB; the code points are in the CICP tag;
 - saving WEBP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;

@@ -2534,3 +2534,34 @@ GetCICPProfile(BYTE primaries, BYTE transfer, BOOL grey, unsigned *size) {
 		return NULL;
 	}
 }
+
+void
+AttachCICPProfile(FIBITMAP *dib) {
+	BYTE cicp[4];
+	const FIICCPROFILE *icc = dib ? FreeImage_GetICCProfile(dib) : NULL;
+	if (!icc || icc->data || (icc->flags & FIICC_COLOR_IS_CMYK) || !GetCICPMetadata(dib, cicp)) {
+		return;
+	}
+	BOOL grey = FALSE;
+	switch (FreeImage_GetImageType(dib)) {
+		case FIT_BITMAP: {
+			const FREE_IMAGE_COLOR_TYPE color = FreeImage_GetColorType(dib);
+			grey = ((color == FIC_MINISBLACK) || (color == FIC_MINISWHITE)) ? TRUE : FALSE;
+			break;
+		}
+		case FIT_UINT16:
+			grey = TRUE;
+			break;
+		case FIT_RGB16:
+		case FIT_RGBA16:
+			break;
+		default:
+			// floating point holds light, the other types no colors
+			return;
+	}
+	unsigned size = 0;
+	const void *profile = GetCICPProfile(cicp[0], cicp[1], grey, &size);
+	if (profile) {
+		FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+	}
+}

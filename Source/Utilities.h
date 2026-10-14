@@ -537,6 +537,12 @@ The bytes stay valid until the process ends. size is unsigned, not DWORD: see Co
 */
 const void* GetCICPProfile(BYTE primaries, BYTE transfer, BOOL grey, unsigned *size);
 
+/**
+Give a loaded image with a CICP tag but no ICC profile the profile of its code points, when it has one
+@see See definition in ColorManagement.cpp
+*/
+void AttachCICPProfile(FIBITMAP *dib);
+
 
 // ==========================================================
 //   Big Endian / Little Endian utility functions

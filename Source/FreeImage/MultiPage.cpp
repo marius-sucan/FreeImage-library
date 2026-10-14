@@ -710,6 +710,8 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 								success = FALSE;
 								break;
 							}
+							// the profile a locked page has
+							AttachCICPProfile(dib);
 
 							// save the data
 							success = node->m_plugin->save_proc(io, dib, handle, count, flags, data);
@@ -1195,6 +1197,7 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 
 			if (header->node->m_plugin->load_proc != NULL) {
 				dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, DisplayICCLoadFlags(header->fif, header->load_flags), header->read_data);
+				AttachCICPProfile(dib);
 				if (dib && ((header->load_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
 					dib = ConvertToDisplayICC(header->fif, header->load_flags, dib);
 				}

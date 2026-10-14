@@ -4,7 +4,7 @@
 # libfreeimage.a needs the OpenMP runtime
 include ../../Makefile.openmp
 
-TESTS   = convert profiles robust display
+TESTS   = convert profiles robust display cicp
 CFLAGS ?= -O2 -g -w
 INC     = -I../../Dist
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS)
@@ -70,4 +70,4 @@ asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libf
 asan-run: asan-obj/.built
 	for t in $(TESTS); do \
 	  gcc $(CFLAGS) $(SAN) $(INC) $$t.c -o $$t-asan asan-obj/*.o ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread -ldl $(OPENMP_LDFLAGS) || exit 1; done
-	ASAN_OPTIONS=detect_leaks=1 ./convert-asan -quick && ./profiles-asan && ./robust-asan 30 && ./display-asan
+	ASAN_OPTIONS=detect_leaks=1 ./convert-asan -quick && ./profiles-asan && ./robust-asan 30 && ./display-asan && ./cicp-asan

@@ -35,8 +35,8 @@ static const Expected EXPECTED[] = {
     {"sofa_grid1x5_420.avif",                       1, 1024,  770, FIT_BITMAP, 24,     0,  0, 0,   -1, -1, 0x7701ca0843b52fc3ULL},
     {"seine_hdr_rec2020.avif",                      1,  400,  300, FIT_RGB16,  48,     0,  4, 1,   -1, -1, 0x580a626c78e36b5aULL},
     {"color_grid_alpha_nogrid.avif",                1,   80,   80, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0xc3be607506ccdb20ULL},
-    {"draw_points_idat.avif",                       1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
-    {"draw_points_idat_two_ipma.avif",              1,   33,   11, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
+    {"draw_points_idat.avif",                       1,   33,   11, FIT_BITMAP, 32,   668,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
+    {"draw_points_idat_two_ipma.avif",              1,   33,   11, FIT_BITMAP, 32,   668,  0, 0,   -1, -1, 0x44ac3d591023db1ULL},
     {"circle_custom_properties.avif",               1,  100,   60, FIT_BITMAP, 32,     0,  0, 0,   -1, -1, 0x58f31c4067b13045ULL},
     /* 'mif3' files: need AVIF_ENABLE_EXPERIMENTAL_MINI */
     {"simple_osm_tile_meta.avif",                   1,  256,  256, FIT_BITMAP, 24,   672, 10, 1,   -1, -1, 0xa3054d39d9bb88bULL},

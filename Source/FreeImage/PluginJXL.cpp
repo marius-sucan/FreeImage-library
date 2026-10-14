@@ -1717,6 +1717,14 @@ ProfileFitsSRGB(const std::vector<BYTE>& icc) {
 	return TRUE;
 }
 
+// the profile a load made of the CICP tag
+static BOOL
+IsCICPProfile(const FIICCPROFILE *icc, const BYTE cicp[4], BOOL grey) {
+	unsigned size = 0;
+	const void *profile = GetCICPProfile(cicp[0], cicp[1], grey, &size);
+	return (profile && (size == (unsigned)icc->size) && (memcmp(profile, icc->data, size) == 0)) ? TRUE : FALSE;
+}
+
 // the colours: the bitmap's ICC profile, else its CICP tag, else sRGB (linear for float)
 static BOOL
 SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
@@ -1725,7 +1733,12 @@ SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
 	BOOL to_srgb = FALSE;
 	writer->has_profile = FALSE;
 	writer->frame_mode = JXL_FRAMES_LAYERED;
-	if(icc && icc->data && (icc->size >= 132) && !(icc->flags & FIICC_COLOR_IS_CMYK)) {
+	JxlColorEncoding enc;
+	BYTE cicp[4];
+	const BOOL coded = (GetCICPMetadata(dib, cicp) && CICPToEncoding(cicp, grey, &enc)) ? TRUE : FALSE;
+	// a profile made of the tag goes as the tag's encoding: a lossless file would keep the ICC
+	const BOOL made = (coded && icc && icc->data && IsCICPProfile(icc, cicp, grey)) ? TRUE : FALSE;
+	if(icc && icc->data && (icc->size >= 132) && !(icc->flags & FIICC_COLOR_IS_CMYK) && !made) {
 		std::vector<BYTE> bytes((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
 		if(ProfileColorSpace(bytes) == (DWORD)(grey ? FICMS_COLORSPACE_GRAY : FICMS_COLORSPACE_RGB)) {
 			// a profile libjxl keeps: its lossy frames could not blend
@@ -1744,13 +1757,19 @@ SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
 			}
 		}
 	}
-	JxlColorEncoding enc;
-	BYTE cicp[4];
-	if(to_srgb || !(GetCICPMetadata(dib, cicp) && CICPToEncoding(cicp, grey, &enc))) {
+	if(to_srgb || !coded) {
 		if(writer->format.data_type == JXL_TYPE_FLOAT) {
 			JxlColorEncodingSetToLinearSRGB(&enc, grey ? JXL_TRUE : JXL_FALSE);
 		} else {
 			JxlColorEncodingSetToSRGB(&enc, grey ? JXL_TRUE : JXL_FALSE);
+		}
+	} else if(made) {
+		// later frames are converted to the encoding's colors
+		unsigned size = 0;
+		const BYTE *profile = (const BYTE*)GetCICPProfile(cicp[0], cicp[1], grey, &size);
+		if(profile) {
+			writer->profile.assign(profile, profile + size);
+			writer->has_profile = TRUE;
 		}
 	}
 	return (JxlEncoderSetColorEncoding(writer->encoder, &enc) == JXL_ENC_SUCCESS) ? TRUE : FALSE;
