@@ -589,6 +589,16 @@ GetOutputPixelFormat(FIBITMAP *dib, PKPixelFormatGUID *guid_format, BOOL *bHasAl
 	*guid_format = GUID_PKPixelFormatDontCare;
 	*bHasAlpha = FALSE;
 
+	// C, M, Y, K as JXR_CMYK loads them; T.832 has no float CMYK
+	if(color_type == FIC_CMYK) {
+		if((image_type == FIT_BITMAP) && (bpp == 32)) {
+			*guid_format = GUID_PKPixelFormat32bppCMYK;
+		} else if(image_type == FIT_RGBA16) {
+			*guid_format = GUID_PKPixelFormat64bppCMYK;
+		}
+		return (*guid_format != GUID_PKPixelFormatDontCare) ? WMP_errSuccess : WMP_errUnsupportedFormat;
+	}
+
 	switch(image_type) {
 		case FIT_BITMAP:	// standard image	: 1-, 4-, 8-, 16-, 24-, 32-bit
 			switch(bpp) {
@@ -2000,8 +2010,10 @@ SetCompression(CWMIStrCodecParam *wmiSCP, const PKPixelInfo *pixelInfo, unsigned
 		} else {
 			wmiSCP->olOverlap = OL_TWO;
 		}
-		// chroma sub-sampling
-		if(fltImageQuality >= 0.5F || pixelInfo->uBitsPerSample > 8) {
+		// chroma sub-sampling; CMYK has none
+		if(pixelInfo->cfColorFormat == CMYK) {
+			wmiSCP->cfColorFormat = CMYK;
+		} else if(fltImageQuality >= 0.5F || pixelInfo->uBitsPerSample > 8) {
 			wmiSCP->cfColorFormat = YUV_444;
 		} else {
 			wmiSCP->cfColorFormat = YUV_420;
@@ -2041,6 +2053,11 @@ SetCompression(CWMIStrCodecParam *wmiSCP, const PKPixelInfo *pixelInfo, unsigned
             wmiSCP->uiDefaultQPIndexYHP = (U8) (0.5F + (float) pQPs[3] * (1.0F - qf) + (float) (pQPs + 6)[3] * qf);
 			wmiSCP->uiDefaultQPIndexUHP = (U8) (0.5F + (float) pQPs[4] * (1.0F - qf) + (float) (pQPs + 6)[4] * qf);
 			wmiSCP->uiDefaultQPIndexVHP = (U8) (0.5F + (float) pQPs[5] * (1.0F - qf) + (float) (pQPs + 6)[5] * qf);
+			// CMYK takes Y's QPs: its fourth channel, the mean of the inks, would get V's
+			if(pixelInfo->cfColorFormat == CMYK) {
+				wmiSCP->uiDefaultQPIndexU = wmiSCP->uiDefaultQPIndexV = wmiSCP->uiDefaultQPIndex;
+				wmiSCP->uiDefaultQPIndexUHP = wmiSCP->uiDefaultQPIndexVHP = wmiSCP->uiDefaultQPIndexYHP;
+			}
 		}
 	} // fltImageQuality < 1.0F
     else {
@@ -2063,7 +2080,7 @@ SetEncoderParameters(CWMIStrCodecParam *wmiSCP, const PKPixelInfo *pixelInfo, un
 
 	// all values have been set to zero by the API
 	// update default values for some attributes
-    wmiSCP->cfColorFormat = YUV_444;		// color format
+    wmiSCP->cfColorFormat = (pixelInfo->cfColorFormat == CMYK) ? CMYK : YUV_444;	// color format; CMYK coded as YUV loses K
     wmiSCP->bdBitDepth = BD_LONG;			// internal bit depth
     wmiSCP->bfBitstreamFormat = SPATIAL;	// compressed image data in spatial order
     wmiSCP->bProgressiveMode = FALSE;		// sequential mode

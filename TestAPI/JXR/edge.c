@@ -1,4 +1,4 @@
-/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE; every save in a pixel format of T.832 Table A.6 */
+/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE; every save in a pixel format of T.832 Table A.6, CMYK in a CMYK one */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,12 +24,12 @@ static FIBITMAP *mk(FREE_IMAGE_TYPE t,int w,int h,int bpp){
         for(i=0;i<c;i++){ int v=(bpp==1)?(i?255:0):i; pal[i].rgbRed=pal[i].rgbGreen=pal[i].rgbBlue=(BYTE)v; } }
     return d;
 }
-/* the PIXEL_FORMAT of a saved file is a T.832 Table A.6 one: they all share these 15 bytes, WIC's do not */
+/* the last byte of a saved file's T.832 Table A.6 PIXEL_FORMAT, else -1: they all share these 15 bytes, WIC's do not */
 static int t832_format(const char *path){
     static const BYTE A6[15]={0x24,0xC3,0xDD,0x6F,0x03,0x4E,0xFE,0x4B,0xB1,0x85,0x3D,0x77,0x76,0x8D,0xC9};
-    BYTE b[16]; unsigned ifd,n,i,off=0; int ok=0;
+    BYTE b[16]; unsigned ifd,n,i,off=0; int fmt=-1;
     FILE *f=fopen(path,"rb");
-    if(!f) return 0;
+    if(!f) return -1;
     if(fseek(f,4,SEEK_SET)==0 && fread(b,1,4,f)==4){
         ifd=b[0]|(b[1]<<8)|(b[2]<<16)|((unsigned)b[3]<<24);
         if(fseek(f,(long)ifd,SEEK_SET)==0 && fread(b,1,2,f)==2){
@@ -39,27 +39,32 @@ static int t832_format(const char *path){
             }
         }
     }
-    if(off && fseek(f,(long)off,SEEK_SET)==0 && fread(b,1,16,f)==16) ok=!memcmp(b,A6,15);
+    if(off && fseek(f,(long)off,SEEK_SET)==0 && fread(b,1,16,f)==16 && !memcmp(b,A6,15)) fmt=b[15];
     fclose(f);
-    return ok;
+    return fmt;
 }
-static int rt(FREE_IMAGE_TYPE t,int bpp,int w,int h,int flags){
-    FIBITMAP *d=mk(t,w,h,bpp), *b; int ok;
+/* CMYK goes out as 32bppCMYK or 64bppCMYK and comes back as CMYK with JXR_CMYK */
+static int rt(FREE_IMAGE_TYPE t,int bpp,int cmyk,int w,int h,int flags){
+    FIBITMAP *d=mk(t,w,h,bpp), *b; int ok, fmt=-1;
     if(!d) return -1;
-    ok = FreeImage_Save(FIF_JXR,d,OUT,flags) && t832_format(OUT);
-    if(ok){ b=FreeImage_Load(FIF_JXR,OUT,0);
+    if(cmyk) FreeImage_GetICCProfile(d)->flags|=FIICC_COLOR_IS_CMYK;
+    ok = FreeImage_Save(FIF_JXR,d,OUT,flags) && (fmt=t832_format(OUT))>=0;
+    if(ok && cmyk) ok = (fmt==((bpp==32)?0x1C:0x1F));
+    if(ok){ b=FreeImage_Load(FIF_JXR,OUT,cmyk?JXR_CMYK:0);
             ok = b && FreeImage_GetWidth(b)==(unsigned)w && FreeImage_GetHeight(b)==(unsigned)h &&
-                 FreeImage_GetImageType(b)==t && FreeImage_GetBPP(b)==(unsigned)bpp;
+                 FreeImage_GetImageType(b)==t && FreeImage_GetBPP(b)==(unsigned)bpp &&
+                 (!cmyk || FreeImage_GetColorType(b)==FIC_CMYK);
             if(b) FreeImage_Unload(b); }
     FreeImage_Unload(d);
     return ok?1:0;
 }
 int main(void){
-    static const struct{const char*n;FREE_IMAGE_TYPE t;int bpp;} F[]={
+    static const struct{const char*n;FREE_IMAGE_TYPE t;int bpp;int cmyk;} F[]={
         {"1bpp",FIT_BITMAP,1},{"8bpp",FIT_BITMAP,8},{"16bpp",FIT_BITMAP,16},
         {"24bpp",FIT_BITMAP,24},{"32bpp",FIT_BITMAP,32},{"uint16",FIT_UINT16,16},
         {"float",FIT_FLOAT,32},{"rgb16",FIT_RGB16,48},{"rgba16",FIT_RGBA16,64},
-        {"rgbf",FIT_RGBF,96},{"rgbaf",FIT_RGBAF,128}};
+        {"rgbf",FIT_RGBF,96},{"rgbaf",FIT_RGBAF,128},
+        {"cmyk32",FIT_BITMAP,32,1},{"cmyk64",FIT_RGBA16,64,1}};
     static const struct{const char*n;int f;} Q[]={{"q10(YUV420,OL2)",10},{"q49(YUV420)",49},
         {"q50(YUV444)",50},{"default",0},{"lossless",JXR_LOSSLESS}};
     static const int WH[][2]={{1,1},{2,3},{7,7},{8,16},{15,15},{16,1},{1,16},{17,33}};
@@ -69,8 +74,8 @@ int main(void){
     printf("=== tiny images x depth x quality (round-trip) ===\n");
     for(q=0;q<5;q++){
         printf("%-18s ",Q[q].n);
-        for(i=0;i<11;i++) for(s=0;s<8;s++){
-            int r=rt(F[i].t,F[i].bpp,WH[s][0],WH[s][1],Q[q].f);
+        for(i=0;i<(int)(sizeof(F)/sizeof(F[0]));i++) for(s=0;s<8;s++){
+            int r=rt(F[i].t,F[i].bpp,F[i].cmyk,WH[s][0],WH[s][1],Q[q].f);
             total++;
             if(r!=1){ fails++; printf("\n   FAIL %s %dx%d ",F[i].n,WH[s][0],WH[s][1]); }
         }
@@ -104,6 +109,19 @@ int main(void){
         int ok=FreeImage_Save(FIF_JXR,d,p,0);
         f=fopen(p,"rb");
         printf("  save=%s  file left on disk=%s\n", ok?"ok":"refused", f?"YES (bad)":"no (good)");
+        if(f) fclose(f);
+        FreeImage_Unload(d);
+    }
+    {   /* T.832 has no float CMYK */
+        FIBITMAP *d=mk(FIT_RGBAF,16,16,128);
+        char p[1024]; snprintf(p, sizeof(p), "%s", tmppath("fi_jxr_refused.jxr"));
+        FILE *f;
+        int ok;
+        FreeImage_GetICCProfile(d)->flags|=FIICC_COLOR_IS_CMYK;
+        ok=FreeImage_Save(FIF_JXR,d,p,JXR_LOSSLESS);
+        f=fopen(p,"rb");
+        printf("  float CMYK: save=%s  file left on disk=%s\n", ok?"ok (bad)":"refused", f?"YES (bad)":"no (good)");
+        if(ok||f) fails++;
         if(f) fclose(f);
         FreeImage_Unload(d);
     }

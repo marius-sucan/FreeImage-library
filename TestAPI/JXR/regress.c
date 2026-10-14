@@ -49,20 +49,21 @@ static int same(FIBITMAP*a,FIBITMAP*b){
         if(memcmp(FreeImage_GetScanLine(a,y),FreeImage_GetScanLine(b,y),n)) return 0;
     return 1;
 }
-/* JXR_LOSSLESS is exact only for integer formats (codec property) */
-static void run(const char*name,FREE_IMAGE_TYPE t,int bpp,int w,int h,int exact_expected){
+/* JXR_LOSSLESS is exact only for integer formats (codec property); CMYK must come back as CMYK with JXR_CMYK */
+static void run_as(const char*name,FREE_IMAGE_TYPE t,int bpp,int w,int h,int exact_expected,int cmyk){
     static const struct{const char*q;int f;} Q[]={{"default",0},{"q90",90},{"lossless",JXR_LOSSLESS}};
     FIBITMAP *d=mk(t,w,h,bpp); int i;
     const char *out = tmppath("fi_jxr_regress.jxr");
     if(!d){ printf("%-14s %2dbpp %3dx%-3d  ALLOC FAILED\n",name,bpp,w,h); return; }
+    if(cmyk) FreeImage_GetICCProfile(d)->flags|=FIICC_COLOR_IS_CMYK;
     for(i=0;i<3;i++){
         int ok=FreeImage_Save(FIF_JXR,d,out,Q[i].f);
         if(!ok){ printf("%-14s %2dbpp %3dx%-3d %-8s  SAVE-REFUSED\n",name,bpp,w,h,Q[i].q); continue; }
         {
-            FIBITMAP *b=FreeImage_Load(FIF_JXR,out,0);
+            FIBITMAP *b=FreeImage_Load(FIF_JXR,out,cmyk?JXR_CMYK:0);
             const char *note="";
             if(Q[i].f==JXR_LOSSLESS){
-                const int got=same(d,b);
+                const int got=same(d,b) && (!cmyk || FreeImage_GetColorType(b)==FIC_CMYK);
                 note = got ? (exact_expected ? " exact"
                                              : " exact (better than expected)")
                            : (exact_expected ? " *** REGRESSION: no longer bit-exact ***"
@@ -74,6 +75,9 @@ static void run(const char*name,FREE_IMAGE_TYPE t,int bpp,int w,int h,int exact_
         }
     }
     FreeImage_Unload(d);
+}
+static void run(const char*name,FREE_IMAGE_TYPE t,int bpp,int w,int h,int exact_expected){
+    run_as(name,t,bpp,w,h,exact_expected,0);
 }
 int main(void){
     FreeImage_Initialise(FALSE);
@@ -92,6 +96,8 @@ int main(void){
     run("24bpp-odd",  FIT_BITMAP,24, 67,53, 1);   /* pitch padding 1 */
     run("24bpp-odd2", FIT_BITMAP,24, 66,53, 1);   /* pitch padding 2 */
     run("8bpp-odd",   FIT_BITMAP,8,  67,53, 1);
+    run_as("32bpp-cmyk", FIT_BITMAP,32, 64,48, 1, 1);
+    run_as("rgba16-cmyk",FIT_RGBA16,64, 64,48, 1, 1);
     printf("--- small sizes (refused outright before the 16x16 floor was lifted) ---\n");
     run("24bpp-tiny", FIT_BITMAP,24, 8,8, 1);
     run("24bpp-15",   FIT_BITMAP,24, 15,15, 1);
