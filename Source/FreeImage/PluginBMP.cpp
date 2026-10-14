@@ -1815,8 +1815,18 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		// ...but rows step by the dib's own pitch (a view's is its parent's)
 		const UINT64 src_pitch = FreeImage_GetPitch(dib);
 
-		// alpha needs an alpha mask, which a BITMAPV5HEADER holds; every other image keeps the 40-byte header
-		const BOOL v5 = (dst_bpp == 32) && CarriesAlpha(dib);
+		// only an RGB profile describes a DIB's colors, and the loader reads 64 MB at most
+		const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+		const BOOL embed = icc->data && ((icc->flags & FIICC_COLOR_IS_CMYK) != FIICC_COLOR_IS_CMYK) &&
+			(icc->size <= BMP_MAX_PROFILE_SIZE) && PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, TRUE);
+		if (icc->data && icc->size && !embed) {
+			FreeImage_OutputMessageProc(s_format_id, "Warning: the ICC profile is invalid for this BMP and was left out");
+		}
+		const DWORD profile_size = embed ? icc->size : 0;
+
+		// alpha masks and profiles need a BITMAPV5HEADER; every other image keeps the 40-byte header
+		const BOOL alpha = (dst_bpp == 32) && CarriesAlpha(dib);
+		const BOOL v5 = alpha || embed;
 		const DWORD info_size = v5 ? BMP_V5_HEADER_SIZE : (DWORD)sizeof(BITMAPINFOHEADER);
 		const BOOL rle = (dst_bpp == 8) && ((flags & BMP_SAVE_RLE) == BMP_SAVE_RLE);
 
@@ -1826,29 +1836,31 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		bitmapfileheader.bfReserved1 = 0;
 		bitmapfileheader.bfReserved2 = 0;
 
-		// take care of the bit fields data of any
+		// 16-bit and V5 32-bit pixels go by masks, after a 40-byte header or inside a V5 one (no alpha mask: opaque)
+		const bool bit_fields = (dst_bpp == 16) || (v5 && (dst_bpp == 32));
 
-		bool bit_fields = (dst_bpp == 16) ? true : false;
-
-		if (bit_fields) {
+		if (bit_fields && !v5) {
 			bitmapfileheader.bfOffBits += 3 * sizeof(DWORD);
 		}
 
 		// the pixel data's size: RLE8 is encoded once to count it, then again to write it
 		UINT64 image_size = dst_height * dst_pitch;
 		if (rle) {
-			image_size = EncodeRLE8(NULL, NULL, dib, (UINT64)0xFFFFFFFFu - bitmapfileheader.bfOffBits);
+			image_size = EncodeRLE8(NULL, NULL, dib, (UINT64)0xFFFFFFFFu - bitmapfileheader.bfOffBits - profile_size);
 			if (image_size == 0) {
 				return FALSE;
 			}
 		}
 
 		// bfSize is 32-bit
-		if ((UINT64)bitmapfileheader.bfOffBits + image_size > (UINT64)0xFFFFFFFFu) {
+		if ((UINT64)bitmapfileheader.bfOffBits + image_size + profile_size > (UINT64)0xFFFFFFFFu) {
 			FreeImage_OutputMessageProc(s_format_id, "A BMP file cannot pass 4 GB, the most its 32-bit size field holds");
 			return FALSE;
 		}
-		bitmapfileheader.bfSize = (DWORD)(bitmapfileheader.bfOffBits + image_size);
+		bitmapfileheader.bfSize = (DWORD)(bitmapfileheader.bfOffBits + image_size + profile_size);
+
+		// the profile ends the file; bV5ProfileData counts from the V5 header
+		const DWORD profile_offset = (DWORD)(bitmapfileheader.bfOffBits - sizeof(BITMAPFILEHEADER) + image_size);
 
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapFileHeader(&bitmapfileheader);
@@ -1864,9 +1876,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		if (v5) {
 			bih.biSize = info_size;
-			bih.biCompression = BI_BITFIELDS;
 		}
-		else if (bit_fields) {
+		if (bit_fields) {
 			bih.biCompression = BI_BITFIELDS;
 		}
 		else if (rle) {
@@ -1888,9 +1899,22 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 
 		if (v5) {
-			// masks of the file's B, G, R, A bytes, then sRGB: no endpoints, gammas or profile
-			DWORD tail[21] = { 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000, BMP_LCS_SRGB };
+			// the masks, then sRGB or the embedded profile: no endpoints or gammas
+			DWORD tail[21] = { 0 };
+			if (dst_bpp == 32) {
+				tail[0] = 0x00FF0000;
+				tail[1] = 0x0000FF00;
+				tail[2] = 0x000000FF;
+				tail[3] = alpha ? 0xFF000000 : 0;
+			} else if (dst_bpp == 16) {
+				tail[0] = FreeImage_GetRedMask(dib);
+				tail[1] = FreeImage_GetGreenMask(dib);
+				tail[2] = FreeImage_GetBlueMask(dib);
+			}
+			tail[4] = embed ? BMP_PROFILE_EMBEDDED : BMP_LCS_SRGB;
 			tail[17] = BMP_LCS_GM_IMAGES;
+			tail[18] = embed ? profile_offset : 0;
+			tail[19] = profile_size;
 #ifdef FREEIMAGE_BIGENDIAN
 			for (int i = 0; i < 21; i++) {
 				SwapLong(&tail[i]);
@@ -1903,7 +1927,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		// write the bit fields when we are dealing with a 16 bit BMP
 
-		if (bit_fields) {
+		if (bit_fields && !v5) {
 			DWORD d;
 
 			d = FreeImage_GetRedMask(dib);
@@ -2029,6 +2053,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 					}
 				}
 			}
+		}
+
+		if (embed && (io->write_proc(icc->data, profile_size, 1, handle) != 1)) {
+			return FALSE;
 		}
 
 		return TRUE;

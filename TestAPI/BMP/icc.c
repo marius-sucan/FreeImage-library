@@ -1,4 +1,4 @@
-/* FreeImage 3 - BMP test: ICC profiles embedded in BITMAPV5HEADER files, and color management on load */
+/* FreeImage 3 - BMP test: ICC profiles embedded in BITMAPV5HEADER files, read and written, and color management on load */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -115,7 +115,90 @@ static int same_pixels(FIBITMAP *a, FIBITMAP *b) {
     return 1;
 }
 
-static void DLL_CALLCONV quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
+static int warnings = 0;
+static void DLL_CALLCONV quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; if (strstr(msg, "left out")) warnings++; }
+
+/* --- the writer ------------------------------------------------------------ */
+
+static DWORD le32(const BYTE *p) { return (DWORD)p[0] | ((DWORD)p[1] << 8) | ((DWORD)p[2] << 16) | ((DWORD)p[3] << 24); }
+
+static unsigned pitch_of(unsigned bpp) { return ((W * bpp + 31) / 32) * 4; }
+
+/* W x H (16-bit: 5-6-5), mixed pixels and palette; 32-bit alpha: 'alpha' everywhere, or mixed when negative */
+static FIBITMAP *make(unsigned bpp, int alpha) {
+    const DWORD r = (bpp == 16) ? FI16_565_RED_MASK : 0, g = (bpp == 16) ? FI16_565_GREEN_MASK : 0, b = (bpp == 16) ? FI16_565_BLUE_MASK : 0;
+    FIBITMAP *dib = FreeImage_Allocate(W, H, bpp, r, g, b);
+    RGBQUAD *pal = FreeImage_GetPalette(dib);
+    unsigned x, y;
+    for (x = 0; pal && x < FreeImage_GetColorsUsed(dib); x++) {
+        pal[x].rgbRed = (BYTE)(x * 37); pal[x].rgbGreen = (BYTE)(255 - x * 11); pal[x].rgbBlue = (BYTE)(x * 5); pal[x].rgbReserved = 0;
+    }
+    for (y = 0; y < H; y++) {
+        BYTE *row = FreeImage_GetScanLine(dib, y);
+        for (x = 0; x < FreeImage_GetLine(dib); x++) row[x] = (BYTE)(x * 29 + y * 71);
+        for (x = 0; bpp == 32 && x < W; x++) row[x * 4 + FI_RGBA_ALPHA] = (BYTE)((alpha >= 0) ? alpha : (int)x * 16);
+    }
+    return dib;
+}
+
+static BUF save_bmp(FIBITMAP *dib, int flags) {
+    BUF b = { NULL, 0 };
+    BYTE *bytes = NULL;
+    DWORD size = 0;
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    if (dib && FreeImage_SaveToMemory(FIF_BMP, dib, mem, flags) && FreeImage_AcquireMemory(mem, &bytes, &size)) put(&b, bytes, size);
+    FreeImage_CloseMemory(mem);
+    return b;
+}
+
+static FIBITMAP *load_bmp(const BUF *b, int flags) {
+    FIMEMORY *mem = FreeImage_OpenMemory(b->p, b->n);
+    FIBITMAP *dib = b->p ? FreeImage_LoadFromMemory(FIF_BMP, mem, flags) : NULL;
+    FreeImage_CloseMemory(mem);
+    return dib;
+}
+
+/* same depth, rows and palette */
+static int identical(FIBITMAP *a, FIBITMAP *b) {
+    const unsigned colors = a ? FreeImage_GetColorsUsed(a) : 0;
+    unsigned y;
+    if (!a || !b || FreeImage_GetBPP(a) != FreeImage_GetBPP(b) || FreeImage_GetColorsUsed(b) != colors) return 0;
+    for (y = 0; y < H; y++) {
+        if (memcmp(FreeImage_GetScanLine(a, y), FreeImage_GetScanLine(b, y), FreeImage_GetLine(a)) != 0) return 0;
+    }
+    return colors == 0 || memcmp(FreeImage_GetPalette(a), FreeImage_GetPalette(b), colors * sizeof(RGBQUAD)) == 0;
+}
+
+/* a V5 header saying MBED, the pixels, then the profile, which ends the file; bfSize is the file's size */
+static int embedded(const BUF *f, DWORD compression, const BYTE *profile, DWORD size) {
+    const BYTE *h = f->p + 14;
+    DWORD image, data;
+    if (!f->p || f->n < 14 + 124) return 0;
+    image = (compression == 0) ? pitch_of(h[14] | (h[15] << 8)) * H : le32(h + 20);
+    data = le32(h + 112);
+    return le32(f->p + 2) == f->n && le32(h) == 124 && le32(h + 16) == compression &&
+        le32(h + 56) == CS_EMBEDDED && le32(h + 108) == 4 && le32(h + 116) == size &&
+        14 + data == le32(f->p + 10) + image && 14 + (UINT64)data + size == f->n &&
+        memcmp(f->p + 14 + data, profile, size) == 0;
+}
+
+/* the V5 header's masks */
+static int masks(const BUF *f, DWORD r, DWORD g, DWORD b, DWORD a) {
+    return f->p && le32(f->p + 54) == r && le32(f->p + 58) == g && le32(f->p + 62) == b && le32(f->p + 66) == a;
+}
+
+/* a 40-byte BI_RGB header and nothing after the pixels */
+static int plain40(const BUF *f, unsigned bpp) {
+    return f->p && le32(f->p + 14) == 40 && le32(f->p + 30) == 0 && le32(f->p + 2) == f->n && le32(f->p + 10) + pitch_of(bpp) * H == f->n;
+}
+
+/* 'profile' padded with zeros to 'to' bytes, its header saying so */
+static BYTE *padded(const BYTE *profile, DWORD size, DWORD to) {
+    BYTE *p = (BYTE *)calloc(to, 1);
+    memcpy(p, profile, size);
+    p[0] = (BYTE)(to >> 24); p[1] = (BYTE)(to >> 16); p[2] = (BYTE)(to >> 8); p[3] = (BYTE)to;
+    return p;
+}
 
 int main(void) {
     DWORD adobe_size = 0, grey_size = 0, srgb_size = 0;
@@ -208,23 +291,193 @@ int main(void) {
     if (dib) FreeImage_Unload(dib);
     if (plain) FreeImage_Unload(plain);
 
-    printf("the writer embeds no profile\n");
+    printf("the writer: an RGB profile goes into a V5 header, after the pixels\n");
     {
-        FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+        static const unsigned depths[] = { 1, 4, 8, 24 };
+        unsigned i;
+        BUF f;
+        char line[128];
         memset(&s, 0, sizeof s); s.header = 124; s.bpp = 24; s.cs_type = CS_EMBEDDED; s.profile = adobe; s.profile_size = adobe_size;
         plain = load(&s, 0);
-        FreeImage_SaveToMemory(FIF_BMP, plain, mem, 0);
-        FreeImage_SeekMemory(mem, 0, SEEK_SET);
-        dib = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
-        {
-            BYTE *bytes = NULL;
-            DWORD size = 0;
-            FreeImage_AcquireMemory(mem, &bytes, &size);
-            report("a 24-bit image with a profile: 40-byte header, no profile", no_profile(dib) && size > 18 && bytes[14] == 40);
-        }
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        report("a loaded V5 file saves its profile back", embedded(&f, 0, adobe, adobe_size) && has_profile(dib, adobe, adobe_size) && same_pixels(dib, plain));
+        if (dib) FreeImage_Unload(dib);
+        dib = load_bmp(&f, FIF_LOAD_NOPIXELS);
+        report("  and a header-only load of it has the profile", has_profile(dib, adobe, adobe_size) && !FreeImage_HasPixels(dib));
         if (dib) FreeImage_Unload(dib);
         if (plain) FreeImage_Unload(plain);
-        FreeImage_CloseMemory(mem);
+        free(f.p);
+
+        for (i = 0; i < sizeof(depths) / sizeof(depths[0]); i++) {
+            plain = make(depths[i], 0);
+            FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+            f = save_bmp(plain, 0);
+            dib = load_bmp(&f, 0);
+            snprintf(line, sizeof line, "%u-bit: BI_RGB, no masks, the palette after the header, loads back", depths[i]);
+            report(line, embedded(&f, 0, adobe, adobe_size) && masks(&f, 0, 0, 0, 0) &&
+                   le32(f.p + 10) == 14 + 124 + FreeImage_GetColorsUsed(plain) * 4 && identical(dib, plain) && has_profile(dib, adobe, adobe_size));
+            if (dib) FreeImage_Unload(dib);
+            FreeImage_Unload(plain);
+            free(f.p);
+        }
+
+        plain = make(8, 0);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        f = save_bmp(plain, BMP_SAVE_RLE);
+        dib = load_bmp(&f, 0);
+        report("8-bit, BMP_SAVE_RLE: BI_RLE8, the profile after the RLE data", embedded(&f, 1, adobe, adobe_size) && identical(dib, plain) && has_profile(dib, adobe, adobe_size));
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        plain = make(16, 0);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        report("16-bit 5-6-5: BI_BITFIELDS, the masks in the header, none after it",
+               embedded(&f, 3, adobe, adobe_size) && masks(&f, FI16_565_RED_MASK, FI16_565_GREEN_MASK, FI16_565_BLUE_MASK, 0) &&
+               le32(f.p + 10) == 14 + 124 && identical(dib, plain) && FreeImage_GetGreenMask(dib) == FI16_565_GREEN_MASK && has_profile(dib, adobe, adobe_size));
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        plain = make(32, -1);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        report("32-bit with alpha: BI_BITFIELDS, alpha mask, both kept",
+               embedded(&f, 3, adobe, adobe_size) && masks(&f, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000) && identical(dib, plain) && has_profile(dib, adobe, adobe_size));
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        plain = make(32, 255);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        report("32-bit opaque: BI_BITFIELDS, no alpha mask, loads back",
+               embedded(&f, 3, adobe, adobe_size) && masks(&f, 0x00FF0000, 0x0000FF00, 0x000000FF, 0) && identical(dib, plain) && has_profile(dib, adobe, adobe_size));
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        plain = make(32, 0);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        {
+            /* alpha 0 everywhere says nothing: no alpha mask, so V5 readers show it opaque too */
+            int ok = embedded(&f, 3, adobe, adobe_size) && masks(&f, 0x00FF0000, 0x0000FF00, 0x000000FF, 0) && dib && FreeImage_GetBPP(dib) == 32 && has_profile(dib, adobe, adobe_size);
+            unsigned x, y;
+            for (y = 0; ok && y < H; y++) {
+                const BYTE *a = FreeImage_GetScanLine(plain, y), *b = FreeImage_GetScanLine(dib, y);
+                for (x = 0; ok && x < W; x++) ok = !memcmp(a + x * 4, b + x * 4, 3) && b[x * 4 + FI_RGBA_ALPHA] == 255;
+            }
+            report("32-bit, alpha never set: no alpha mask, loads back opaque", ok);
+        }
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        {
+            /* the loader's bound */
+            BYTE *big = padded(adobe, adobe_size, 64u << 20);
+            plain = make(24, 0);
+            FreeImage_CreateICCProfile(plain, big, 64L << 20);
+            f = save_bmp(plain, 0);
+            dib = load_bmp(&f, 0);
+            report("a 64 MB profile: kept", embedded(&f, 0, big, 64u << 20) && has_profile(dib, big, 64u << 20));
+            if (dib) FreeImage_Unload(dib);
+            FreeImage_Unload(plain);
+            free(f.p);
+            free(big);
+            big = padded(adobe, adobe_size, (64u << 20) + 4);
+            plain = make(24, 0);
+            FreeImage_CreateICCProfile(plain, big, (64L << 20) + 4);
+            warnings = 0;
+            f = save_bmp(plain, 0);
+            report("64 MB + 4 bytes: left out, with a warning", plain40(&f, 24) && warnings == 1);
+            FreeImage_Unload(plain);
+            free(f.p);
+            free(big);
+        }
+    }
+
+    printf("profiles left out, with a warning: the header of an image without one\n");
+    {
+        BUF f;
+        plain = FreeImage_Allocate(W, H, 8, 0, 0, 0);
+        FreeImage_CreateICCProfile(plain, (void *)grey, (long)grey_size);
+        warnings = 0;
+        f = save_bmp(plain, 0);
+        dib = load_bmp(&f, 0);
+        report("8-bit grey with a grey profile: a DIB holds RGB", plain40(&f, 8) && warnings == 1 && no_profile(dib));
+        if (dib) FreeImage_Unload(dib);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        memcpy(copy, adobe, adobe_size); memcpy(copy + 16, "CMYK", 4);
+        plain = make(24, 0);
+        FreeImage_CreateICCProfile(plain, copy, (long)adobe_size);
+        warnings = 0;
+        f = save_bmp(plain, 0);
+        report("a CMYK profile", plain40(&f, 24) && warnings == 1);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        memcpy(copy, adobe, adobe_size); memcpy(copy + 36, "xxxx", 4);
+        plain = make(24, 0);
+        FreeImage_CreateICCProfile(plain, copy, (long)adobe_size);
+        warnings = 0;
+        f = save_bmp(plain, 0);
+        report("a damaged profile", plain40(&f, 24) && warnings == 1);
+        FreeImage_Unload(plain);
+        free(f.p);
+
+        plain = make(32, -1);
+        FreeImage_CreateICCProfile(plain, (void *)adobe, (long)adobe_size);
+        FreeImage_GetICCProfile(plain)->flags |= FIICC_COLOR_IS_CMYK;
+        warnings = 0;
+        f = save_bmp(plain, 0);
+        report("a CMYK image: 40-byte header, K in the fourth byte", plain40(&f, 32) && warnings == 1);
+        FreeImage_Unload(plain);
+        free(f.p);
+    }
+
+    printf("images without a profile keep their header\n");
+    {
+        BUF f;
+        warnings = 0;
+        plain = make(24, 0);
+        f = save_bmp(plain, 0);
+        report("24-bit: 40-byte header", plain40(&f, 24));
+        FreeImage_Unload(plain);
+        free(f.p);
+        plain = make(8, 0);
+        f = save_bmp(plain, 0);
+        report("8-bit: 40-byte header", plain40(&f, 8));
+        FreeImage_Unload(plain);
+        free(f.p);
+        plain = make(16, 0);
+        f = save_bmp(plain, 0);
+        report("16-bit: 40-byte header, three masks after it",
+               f.p && le32(f.p + 14) == 40 && le32(f.p + 30) == 3 && le32(f.p + 10) == 14 + 40 + 12 && le32(f.p + 54) == FI16_565_RED_MASK && le32(f.p + 2) == f.n);
+        FreeImage_Unload(plain);
+        free(f.p);
+        plain = make(32, 0);
+        f = save_bmp(plain, 0);
+        report("32-bit, alpha never set: 40-byte header", plain40(&f, 32));
+        FreeImage_Unload(plain);
+        free(f.p);
+        plain = make(32, -1);
+        f = save_bmp(plain, 0);
+        report("32-bit with alpha: V5 header, sRGB, no profile",
+               f.p && le32(f.p + 14) == 124 && le32(f.p + 30) == 3 && masks(&f, 0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000) &&
+               le32(f.p + 14 + 56) == CS_SRGB && le32(f.p + 14 + 112) == 0 && le32(f.p + 14 + 116) == 0 && le32(f.p + 2) == f.n && f.n == 14 + 124 + W * 4 * H);
+        FreeImage_Unload(plain);
+        free(f.p);
+        report("no warning for any of them", warnings == 0);
     }
 
     free(copy);

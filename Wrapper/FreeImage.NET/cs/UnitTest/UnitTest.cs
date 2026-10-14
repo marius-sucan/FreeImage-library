@@ -312,7 +312,7 @@ namespace FreeImageNETUnitTest
 		public void FreeImage_FIFSupportsICCProfiles()
 		{
 			Assert.IsTrue(FreeImage.FIFSupportsICCProfiles(FREE_IMAGE_FORMAT.FIF_JPEG));
-			Assert.IsFalse(FreeImage.FIFSupportsICCProfiles(FREE_IMAGE_FORMAT.FIF_BMP));
+			Assert.IsTrue(FreeImage.FIFSupportsICCProfiles(FREE_IMAGE_FORMAT.FIF_BMP));
 		}
 
 		[Test]

@@ -257,7 +257,7 @@ static void test_bmp_4g(void) {
 /* --- a PSD whose pixels pass 2 GB ------------------------------------------------ */
 
 /* a FreeImageIO that keeps the first bytes written and discards the rest */
-typedef struct { INT64 pos, size; BYTE head[32]; } SINK;
+typedef struct { INT64 pos, size; BYTE head[160]; } SINK;
 
 static unsigned DLL_CALLCONV sink_rd(void *b, unsigned s, unsigned c, fi_handle h) { return 0; }
 static unsigned DLL_CALLCONV sink_wr(void *b, unsigned s, unsigned c, fi_handle h) {
@@ -298,6 +298,41 @@ static void test_psd_2g(void) {
     report("20000 x 20000, 1.6 GB of pixels: PSD", psd_version(20000, PSD_DEFAULT) == 1);
     report("24000 x 24000, 2.3 GB of pixels: PSB", psd_version(24000, PSD_DEFAULT) == 2);
     report("64 x 64 with PSD_PSB: PSB", psd_version(64, PSD_PSB) == 2);
+}
+
+/* --- a BMP whose profile would take it past 4 GB ----------------------------------- */
+
+/* 65536 x 65535 8-bit, rows 1 byte apart in a small buffer, with an sRGB profile padded to 'profile_size'; the BMP's size, 0 if refused */
+static INT64 bmp_profile_save(DWORD profile_size, SINK *sink) {
+    FreeImageIO io = { sink_rd, sink_wr, sink_sk, sink_tl };
+    DWORD srgb_size = 0;
+    const BYTE *srgb = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_size);
+    BYTE *bits = (BYTE *)calloc(65536 + 65535, 1);
+    BYTE *profile = (BYTE *)calloc(profile_size, 1);
+    FIBITMAP *dib = bits ? FreeImage_ConvertFromRawBitsEx(FALSE, bits, FIT_BITMAP, 65536, 65535, 1, 8, 0, 0, 0, FALSE) : NULL;
+    INT64 size = 0;
+    memset(sink, 0, sizeof(*sink));
+    if (dib && profile && srgb && srgb_size <= profile_size) {
+        memcpy(profile, srgb, srgb_size);
+        profile[0] = (BYTE)(profile_size >> 24); profile[1] = (BYTE)(profile_size >> 16); profile[2] = (BYTE)(profile_size >> 8); profile[3] = (BYTE)profile_size;
+        FreeImage_CreateICCProfile(dib, profile, (long)profile_size);
+        if (FreeImage_SaveToHandle(FIF_BMP, dib, &io, (fi_handle)sink, BMP_DEFAULT)) size = sink->size;
+    }
+    if (dib) FreeImage_Unload(dib);
+    free(profile);
+    free(bits);
+    return size;
+}
+
+static void test_bmp_4g_profile(void) {
+    SINK sink;
+    INT64 size;
+    printf("65536 x 65535 8-bit BMP: V5 header, palette and pixels 64373 bytes short of 4 GB, then a profile\n");
+    size = bmp_profile_save(64372, &sink);
+    report("a 64372-byte profile fits: 4 GB - 2 bytes, profile last",
+           size == (INT64)0xFFFFFFFEu && le32(sink.head + 2) == 0xFFFFFFFEu && 14 + (INT64)le32(sink.head + 126) + 64372 == size);
+    size = bmp_profile_save(64376, &sink);
+    report("a 64376-byte one does not: refused, nothing written", size == 0 && sink.size == 0);
 }
 
 /* --- sizes taken from a file 4 GB long ----------------------------------------- */
@@ -440,6 +475,7 @@ int main(int argc, char **argv) {
     test_bigtiff_flag();
     test_bmp_4g();
     test_psd_2g();
+    test_bmp_4g_profile();
     test_tga_rle();
     test_sgi_rle();
     test_webp_4g();

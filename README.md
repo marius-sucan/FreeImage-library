@@ -85,7 +85,7 @@ Changes:
 - added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well;
 - added color management by bundling Little CMS 2.19.1: several new exported functions are available;
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
-- BMP files load with the ICC profile their V5 header embeds, for color management; saved BMPs carry none;
+- BMP files load and save the ICC profile a V5 header embeds, for color management; images without one are saved as before;
 - AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors, for color management; 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix; a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them; narrow-range PNGs load expanded to the full range;
 - fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
 - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;

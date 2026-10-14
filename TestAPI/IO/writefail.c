@@ -129,6 +129,21 @@ int main(void) {
         report(what, !ok);
     }
 
+    /* a BMP's ICC profile is its last write */
+    {
+        DWORD size = 0;
+        const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &size);
+        FIBITMAP *tagged = FreeImage_Clone(rgb);
+        BOOL ok;
+        INT64 full;
+        FreeImage_CreateICCProfile(tagged, (void *)adobe, (long)size);
+        full = save(FIF_BMP, tagged, 0, (INT64)1 << 40, &ok);
+        report("BMP with an ICC profile saves", ok && (full > (INT64)size));
+        save(FIF_BMP, tagged, 0, full - 1, &ok);
+        report("  writes stop 1 byte short, in the profile -> FALSE", !ok);
+        FreeImage_Unload(tagged);
+    }
+
     /* FreeImage_SaveMultiBitmapToHandle: two GIF pages */
     {
         char path[1024];
