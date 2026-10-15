@@ -29,6 +29,10 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
   - added the APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - added full support for animated WebP files, reading and writing, with an example file;
 - added full support for MNG animations (FIF_MNG=6), reading and writing;
+  - every frame loads as a page, not only the first, header-only too; MNG_PLAYBACK composites the frames as a viewer shows them;
+  - frame delays, positions, clipping, hidden images, the background and the loop count are read from the MHDR, FRAM, DEFI, SHOW, BACK, TERM and LOOP chunks; BASI images and solid fills load;
+  - frames inherit the file's global PLTE, tRNS and pHYs chunks and its gAMA, cHRM, sRGB, iCCP or cICP color space, as the spec orders; JNG files and frames keep their ICC profile;
+  - saves write PNG frames with their delays, positions, disposal, loop count, background and ICC profile;
 
 ### Color management and CMYK
 
@@ -36,7 +40,8 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors;
   - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
-  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them; narrow-range PNGs load expanded to the full range;
+  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them;
+  - narrow-range PNG and JPEG XR files load expanded to the full range;
 - the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the file's ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag) as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values;
   - the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
   - a color conversion that changes the pixels removes the tag;
@@ -102,9 +107,13 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 ### BMP
 
 - BMP files load and save the ICC profile a V5 header embeds; images without one are saved as before;
+- added loading of BI_ALPHABITFIELDS files, at 16 and 32 bits, and of 24-bit BI_BITFIELDS files as GIMP 2.10 writes them;
 - fixed BMPs with a V2, V3, V4, V5 (such as 32-bit BMPs with alpha) or OS/2 2.x header not loading;
 - fixed 32-bit BMPs loading fully transparent, and 16- and 32-bit BMPs with uncommon color masks loading with wrong colors or without their alpha channel;
+- fixed RLE8 BMPs failing to load, FreeImage's own BMP_SAVE_RLE saves among them, also when a run passes the row end;
+- fixed 16-, 24- and 32-bit OS/2 1.x BMPs reading their pixels from the wrong offset;
 - fixed BMPs saved with transparency showing opaque in Windows, web browsers and other programs;
+- fixed saved BMPs stating wrong sizes in their headers, and carrying a view's parent pixels in their row padding;
 
 ### TIFF
 
@@ -117,18 +126,32 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ### PSD
 
+- fixed CMYK PSD files with transparency loading opaque, with FIF_LOAD_DISPLAY_ICC too: they load as RGBA;
+- fixed saved selections and spot channels of RGB and Lab PSD files loading as transparency;
+- fixed greyscale PSD files with transparency loading without their alpha channel: they load as RGBA, RGBA16 or RGBAF;
 - fixed PSD files with several alpha or spot channels failing to load, or losing their color profile;
-- fixed saved selections and spot channels of RGB PSD files loading as transparency;
-- fixed greyscale PSD files with transparency loading without their alpha channel: they load as RGBA;
+- fixed image resources stored after a thumbnail being misread, and CMYK and multichannel PSDs loaded as RGB losing their thumbnail;
+- fixed 8-bit palette, 1-bit and float PSD saves: indexed files could not be read back, 1-bit saves overran a buffer, and float images are now saved as 32-bit greyscale;
 
-### JPEG, JPEG 2000 and JPEG XR
+### JPEG and JPEG 2000
 
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
 - fixed swapped width and height when loading JPEG and RAW files with FIF_LOAD_NOPIXELS;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535;
   - the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision;
   - added the J2K_UNSCALED and JP2_UNSCALED load flags, which keep the file's original values instead, tagged "UnscaledBits";
-- many fixes related to JPEG XR;
+
+### JPEG XR
+
+- the bundled jxrlib decodes 416 of the 463 ITU-T T.834 conformance files bit-exact with the T.835 reference decoder;
+- added loading of n-channel images: 3 channels load as RGB or RGBA, 4 to 8 as CMYK;
+- CMYK images are saved as CMYK, no longer as BGRA with K in the alpha channel;
+- the T.835 reference decoder reads every file FreeImage saves, metadata included;
+- JXR_PROGRESSIVE writes a progressive codestream, and images under 16x16 pixels save;
+- fixed CMYK files, with or without alpha, and premultiplied, RGBA-ordered, RGBE and 128-bit float RGB files loading with wrong colors or not at all;
+- fixed images stored with a quarter turn, cropped with planar alpha, or hard-tiled on non-square grids failing to load or loading with wrong pixels;
+- fixed half-float, fixed-point, odd-width 10-bit RGB and black-is-one bilevel images, and interleaved alpha planes, loading with wrong pixels;
+- many other fixes related to JPEG XR;
 
 ### Other formats
 
