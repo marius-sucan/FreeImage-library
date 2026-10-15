@@ -469,10 +469,12 @@ static void same_as_full(const char *what, FIBITMAP *full, FIBITMAP *head) {
     FreeImage_Unload(head);
 }
 
-/* samples of bits each (32: float), 300 dpi, strips (layout 0), planes (1) or 16x16 tiles (2); samples past the colours are extra */
-static int write_test_tiff(const char *path, int photometric, int bits, int spp, int layout, const Bytes *icc) {
+#define TAGGED 4
+
+/* samples of bits each (32: float), 300 dpi, strips (layout 0), planes (1) or 16x16 tiles (2), | TAGGED: SampleFormat unsigned; samples past the colours are extra */
+static int write_test_tiff(const char *path, int photometric, int bits, int spp, int flags, const Bytes *icc) {
     static BYTE px[48 * 32 * 8 * 4];
-    const int bytes = bits / 8, row = 48 * (layout == 1 ? 1 : spp) * bytes;
+    const int layout = flags & 3, bytes = bits / 8, row = 48 * (layout == 1 ? 1 : spp) * bytes;
     const int colours = (photometric == PHOTOMETRIC_SEPARATED) ? 4 : (photometric == PHOTOMETRIC_RGB) ? 3 : 1;
     TIFF *t;
     int i, s;
@@ -492,6 +494,7 @@ static int write_test_tiff(const char *path, int photometric, int bits, int spp,
         TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - colours, extra);
     }
     if (bits == 32) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+    else if (flags & TAGGED) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
     if (icc) TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
     if (layout == 2) {
         TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
@@ -513,6 +516,7 @@ static void header_only_cmyk_tiff(const Bytes *press) {
     static const struct { int bits, spp, layout; const char *name; } FILES[] = {
         { 8, 4, 0, "8-bit CMYK strips" }, { 8, 4, 1, "8-bit CMYK planes" }, { 8, 4, 2, "8-bit CMYK tiles" },
         { 16, 4, 0, "16-bit CMYK strips" }, { 16, 4, 2, "16-bit CMYK tiles" }, { 8, 6, 0, "8-bit CMYK + 2 extra samples" },
+        { 8, 5, 0, "8-bit CMYK + alpha" }, { 16, 5, 1 | TAGGED, "16-bit planar CMYK + alpha, SampleFormat" },
         { 8, 3, 0, "8-bit 3-ink separation" }, { 32, 4, 0, "float CMYK strips" }, { 32, 4, 2, "float CMYK tiles" }
     };
     const char *path = scratch("icc_separated.tif");
@@ -534,7 +538,7 @@ static void header_only_cmyk_tiff(const Bytes *press) {
 static void tiled_layouts_refused(const Bytes *press) {
     static const struct { int photometric, bits, spp; const char *name; } FILES[] = {
         { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }, { PHOTOMETRIC_SEPARATED, 16, 6, "16-bit CMYK + 2 extra samples" },
-        { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
+        { PHOTOMETRIC_SEPARATED, 8, 5, "8-bit CMYK + alpha" }, { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
     };
     static const int FLAGS[4] = { TIFF_DEFAULT, FIF_LOAD_NOPIXELS, TIFF_CMYK, TIFF_CMYK | FIF_LOAD_NOPIXELS };
     const char *path = scratch("icc_tiled_layout.tif");
@@ -549,6 +553,73 @@ static void tiled_layouts_refused(const Bytes *press) {
             if (dib) FreeImage_Unload(dib);
         }
         remove(path);
+    }
+}
+
+/* what write_test_tiff stores for sample c of pixel x in file row y, 8 or 16 bits */
+static unsigned test_sample(int bits, int spp, int flags, int x, int y, int c) {
+    const int bytes = bits / 8;
+    const size_t o = ((flags & 3) == 1) ? ((size_t)((y + c) % 32) * 48 + x) * bytes : ((size_t)(y % 32) * 48 * spp + (size_t)x * spp + c) * bytes;
+    BYTE b[2];
+    WORD w;
+    b[0] = (BYTE)(o * 11 + 5);
+    b[1] = (BYTE)((o + 1) * 11 + 5);
+    if (bytes == 1) return b[0];
+    memcpy(&w, b, 2);
+    return w;
+}
+
+/* CMYK and RGB strips with any number of extra samples: the first is the alpha; TIFF_CMYK gives the inks */
+static void extra_sample_tiffs(const Bytes *press) {
+    static const struct { int photometric, bits, spp, flags; const char *name; } FILES[] = {
+        { PHOTOMETRIC_SEPARATED, 8, 5, 0, "8-bit CMYK + alpha" }, { PHOTOMETRIC_SEPARATED, 8, 5, 1 | TAGGED, "8-bit planar CMYK + alpha, SampleFormat" },
+        { PHOTOMETRIC_SEPARATED, 16, 5, 0 | TAGGED, "16-bit CMYK + alpha, SampleFormat" }, { PHOTOMETRIC_SEPARATED, 16, 5, 1, "16-bit planar CMYK + alpha" },
+        { PHOTOMETRIC_SEPARATED, 16, 6, 0 | TAGGED, "16-bit CMYK + 2 extra samples, SampleFormat" }, { PHOTOMETRIC_SEPARATED, 8, 7, 1, "8-bit planar CMYK + 3 extra samples" },
+        { PHOTOMETRIC_RGB, 8, 5, 0, "8-bit RGB + 2 extra samples" }, { PHOTOMETRIC_RGB, 16, 5, 1 | TAGGED, "16-bit planar RGB + 2 extra samples, SampleFormat" }
+    };
+    const char *path = scratch("icc_extra_samples.tif");
+    unsigned i;
+    for (i = 0; i < sizeof(FILES) / sizeof(FILES[0]); i++) {
+        const int cmyk = FILES[i].photometric == PHOTOMETRIC_SEPARATED, colours = cmyk ? 4 : 3, deep = FILES[i].bits == 16;
+        unsigned wrong_alpha = 0, wrong_colour = 0, wrong_ink = 0;
+        FIBITMAP *plain, *inks;
+        int x, y, c;
+        if (!write_test_tiff(path, FILES[i].photometric, FILES[i].bits, FILES[i].spp, FILES[i].flags, cmyk ? press : NULL)) { fail("cannot write %s", path); return; }
+        plain = FreeImage_Load(FIF_TIFF, path, TIFF_DEFAULT);
+        inks = cmyk ? FreeImage_Load(FIF_TIFF, path, TIFF_CMYK) : NULL;
+        remove(path);
+        if (!plain || FreeImage_GetImageType(plain) != (deep ? FIT_RGBA16 : FIT_BITMAP) || FreeImage_GetBPP(plain) != (deep ? 64u : 32u)) {
+            fail("%s: not loaded as RGBA", FILES[i].name);
+        } else {
+            for (y = 0; y < 32; y++) {
+                const BYTE *p = FreeImage_GetScanLine(plain, 31 - y);
+                for (x = 0; x < 48; x++) {
+                    unsigned v[4];
+                    if (deep) {
+                        const WORD *w = (const WORD *)p + 4 * x;
+                        v[0] = w[0]; v[1] = w[1]; v[2] = w[2]; v[3] = w[3];
+                    } else {
+                        v[0] = p[4 * x + FI_RGBA_RED]; v[1] = p[4 * x + FI_RGBA_GREEN]; v[2] = p[4 * x + FI_RGBA_BLUE]; v[3] = p[4 * x + FI_RGBA_ALPHA];
+                    }
+                    wrong_alpha += v[3] != test_sample(FILES[i].bits, FILES[i].spp, FILES[i].flags, x, y, colours);
+                    if (!cmyk) for (c = 0; c < 3; c++) wrong_colour += v[c] != test_sample(FILES[i].bits, FILES[i].spp, FILES[i].flags, x, y, c);
+                }
+            }
+            CHECK(wrong_alpha == 0 && wrong_colour == 0, "%s: %u alphas and %u colours are not the file's", FILES[i].name, wrong_alpha, wrong_colour);
+        }
+        if (cmyk && (!inks || FreeImage_GetColorType(inks) != FIC_CMYK || !(FreeImage_GetICCProfile(inks)->flags & FIICC_COLOR_IS_CMYK))) {
+            fail("%s, TIFF_CMYK: not CMYK with its profile", FILES[i].name);
+        } else if (cmyk) {
+            for (y = 0; y < 32; y++) {
+                const BYTE *p = FreeImage_GetScanLine(inks, 31 - y);
+                for (x = 0; x < 48; x++) {
+                    for (c = 0; c < 4; c++) wrong_ink += (deep ? ((const WORD *)p)[4 * x + c] : p[4 * x + c]) != test_sample(FILES[i].bits, FILES[i].spp, FILES[i].flags, x, y, c);
+                }
+            }
+            CHECK(wrong_ink == 0, "%s, TIFF_CMYK: %u inks are not the file's", FILES[i].name, wrong_ink);
+        }
+        if (plain) FreeImage_Unload(plain);
+        if (inks) FreeImage_Unload(inks);
     }
 }
 
@@ -1128,6 +1199,7 @@ int main(int argc, char **argv) {
     png_with_profile_and_gamma();
     tiled_cmyk_tiff(&press);
     header_only_cmyk_tiff(&press);
+    extra_sample_tiffs(&press);
     tiled_layouts_refused(&press);
     grey_alpha_float_strips();
     header_only_psd(&press);

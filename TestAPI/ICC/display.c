@@ -194,18 +194,19 @@ static int write_two_page_tiff(const char *path, const Bytes *cmyk_icc, const By
     return 1;
 }
 
-/* CMYK, an alpha and one more extra sample with the press profile, written by libtiff: 8-bit contiguous or 16-bit planar */
-static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep) {
+/* CMYK, an alpha and spp - 5 more extra samples with the press profile, by libtiff: 8-bit contiguous or 16-bit planar; tagged: SampleFormat unsigned */
+static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep, int spp, int tagged) {
     static BYTE row[W * 6 * 2];
     uint16_t extra[2] = { EXTRASAMPLE_UNASSALPHA, EXTRASAMPLE_UNSPECIFIED };
-    const int planes = deep ? 6 : 1, line = deep ? W * 2 : W * 6;
+    const int planes = deep ? spp : 1, line = deep ? W * 2 : W * spp;
     FILE *f = fopen(path, "w+b");
     TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
     int s, y, x, ok = 1;
     if (!t) { if (f) fclose(f); return 0; }
     TIFFSetField(t, TIFFTAG_IMAGEWIDTH, W); TIFFSetField(t, TIFFTAG_IMAGELENGTH, H);
-    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, deep ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 6);
-    TIFFSetField(t, TIFFTAG_EXTRASAMPLES, 2, extra);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, deep ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
+    TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - 4, extra);
+    if (tagged) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_UINT);
     TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED); TIFFSetField(t, TIFFTAG_INKSET, INKSET_CMYK);
     TIFFSetField(t, TIFFTAG_PLANARCONFIG, deep ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG); TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 16);
     TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)icc->size, icc->data);
@@ -355,10 +356,14 @@ static void make_fixtures(void) {
     save_fixture("unlinkable profile TIFF", FIF_TIFF, broken, TIFF_DEFAULT, 0, "dsp_broken.tif");
     if (write_two_page_tiff(scratch("dsp_2p.tif"), &press, &adobe)) add("2-page TIFF", FIF_TIFF, 0, 2, scratch("dsp_2p.tif"));
     else fail("2-page TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka.tif"), &press, 0)) add("CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka.tif"), &press, 0, 6, 0)) add("CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka.tif"));
     else fail("CMYK + alpha TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka16.tif"), &press, 1)) add("16-bit planar CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka16.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka16.tif"), &press, 1, 6, 0)) add("16-bit planar CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka16.tif"));
     else fail("16-bit planar CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka5.tif"), &press, 0, 5, 0)) add("5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5.tif"));
+    else fail("5-sample CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka5_16.tif"), &press, 1, 5, 1)) add("16-bit planar 5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5_16.tif"));
+    else fail("16-bit planar 5-sample CMYK + alpha TIFF: fixture not saved");
     if (write_cmyka_jxl(scratch("dsp_cmyka.jxl"), &press)) add("CMYK + alpha JPEG XL", FIF_JXL, 0, 1, scratch("dsp_cmyka.jxl"));
     else fail("CMYK + alpha JPEG XL: fixture not saved");
     /* an 8-bit RLE PSD with a negative layer count, a 16-bit one with Photoshop's Mt16 */

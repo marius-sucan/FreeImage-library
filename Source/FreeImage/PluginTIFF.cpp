@@ -561,6 +561,10 @@ ReadImageType(TIFF *tiff, uint16_t bitspersample, uint16_t samplesperpixel) {
 						}
 						break;
 				}
+				// as without the tag
+				if((bitspersample == 16) && (samplesperpixel > 4)) {
+					fit = FIT_RGBA16;
+				}
 				break;
 
 			case SAMPLEFORMAT_INT:
@@ -1178,6 +1182,11 @@ static BOOL
 IsValidBitsPerSample(uint16_t photometric, uint16_t bitspersample, uint16_t samplesperpixel) {
 	// get the pixel depth in bits
 	const uint16_t pixel_depth = bitspersample * samplesperpixel;
+
+	// RGB and CMYK take any number of extra samples, the first one loaded as alpha
+	if(((photometric == PHOTOMETRIC_RGB) || (photometric == PHOTOMETRIC_SEPARATED)) && (samplesperpixel > 4) && ((bitspersample == 8) || (bitspersample == 16))) {
+		return TRUE;
+	}
 
 	// check for a supported pixel depth
 	switch (pixel_depth) {
@@ -2156,7 +2165,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// create a new DIB
 			dib = CreateImageType( header_only, image_type, width, height, bitspersample, samplesperpixel);
 			if (dib == NULL) {
-				throw FI_MSG_ERROR_MEMORY;
+				// a standard bitmap holds no more than 32 bits per pixel
+				throw ((image_type == FIT_BITMAP) && (bitspersample * samplesperpixel > 32)) ? "Tiled TIFF images of this sample layout are not supported" : FI_MSG_ERROR_MEMORY;
 			}
 
 			// tiles are copied as they are: the image rows must be the file's
