@@ -1026,7 +1026,7 @@ jpegxr_read_exif_gps_profile(FIBITMAP *dib, const BYTE *profile, unsigned length
 // ==========================================================
 
 /**
-Replace a dib with its rotated copy, to which FreeImage_Rotate gives neither the ICC profile nor the thumbnail
+Replace a dib with its rotated copy, which gets the dib's ICC profile and thumbnail
 @param dib Input / Output dib
 @param rotated Rotated copy of the dib, or NULL
 */

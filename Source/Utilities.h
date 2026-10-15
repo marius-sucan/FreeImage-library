@@ -487,10 +487,10 @@ The alpha SetCMYKAlpha gave dib, or NULL; the caller unloads it
 FIBITMAP* TakeCMYKAlpha(FIBITMAP *dib);
 
 /**
-dst, made from src, takes src's CMYK flag when it has src's image type and depth
+dst, made from src, takes src's CMYK flag when it has src's image type and depth, and its ICC profile when it has its colour type too
 @see See definition in BitmapAccess.cpp
 */
-void CopyCMYKFlag(FIBITMAP *dst, FIBITMAP *src);
+void CopyICCProfile(FIBITMAP *dst, FIBITMAP *src);
 
 /**
 A frame of a file with one ICC profile for every frame, in that profile's colors (NULL: sRGB) as *converted;

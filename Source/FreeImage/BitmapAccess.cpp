@@ -743,10 +743,30 @@ TakeCMYKAlpha(FIBITMAP *dib) {
 	return alpha;
 }
 
+// the colour type a profile describes: 32-bit RGB and RGBA alike, without scanning the alpha
+static FREE_IMAGE_COLOR_TYPE
+ProfileColorType(FIBITMAP *dib) {
+	if ((FreeImage_GetImageType(dib) == FIT_BITMAP) && (FreeImage_GetBPP(dib) == 32)) {
+		return ((FreeImage_GetICCProfile(dib)->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) ? FIC_CMYK : FIC_RGB;
+	}
+	return FreeImage_GetColorType(dib);
+}
+
 void
-CopyCMYKFlag(FIBITMAP *dst, FIBITMAP *src) {
-	if (dst && src && (FreeImage_GetImageType(dst) == FreeImage_GetImageType(src)) && (FreeImage_GetBPP(dst) == FreeImage_GetBPP(src))) {
-		FreeImage_GetICCProfile(dst)->flags |= (WORD)(FreeImage_GetICCProfile(src)->flags & FIICC_COLOR_IS_CMYK);
+CopyICCProfile(FIBITMAP *dst, FIBITMAP *src) {
+	if (!dst || !src || (FreeImage_GetImageType(dst) != FreeImage_GetImageType(src)) || (FreeImage_GetBPP(dst) != FreeImage_GetBPP(src))) {
+		return;
+	}
+	FIICCPROFILE *icc = FreeImage_GetICCProfile(dst);
+	const FIICCPROFILE *src_icc = FreeImage_GetICCProfile(src);
+	icc->flags |= (WORD)(src_icc->flags & FIICC_COLOR_IS_CMYK);
+	// not FreeImage_CreateICCProfile, which drops the Exif InterColorProfile tag dst's metadata may hold
+	if (!icc->data && src_icc->data && src_icc->size && (ProfileColorType(dst) == ProfileColorType(src))) {
+		icc->data = malloc(src_icc->size);
+		if (icc->data) {
+			memcpy(icc->data, src_icc->data, src_icc->size);
+			icc->size = src_icc->size;
+		}
 	}
 }
 

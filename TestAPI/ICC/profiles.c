@@ -1498,11 +1498,17 @@ static void cmyk_save_flags(const Bytes *press) {
     FreeImage_Unload(rgb);
 }
 
-/* Rescale and Rotate keep the CMYK flag of a result with the source's type and depth */
-static void cmyk_flag_kept(const Bytes *press) {
+static int same_profile(FIBITMAP *a, FIBITMAP *b) {
+    const FIICCPROFILE *p = FreeImage_GetICCProfile(a), *q = FreeImage_GetICCProfile(b);
+    return (p->size == q->size) && (!p->size || (p->data && q->data && !memcmp(p->data, q->data, p->size)));
+}
+
+/* Rescale and Rotate keep the CMYK flag of a result with the source's type and depth, and the profile with its colour type too */
+static void profile_kept(const Bytes *press) {
     static const char *NAMES[4] = { "CMYK", "16-bit CMYK", "32-bit RGBA", "RGBA16" };
     static const char *OPS[10] = { "Rescale", "Rescale nearest", "RescaleRect", "RescaleRect omitting metadata", "Rotate 90",
                                    "Rotate 180", "Rotate 270", "Rotate 30", "RotateEx", "MakeThumbnail" };
+    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
     FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb16, *src[4];
     unsigned x, y;
     int i, k, v;
@@ -1517,6 +1523,7 @@ static void cmyk_flag_kept(const Bytes *press) {
         FIRGBA16 *q = (FIRGBA16 *)FreeImage_GetScanLine(src[3], y);
         for (x = 0; x < 37; x++) { p[4 * x + FI_RGBA_ALPHA] = rnd() & 255; q[x].alpha = (WORD)rnd(); }
     }
+    for (i = 2; i < 4; i++) FreeImage_CreateICCProfile(src[i], adobe.data, adobe.size);
 
     for (i = 0; i < 4; i++) {
         const int cmyk = (i < 2);
@@ -1545,6 +1552,7 @@ static void cmyk_flag_kept(const Bytes *press) {
             }
             CHECK(out[0][k] && out[1][k] && same_plane(out[0][k], out[1][k]), "%s, %s: not the pixels of the same samples without the flag", NAMES[i], OPS[k]);
             CHECK(out[0][k] && ((FreeImage_GetColorType(out[0][k]) == FIC_CMYK) == cmyk), "%s, %s: %s", NAMES[i], OPS[k], cmyk ? "the CMYK flag is lost" : "flagged CMYK");
+            CHECK(out[0][k] && same_profile(out[0][k], src[i]), "%s, %s: the profile is lost", NAMES[i], OPS[k]);
         }
         for (v = 0; v < 2; v++) for (k = 0; k < 10; k++) if (out[v][k]) FreeImage_Unload(out[v][k]);
         FreeImage_Unload(bare);
@@ -1555,20 +1563,23 @@ static void cmyk_flag_kept(const Bytes *press) {
         FIBITMAP *t = FreeImage_MakeThumbnail(src[i], 20, TRUE);
         CHECK(t && FreeImage_GetImageType(t) == FIT_BITMAP && FreeImage_GetBPP(t) == 32 && ((FreeImage_GetColorType(t) == FIC_CMYK) == (i == 0)),
               "%s, MakeThumbnail converting: %s", NAMES[i], i ? "flagged CMYK" : "the CMYK flag is lost");
+        CHECK(t && ((FreeImage_GetICCProfile(t)->data != NULL) == (i == 0)), "%s, MakeThumbnail converting: %s", NAMES[i], i ? "a profile kept" : "the profile is lost");
         if (t) FreeImage_Unload(t);
     }
 
-    /* the flag on a transparent palette image, which rescales to 32 bits: not CMYK */
+    /* the flag and an RGB profile on a transparent palette image, which rescales to 32 bits: neither kept */
     {
         FIBITMAP *pal = FreeImage_ColorQuantize(rgb, FIQ_WUQUANT), *r = NULL;
         BYTE trns[256];
         for (k = 0; k < 256; k++) trns[k] = (BYTE)(k * 7);
         if (pal) {
             FreeImage_SetTransparencyTable(pal, trns, 256);
+            FreeImage_CreateICCProfile(pal, adobe.data, adobe.size);
             FreeImage_GetICCProfile(pal)->flags |= FIICC_COLOR_IS_CMYK;
             r = FreeImage_Rescale(pal, 20, 12, FILTER_BILINEAR);
         }
         CHECK(r && FreeImage_GetBPP(r) == 32 && FreeImage_GetColorType(r) == FIC_RGBALPHA, "flagged palette image, Rescale to 32 bits: not RGBA");
+        CHECK(r && !FreeImage_GetICCProfile(r)->data, "palette image, Rescale to 32 bits: the profile kept");
         if (r) FreeImage_Unload(r);
         if (pal) FreeImage_Unload(pal);
     }
@@ -1576,6 +1587,126 @@ static void cmyk_flag_kept(const Bytes *press) {
     for (i = 0; i < 4; i++) FreeImage_Unload(src[i]);
     FreeImage_Unload(rgb16);
     FreeImage_Unload(rgb);
+}
+
+static void unload_checked(FIBITMAP *dib) {
+    if (dib) FreeImage_Unload(dib);
+}
+
+/* the profile on other layouts, and where the colour type or depth changes */
+static void profile_kept_layouts(void) {
+    static const char *OPS[3] = { "Rotate 90", "Rotate 30", "Rescale" };
+    Bytes srgb = builtin(FICMS_PROFILE_SRGB), linear = builtin(FICMS_PROFILE_LINEAR_SRGB), grey = make_gray_profile(1.8);
+    FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    FIBITMAP *g8, *g16, *rgbf, *opaque, *bw, *pal1, *pal8, *e, *r;
+    RGBQUAD *pal;
+    BYTE exif_icc[8] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    unsigned x, y;
+    int k;
+    for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(rgb, y); for (x = 0; x < 37 * 3; x++) p[x] = rnd() & 255; }
+
+    /* 8-bit grey keeps its grey profile, but not rescaled to 24 bits */
+    g8 = FreeImage_ConvertToGreyscale(rgb);
+    FreeImage_CreateICCProfile(g8, grey.data, grey.size);
+    r = FreeImage_Rescale(g8, 20, 12, FILTER_BILINEAR);
+    CHECK(r && FreeImage_GetBPP(r) == 8 && same_profile(r, g8), "8-bit grey, Rescale: the profile is lost");
+    unload_checked(r);
+    r = FreeImage_Rotate(g8, 90, NULL);
+    CHECK(r && same_profile(r, g8), "8-bit grey, Rotate 90: the profile is lost");
+    unload_checked(r);
+    r = FreeImage_RotateEx(g8, 15, 2, 1, 18, 11, TRUE);
+    CHECK(r && same_profile(r, g8), "8-bit grey, RotateEx: the profile is lost");
+    unload_checked(r);
+    r = FreeImage_RescaleRect(g8, 20, 12, 0, 0, 37, 23, FILTER_BILINEAR, FI_RESCALE_TRUE_COLOR);
+    CHECK(r && FreeImage_GetBPP(r) == 24 && !FreeImage_GetICCProfile(r)->data, "8-bit grey, Rescale to 24 bits: the grey profile kept");
+    unload_checked(r);
+
+    /* an 8-bit colour palette: Rotate copies it, RotateEx gives a grey one */
+    pal8 = FreeImage_ColorQuantize(rgb, FIQ_WUQUANT);
+    if (pal8) FreeImage_CreateICCProfile(pal8, srgb.data, srgb.size);
+    r = pal8 ? FreeImage_Rotate(pal8, 90, NULL) : NULL;
+    CHECK(r && FreeImage_GetColorType(r) == FIC_PALETTE && same_profile(r, pal8), "8-bit palette, Rotate 90: the profile is lost");
+    unload_checked(r);
+    r = pal8 ? FreeImage_RotateEx(pal8, 15, 2, 1, 18, 11, TRUE) : NULL;
+    CHECK(r && FreeImage_GetColorType(r) != FIC_PALETTE && !FreeImage_GetICCProfile(r)->data, "8-bit palette, RotateEx to grey: the RGB profile kept");
+    unload_checked(r);
+
+    g16 = FreeImage_ConvertToUINT16(g8);
+    FreeImage_CreateICCProfile(g16, grey.data, grey.size);
+    r = FreeImage_Rescale(g16, 20, 12, FILTER_BILINEAR);
+    CHECK(r && same_profile(r, g16), "16-bit grey, Rescale: the profile is lost");
+    unload_checked(r);
+    rgbf = FreeImage_ConvertToRGBF(rgb);
+    FreeImage_CreateICCProfile(rgbf, linear.data, linear.size);
+    r = FreeImage_Rotate(rgbf, 30, NULL);
+    CHECK(r && same_profile(r, rgbf), "RGBF, Rotate 30: the profile is lost");
+    unload_checked(r);
+
+    /* opaque 32-bit RGB rotated into transparent corners: RGB all the same */
+    opaque = FreeImage_ConvertTo32Bits(rgb);
+    FreeImage_CreateICCProfile(opaque, srgb.data, srgb.size);
+    r = FreeImage_Rotate(opaque, 30, NULL);
+    CHECK(r && FreeImage_GetColorType(opaque) == FIC_RGB && FreeImage_GetColorType(r) == FIC_RGBALPHA && same_profile(r, opaque), "opaque RGB, Rotate 30: the profile is lost");
+    unload_checked(r);
+    /* results that are clones */
+    r = FreeImage_Rescale(opaque, 37, 23, FILTER_BILINEAR);
+    CHECK(r && same_profile(r, opaque), "RGB, Rescale to its own size: the profile is lost");
+    unload_checked(r);
+    r = FreeImage_Rotate(opaque, 360, NULL);
+    CHECK(r && same_profile(r, opaque), "RGB, Rotate 360: the profile is lost");
+    unload_checked(r);
+
+    /* 1-bit: Rotate gives a grey palette, which a colour palette's RGB profile does not describe */
+    bw = FreeImage_Allocate(37, 23, 1, 0, 0, 0);
+    for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(bw, y); for (x = 0; x < 5; x++) p[x] = rnd() & 255; }
+    pal = FreeImage_GetPalette(bw);
+    pal[0].rgbRed = pal[0].rgbGreen = pal[0].rgbBlue = 0;
+    pal[1].rgbRed = pal[1].rgbGreen = pal[1].rgbBlue = 255;
+    FreeImage_CreateICCProfile(bw, grey.data, grey.size);
+    r = FreeImage_Rotate(bw, 90, NULL);
+    CHECK(r && FreeImage_GetColorType(bw) == FIC_MINISBLACK && FreeImage_GetColorType(r) == FIC_MINISBLACK && same_profile(r, bw), "1-bit grey, Rotate 90: the profile is lost");
+    unload_checked(r);
+    pal1 = FreeImage_Clone(bw);
+    pal = FreeImage_GetPalette(pal1);
+    pal[0].rgbRed = 255; pal[0].rgbGreen = 0; pal[0].rgbBlue = 0;
+    pal[1].rgbRed = 0; pal[1].rgbGreen = 0; pal[1].rgbBlue = 255;
+    FreeImage_CreateICCProfile(pal1, srgb.data, srgb.size);
+    r = FreeImage_Rotate(pal1, 90, NULL);
+    CHECK(r && FreeImage_GetColorType(pal1) == FIC_PALETTE && FreeImage_GetColorType(r) != FIC_PALETTE && !FreeImage_GetICCProfile(r)->data, "1-bit palette, Rotate 90 to grey: the RGB profile kept");
+    unload_checked(r);
+
+    /* the Exif InterColorProfile tag stays beside the profile */
+    e = FreeImage_Clone(opaque);
+    {
+        FITAG *t = FreeImage_CreateTag();
+        FreeImage_SetTagKey(t, "InterColorProfile");
+        FreeImage_SetTagID(t, 0x8773);
+        FreeImage_SetTagType(t, FIDT_UNDEFINED);
+        FreeImage_SetTagCount(t, sizeof(exif_icc));
+        FreeImage_SetTagLength(t, sizeof(exif_icc));
+        FreeImage_SetTagValue(t, exif_icc);
+        FreeImage_SetMetadata(FIMD_EXIF_MAIN, e, "InterColorProfile", t);
+        FreeImage_DeleteTag(t);
+    }
+    for (k = 0; k < 3; k++) {
+        FITAG *tag = NULL;
+        r = (k == 2) ? FreeImage_Rescale(e, 20, 12, FILTER_BILINEAR) : FreeImage_Rotate(e, k ? 30 : 90, NULL);
+        CHECK(r && same_profile(r, e), "%s: the profile is lost", OPS[k]);
+        CHECK(r && FreeImage_GetMetadata(FIMD_EXIF_MAIN, r, "InterColorProfile", &tag) && tag && FreeImage_GetTagLength(tag) == sizeof(exif_icc),
+              "%s: the Exif InterColorProfile tag is lost", OPS[k]);
+        unload_checked(r);
+    }
+
+    FreeImage_Unload(e);
+    unload_checked(pal8);
+    FreeImage_Unload(pal1);
+    FreeImage_Unload(bw);
+    FreeImage_Unload(opaque);
+    FreeImage_Unload(rgbf);
+    FreeImage_Unload(g16);
+    FreeImage_Unload(g8);
+    FreeImage_Unload(rgb);
+    free(grey.data);
 }
 
 /* a little-endian Exif APP1 payload: ColorSpace, and an interoperability index when one is given */
@@ -1691,7 +1822,8 @@ int main(int argc, char **argv) {
     grey_alpha_psd();
     cmyk_pages_cached(&press);
     cmyk_save_flags(&press);
-    cmyk_flag_kept(&press);
+    profile_kept(&press);
+    profile_kept_layouts();
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

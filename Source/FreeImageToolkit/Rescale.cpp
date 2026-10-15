@@ -87,7 +87,7 @@ FreeImage_RescaleRect(FIBITMAP *src, int dst_width, int dst_height, int src_left
 	delete pFilter;
 
 	// not metadata: it says what the samples are
-	CopyCMYKFlag(dst, src);
+	CopyICCProfile(dst, src);
 
 	if ((flags & FI_RESCALE_OMIT_METADATA) != FI_RESCALE_OMIT_METADATA) {
 		// copy metadata from src to dst

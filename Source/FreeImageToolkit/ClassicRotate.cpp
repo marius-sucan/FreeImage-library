@@ -866,6 +866,7 @@ FreeImage_Rotate(FIBITMAP *dib, double angle, const void *bkcolor) {
 
 					// copy metadata from src to dst
 					FreeImage_CloneMetadata(dst, dib);
+					CopyICCProfile(dst, dib);
 
 					return dst;
 				}
@@ -892,7 +893,7 @@ FreeImage_Rotate(FIBITMAP *dib, double angle, const void *bkcolor) {
 
 					// copy metadata from src to dst
 					FreeImage_CloneMetadata(dst, dib);
-					CopyCMYKFlag(dst, dib);
+					CopyICCProfile(dst, dib);
 
 					return dst;
 				}
@@ -909,7 +910,7 @@ FreeImage_Rotate(FIBITMAP *dib, double angle, const void *bkcolor) {
 
 				// copy metadata from src to dst
 				FreeImage_CloneMetadata(dst, dib);
-				CopyCMYKFlag(dst, dib);
+				CopyICCProfile(dst, dib);
 
 				return dst;
 			}
