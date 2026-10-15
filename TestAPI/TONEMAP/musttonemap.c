@@ -684,6 +684,136 @@ static double gamma22(double v) { return pow(v, 2.2); }
 static double gamma28(double v) { return pow(v, 2.8); }
 static double identity(double v) { return v; }
 
+/* ----------------------------------------------------------------------------------------------
+   the ICC profile of a result
+   ---------------------------------------------------------------------------------------------- */
+
+/* ITU-T H.273 table 2: red, green, blue and white */
+static const double *code_xy(int code) {
+    static const struct { int code; double xy[8]; } table[] = {
+        { 1, { 0.640, 0.330, 0.300, 0.600, 0.150, 0.060, 0.3127, 0.3290 } },
+        { 4, { 0.670, 0.330, 0.210, 0.710, 0.140, 0.080, 0.3100, 0.3160 } },
+        { 5, { 0.640, 0.330, 0.290, 0.600, 0.150, 0.060, 0.3127, 0.3290 } },
+        { 9, { 0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290 } },
+        { 11, { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3140, 0.3510 } },
+        { 12, { 0.680, 0.320, 0.265, 0.690, 0.150, 0.060, 0.3127, 0.3290 } },
+    };
+    unsigned i;
+    for (i = 0; i < sizeof(table) / sizeof(table[0]); i++) if (table[i].code == code) return table[i].xy;
+    return NULL;
+}
+
+static cmsHPROFILE open_icc(FIBITMAP *dib) {
+    FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+    return (icc && icc->data && icc->size) ? cmsOpenProfileFromMem(icc->data, icc->size) : NULL;
+}
+
+static unsigned icc_size(FIBITMAP *dib) {
+    return dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0;
+}
+
+/* the colorants of an RGB profile against those of primaries and a white, adapted to D50 */
+static int same_colorants(cmsHPROFILE h, const double xy[8]) {
+    static const cmsTagSignature tags[3] = { cmsSigRedColorantTag, cmsSigGreenColorantTag, cmsSigBlueColorantTag };
+    cmsCIExyY white;
+    cmsCIExyYTRIPLE rgb;
+    cmsToneCurve *linear = cmsBuildGamma(NULL, 1.0), *curves[3];
+    cmsHPROFILE ref;
+    int ok, c;
+    white.x = xy[6]; white.y = xy[7]; white.Y = 1;
+    rgb.Red.x = xy[0]; rgb.Red.y = xy[1]; rgb.Red.Y = 1;
+    rgb.Green.x = xy[2]; rgb.Green.y = xy[3]; rgb.Green.Y = 1;
+    rgb.Blue.x = xy[4]; rgb.Blue.y = xy[5]; rgb.Blue.Y = 1;
+    curves[0] = curves[1] = curves[2] = linear;
+    ref = cmsCreateRGBProfile(&white, &rgb, curves);
+    cmsFreeToneCurve(linear);
+    ok = (ref != NULL);
+    for (c = 0; ok && c < 3; c++) {
+        const cmsCIEXYZ *a = (const cmsCIEXYZ *)cmsReadTag(h, tags[c]), *b = (const cmsCIEXYZ *)cmsReadTag(ref, tags[c]);
+        ok = a && b && fabs(a->X - b->X) < 2e-4 && fabs(a->Y - b->Y) < 2e-4 && fabs(a->Z - b->Z) < 2e-4;
+    }
+    if (ref) cmsCloseProfile(ref);
+    return ok;
+}
+
+/* every tone curve of an RGB profile against a curve written out here */
+static int curves_are(cmsHPROFILE h, double (*ref)(double)) {
+    static const cmsTagSignature tags[3] = { cmsSigRedTRCTag, cmsSigGreenTRCTag, cmsSigBlueTRCTag };
+    static const double v[] = { 0.01, 0.04, 0.1, 0.3, 0.5, 0.75, 0.95 };
+    unsigned c, i;
+    for (c = 0; c < 3; c++) {
+        const cmsToneCurve *t = (const cmsToneCurve *)cmsReadTag(h, tags[c]);
+        if (!t) return 0;
+        for (i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+            if (fabs(cmsEvalToneCurveFloat(t, (cmsFloat32Number)v[i]) - ref(v[i])) > 1e-4) return 0;
+        }
+    }
+    return 1;
+}
+
+/* the image carries the RGB profile of a primaries code point with a tone curve, its cicp tag saying so */
+static void check_code_profile(FIBITMAP *dib, int primaries, int transfer, double (*curve)(double), const char *what) {
+    cmsHPROFILE h = open_icc(dib);
+    const cmsVideoSignalType *cicp;
+    CHECK(h != NULL, "%s: no ICC profile", what);
+    if (!h) return;
+    CHECK(cmsGetColorSpace(h) == cmsSigRgbData, "%s: not an RGB profile", what);
+    CHECK(same_colorants(h, code_xy(primaries)), "%s: not the colorants of primaries %d", what, primaries);
+    CHECK(curves_are(h, curve), "%s: not the tone curve of transfer %d", what, transfer);
+    cicp = (const cmsVideoSignalType *)cmsReadTag(h, cmsSigcicpTag);
+    CHECK(cicp && cicp->ColourPrimaries == primaries && cicp->TransferCharacteristics == transfer && cicp->MatrixCoefficients == 0 && cicp->VideoFullRangeFlag == 1,
+          "%s: the profile's cicp tag", what);
+    cmsCloseProfile(h);
+}
+
+/* the result keeps the primaries the CICP tag names, and carries their profile with a linear tone curve */
+static void test_linear_profiles(void) {
+    static const struct { BYTE code, transfer; const char *what; } kept[] = {
+        { 9, 16, "BT.2020 PQ" }, { 9, 1, "BT.2020" }, { 12, 13, "Display P3" }, { 5, 6, "BT.601 625 lines" },
+        { 11, 1, "DCI-P3, its own white" }, { 4, 1, "BT.470 System M, illuminant C" } };
+    static const struct { BYTE code, transfer; const char *what; } none[] = {
+        { 1, 13, "sRGB" }, { 2, 16, "unspecified primaries" }, { 10, 1, "XYZ primaries" } };
+    static const double rgb[12] = { 0.9, 0.2, 0.1, 0.1, 0.8, 0.3, 0.2, 0.3, 0.9, 0.5, 0.5, 0.5 };
+    DWORD size = 0;
+    const void *linear_srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_LINEAR_SRGB, &size);
+    unsigned k, x, c;
+    char what[128];
+    printf("FreeImage_ConvertToLinear, the result's profile\n");
+    for (k = 0; k < sizeof(kept) / sizeof(kept[0]); k++) {
+        FIBITMAP *dib = rgb16_row(rgb, 4), *lin, *lin709, *cm;
+        set_cicp(dib, kept[k].code, kept[k].transfer, 0, 1);
+        snprintf(what, sizeof(what), "linear %s", kept[k].what);
+        lin = linear_of(dib, 0, what);
+        lin709 = linear_of(dib, FI_LINEAR_SRGB_PRIMARIES, what);
+        if (lin && lin709) {
+            check_code_profile(lin, kept[k].code, 8, identity, what);
+            CHECK(icc_size(lin709) == 0, "%s, in sRGB primaries: a profile on linear sRGB", what);
+            /* the profile takes the colors where the flag's matrix does */
+            cm = FreeImage_ConvertToICCProfile(lin, linear_srgb, size, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+            CHECK(cm != NULL, "%s: not converted to linear sRGB", what);
+            if (cm) {
+                unsigned bad = 0;
+                for (x = 0; x < 4; x++) for (c = 0; c < 3; c++) if (!near(out(cm, x, c), out(lin709, x, c), 1e-3)) bad++;
+                CHECK(bad == 0, "%s: %u of 12 samples converted through its profile miss the flag's (red %.4f, not %.4f)",
+                      what, bad, out(cm, 0, 0), out(lin709, 0, 0));
+                FreeImage_Unload(cm);
+            }
+        }
+        FreeImage_Unload(lin);
+        FreeImage_Unload(lin709);
+        FreeImage_Unload(dib);
+    }
+    for (k = 0; k < sizeof(none) / sizeof(none[0]); k++) {
+        FIBITMAP *dib = rgb16_row(rgb, 4), *lin;
+        set_cicp(dib, none[k].code, none[k].transfer, 0, 1);
+        snprintf(what, sizeof(what), "linear %s", none[k].what);
+        lin = linear_of(dib, 0, what);
+        CHECK(lin && icc_size(lin) == 0, "%s: the result has a profile", what);
+        FreeImage_Unload(lin);
+        FreeImage_Unload(dib);
+    }
+}
+
 static void test_linear(void) {
     FIBITMAP *dib, *lin;
     BYTE cicp[4];
@@ -986,6 +1116,16 @@ static void test_linear(void) {
                 FreeImage_Unload(tm_raw);
                 FreeImage_Unload(lin);
             }
+            /* its BT.2020 primaries kept: linear, then tone mapped, each with their profile */
+            lin = linear_of(dib, 0, "seine_hdr_rec2020.avif, BT.2020");
+            if (lin) {
+                check_code_profile(lin, 9, 8, identity, "seine_hdr_rec2020.avif, linear BT.2020");
+                tm_lin = FreeImage_ToneMapping(lin, FITMO_REINHARD05, 0, 0);
+                CHECK(tm_lin != NULL, "seine_hdr_rec2020.avif, linear BT.2020: not tone mapped");
+                if (tm_lin) check_code_profile(tm_lin, 9, 13, ref_srgb, "seine_hdr_rec2020.avif, tone mapped in BT.2020");
+                FreeImage_Unload(tm_lin);
+                FreeImage_Unload(lin);
+            }
             FreeImage_Unload(dib);
         } else {
             printf("  skipped, not found: %s\n", path);
@@ -1015,23 +1155,28 @@ static void check_display_samples(FIBITMAP *dst, const char *what) {
 static void test_tonemapped(void) {
     static const struct { FREE_IMAGE_TMO op; const char *name; } ops[] = {
         { FITMO_DRAGO03, "Drago03" }, { FITMO_REINHARD05, "Reinhard05" }, { FITMO_FATTAL02, "Fattal02" } };
-    static const BYTE primaries[2] = { 1, 9 };
+    static const BYTE primaries[3] = { 1, 9, 2 };
     unsigned i, p;
     char what[128];
+    FITAG *kept = NULL;
     printf("tone mapped images\n");
     for (i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
         FIBITMAP *light, *dst;
         BYTE cicp[4];
 
         light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+        FreeImage_SetMetadataKeyValue(FIMD_EXIF_MAIN, light, "InterColorProfile", "the input's");
         dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
         CHECK(dst && cicp_transfer(dst, cicp) == -1, "%s, untagged light: the output has a CICP tag", ops[i].name);
+        CHECK(dst && icc_size(dst) == 0, "%s, untagged light: the output has a profile", ops[i].name);
+        CHECK(dst && !FreeImage_GetMetadata(FIMD_EXIF_MAIN, dst, "InterColorProfile", &kept), "%s, untagged light: the input's Exif InterColorProfile tag kept", ops[i].name);
         FreeImage_Unload(dst);
         FreeImage_Unload(light);
 
-        for (p = 0; p < 2; p++) {
+        for (p = 0; p < 3; p++) {
             light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
             set_cicp(light, primaries[p], 8, 0, 1);
+            FreeImage_SetMetadataKeyValue(FIMD_EXIF_MAIN, light, "InterColorProfile", "the input's");
             dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
             snprintf(what, sizeof(what), "%s, linear light in primaries %d", ops[i].name, primaries[p]);
             CHECK(dst != NULL, "%s: not tone mapped", what);
@@ -1040,6 +1185,12 @@ static void test_tonemapped(void) {
                       "%s: the output's CICP tag is %d/%d/%d/%d", what, cicp[0], cicp[1], cicp[2], cicp[3]);
                 CHECK(cicp_transfer(light, cicp) == 8, "%s: the input's tag changed", what);
                 check_display_samples(dst, what);
+                if (code_xy(primaries[p]) && (primaries[p] != 1)) {
+                    check_code_profile(dst, primaries[p], 13, ref_srgb, what);
+                } else {
+                    CHECK(icc_size(dst) == 0, "%s: a profile on display samples taken for sRGB", what);
+                }
+                CHECK(!FreeImage_GetMetadata(FIMD_EXIF_MAIN, dst, "InterColorProfile", &kept), "%s: the input's Exif InterColorProfile tag kept", what);
                 FreeImage_Unload(dst);
             }
             FreeImage_Unload(light);
@@ -1082,6 +1233,7 @@ int main(void) {
     test_png();
     test_files();
     test_linear();
+    test_linear_profiles();
     test_tonemapped();
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();

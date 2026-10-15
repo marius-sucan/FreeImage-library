@@ -528,7 +528,8 @@ void CopyColorDescription(FIBITMAP *dst, FIBITMAP *src);
 
 /**
 Describe the output of a tone mapping operator, display samples in the primaries of its input: the CICP tag
-copied from the input keeps its primaries and takes sRGB's transfer characteristics
+copied from the input keeps its primaries and takes sRGB's transfer characteristics, and the ICC profile of those
+primaries with the sRGB tone curve is attached, none for sRGB's; the input's Exif InterColorProfile tag is dropped
 @see See definition in MustTonemap.cpp
 */
 void DescribeToneMapped(FIBITMAP *dib);

@@ -448,7 +448,7 @@ ConvertRows(FIBITMAP *src, FIBITMAP *dst, Layout layout, const Plan &plan, const
 	}
 }
 
-// the result's description: its primaries and linear transfer, and the profile it keeps, if any
+// the result's description: its primaries and linear transfer, and the profile it keeps or the one of its primaries
 static void
 Describe(FIBITMAP *dst, FIBITMAP *dib, BYTE primaries, const std::vector<BYTE> &icc) {
 	FreeImage_CloneMetadata(dst, dib);
@@ -461,6 +461,13 @@ Describe(FIBITMAP *dst, FIBITMAP *dib, BYTE primaries, const std::vector<BYTE> &
 	FreeImage_DestroyICCProfile(dst);
 	if (!icc.empty()) {
 		FreeImage_CreateICCProfile(dst, (void *)&icc[0], (long)icc.size());
+	} else if ((primaries != 1) && ChromaticitiesOfCode(primaries)) {
+		// linear sRGB needs none: a float image without a profile is taken for it
+		unsigned size = 0;
+		const void *profile = GetCICPProfile(primaries, 8, FALSE, &size);
+		if (profile) {
+			FreeImage_CreateICCProfile(dst, (void *)profile, (long)size);
+		}
 	}
 }
 
@@ -650,7 +657,8 @@ the HLG reference display 4.9. HLG gets the display step of BT.2100 for a 1000 c
 Samples tagged "UnscaledBits" are read in their own precision. CMYK images are converted to RGB first.
 @param dib Image to convert: a standard bitmap, FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF or FIT_RGBAF
 @param flags FI_LINEAR_SRGB_PRIMARIES converts the colors to sRGB's primaries; otherwise they keep the image's,
-which the CICP tag of the result names, or the linear copy of a matrix-shaper profile it carries
+which the CICP tag of the result names, and the ICC profile it carries: that of those primaries with a linear tone
+curve, or the linear copy of a matrix-shaper profile
 @return Returns a FIT_RGBF image, FIT_RGBAF when the image has an alpha channel, or NULL
 */
 FIBITMAP * DLL_CALLCONV

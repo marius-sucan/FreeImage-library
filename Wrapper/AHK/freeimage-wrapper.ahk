@@ -1100,6 +1100,7 @@ FreeImage_ToneMapping(hImage, algo:=0, p1:=0, p2:=0) {
       ; p1 = intensity [-8, 8]; p2 = contrast [0.3, 1.0]
 ; 2 = FITMO_FATTAL02   ; Gradient domain High Dynamic Range compression (R. Fattal, 2002)
       ; p1 = saturation [0.4, 0.6]; p2 = attenuation [0.8, 0.9]
+; The result carries an ICC profile of the primaries the image's CICP tag names, when they are not sRGB's.
 
    Return DllCall(getFIMfunc("ToneMapping"), "UPtr", hImage, "Int", algo, "Double", p1, "Double", p2, "UPtr")
 }
@@ -1149,7 +1150,7 @@ FreeImage_ConvertToLinear(hImage, flags:=0) {
 ; Returns an RGBF image (RGBAF with alpha) in linear light, 1.0 = SDR reference white, 203 cd/m2.
 ; To display the image, feed it to FreeImage_ToneMapping().
 ; The type of curves undone: the CICP tag's (PQ, HLG, sRGB, BT.709...), else the ICC profile's, else sRGB; floating-point images stay as they are.
-; flags: FI_LINEAR_SRGB_PRIMARIES = 0x01; convert the colors to sRGB's primaries, e.g. BT.2020 ones; otherwise they keep the image's.
+; flags: FI_LINEAR_SRGB_PRIMARIES = 0x01; convert the colors to sRGB's primaries, e.g. BT.2020 ones; otherwise they keep the image's, and the result carries their ICC profile.
 ; Accepts standard bitmaps, UINT16, RGB16, RGBA16, FLOAT, RGBF and RGBAF images; returns 0 for the others.
    Return DllCall(getFIMfunc("ConvertToLinear"), "UPtr", hImage, "Int", flags, "UPtr")
 }
