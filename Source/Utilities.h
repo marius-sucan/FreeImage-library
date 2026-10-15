@@ -527,12 +527,13 @@ Copy src's RGB ICC profile and CICP tag to dst, an RGB image made of src's sampl
 void CopyColorDescription(FIBITMAP *dst, FIBITMAP *src);
 
 /**
-Describe the output of a tone mapping operator, display samples in the primaries of its input: the CICP tag
-copied from the input keeps its primaries and takes sRGB's transfer characteristics, and the ICC profile of those
-primaries with the sRGB tone curve is attached, none for sRGB's; the input's Exif InterColorProfile tag is dropped
+Describe dib, the output of a tone mapping operator, display samples in the primaries of src, its input: the CICP tag
+copied from src keeps its primaries and takes sRGB's transfer characteristics, and the ICC profile of those primaries
+with the sRGB tone curve is attached, none for sRGB's; without primaries in the tag, the one GetToneMappedProfile
+makes of src's profile. The Exif InterColorProfile tag copied from src is dropped
 @see See definition in MustTonemap.cpp
 */
-void DescribeToneMapped(FIBITMAP *dib);
+void DescribeToneMapped(FIBITMAP *dib, FIBITMAP *src);
 
 /**
 Expand narrow range samples, black at 16 and white at 235 times 2^(bits - 8), to the full range: the palette of 1-, 4- and
@@ -575,6 +576,14 @@ Give a loaded image with a CICP tag but no ICC profile the profile of its code p
 @see See definition in ColorManagement.cpp
 */
 void AttachCICPProfile(FIBITMAP *dib);
+
+/**
+The profile of display samples in the colorants of dib's RGB matrix-shaper ICC profile: those colorants with the sRGB
+tone curve, what a tone mapping operator gives from light dib's profile describes. Empty for other profiles, and for
+sRGB's colorants, which need none
+@see See definition in ColorManagement.cpp
+*/
+void GetToneMappedProfile(FIBITMAP *dib, std::vector<BYTE> &profile);
 
 
 // ==========================================================

@@ -253,7 +253,7 @@ FreeImage_TmoReinhard05Ex(FIBITMAP *src, double intensity, double contrast, doub
 
 	// copy metadata from src to dst
 	FreeImage_CloneMetadata(dst, src);
-	DescribeToneMapped(dst);
+	DescribeToneMapped(dst, src);
 
 	return dst;
 }

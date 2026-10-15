@@ -144,18 +144,27 @@ CopyColorDescription(FIBITMAP *dst, FIBITMAP *src) {
 }
 
 void
-DescribeToneMapped(FIBITMAP *dib) {
+DescribeToneMapped(FIBITMAP *dib, FIBITMAP *src) {
 	// also drops an Exif InterColorProfile tag, which describes the input
 	FreeImage_DestroyICCProfile(dib);
 	BYTE cicp[4];
-	if (GetCICPMetadata(dib, cicp)) {
+	const bool tagged = GetCICPMetadata(dib, cicp);
+	if (tagged) {
 		// transfer 13: sRGB, as display samples are read; matrix 0: RGB
 		SetCICPMetadata(dib, cicp[0], 13, 0, TRUE);
-		// sRGB's primaries need no profile
+	}
+	if (tagged && (cicp[0] != CICP_UNSPECIFIED)) {
+		// the tag's primaries outrank the input's profile; sRGB's need no profile
 		unsigned size = 0;
 		const void *profile = GetCICPProfile(cicp[0], 13, FALSE, &size);
 		if (profile) {
 			FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
+		}
+	} else {
+		std::vector<BYTE> profile;
+		GetToneMappedProfile(src, profile);
+		if (!profile.empty()) {
+			FreeImage_CreateICCProfile(dib, &profile[0], (long)profile.size());
 		}
 	}
 }

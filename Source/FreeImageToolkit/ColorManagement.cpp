@@ -2595,3 +2595,69 @@ AttachCICPProfile(FIBITMAP *dib) {
 		FreeImage_CreateICCProfile(dib, (void *)profile, (long)size);
 	}
 }
+
+// ==========================================================
+//   Profiles of tone mapped images
+// ==========================================================
+
+void
+GetToneMappedProfile(FIBITMAP *dib, std::vector<BYTE> &bytes) {
+	bytes.clear();
+	const FIICCPROFILE *icc = dib ? FreeImage_GetICCProfile(dib) : NULL;
+	if (!icc || !icc->data || (icc->flags & FIICC_COLOR_IS_CMYK)) {
+		return;
+	}
+	try {
+		Context context;
+		context.mute = true;
+		cmsHPROFILE profile = context.Open(icc->data, (DWORD)icc->size);
+		if (!profile) {
+			return;
+		}
+		// the colorants against the PCS white, as FreeImage_ConvertToLinear's linear copy takes them
+		static const cmsTagSignature tags[3] = { cmsSigRedColorantTag, cmsSigGreenColorantTag, cmsSigBlueColorantTag };
+		cmsCIExyYTRIPLE primaries;
+		cmsCIExyY *xyY[3] = { &primaries.Red, &primaries.Green, &primaries.Blue };
+		bool colorants = (cmsGetColorSpace(profile) == cmsSigRgbData) && cmsIsMatrixShaper(profile);
+		for (unsigned c = 0; colorants && (c < 3); c++) {
+			const cmsCIEXYZ *XYZ = (const cmsCIEXYZ *)cmsReadTag(profile, tags[c]);
+			colorants = XYZ && (XYZ->X + XYZ->Y + XYZ->Z > 0);
+			if (colorants) {
+				cmsXYZ2xyY(xyY[c], XYZ);
+			}
+		}
+		char name[256] = "";
+		if (colorants) {
+			cmsGetProfileInfoASCII(profile, cmsInfoDescription, "en", "US", name, sizeof(name));
+		}
+		cmsCloseProfile(profile);
+		if (!colorants) {
+			return;
+		}
+		const std::string description = std::string(name[0] ? name : "RGB") + ", sRGB tone curve (FreeImage)";
+		double params[5];
+		const int type = GetCICPToneCurve(13, params);
+		cmsToneCurve *curve = cmsBuildParametricToneCurve(context.id, type, params);
+		if (!curve) {
+			return;
+		}
+		cmsCIExyY white;
+		cmsXYZ2xyY(&white, cmsD50_XYZ());
+		cmsToneCurve *curves[3] = { curve, curve, curve };
+		cmsHPROFILE made = cmsCreateRGBProfileTHR(context.id, &white, &primaries, curves);
+		cmsFreeToneCurve(curve);
+		if (!made) {
+			return;
+		}
+		DWORD size = 0;
+		BYTE *data = SetDescription(made, description.c_str()) ? SaveBuiltInProfile(made, &size) : NULL;
+		cmsCloseProfile(made);
+		std::unique_ptr<BYTE, void (*)(void *)> saved(data, free);
+		// sRGB's colorants need no profile
+		if (data && !GetTwinCache().IsTwin(data, size)) {
+			bytes.assign(data, data + size);
+		}
+	} catch (std::bad_alloc &) {
+		bytes.clear();
+	}
+}

@@ -1100,7 +1100,7 @@ FreeImage_ToneMapping(hImage, algo:=0, p1:=0, p2:=0) {
       ; p1 = intensity [-8, 8]; p2 = contrast [0.3, 1.0]
 ; 2 = FITMO_FATTAL02   ; Gradient domain High Dynamic Range compression (R. Fattal, 2002)
       ; p1 = saturation [0.4, 0.6]; p2 = attenuation [0.8, 0.9]
-; The result carries an ICC profile of the primaries the image's CICP tag names, when they are not sRGB's.
+; The result carries an ICC profile of the image's primaries, its CICP tag's or else its ICC profile's, unless they are sRGB's.
 
    Return DllCall(getFIMfunc("ToneMapping"), "UPtr", hImage, "Int", algo, "Double", p1, "Double", p2, "UPtr")
 }

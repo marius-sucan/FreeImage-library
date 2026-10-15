@@ -1222,6 +1222,251 @@ static void test_tonemapped(void) {
     }
 }
 
+/* ----------------------------------------------------------------------------------------------
+   the tone mapping operators' output from light an ICC profile describes: its colorants, the sRGB curve
+   ---------------------------------------------------------------------------------------------- */
+
+static cmsHPROFILE named(cmsHPROFILE h, const char *name) {
+    if (name) {
+        cmsMLU *mlu = cmsMLUalloc(NULL, 1);
+        cmsMLUsetASCII(mlu, "en", "US", name);
+        cmsWriteTag(h, cmsSigProfileDescriptionTag, mlu);
+        cmsMLUfree(mlu);
+    } else {
+        cmsWriteTag(h, cmsSigProfileDescriptionTag, NULL);
+    }
+    return h;
+}
+
+/* ROMM RGB, ProPhoto's primaries, with a linear tone curve */
+static cmsHPROFILE linear_prophoto(const char *name) {
+    cmsCIExyY d50 = { 0.3457, 0.3585, 1.0 };
+    cmsCIExyYTRIPLE romm = { { 0.7347, 0.2653, 1.0 }, { 0.1596, 0.8404, 1.0 }, { 0.0366, 0.0001, 1.0 } };
+    cmsToneCurve *linear = cmsBuildGamma(NULL, 1.0), *curves[3];
+    cmsHPROFILE h;
+    curves[0] = curves[1] = curves[2] = linear;
+    h = cmsCreateRGBProfile(&d50, &romm, curves);
+    cmsFreeToneCurve(linear);
+    return named(h, name);
+}
+
+static int attach_file(FIBITMAP *dib, const char *path) {
+    static BYTE data[65536];
+    long size;
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        printf("  skipped, not found: %s\n", path);
+        return 0;
+    }
+    size = (long)fread(data, 1, sizeof(data), f);
+    fclose(f);
+    FreeImage_CreateICCProfile(dib, data, size);
+    return 1;
+}
+
+/* the output carries the colorants of the input's profile with the sRGB tone curve, named after it, the same bytes on every run */
+static void check_colorant_profile(FIBITMAP *dst, FIBITMAP *light, const char *what) {
+    static const cmsTagSignature tags[3] = { cmsSigRedColorantTag, cmsSigGreenColorantTag, cmsSigBlueColorantTag };
+    static const BYTE date[12] = { 0x07, 0xEA, 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0 };
+    static const BYTE none[4] = { 0, 0, 0, 0 };
+    cmsHPROFILE h = open_icc(dst), in = open_icc(light);
+    char name[256] = "", desc[256] = "", want[300];
+    int c, same = 1;
+    CHECK(h != NULL, "%s: no ICC profile", what);
+    if (h && in) {
+        const BYTE *bytes = (const BYTE *)FreeImage_GetICCProfile(dst)->data;
+        for (c = 0; c < 3; c++) {
+            const cmsCIEXYZ *a = (const cmsCIEXYZ *)cmsReadTag(h, tags[c]), *b = (const cmsCIEXYZ *)cmsReadTag(in, tags[c]);
+            if (!a || !b || fabs(a->X - b->X) > 2e-4 || fabs(a->Y - b->Y) > 2e-4 || fabs(a->Z - b->Z) > 2e-4) same = 0;
+        }
+        CHECK(same, "%s: not the input's colorants", what);
+        CHECK(curves_are(h, ref_srgb), "%s: not the sRGB tone curve", what);
+        CHECK(cmsReadTag(h, cmsSigcicpTag) == NULL, "%s: a cicp tag, with no code points to name", what);
+        cmsGetProfileInfoASCII(in, cmsInfoDescription, "en", "US", name, sizeof(name));
+        cmsGetProfileInfoASCII(h, cmsInfoDescription, "en", "US", desc, sizeof(desc));
+        snprintf(want, sizeof(want), "%s, sRGB tone curve (FreeImage)", name[0] ? name : "RGB");
+        CHECK(strcmp(desc, want) == 0, "%s: named '%s', not '%s'", what, desc, want);
+        CHECK(memcmp(bytes + 24, date, 12) == 0 && memcmp(bytes + 40, none, 4) == 0, "%s: the profile's date or platform is not fixed", what);
+    }
+    if (h) cmsCloseProfile(h);
+    if (in) cmsCloseProfile(in);
+}
+
+/* RGB to XYZ of primaries against their white, row-major */
+static void rgb_to_xyz(const double xy[8], double m[9]) {
+    double p[9], inv[9], s[3], w[3], det;
+    int i;
+    for (i = 0; i < 3; i++) {
+        p[i] = xy[2 * i] / xy[2 * i + 1];
+        p[3 + i] = 1;
+        p[6 + i] = (1 - xy[2 * i] - xy[2 * i + 1]) / xy[2 * i + 1];
+    }
+    w[0] = xy[6] / xy[7]; w[1] = 1; w[2] = (1 - xy[6] - xy[7]) / xy[7];
+    det = p[0] * (p[4] * p[8] - p[5] * p[7]) - p[1] * (p[3] * p[8] - p[5] * p[6]) + p[2] * (p[3] * p[7] - p[4] * p[6]);
+    inv[0] = (p[4] * p[8] - p[5] * p[7]) / det; inv[1] = (p[2] * p[7] - p[1] * p[8]) / det; inv[2] = (p[1] * p[5] - p[2] * p[4]) / det;
+    inv[3] = (p[5] * p[6] - p[3] * p[8]) / det; inv[4] = (p[0] * p[8] - p[2] * p[6]) / det; inv[5] = (p[2] * p[3] - p[0] * p[5]) / det;
+    inv[6] = (p[3] * p[7] - p[4] * p[6]) / det; inv[7] = (p[1] * p[6] - p[0] * p[7]) / det; inv[8] = (p[0] * p[4] - p[1] * p[3]) / det;
+    for (i = 0; i < 3; i++) s[i] = inv[3 * i] * w[0] + inv[3 * i + 1] * w[1] + inv[3 * i + 2] * w[2];
+    for (i = 0; i < 9; i++) m[i] = p[i] * s[i % 3];
+}
+
+static void invert3(const double a[9], double out[9]) {
+    const double det = a[0] * (a[4] * a[8] - a[5] * a[7]) - a[1] * (a[3] * a[8] - a[5] * a[6]) + a[2] * (a[3] * a[7] - a[4] * a[6]);
+    out[0] = (a[4] * a[8] - a[5] * a[7]) / det; out[1] = (a[2] * a[7] - a[1] * a[8]) / det; out[2] = (a[1] * a[5] - a[2] * a[4]) / det;
+    out[3] = (a[5] * a[6] - a[3] * a[8]) / det; out[4] = (a[0] * a[8] - a[2] * a[6]) / det; out[5] = (a[2] * a[3] - a[0] * a[5]) / det;
+    out[6] = (a[3] * a[7] - a[4] * a[6]) / det; out[7] = (a[1] * a[6] - a[0] * a[7]) / det; out[8] = (a[0] * a[4] - a[1] * a[3]) / det;
+}
+
+static double encode_srgb(double v) {
+    v = fmin(fmax(v, 0), 1);
+    return (v <= 0.0031308) ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055;
+}
+
+/* the output converted to sRGB through its profile, against display samples in primaries of the same white written out here */
+static void check_shown_as(FIBITMAP *dst, const double xy[8], const char *what) {
+    DWORD size = 0;
+    const void *srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &size);
+    FIBITMAP *shown = FreeImage_ConvertToICCProfile(dst, srgb, size, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+    double from[9], to[9], to_inv[9], m[9];
+    unsigned x, y, worst = 0, w = FreeImage_GetWidth(dst), h = FreeImage_GetHeight(dst);
+    int i;
+    CHECK(shown != NULL, "%s: not converted to sRGB", what);
+    if (!shown) return;
+    rgb_to_xyz(xy, from);
+    rgb_to_xyz(code_xy(1), to);
+    invert3(to, to_inv);
+    for (i = 0; i < 9; i++) m[i] = to_inv[3 * (i / 3)] * from[i % 3] + to_inv[3 * (i / 3) + 1] * from[3 + i % 3] + to_inv[3 * (i / 3) + 2] * from[6 + i % 3];
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+        RGBQUAD q, s;
+        double lin[3];
+        int got[3], c;
+        FreeImage_GetPixelColor(dst, x, y, &q);
+        FreeImage_GetPixelColor(shown, x, y, &s);
+        lin[0] = ref_srgb(q.rgbRed / 255.0); lin[1] = ref_srgb(q.rgbGreen / 255.0); lin[2] = ref_srgb(q.rgbBlue / 255.0);
+        got[0] = s.rgbRed; got[1] = s.rgbGreen; got[2] = s.rgbBlue;
+        for (c = 0; c < 3; c++) {
+            const int d = abs(got[c] - (int)floor(encode_srgb(m[3 * c] * lin[0] + m[3 * c + 1] * lin[1] + m[3 * c + 2] * lin[2]) * 255 + 0.5));
+            if ((unsigned)d > worst) worst = (unsigned)d;
+        }
+    }
+    CHECK(worst <= 2, "%s: shown in sRGB through its profile, up to %u steps off the colors written out here", what, worst);
+    FreeImage_Unload(shown);
+}
+
+static void test_tonemapped_profiles(void) {
+    static const struct { FREE_IMAGE_TMO op; const char *name; } ops[] = {
+        { FITMO_DRAGO03, "Drago03" }, { FITMO_REINHARD05, "Reinhard05" }, { FITMO_FATTAL02, "Fattal02" } };
+    static const double adobe[8] = { 0.64, 0.33, 0.21, 0.71, 0.15, 0.06, 0.3127, 0.3290 };
+    FIBITMAP *light, *dst, *first = NULL, *lin;
+    BYTE cicp[4];
+    unsigned i;
+    char what[128];
+    printf("tone mapped images, light an ICC profile describes\n");
+
+    for (i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+        light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+        attach_profile(light, linear_prophoto("Linear ProPhoto RGB"));
+        dst = FreeImage_ToneMapping(light, ops[i].op, 0, 0);
+        snprintf(what, sizeof(what), "%s, linear ProPhoto light", ops[i].name);
+        CHECK(dst != NULL, "%s: not tone mapped", what);
+        if (dst) {
+            check_colorant_profile(dst, light, what);
+            CHECK(cicp_transfer(dst, cicp) == -1, "%s: the output has a CICP tag", what);
+            if (first) {
+                const FIICCPROFILE *a = FreeImage_GetICCProfile(first), *b = FreeImage_GetICCProfile(dst);
+                CHECK(a->size == b->size && b->data && !memcmp(a->data, b->data, a->size), "%s: not the bytes Drago03 gave", what);
+                FreeImage_Unload(dst);
+            } else {
+                first = dst;
+            }
+        }
+        FreeImage_Unload(light);
+    }
+    FreeImage_Unload(first);
+
+    /* the CICP tag's primaries outrank the profile; unspecified ones leave it to the profile */
+    light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+    attach_profile(light, linear_prophoto("Linear ProPhoto RGB"));
+    set_cicp(light, 12, 8, 0, 1);
+    dst = FreeImage_ToneMapping(light, FITMO_REINHARD05, 0, 0);
+    if (dst) check_code_profile(dst, 12, 13, ref_srgb, "linear ProPhoto light tagged Display P3");
+    FreeImage_Unload(dst);
+    set_cicp(light, 2, 8, 0, 1);
+    dst = FreeImage_ToneMapping(light, FITMO_REINHARD05, 0, 0);
+    if (dst) check_colorant_profile(dst, light, "linear ProPhoto light tagged with unspecified primaries");
+    FreeImage_Unload(dst);
+    set_cicp(light, 1, 8, 0, 1);
+    dst = FreeImage_ToneMapping(light, FITMO_REINHARD05, 0, 0);
+    CHECK(dst && icc_size(dst) == 0, "linear ProPhoto light tagged BT.709: the output has a profile");
+    FreeImage_Unload(dst);
+    set_cicp(light, 10, 8, 0, 1);
+    dst = FreeImage_ToneMapping(light, FITMO_REINHARD05, 0, 0);
+    CHECK(dst && icc_size(dst) == 0, "linear ProPhoto light tagged XYZ: the output has a profile");
+    FreeImage_Unload(dst);
+    FreeImage_Unload(light);
+
+    /* a profile without a description; RGB16 light */
+    light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+    attach_profile(light, linear_prophoto(NULL));
+    dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+    if (dst) check_colorant_profile(dst, light, "linear ProPhoto light, no description");
+    FreeImage_Unload(dst);
+    FreeImage_Unload(light);
+    light = make16(FIT_RGB16, 64, 48, FULL);
+    attach_profile(light, linear_prophoto("Linear ProPhoto RGB"));
+    dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+    if (dst) check_colorant_profile(dst, light, "RGB16 linear ProPhoto light");
+    FreeImage_Unload(dst);
+    FreeImage_Unload(light);
+
+    /* no profile: sRGB's colorants, a LUT-based profile, grey, CMYK */
+    light = makeFloat(FIT_RGBF, 64, 48, 0, 4);
+    attach_builtin(light, FICMS_PROFILE_LINEAR_SRGB);
+    dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+    CHECK(dst && icc_size(dst) == 0, "linear sRGB light: the output has a profile");
+    FreeImage_Unload(dst);
+    if (attach_file(light, "../ICC/data/test5.icc")) {
+        dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+        CHECK(dst && icc_size(dst) == 0, "light in a v2 profile of sRGB's colorants: the output has a profile");
+        FreeImage_Unload(dst);
+    }
+    if (attach_file(light, "../ICC/data/test3.icc")) {
+        dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+        CHECK(dst && icc_size(dst) == 0, "light in a LUT-based profile: the output has a profile");
+        FreeImage_Unload(dst);
+    }
+    FreeImage_DestroyICCProfile(light);
+    attach_profile(light, linear_prophoto("Linear ProPhoto RGB"));
+    FreeImage_GetICCProfile(light)->flags |= FIICC_COLOR_IS_CMYK;
+    dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+    CHECK(dst && icc_size(dst) == 0, "light flagged CMYK: the output has a profile");
+    FreeImage_Unload(dst);
+    FreeImage_Unload(light);
+    light = makeFloat(FIT_FLOAT, 64, 48, 0, 4);
+    attach_builtin(light, FICMS_PROFILE_LINEAR_GRAY);
+    dst = FreeImage_ToneMapping(light, FITMO_DRAGO03, 0, 0);
+    CHECK(dst && icc_size(dst) == 0, "grey light in a linear grey profile: the output has a profile");
+    FreeImage_Unload(dst);
+    FreeImage_Unload(light);
+
+    /* an Adobe RGB image made linear, which keeps a linear copy of its profile, tone mapped, then shown in sRGB */
+    light = make16(FIT_RGB16, 64, 48, FULL);
+    attach_builtin(light, FICMS_PROFILE_ADOBE_RGB);
+    lin = FreeImage_ConvertToLinear(light, 0);
+    dst = lin ? FreeImage_ToneMapping(lin, FITMO_DRAGO03, 0, 0) : NULL;
+    CHECK(dst != NULL, "Adobe RGB, linear: not tone mapped");
+    if (dst) {
+        cmsHPROFILE h = open_icc(dst);
+        check_colorant_profile(dst, lin, "Adobe RGB, linear, tone mapped");
+        CHECK(h && same_colorants(h, adobe), "Adobe RGB, linear, tone mapped: not Adobe RGB's colorants");
+        if (h) cmsCloseProfile(h);
+        check_shown_as(dst, adobe, "Adobe RGB, linear, tone mapped");
+    }
+    FreeImage_Unload(dst);
+    FreeImage_Unload(lin);
+    FreeImage_Unload(light);
+}
+
 int main(void) {
     FreeImage_Initialise(FALSE);
     test_types();
@@ -1235,6 +1480,7 @@ int main(void) {
     test_linear();
     test_linear_profiles();
     test_tonemapped();
+    test_tonemapped_profiles();
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;
