@@ -366,6 +366,9 @@ static void make_fixtures(void) {
     else fail("16-bit planar 5-sample CMYK + alpha TIFF: fixture not saved");
     if (write_cmyka_jxl(scratch("dsp_cmyka.jxl"), &press)) add("CMYK + alpha JPEG XL", FIF_JXL, 0, 1, scratch("dsp_cmyka.jxl"));
     else fail("CMYK + alpha JPEG XL: fixture not saved");
+    /* cjxl's XYB: the colours are the image, K included */
+    if (access("../JXL/data/cmyka8_xyb.jxl", R_OK) == 0) add("XYB CMYK + alpha JPEG XL", FIF_JXL, 0, 1, "../JXL/data/cmyka8_xyb.jxl");
+    else printf("  (no ../JXL/data/cmyka8_xyb.jxl: XYB CMYK JPEG XL skipped)\n");
     /* an 8-bit RLE PSD with a negative layer count, a 16-bit one with Photoshop's Mt16 */
     {
         FIBITMAP *a8 = FreeImage_Allocate(W, H, 8, 0, 0, 0), *a16 = FreeImage_AllocateT(FIT_UINT16, W, H, 16, 0, 0, 0);

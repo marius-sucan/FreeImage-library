@@ -23,6 +23,30 @@ static int wanted(const char *name) {
     return g_argc < 2;
 }
 
+static int named(const char *name) {
+    int i;
+    for (i = 1; i < g_argc; i++) if (!strcmp(g_argv[i], name)) return 1;
+    return 0;
+}
+
+/* cjxl input: the inks of a CMYK bitmap as a PAM of samples 1 - ink, an alpha before the black when asked */
+static void write_pam(const char *name, FIBITMAP *cmyk, int alpha) {
+    const unsigned w = FreeImage_GetWidth(cmyk), h = FreeImage_GetHeight(cmyk);
+    FILE *f = fopen(name, "wb");
+    unsigned x, y;
+    if (!f) { printf("%-24s FAILED\n", name); return; }
+    fprintf(f, "P7\nWIDTH %u\nHEIGHT %u\nDEPTH %d\nMAXVAL 255\nTUPLTYPE %s\nTUPLTYPE Black\nENDHDR\n", w, h, alpha ? 5 : 4, alpha ? "RGB_ALPHA" : "RGB");
+    for (y = 0; y < h; y++) {
+        const BYTE *p = FreeImage_GetScanLine(cmyk, h - 1 - y);
+        for (x = 0; x < w; x++) {
+            fputc(255 - p[4 * x], f); fputc(255 - p[4 * x + 1], f); fputc(255 - p[4 * x + 2], f);
+            if (alpha) fputc(cmyk_alpha(x, y), f);
+            fputc(255 - p[4 * x + 3], f);
+        }
+    }
+    printf("%-24s %s\n", name, fclose(f) == 0 ? "ok" : "FAILED");
+}
+
 static void save(FIBITMAP *d, const char *name, int flags) {
     char path[256];
     if (!wanted(name)) return;
@@ -294,6 +318,13 @@ int main(int argc, char **argv) {
         press_profile(&icc, &size);
         d = cmyk_pattern(FIT_BITMAP, 40, 30, 9, icc, (long)size); save(d, "cmyk8_lossless.jxl", JXL_LOSSLESS); FreeImage_Unload(d);
         d = cmyk_pattern(FIT_RGBA16, 40, 30, 10, icc, (long)size); save(d, "cmyk16_lossy.jxl", 0); FreeImage_Unload(d);
+        /* cjxl's input for the XYB CMYK files, written only when named: see README.md */
+        if (named("press.icc")) {
+            FILE *f = fopen("press.icc", "wb");
+            printf("%-24s %s\n", "press.icc", (f && fwrite(icc, 1, size, f) == size && fclose(f) == 0) ? "ok" : "FAILED");
+        }
+        if (named("cmyk8_xyb.pam")) { d = cmyk_pattern(FIT_BITMAP, 40, 30, 11, NULL, 0); write_pam("cmyk8_xyb.pam", d, 0); FreeImage_Unload(d); }
+        if (named("cmyka8_xyb.pam")) { d = cmyk_pattern(FIT_BITMAP, 40, 30, 12, NULL, 0); write_pam("cmyka8_xyb.pam", d, 1); FreeImage_Unload(d); }
         free(icc);
     }
     if (wanted("anim_lossless.jxl")) {

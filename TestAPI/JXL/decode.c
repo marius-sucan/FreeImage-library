@@ -5,6 +5,10 @@
 #include <string.h>
 #include "FreeImage.h"
 #include "pattern.h"
+#ifdef JXL_TEST_LIBJXL
+#include <jxl/decode.h>
+#include <jxl/encode.h>
+#endif
 
 typedef struct {
     const char *file;
@@ -46,6 +50,8 @@ static const Expected EXPECTED[] = {
     {"anim_icc_lossy.jxl",      3, 48, 40, FIT_BITMAP,  32, 1076, NULL,    0, 0, 100,  0, 0},
     {"cmyk8_lossless.jxl",      1, 40, 30, FIT_BITMAP,  24,    0, NULL,    0, 0,  -1, -1, 0xb5130a8127fefae0ULL},
     {"cmyk16_lossy.jxl",        1, 40, 30, FIT_RGB16,   48,    0, NULL,    0, 0,  -1, -1, 0},
+    {"cmyk8_xyb.jxl",           1, 40, 30, FIT_BITMAP,  24,    0, "1 13",  0, 0,  -1, -1, 0},
+    {"cmyka8_xyb.jxl",          1, 40, 30, FIT_BITMAP,  32,    0, "1 13",  0, 0,  -1, -1, 0},
 };
 #define NEXPECTED (sizeof(EXPECTED) / sizeof(EXPECTED[0]))
 
@@ -204,6 +210,55 @@ static double ink_psnr(FIBITMAP *a, FIBITMAP *b) {
     return se == 0 ? 99 : 10 * log10(4.0 * w * h / se);
 }
 
+#ifdef JXL_TEST_LIBJXL
+/* the largest difference between a page and libjxl's own 8-bit sRGB rendering of the file, alpha included; -1 if libjxl fails */
+static int libjxl_srgb_diff(const char *file, FIBITMAP *d) {
+    const unsigned n = FreeImage_GetBPP(d) / 8, w = FreeImage_GetWidth(d), h = FreeImage_GetHeight(d);
+    JxlPixelFormat pf = { n, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 };
+    static const int order[4] = { FI_RGBA_RED, FI_RGBA_GREEN, FI_RGBA_BLUE, FI_RGBA_ALPHA };
+    JxlDecoder *dec = JxlDecoderCreate(NULL);
+    BYTE *data = NULL, *out = (BYTE *)malloc((size_t)w * h * n);
+    FILE *f = fopen(path(file), "rb");
+    long size = 0;
+    int worst = -1, done = 0;
+    unsigned x, y, c;
+    if (f && fseek(f, 0, SEEK_END) == 0 && (size = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0 && (data = (BYTE *)malloc(size)) && fread(data, 1, size, f) == (size_t)size &&
+        dec && out && JxlDecoderSubscribeEvents(dec, JXL_DEC_COLOR_ENCODING | JXL_DEC_FULL_IMAGE) == JXL_DEC_SUCCESS &&
+        JxlDecoderSetInput(dec, data, size) == JXL_DEC_SUCCESS) {
+        JxlDecoderCloseInput(dec);
+        for (;;) {
+            JxlDecoderStatus s = JxlDecoderProcessInput(dec);
+            if (s == JXL_DEC_COLOR_ENCODING) {
+                JxlColorEncoding srgb;
+                JxlColorEncodingSetToSRGB(&srgb, JXL_FALSE);
+                if (JxlDecoderSetPreferredColorProfile(dec, &srgb) != JXL_DEC_SUCCESS) break;
+            } else if (s == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+                if (JxlDecoderSetImageOutBuffer(dec, &pf, out, (size_t)w * h * n) != JXL_DEC_SUCCESS) break;
+            } else if (s == JXL_DEC_FULL_IMAGE) {
+                done = 1;
+            } else {
+                break;
+            }
+        }
+    }
+    if (done) {
+        worst = 0;
+        for (y = 0; y < h; y++) {
+            const BYTE *row = FreeImage_GetScanLine(d, h - 1 - y), *ref = out + (size_t)y * w * n;
+            for (x = 0; x < w; x++) for (c = 0; c < n; c++) {
+                const int e = abs((int)row[x * n + order[c]] - (int)ref[x * n + c]);
+                if (e > worst) worst = e;
+            }
+        }
+    }
+    if (f) fclose(f);
+    if (dec) JxlDecoderDestroy(dec);
+    free(data);
+    free(out);
+    return worst;
+}
+#endif
+
 /* a header-only load describes what the full load returns */
 static void check_header(const char *file, int page, FIBITMAP *full) {
     FIBITMAP *h = load_page(file, page, FIF_LOAD_NOPIXELS);
@@ -310,6 +365,50 @@ int main(int argc, char **argv) {
             if (h) FreeImage_Unload(h);
             FreeImage_Unload(ref);
         }
+    }
+
+    /* XYB CMYK files by cjxl: their colours are the image through its profile, K included; JXL_CMYK gives that RGB too */
+    {
+        static const struct { const char *file; int seed, alpha; double min_psnr; } XYB[] = {
+            {"cmyk8_xyb.jxl", 11, 0, 25}, {"cmyka8_xyb.jxl", 12, 1, 25},
+        };
+        FIBITMAP *press = load_page("cmyk8_lossless.jxl", 0, JXL_CMYK | FIF_LOAD_NOPIXELS);
+        FIICCPROFILE *icc = press ? FreeImage_GetICCProfile(press) : NULL;
+        if (!icc || !icc->size) fail("cmyk8_lossless.jxl", "no press profile");
+        for (i = 0; icc && icc->size && i < sizeof(XYB) / sizeof(XYB[0]); i++) {
+            FIBITMAP *d = load_page(XYB[i].file, 0, 0), *c = load_page(XYB[i].file, 0, JXL_CMYK), *h = load_page(XYB[i].file, 0, JXL_CMYK | FIF_LOAD_NOPIXELS);
+            FIBITMAP *inks = cmyk_pattern(FIT_BITMAP, 40, 30, XYB[i].seed, icc->data, icc->size);
+            FIBITMAP *ref = FreeImage_ConvertCMYKToRGB(inks, NULL, 0, 0);
+            double p = (d && ref) ? psnr(d, ref, 1.0) : 0;
+            unsigned bad_alpha = 0, x, y;
+            for (y = 0; d && XYB[i].alpha && FreeImage_GetBPP(d) == 32 && y < 30; y++) {
+                const BYTE *row = FreeImage_GetScanLine(d, 29 - y);
+                for (x = 0; x < 40; x++) bad_alpha += abs((int)row[4 * x + FI_RGBA_ALPHA] - (int)cmyk_alpha(x, y)) > 1;
+            }
+            if (p < XYB[i].min_psnr && !g_record) {
+                char what[96];
+                snprintf(what, sizeof(what), "PSNR %.1f dB against its inks' rendering, below %.0f", p, XYB[i].min_psnr);
+                fail(XYB[i].file, what);
+            } else if (bad_alpha) fail(XYB[i].file, "not the alpha it was made with");
+            else if (!c || FreeImage_GetColorType(c) == FIC_CMYK || sum_pixels(c) != sum_pixels(d)) fail(XYB[i].file, "JXL_CMYK: not the RGB image of a plain load");
+            else if (!h || FreeImage_HasPixels(h) || FreeImage_GetImageType(h) != FreeImage_GetImageType(d) || FreeImage_GetBPP(h) != FreeImage_GetBPP(d) || icc_size(h) != icc_size(d))
+                fail(XYB[i].file, "JXL_CMYK: the header-only load differs from the full load");
+            else
+                printf("%s %s: PSNR %.1f dB against its inks' rendering (min %.0f), JXL_CMYK alike\n", g_record ? "    " : "ok  ", XYB[i].file, p, XYB[i].min_psnr);
+#ifdef JXL_TEST_LIBJXL
+            if (d) {
+                const int worst = libjxl_srgb_diff(XYB[i].file, d);
+                if (worst < 0 || worst > 1) fail(XYB[i].file, "not libjxl's own sRGB rendering");
+                else printf("ok   %s: libjxl's own sRGB rendering within %d\n", XYB[i].file, worst);
+            }
+#endif
+            if (d) FreeImage_Unload(d);
+            if (c) FreeImage_Unload(c);
+            if (h) FreeImage_Unload(h);
+            if (ref) FreeImage_Unload(ref);
+            FreeImage_Unload(inks);
+        }
+        if (press) FreeImage_Unload(press);
     }
 
     /* an animation page out of order, then back: the decoder rewinds */

@@ -518,7 +518,8 @@ ParseHeaders(JXLReader *reader) {
 					reader->have_info = TRUE;
 					for(uint32_t i = 0; i < reader->info.num_extra_channels; i++) {
 						JxlExtraChannelInfo extra;
-						if((JxlDecoderGetExtraChannelInfo(dec, i, &extra) == JXL_DEC_SUCCESS) && (extra.type == JXL_CHANNEL_BLACK) && !reader->cmyk) {
+						// XYB colours are the rendered image, K included: such a file decodes as RGB
+						if(reader->info.uses_original_profile && (JxlDecoderGetExtraChannelInfo(dec, i, &extra) == JXL_DEC_SUCCESS) && (extra.type == JXL_CHANNEL_BLACK) && !reader->cmyk) {
 							reader->cmyk = TRUE;
 							reader->black_index = i;
 						}

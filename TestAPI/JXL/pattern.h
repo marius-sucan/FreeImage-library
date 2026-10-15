@@ -69,4 +69,9 @@ static FIBITMAP *cmyk_pattern(FREE_IMAGE_TYPE type, unsigned w, unsigned h, int 
     return d;
 }
 
+/* the alpha of the CMYK + alpha pattern, never 0: lossy encoders keep the colours under it */
+static BYTE cmyk_alpha(unsigned x, unsigned y) {
+    return (BYTE)(64 + ((x / 5 + y / 5) % 3) * 95);
+}
+
 #endif
