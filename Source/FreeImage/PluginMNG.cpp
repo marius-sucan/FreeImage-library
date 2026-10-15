@@ -30,6 +30,8 @@
 
 #include <algorithm>
 #include <new>
+#include <string>
+#include <utility>
 #include <vector>
 
 // see MNGHelper.cpp
@@ -91,6 +93,7 @@ static const DWORD CHUNK_iCCP = MNG_CHUNK('i', 'C', 'C', 'P');
 static const DWORD CHUNK_cICP = MNG_CHUNK('c', 'I', 'C', 'P');
 static const DWORD CHUNK_pHYs = MNG_CHUNK('p', 'H', 'Y', 's');
 static const DWORD CHUNK_bKGD = MNG_CHUNK('b', 'K', 'G', 'D');
+static const DWORD CHUNK_tEXt = MNG_CHUNK('t', 'E', 'X', 't');
 static const DWORD CHUNK_PAST = MNG_CHUNK('P', 'A', 'S', 'T');
 static const DWORD CHUNK_MAGN = MNG_CHUNK('M', 'A', 'G', 'N');
 static const DWORD CHUNK_CLON = MNG_CHUNK('C', 'L', 'O', 'N');
@@ -211,6 +214,8 @@ struct MNGinfo {
 
 	std::vector<MNGGlobals> globals;
 	std::vector<MNGFrame> frames;
+
+	std::vector<std::pair<std::string, std::string> > comments;	//! top-level tEXt: keyword, text
 
 	BOOL complex_features;		//! delta image or object-buffer chunk seen
 	BOOL warned;
@@ -508,6 +513,24 @@ ParseBACK(const BYTE *payload, DWORD length, const MNGGlobals& globals, MNGinfo 
 }
 
 // skip a zero-count LOOP up to its matching ENDL
+// keyword, NUL, Latin-1 text; no keyword, no comment
+static void
+ParseTEXt(const BYTE *payload, DWORD length, MNGinfo *info) {
+	const BYTE *nul = payload ? (const BYTE*)memchr(payload, 0, length) : NULL;
+	if(!nul || (nul == payload)) {
+		return;
+	}
+	const BYTE *text = nul + 1;
+	const BYTE *end = payload + length;
+	const BYTE *stop = (const BYTE*)memchr(text, 0, (size_t)(end - text));
+	try {
+		info->comments.push_back(std::make_pair(
+			std::string((const char*)payload, (size_t)(nul - payload)),
+			std::string((const char*)text, (size_t)((stop ? stop : end) - text))));
+	} catch(std::bad_alloc&) {
+	}
+}
+
 static BOOL
 SkipToMatchingENDL(FreeImageIO *io, fi_handle handle, INT64 file_length) {
 	int depth = 1;
@@ -761,7 +784,8 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			(type == CHUNK_TERM) || (type == CHUNK_SHOW) || (type == CHUNK_PLTE) ||
 			(type == CHUNK_tRNS) ||
 			(type == CHUNK_gAMA) || (type == CHUNK_cHRM) || (type == CHUNK_sRGB) ||
-			(type == CHUNK_iCCP) || (type == CHUNK_pHYs) || (type == CHUNK_bKGD);
+			(type == CHUNK_iCCP) || (type == CHUNK_pHYs) || (type == CHUNK_bKGD) ||
+			((type == CHUNK_tEXt) && (length <= MNG_MAX_CHUNK_PAYLOAD));
 
 		payload.clear();
 		if(want_payload && (length > 0)) {
@@ -1024,6 +1048,8 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			if(!info->has_background) {
 				ParseBACK(data, length, globals, info);
 			}
+		} else if(type == CHUNK_tEXt) {
+			ParseTEXt(data, length, info);
 		}
 
 		io->seek_proc(handle, next_chunk, SEEK_SET);
@@ -1790,6 +1816,25 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
 	}
 }
 
+// a repeated keyword keeps its last text
+static void
+SetComments(FIBITMAP *dib, const MNGinfo *info) {
+	for(size_t i = 0; i < info->comments.size(); i++) {
+		const std::string& key = info->comments[i].first;
+		const std::string& value = info->comments[i].second;
+		FITAG *tag = FreeImage_CreateTag();
+		if(tag) {
+			const DWORD length = (DWORD)value.size() + 1;
+			if(FreeImage_SetTagKey(tag, key.c_str()) && FreeImage_SetTagType(tag, FIDT_ASCII) &&
+			   FreeImage_SetTagCount(tag, length) && FreeImage_SetTagLength(tag, length) &&
+			   FreeImage_SetTagValue(tag, value.c_str())) {
+				FreeImage_SetMetadata(FIMD_COMMENTS, dib, key.c_str(), tag);
+			}
+			FreeImage_DeleteTag(tag);
+		}
+	}
+}
+
 // ==========================================================
 // Writing
 // ==========================================================
@@ -2156,6 +2201,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	}
 
 	SetFrameMetadata(dib, info, page);
+
+	// file-level text stays on page 0, as GIF's comments do
+	if(page == 0) {
+		SetComments(dib, info);
+	}
 
 	if(info->has_background) {
 		FreeImage_SetBackgroundColor(dib, playback ? &info->canvas_background : &info->background);

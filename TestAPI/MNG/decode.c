@@ -2068,6 +2068,109 @@ static void test_jng_profiles(void) {
 	buf_free(&iccp_grey);
 }
 
+/* FIMD_COMMENTS text under key, or NULL */
+static const char *comment(FIBITMAP *dib, const char *key) {
+	FITAG *tag = NULL;
+	if (!FreeImage_GetMetadata(FIMD_COMMENTS, dib, key, &tag) || !tag || FreeImage_GetTagType(tag) != FIDT_ASCII) {
+		return NULL;
+	}
+	return (const char *)FreeImage_GetTagValue(tag);
+}
+
+static int same_text(const char *got, const char *want) {
+	return got && !strcmp(got, want);
+}
+
+/** Top-level tEXt chunks are the file's comments, on page 0 as GIF's are; a frame's own stay on it. */
+static void test_top_level_text(void) {
+	static const int flags[3] = { 0, FIF_LOAD_NOPIXELS, MNG_PLAYBACK };
+	static const char *names[3] = { "a load", "a header-only load", "MNG_PLAYBACK" };
+	Buf mng;
+	const char *path;
+	FIBITMAP *frame;
+	int i, bad = 0;
+
+	printf("top-level tEXt\n");
+
+	frame = FreeImage_Allocate(W, H, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	if (!frame) {
+		fail("could not allocate a frame");
+		return;
+	}
+
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, 2, 2, 0, 1);
+	chunk(&mng, "tEXt", "Title\0First", 11);
+	chunk(&mng, "tEXt", "Author\0Someone", 14);
+	mng_image(&mng, W, H, COLOUR[0][0], COLOUR[0][1], COLOUR[0][2], 24);
+	chunk(&mng, "tEXt", "Comment\0between frames", 22);
+	chunk(&mng, "tEXt", "\0no keyword", 11);
+	chunk(&mng, "tEXt", "Damaged\0bad CRC", 15);
+	mng.data[mng.size - 1] ^= 0xFF;
+	mng_png_with(&mng, frame, "tEXt", "Frame\0one", 9);
+	chunk(&mng, "tEXt", "Title\0Second", 12);
+	mng_mend(&mng);
+	path = write_file("mng_text.mng", &mng);
+	buf_free(&mng);
+	FreeImage_Unload(frame);
+
+	for (i = 0; i < 3; i++) {
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, flags[i]);
+		FIBITMAP *page0, *page1;
+		if (!mb) {
+			fail("%s: FreeImage_OpenMultiBitmap returned NULL", names[i]);
+			bad = 1;
+			continue;
+		}
+		page0 = FreeImage_LockPage(mb, 0);
+		page1 = FreeImage_LockPage(mb, 1);
+		if (!page0 || !page1) {
+			fail("%s: the pages could not be locked", names[i]);
+			bad = 1;
+		} else {
+			if (FreeImage_GetMetadataCount(FIMD_COMMENTS, page0) != 3 ||
+				!same_text(comment(page0, "Title"), "Second") ||
+				!same_text(comment(page0, "Author"), "Someone") ||
+				!same_text(comment(page0, "Comment"), "between frames")) {
+				fail("%s: page 0 has %u comments, Title \"%s\", Author \"%s\", Comment \"%s\"; expected 3: "
+					 "Second, Someone, between frames", names[i],
+					 FreeImage_GetMetadataCount(FIMD_COMMENTS, page0),
+					 comment(page0, "Title") ? comment(page0, "Title") : "(none)",
+					 comment(page0, "Author") ? comment(page0, "Author") : "(none)",
+					 comment(page0, "Comment") ? comment(page0, "Comment") : "(none)");
+				bad = 1;
+			}
+			if (comment(page1, "Title") || comment(page1, "Author") || comment(page1, "Comment")) {
+				fail("%s: page 1 carries the file's comments", names[i]);
+				bad = 1;
+			}
+			/* a playback canvas is not the frame's own bitmap */
+			if (!(flags[i] & MNG_PLAYBACK) &&
+				(FreeImage_GetMetadataCount(FIMD_COMMENTS, page1) != 1 || !same_text(comment(page1, "Frame"), "one"))) {
+				fail("%s: page 1 has %u comments, expected only its own Frame = one", names[i],
+					 FreeImage_GetMetadataCount(FIMD_COMMENTS, page1));
+				bad = 1;
+			}
+		}
+		if (page1) FreeImage_UnlockPage(mb, page1, FALSE);
+		if (page0) FreeImage_UnlockPage(mb, page0, FALSE);
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+
+	frame = FreeImage_Load(FIF_MNG, path, 0);
+	if (!frame || !same_text(comment(frame, "Title"), "Second")) {
+		fail("FreeImage_Load does not give the file's comments");
+		bad = 1;
+	}
+	if (frame) FreeImage_Unload(frame);
+
+	if (!bad) {
+		ok("top-level tEXt goes on page 0, the last of a repeated keyword wins, no keyword or a bad CRC drops it, "
+		   "and a frame's own tEXt stays on that frame");
+	}
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -2095,6 +2198,7 @@ int main(void) {
 	test_background_colour_space();
 	test_unconvertible_canvas();
 	test_jng_profiles();
+	test_top_level_text();
 
 	FreeImage_DeInitialise();
 
