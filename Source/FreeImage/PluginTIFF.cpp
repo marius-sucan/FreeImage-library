@@ -73,7 +73,8 @@ typedef enum {
 	LoadAsGenericStrip	= 3, 
 	LoadAsTiled			= 4,
 	LoadAsLogLuv		= 5,
-	LoadAsHalfFloat		= 6
+	LoadAsHalfFloat		= 6,
+	LoadAsGrey16		= 7
 } TIFFLoadMethod;
 
 // ----------------------------------------------------------
@@ -596,6 +597,9 @@ ReadImageType(TIFF *tiff, uint16_t bitspersample, uint16_t samplesperpixel) {
 					case 64:
 						if(samplesperpixel == 2) {
 							fit = FIT_FLOAT;
+						} else if((samplesperpixel == 4) && (bitspersample == 16)) {
+							// 4 x half float => convert to RGBAF
+							fit = FIT_RGBAF;
 						} else {
 							fit = FIT_DOUBLE;
 						}
@@ -1274,11 +1278,9 @@ FindLoadMethod(TIFF *tif, FREE_IMAGE_TYPE image_type, int flags) {
 				// load 48-bit RGB and 64-bit RGBA without conversion 
 				loadMethod = LoadAsGenericStrip;
 			} 
-			else if(image_type == FIT_RGBF) {
-				if((samplesperpixel == 3) && (bitspersample == 16)) {
-					// load 3 x 16-bit half as RGBF
-					loadMethod = LoadAsHalfFloat;
-				}
+			else if(((image_type == FIT_RGBF) || (image_type == FIT_RGBAF)) && (bitspersample == 16)) {
+				// load 16-bit half as RGBF, or RGBAF with an alpha
+				loadMethod = LoadAsHalfFloat;
 			}
 			break;
 		case PHOTOMETRIC_YCBCR:
@@ -1309,6 +1311,9 @@ FindLoadMethod(TIFF *tif, FREE_IMAGE_TYPE image_type, int flags) {
 			// and convert to a 8-bit image with a transparency table
 			if((samplesperpixel > 1) && (bitspersample == 8)) {
 				loadMethod = LoadAs8BitTrns;
+			} else if((samplesperpixel > 1) && (bitspersample == 16) && ((image_type == FIT_RGBA16) || (image_type == FIT_UINT16))) {
+				// 16-bit grey with extra samples: RGBA with an alpha, the grey alone without
+				loadMethod = LoadAsGrey16;
 			} else {
 				loadMethod = LoadAsGenericStrip;
 			}
@@ -1496,6 +1501,162 @@ FinishCMYK(FIBITMAP *dib, FIBITMAP *alpha, BOOL has_alpha, BOOL asCMYK, BOOL hea
 		FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
 	}
 	return dib;
+}
+
+/**
+An image's rows, top to bottom, as pixels of all their samples, from strips, planes or contiguous tiles of whole-byte samples;
+a strip or tile libtiff cannot read gives zeros
+*/
+class TIFFRowReader {
+public:
+	TIFFRowReader(TIFF *tif, uint32_t width, uint32_t height, uint16_t samplesperpixel, uint16_t bitspersample, uint16_t planar_config);
+	~TIFFRowReader() {
+		free(m_block);
+		free(m_extra);
+	}
+	//! The layout is one it reads, and its buffers were allocated
+	BOOL IsValid() const {
+		return (m_block != NULL) ? TRUE : FALSE;
+	}
+	//! The pixels of row y, asked for in order
+	const BYTE* GetRow(uint32_t y);
+	//! The strip or tiles of the last row returned were read
+	BOOL RowRead() const {
+		return m_read;
+	}
+	//! A strip or tile could not be read
+	BOOL Damaged() const {
+		return m_damaged;
+	}
+
+private:
+	TIFF *m_tif;
+	uint32_t m_width;
+	uint32_t m_height;
+	uint16_t m_spp;
+	size_t m_sample;		// bytes per sample
+	size_t m_pixel;			// bytes per pixel
+	size_t m_line;			// bytes per row
+	BOOL m_tiled;
+	BOOL m_planar;
+	uint32_t m_rows;		// rows per strip or tile
+	uint32_t m_tile_width;
+	tmsize_t m_tile_size;
+	BYTE *m_block;			// the rows of a strip, of a row of tiles, or a strip of every plane
+	BYTE *m_extra;			// a tile, or a row gathered from the planes
+	uint32_t m_first;		// the block's first row, m_height before the first
+	BOOL m_read;
+	BOOL m_damaged;
+
+	void ReadBlock(uint32_t first);
+};
+
+TIFFRowReader::TIFFRowReader(TIFF *tif, uint32_t width, uint32_t height, uint16_t samplesperpixel, uint16_t bitspersample, uint16_t planar_config) {
+	m_tif = tif;
+	m_width = width;
+	m_height = height;
+	m_spp = samplesperpixel;
+	m_sample = bitspersample / 8;
+	m_pixel = m_sample * samplesperpixel;
+	m_line = m_pixel * width;
+	m_tiled = TIFFIsTiled(tif) ? TRUE : FALSE;
+	m_planar = (planar_config == PLANARCONFIG_SEPARATE) ? TRUE : FALSE;
+	m_rows = 0;
+	m_tile_width = 0;
+	m_tile_size = 0;
+	m_block = NULL;
+	m_extra = NULL;
+	m_first = height;
+	m_read = FALSE;
+	m_damaged = FALSE;
+
+	if((bitspersample % 8) || !m_sample || !m_spp || !width || !height) {
+		return;
+	}
+	if(m_tiled) {
+		uint32_t tile_height = 0;
+		// tiles of separate planes are not read
+		if(m_planar || !TIFFGetField(tif, TIFFTAG_TILEWIDTH, &m_tile_width) || !TIFFGetField(tif, TIFFTAG_TILELENGTH, &tile_height) || !m_tile_width || !tile_height) {
+			return;
+		}
+		m_tile_size = TIFFTileSize(tif);
+		if(((size_t)TIFFTileRowSize(tif) != m_pixel * m_tile_width) || ((size_t)m_tile_size < m_pixel * m_tile_width * tile_height)) {
+			return;
+		}
+		m_rows = MIN(tile_height, height);
+		m_extra = (BYTE*)malloc((size_t)m_tile_size);
+	} else {
+		uint32_t rowsperstrip = 0;
+		TIFFGetFieldDefaulted(tif, TIFFTAG_ROWSPERSTRIP, &rowsperstrip);
+		m_rows = ((rowsperstrip == 0) || (rowsperstrip > height)) ? height : rowsperstrip;
+		if(m_planar) {
+			m_extra = (BYTE*)malloc(m_line);
+		}
+	}
+	if((m_tiled || m_planar) && !m_extra) {
+		return;
+	}
+	if(m_rows > ((size_t)-1) / m_line) {
+		return;
+	}
+	m_block = (BYTE*)malloc(m_rows * m_line);
+}
+
+void
+TIFFRowReader::ReadBlock(uint32_t first) {
+	const uint32_t rows = MIN(m_rows, m_height - first);
+	m_first = first;
+	m_read = TRUE;
+	memset(m_block, 0, (size_t)rows * m_line);
+
+	if(m_tiled) {
+		for(uint32_t x = 0; x < m_width; x += m_tile_width) {
+			const size_t bytes = (size_t)MIN(m_tile_width, m_width - x) * m_pixel;
+			memset(m_extra, 0, (size_t)m_tile_size);
+			if(TIFFReadTile(m_tif, m_extra, x, first, 0, 0) < 0) {
+				m_read = FALSE;
+			}
+			for(uint32_t r = 0; r < rows; r++) {
+				memcpy(m_block + r * m_line + x * m_pixel, m_extra + (size_t)r * m_tile_width * m_pixel, bytes);
+			}
+		}
+	} else if(m_planar) {
+		const size_t plane = (size_t)rows * m_width * m_sample;
+		for(uint16_t s = 0; s < m_spp; s++) {
+			if(TIFFReadEncodedStrip(m_tif, TIFFComputeStrip(m_tif, first, s), m_block + s * plane, (tmsize_t)plane) == -1) {
+				m_read = FALSE;
+			}
+		}
+	} else if(TIFFReadEncodedStrip(m_tif, TIFFComputeStrip(m_tif, first, 0), m_block, (tmsize_t)(rows * m_line)) == -1) {
+		m_read = FALSE;
+	}
+
+	if(!m_read) {
+		m_damaged = TRUE;
+	}
+}
+
+const BYTE*
+TIFFRowReader::GetRow(uint32_t y) {
+	const uint32_t first = (y / m_rows) * m_rows;
+	if(first != m_first) {
+		ReadBlock(first);
+	}
+	const size_t r = y - first;
+	if(!m_planar) {
+		return m_block + r * m_line;
+	}
+
+	// the samples of the row, from each plane
+	const size_t plane = (size_t)MIN(m_rows, m_height - first) * m_width * m_sample;
+	for(uint16_t s = 0; s < m_spp; s++) {
+		const BYTE *src = m_block + s * plane + r * m_width * m_sample;
+		BYTE *dst = m_extra + s * m_sample;
+		for(uint32_t x = 0; x < m_width; x++, src += m_sample, dst += m_pixel) {
+			AssignPixel(dst, src, (unsigned)m_sample);
+		}
+	}
+	return m_extra;
 }
 
 // ==========================================================
@@ -1712,7 +1873,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sampleformat);
 		const BOOL rgb_samples = (photometric == PHOTOMETRIC_RGB) && (samplesperpixel > 3) &&
 			((((bitspersample == 8) || (bitspersample == 16)) && (sampleformat == SAMPLEFORMAT_UINT)) || ((bitspersample == 32) && (sampleformat == SAMPLEFORMAT_IEEEFP)));
-		const uint16_t bitmap_spp = rgb_samples ? ((alpha_sample >= 0) ? 4 : 3) : samplesperpixel;
+		// half-float RGB loads as RGBF or RGBAF, 16-bit grey with extra samples as RGBA16 with an alpha or UINT16 without
+		const BOOL half_samples = (photometric == PHOTOMETRIC_RGB) && (samplesperpixel >= 3) && (bitspersample == 16) && (sampleformat == SAMPLEFORMAT_IEEEFP);
+		const BOOL grey16_samples = ((photometric == PHOTOMETRIC_MINISBLACK) || (photometric == PHOTOMETRIC_MINISWHITE)) && (samplesperpixel > 1) &&
+			(bitspersample == 16) && (sampleformat == SAMPLEFORMAT_UINT);
+		uint16_t bitmap_spp = samplesperpixel;
+		if(rgb_samples || half_samples) {
+			bitmap_spp = (alpha_sample >= 0) ? 4 : 3;
+		} else if(grey16_samples) {
+			bitmap_spp = (alpha_sample >= 0) ? 4 : 1;
+		}
 
 		const BOOL display = (flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC;
 
@@ -1764,7 +1934,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// libtiff's RGBA holds the first extra sample: the alpha when it is that one
 			const uint16_t rgba_spp = (alpha_sample == 3) ? 4 : 3;
 
-			dib = CreateImageType(header_only, image_type, width, height, bitspersample, rgba_spp);
+			// its samples are 8-bit, whatever the file's
+			dib = CreateImageType(header_only, FIT_BITMAP, width, height, 8, rgba_spp);
 			if (dib == NULL) {
 				// free the raster pointer and output an error if allocation failed
 				if(raster) {
@@ -1844,123 +2015,41 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			ReadResolution(tif, dib);
 
-			// set up the colormap based on photometric	
+			// set up the colormap based on photometric
 
 			ReadPalette(tif, photometric, bitspersample, dib);
 
-			// calculate the line + pitch (separate for scr & dest)
-
-			const tmsize_t src_line = TIFFScanlineSize(tif);
-			// here, the pitch is 2x less than the original as we only keep the first layer				
-			int dst_pitch = FreeImage_GetPitch(dib);
-
 			// transparency table for 8-bit + 8-bit alpha images
-
-			BYTE trns[256]; 
-			// clear the transparency table
+			BYTE trns[256];
 			memset(trns, 0xFF, 256 * sizeof(BYTE));
 
-			// In the tiff file the lines are saved from up to down 
-			// In a DIB the lines must be saved from down to up
-
-			BYTE *bits = FreeImage_GetScanLine(dib, height - 1);
-
-			// read the tiff lines and save them in the DIB
-
-			if(planar_config == PLANARCONFIG_CONTIG && !header_only) {
-
-				const tmsize_t bufsz = TIFFStripSize(tif) * sizeof(BYTE);
-				BYTE *buf = (BYTE*)malloc(bufsz);
-				if(buf == NULL) {
-					throw FI_MSG_ERROR_MEMORY;
+			if(!header_only) {
+				TIFFRowReader reader(tif, width, height, samplesperpixel, bitspersample, planar_config);
+				if(!reader.IsValid()) {
+					throw (TIFFIsTiled(tif) && (planar_config == PLANARCONFIG_SEPARATE)) ? "Separated tiled TIFF images are not supported" : FI_MSG_ERROR_MEMORY;
 				}
-
-				const uint32_t src_width = static_cast<uint32_t>(src_line / samplesperpixel);
-				for (uint32_t y = 0; y < height; y += rowsperstrip) {
-					const int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
-
-					if (nrow * src_width * samplesperpixel * sizeof(BYTE) > static_cast<size_t>(bufsz)) {
-						free(buf);
-						throw FI_MSG_ERROR_CORRUPTED_IMAGE;
-					}
-
-					if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, nrow * src_line) == -1) {
-						// a strip that cannot be read stays blank, and its zeros must not reach the trns table
-						bParseError = TRUE;
-						bits -= (size_t)nrow * dst_pitch;
-						continue;
-					}
-					for (int l = 0; l < nrow; l++) {
-						BYTE *p = bits;
-						const BYTE *b = buf + l * src_line;
-
-						for(uint32_t x = 0; x < src_width; x++) {
-							BYTE value = b[0];
-							if(has_alpha) {
-								if(unpremultiply) {
-									Unpremultiply(&value, 1, b[alpha_sample]);
-								}
-								// convert the 8-bit alpha layer to a trns table
-								trns[value] = b[alpha_sample];
+				for(uint32_t y = 0; y < height; y++) {
+					const BYTE *src = reader.GetRow(y);
+					BYTE *dst = FreeImage_GetScanLine(dib, height - 1 - y);
+					// the zeros of a strip or tile that cannot be read must not reach the trns table
+					const BOOL read = reader.RowRead();
+					for(uint32_t x = 0; x < width; x++, src += samplesperpixel) {
+						BYTE value = src[0];
+						if(has_alpha && read) {
+							if(unpremultiply) {
+								Unpremultiply(&value, 1, src[alpha_sample]);
 							}
-							*p = value;
-
-							p++;
-							b += samplesperpixel;
-						} 
-						bits -= dst_pitch;
-					}
-				}
-
-				free(buf);
-			}
-			else if(planar_config == PLANARCONFIG_SEPARATE && !header_only) {
-				tmsize_t stripsize = TIFFStripSize(tif) * sizeof(BYTE);
-				BYTE *buf = (BYTE*)malloc(2 * stripsize);
-				if(buf == NULL) {
-					throw FI_MSG_ERROR_MEMORY;
-				}
-				BYTE *grey = buf;
-				BYTE *alpha = buf + stripsize;
-
-				for (uint32_t y = 0; y < height; y += rowsperstrip) {
-					int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
-
-					if ((TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), grey, nrow * src_line) == -1) ||
-						(has_alpha && (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, (uint16_t)alpha_sample), alpha, nrow * src_line) == -1))) {
-						bParseError = TRUE;
-						bits -= (size_t)nrow * dst_pitch;
-						continue;
-					} 
-
-					for (int l = 0; l < nrow; l++) {
-						BYTE *p = bits;
-						BYTE *g = grey + l * src_line;
-						BYTE *a = alpha + l * src_line;
-
-						for(uint32_t x = 0; x < (uint32_t)(src_line); x++) {
-							BYTE value = g[0];
-							if(has_alpha) {
-								if(unpremultiply) {
-									Unpremultiply(&value, 1, a[0]);
-								}
-								// convert the 8-bit alpha layer to a trns table
-								trns[value] = a[0];
-							}
-							*p = value;
-
-							p++;
-							g++;
-							a++;
+							// convert the 8-bit alpha layer to a trns table
+							trns[value] = src[alpha_sample];
 						}
-						bits -= dst_pitch;
+						dst[x] = value;
 					}
 				}
-
-				free(buf);
-
+				if(reader.Damaged()) {
+					bParseError = TRUE;
+				}
 			}
-			
+
 			if(has_alpha) {
 				FreeImage_SetTransparencyTable(dib, &trns[0], 256);
 				FreeImage_SetTransparent(dib, TRUE);
@@ -2540,11 +2629,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		} else if(loadMethod == LoadAsHalfFloat) {
 			// ---------------------------------------------------------------------------------
-			// RGBF loading from a half format
+			// RGB[A]F loading from a half format
 			// ---------------------------------------------------------------------------------
 
 			// create a new DIB
-			dib = CreateImageType(header_only, image_type, width, height, bitspersample, samplesperpixel);
+			dib = CreateImageType(header_only, image_type, width, height, bitspersample, bitmap_spp);
 			if (dib == NULL) {
 				throw FI_MSG_ERROR_MEMORY;
 			}
@@ -2554,59 +2643,92 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			ReadResolution(tif, dib);
 
 			if(!header_only) {
+				TIFFRowReader reader(tif, width, height, samplesperpixel, bitspersample, planar_config);
+				if(!reader.IsValid()) {
+					throw (TIFFIsTiled(tif) && (planar_config == PLANARCONFIG_SEPARATE)) ? "Separated tiled TIFF images are not supported" : FI_MSG_ERROR_MEMORY;
+				}
 
-				// calculate the line + pitch (separate for scr & dest)
+				// convert from half (16-bit) to float (32-bit): the colours, then the alpha, if any
+				half half_value;
+				const unsigned channels = (alpha_sample >= 0) ? 4 : 3;
 
-				tmsize_t src_line = TIFFScanlineSize(tif);
-				unsigned dst_pitch = FreeImage_GetPitch(dib);
-
-				// In the tiff file the lines are save from up to down 
-				// In a DIB the lines must be saved from down to up
-
-				BYTE *bits = FreeImage_GetScanLine(dib, height - 1);
-
-				// read the tiff lines and save them in the DIB
-
-				if(planar_config == PLANARCONFIG_CONTIG) {
-
-					BYTE *buf = (BYTE*)calloc(TIFFStripSize(tif), sizeof(BYTE));
-					if(buf == NULL) {
-						throw FI_MSG_ERROR_MEMORY;
-					}
-
-					for (uint32_t y = 0; y < height; y += rowsperstrip) {
-						uint32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
-
-						if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), buf, nrow * src_line) == -1) {
-							// libtiff zeroes a strip it cannot read
-							bParseError = TRUE;
-						} 
-
-						// convert from half (16-bit) to float (32-bit)
-						// !!! use OpenEXR half helper class
-
-						half half_value;
-
-						for (uint32_t l = 0; l < nrow; l++) {
-							WORD *src_pixel = (WORD*)(buf + l * src_line);
-							float *dst_pixel = (float*)bits;
-
-							for(tmsize_t x = 0; x < (tmsize_t)(src_line / sizeof(WORD)); x++) {
-								half_value.setBits(src_pixel[x]);
-								dst_pixel[x] = half_value;
-							}
-
-							bits -= dst_pitch;
+				for(uint32_t y = 0; y < height; y++) {
+					const WORD *src = (const WORD*)reader.GetRow(y);
+					float *dst = (float*)FreeImage_GetScanLine(dib, height - 1 - y);
+					for(uint32_t x = 0; x < width; x++, src += samplesperpixel, dst += channels) {
+						for(unsigned c = 0; c < 3; c++) {
+							half_value.setBits(src[c]);
+							dst[c] = half_value;
+						}
+						if(alpha_sample >= 0) {
+							half_value.setBits(src[alpha_sample]);
+							dst[3] = half_value;
 						}
 					}
+				}
+				if(reader.Damaged()) {
+					bParseError = TRUE;
+				}
 
-					free(buf);
+				// premultiplied colours divided by the alpha
+				if(associated) {
+					UnpremultiplyImage(dib, NULL);
 				}
-				else if(planar_config == PLANARCONFIG_SEPARATE) {
-					// this use case was never encountered yet
-					throw "Unable to handle PLANARCONFIG_SEPARATE RGB half float images";
+			} // !header only
+
+		} else if(loadMethod == LoadAsGrey16) {
+			// ---------------------------------------------------------------------------------
+			// 16-bit grey with extra samples: RGBA16 with an alpha, the grey alone without
+			// ---------------------------------------------------------------------------------
+
+			const BOOL has_alpha = (alpha_sample >= 0);
+
+			// create a new DIB
+			dib = CreateImageType(header_only, image_type, width, height, bitspersample, bitmap_spp);
+			if (dib == NULL) {
+				throw FI_MSG_ERROR_MEMORY;
+			}
+
+			// fill in the resolution (english or universal)
+
+			ReadResolution(tif, dib);
+
+			if(has_alpha) {
+				// a grey profile does not describe the RGBA
+				iccSize = 0;
+				iccBuf = NULL;
+			}
+
+			if(!header_only) {
+				TIFFRowReader reader(tif, width, height, samplesperpixel, bitspersample, planar_config);
+				if(!reader.IsValid()) {
+					throw (TIFFIsTiled(tif) && (planar_config == PLANARCONFIG_SEPARATE)) ? "Separated tiled TIFF images are not supported" : FI_MSG_ERROR_MEMORY;
 				}
-				
+
+				// RGB has no min-is-white: its greys are turned
+				const WORD flip = (has_alpha && (photometric == PHOTOMETRIC_MINISWHITE)) ? 0xFFFF : 0;
+
+				for(uint32_t y = 0; y < height; y++) {
+					const WORD *src = (const WORD*)reader.GetRow(y);
+					WORD *dst = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
+					for(uint32_t x = 0; x < width; x++, src += samplesperpixel) {
+						if(has_alpha) {
+							dst[0] = dst[1] = dst[2] = (WORD)(src[0] ^ flip);
+							dst[3] = src[alpha_sample];
+							dst += 4;
+						} else {
+							*dst++ = src[0];
+						}
+					}
+				}
+				if(reader.Damaged()) {
+					bParseError = TRUE;
+				}
+
+				// premultiplied greys divided by the alpha
+				if(associated && (photometric == PHOTOMETRIC_MINISBLACK)) {
+					UnpremultiplyImage(dib, NULL);
+				}
 			} // !header only
 
 		} else {

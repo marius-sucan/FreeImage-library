@@ -626,6 +626,11 @@ static void extra_sample_tiffs(const Bytes *press) {
 
 #define XS_W 37
 #define XS_H 21
+/* a bit depth of its own for 16-bit half floats */
+#define XS_HALF 17
+
+/* a profile write_xs_tiff embeds, when not NULL */
+static const Bytes *xs_icc = NULL;
 
 /* sample c of pixel x, y of write_xs_tiff's files: 0 and the maximum often, the rest spread */
 static unsigned xs_sample(int bits, int x, int y, int c) {
@@ -639,8 +644,27 @@ static unsigned xs_sample(int bits, int x, int y, int c) {
 
 static float xs_float(int x, int y, int c) { return (float)xs_sample(32, x, y, c) / 65535.0f; }
 
+/* sample c of pixel x, y as a half, truncated */
+static uint16_t xs_half(int x, int y, int c) {
+    const float f = xs_float(x, y, c);
+    float m;
+    int e = 0;
+    if (f <= 0) return 0;
+    m = frexpf(f, &e);
+    if (e < -13) return (uint16_t)(f * 16777216.0f);
+    return (uint16_t)(((e + 14) << 10) | (int)((m * 2 - 1) * 1024));
+}
+
+/* a half's value, exactly */
+static float xs_half_value(uint16_t h) {
+    const int e = (h >> 10) & 31, m = h & 1023;
+    const float v = (e == 0) ? ldexpf((float)m, -24) : ldexpf((float)(m | 1024), e - 25);
+    return (h & 0x8000) ? -v : v;
+}
+
 static void xs_put(BYTE *p, int bits, int x, int y, int c) {
-    if (bits == 32) { const float f = xs_float(x, y, c); memcpy(p, &f, 4); }
+    if (bits == XS_HALF) { const uint16_t v = xs_half(x, y, c); memcpy(p, &v, 2); }
+    else if (bits == 32) { const float f = xs_float(x, y, c); memcpy(p, &f, 4); }
     else if (bits == 16) { const uint16_t v = (uint16_t)xs_sample(16, x, y, c); memcpy(p, &v, 2); }
     else *p = (BYTE)xs_sample(8, x, y, c);
 }
@@ -669,11 +693,11 @@ static int rename_to_matteing(const char *path) {
     return 0;
 }
 
-/* 37x21 samples of bits each (32: float) in strips (layout 0), planes (1) or 16x16 tiles (2); types: the ExtraSamples values as
-   digits, "" for no tag, "m" for Matteing; inkset 0 for none */
+/* 37x21 samples of bits each (32: float, XS_HALF: half float) in strips (layout 0), planes (1) or 16x16 tiles (2); types: the
+   ExtraSamples values as digits, "" for no tag, "m" for Matteing; inkset 0 for none */
 static int write_xs_tiff(const char *path, int photometric, int bits, int spp, int layout, const char *types, int inkset) {
     static BYTE buf[16 * 16 * 8 * 4];
-    const int bytes = bits / 8, n = (int)strlen(types);
+    const int bytes = (bits == XS_HALF) ? 2 : bits / 8, n = (int)strlen(types);
     TIFF *t;
     int s, x, y, c, tx, ty;
     FILE *f = fopen(path, "w+b");
@@ -681,11 +705,12 @@ static int write_xs_tiff(const char *path, int photometric, int bits, int spp, i
     t = TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap);
     if (!t) { fclose(f); return 0; }
     TIFFSetField(t, TIFFTAG_IMAGEWIDTH, XS_W); TIFFSetField(t, TIFFTAG_IMAGELENGTH, XS_H);
-    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, (bits == XS_HALF) ? 16 : bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
     TIFFSetField(t, TIFFTAG_PHOTOMETRIC, photometric);
     if (inkset) TIFFSetField(t, TIFFTAG_INKSET, inkset);
+    if (xs_icc) TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)xs_icc->size, xs_icc->data);
     TIFFSetField(t, TIFFTAG_PLANARCONFIG, layout == 1 ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG);
-    if (bits == 32) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+    if (bits == 32 || bits == XS_HALF) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
     if (n) {
         uint16_t es[4];
         if (types[0] == 'm') {
@@ -732,7 +757,8 @@ static unsigned xs_straight(unsigned c, unsigned a, unsigned max) {
     return v > max ? max : (unsigned)v;
 }
 
-/* the colours and alpha (sample alpha, -1 for none) that are not the file's: RGB, CMYK as RGB, the inks of TIFF_CMYK, or grey and palette indices and their trns table */
+/* the colours and alpha (sample alpha, -1 for none) that are not the file's: RGB, CMYK as RGB, the inks of TIFF_CMYK, 16-bit grey as RGBA16 or
+   alone, or 8-bit grey and palette indices and their trns table */
 static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int assoc, int inks) {
     const unsigned max = (bits == 8) ? 255u : 65535u;
     unsigned wrong = 0;
@@ -742,11 +768,11 @@ static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int 
     for (y = 0; y < XS_H; y++) {
         const BYTE *r = FreeImage_GetScanLine(d, XS_H - 1 - y);
         for (x = 0; x < XS_W; x++) {
-            if (photometric == PHOTOMETRIC_RGB && bits == 32) {
+            if (photometric == PHOTOMETRIC_RGB && (bits == 32 || bits == XS_HALF)) {
                 const float *p = (const float *)r + (alpha >= 0 ? 4 : 3) * x;
-                const float a = (alpha >= 0) ? xs_float(x, y, alpha) : 1.0f;
+                const float a = (alpha < 0) ? 1.0f : (bits == XS_HALF) ? xs_half_value(xs_half(x, y, alpha)) : xs_float(x, y, alpha);
                 for (c = 0; c < 3; c++) {
-                    float e = xs_float(x, y, c);
+                    float e = (bits == XS_HALF) ? xs_half_value(xs_half(x, y, c)) : xs_float(x, y, c);
                     if (assoc && a > 0) e /= a;
                     wrong += p[c] != e;
                 }
@@ -773,6 +799,18 @@ static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int 
                 }
                 for (c = 0; c < 3; c++) wrong += got[c] != want[c];
                 if (alpha >= 0) wrong += got[3] != a;
+            } else if (bits == 16) {
+                /* min-is-white greys are turned in an RGBA16, premultiplied ones divided */
+                const WORD *p = (const WORD *)r;
+                unsigned g = xs_sample(16, x, y, 0);
+                if (alpha >= 0) {
+                    const unsigned a = xs_sample(16, x, y, alpha);
+                    if (photometric == PHOTOMETRIC_MINISWHITE) g = 65535 - g;
+                    else if (assoc) g = xs_straight(g, a, 65535);
+                    wrong += (p[4 * x] != g) + (p[4 * x + 1] != g) + (p[4 * x + 2] != g) + (p[4 * x + 3] != a);
+                } else {
+                    wrong += p[x] != g;
+                }
             } else {
                 unsigned g = xs_sample(8, x, y, 0);
                 if (alpha >= 0) {
@@ -784,14 +822,15 @@ static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int 
             }
         }
     }
-    if (alpha >= 0 && photometric != PHOTOMETRIC_RGB && photometric != PHOTOMETRIC_SEPARATED) {
+    if (alpha >= 0 && bits == 8 && photometric != PHOTOMETRIC_RGB && photometric != PHOTOMETRIC_SEPARATED) {
         const BYTE *t = FreeImage_GetTransparencyTable(d);
         wrong += !t || FreeImage_GetTransparencyCount(d) != 256 || memcmp(t, trns, 256) != 0;
     }
     return wrong;
 }
 
-/* the layout a load has: RGB(A) of the file's depth, the 4 inks of TIFF_CMYK, or 8 bits, with a trns table when there is an alpha */
+/* the layout a load has: RGB(A) of the file's depth (float for half), the 4 inks of TIFF_CMYK, RGBA16 or UINT16 for 16-bit grey, or
+   8 bits, with a trns table when there is an alpha */
 static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks) {
     const FREE_IMAGE_TYPE type = FreeImage_GetImageType(d);
     if (inks) return (bits == 8) ? (type == FIT_BITMAP && FreeImage_GetBPP(d) == 32) : (type == FIT_RGBA16);
@@ -800,6 +839,7 @@ static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks
         if (bits == 16) return type == ((alpha >= 0) ? FIT_RGBA16 : FIT_RGB16);
         return type == ((alpha >= 0) ? FIT_RGBAF : FIT_RGBF);
     }
+    if (bits == 16) return type == ((alpha >= 0) ? FIT_RGBA16 : FIT_UINT16);
     return type == FIT_BITMAP && FreeImage_GetBPP(d) == 8 && (FreeImage_IsTransparent(d) ? 1 : 0) == (alpha >= 0);
 }
 
@@ -820,7 +860,12 @@ static void extra_samples_tag(void) {
         { XS_CMYK, 16, 6, 1, "10", 4, 1 }, { XS_CMYK, 16, 6, 2, "02", 5, 0 }, { XS_CMYK, 16, 5, 0, "m", 4, 1 },
         { XS_GREY, 8, 2, 0, "", 1, 0 }, { XS_GREY, 8, 2, 0, "0", -1, 0 }, { XS_GREY, 8, 2, 0, "1", 1, 1 }, { XS_GREY, 8, 3, 0, "02", 2, 0 },
         { XS_GREY, 8, 3, 1, "02", 2, 0 }, { XS_GREY, 8, 4, 0, "000", -1, 0 },
-        { XS_PAL, 8, 2, 0, "2", 1, 0 }, { XS_PAL, 8, 2, 0, "0", -1, 0 }, { XS_PAL, 8, 2, 0, "1", 1, 1 }, { XS_WHITE, 8, 2, 0, "1", 1, 1 }
+        { XS_PAL, 8, 2, 0, "2", 1, 0 }, { XS_PAL, 8, 2, 0, "0", -1, 0 }, { XS_PAL, 8, 2, 0, "1", 1, 1 }, { XS_WHITE, 8, 2, 0, "1", 1, 1 },
+        { XS_GREY, 8, 2, 2, "2", 1, 0 }, { XS_GREY, 8, 3, 2, "02", 2, 0 }, { XS_PAL, 8, 2, 2, "", 1, 0 }, { XS_WHITE, 8, 2, 2, "0", -1, 0 },
+        { XS_GREY, 16, 2, 0, "", 1, 0 }, { XS_GREY, 16, 2, 0, "0", -1, 0 }, { XS_GREY, 16, 2, 0, "2", 1, 0 }, { XS_GREY, 16, 2, 1, "1", 1, 1 },
+        { XS_GREY, 16, 3, 2, "02", 2, 0 }, { XS_GREY, 16, 2, 2, "m", 1, 1 }, { XS_WHITE, 16, 2, 0, "2", 1, 0 }, { XS_WHITE, 16, 3, 2, "00", -1, 0 },
+        { XS_RGB, XS_HALF, 3, 0, "", -1, 0 }, { XS_RGB, XS_HALF, 3, 1, "", -1, 0 }, { XS_RGB, XS_HALF, 3, 2, "", -1, 0 },
+        { XS_RGB, XS_HALF, 4, 0, "", 3, 0 }, { XS_RGB, XS_HALF, 4, 0, "0", -1, 0 }, { XS_RGB, XS_HALF, 4, 1, "1", 3, 1 }, { XS_RGB, XS_HALF, 5, 2, "02", 4, 0 }
     };
     static const char *LAYOUT[3] = { "strips", "planes", "tiles" };
     const char *path = scratch("icc_extra_samples_tag.tif");
@@ -835,8 +880,9 @@ static void extra_samples_tag(void) {
             /* palette and min-is-white samples are not premultiplied colours */
             const int assoc = XS[i].assoc && XS[i].photometric != XS_PAL && XS[i].photometric != XS_WHITE;
             FIBITMAP *full = FreeImage_Load(FIF_TIFF, path, flags);
-            snprintf(what, sizeof(what), "%d-bit %s TIFF, %d samples in %s, ExtraSamples %s, flags %d", XS[i].bits,
-                cmyk ? "CMYK" : XS[i].photometric == XS_RGB ? "RGB" : XS[i].photometric == XS_PAL ? "palette" : "grey", XS[i].spp, LAYOUT[XS[i].layout],
+            snprintf(what, sizeof(what), "%d-bit %s TIFF, %d samples in %s, ExtraSamples %s, flags %d", (XS[i].bits == XS_HALF) ? 16 : XS[i].bits,
+                cmyk ? "CMYK" : XS[i].bits == XS_HALF ? "half-float RGB" : XS[i].photometric == XS_RGB ? "RGB" : XS[i].photometric == XS_PAL ? "palette" :
+                XS[i].photometric == XS_WHITE ? "min-is-white" : "grey", XS[i].spp, LAYOUT[XS[i].layout],
                 XS[i].types[0] ? XS[i].types : "absent", flags);
             if (!full) { fail("%s: not loaded", what); continue; }
             if (!xs_layout(full, XS[i].photometric, XS[i].bits, k ? -1 : XS[i].alpha, k)) {
@@ -860,6 +906,65 @@ static void extra_samples_tag(void) {
         }
         remove(path);
     }
+    /* a grey profile stays with a 16-bit grey, not with the RGBA16 of a grey and an alpha */
+    {
+        const Bytes grey = builtin(FICMS_PROFILE_GRAY);
+        xs_icc = &grey;
+        for (k = 0; k < 2; k++) {
+            FIBITMAP *dib;
+            if (!write_xs_tiff(path, XS_GREY, 16, 2, 0, k ? "2" : "0", 0)) { fail("cannot write %s", path); break; }
+            dib = FreeImage_Load(FIF_TIFF, path, TIFF_DEFAULT);
+            CHECK(dib && FreeImage_GetICCProfile(dib)->size == (k ? 0 : grey.size), "16-bit grey with %s and a grey profile: a profile of %u bytes",
+                k ? "an alpha" : "an unspecified sample", dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0u);
+            if (dib) FreeImage_Unload(dib);
+            remove(path);
+        }
+        xs_icc = NULL;
+    }
+}
+
+/* 16-bit CIELab loads as 24-bit RGB through libtiff's 8-bit RGBA, as 8-bit CIELab does */
+static void cielab16_tiff(void) {
+    static const double LAB[6][3] = { { 0, 0, 0 }, { 50, 0, 0 }, { 76, 0, 0 }, { 100, 0, 0 }, { 60, 40, -20 }, { 30, -50, 45 } };
+    const char *paths[2] = { scratch("icc_lab8.tif"), scratch("icc_lab16.tif") };
+    FIBITMAP *dib[2], *head;
+    unsigned worst = 0;
+    int k, x, c;
+    for (k = 0; k < 2; k++) {
+        FILE *f = fopen(paths[k], "w+b");
+        TIFF *t = f ? TIFFClientOpen(paths[k], "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+        BYTE row[6 * 3 * 2];
+        if (!t) { if (f) fclose(f); fail("cannot write %s", paths[k]); return; }
+        TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 6); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 1);
+        TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, k ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 3);
+        TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_CIELAB); TIFFSetField(t, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+        for (x = 0; x < 6; x++) {
+            if (k) {
+                uint16_t w[3];
+                w[0] = (uint16_t)(LAB[x][0] * 65535 / 100 + 0.5); w[1] = (uint16_t)(int16_t)(LAB[x][1] * 256); w[2] = (uint16_t)(int16_t)(LAB[x][2] * 256);
+                memcpy(row + 6 * x, w, 6);
+            } else {
+                row[3 * x] = (BYTE)(LAB[x][0] * 255 / 100 + 0.5); row[3 * x + 1] = (BYTE)(signed char)LAB[x][1]; row[3 * x + 2] = (BYTE)(signed char)LAB[x][2];
+            }
+        }
+        TIFFWriteScanline(t, row, 0, 0);
+        TIFFClose(t);
+        dib[k] = FreeImage_Load(FIF_TIFF, paths[k], TIFF_DEFAULT);
+    }
+    head = FreeImage_Load(FIF_TIFF, paths[1], FIF_LOAD_NOPIXELS);
+    if (dib[0] && dib[1] && FreeImage_GetBPP(dib[0]) == 24 && FreeImage_GetBPP(dib[1]) == 24 && FreeImage_GetImageType(dib[1]) == FIT_BITMAP) {
+        for (x = 0; x < 6 * 3; x++) {
+            const int d = (int)FreeImage_GetScanLine(dib[0], 0)[x] - (int)FreeImage_GetScanLine(dib[1], 0)[x];
+            if ((unsigned)abs(d) > worst) worst = (unsigned)abs(d);
+        }
+        c = FreeImage_GetScanLine(dib[1], 0)[3 * 3 + FI_RGBA_RED];
+        CHECK(worst <= 1 && c > 200, "16-bit CIELab: colours %u from the 8-bit file's, white's red %d", worst, c);
+    } else {
+        fail("CIELab: 8-bit %s, 16-bit %s, not both 24-bit RGB", dib[0] ? "loaded" : "not loaded", dib[1] ? "loaded" : "not loaded");
+    }
+    CHECK(head && FreeImage_GetBPP(head) == 24 && FreeImage_GetImageType(head) == FIT_BITMAP, "16-bit CIELab: the header-only load is not 24-bit RGB");
+    for (k = 0; k < 2; k++) { if (dib[k]) FreeImage_Unload(dib[k]); remove(paths[k]); }
+    if (head) FreeImage_Unload(head);
 }
 
 /* striped grey + float alpha loads its grey, contiguous or planar */
@@ -1440,6 +1545,7 @@ int main(int argc, char **argv) {
     header_only_cmyk_tiff(&press);
     extra_sample_tiffs(&press);
     extra_samples_tag();
+    cielab16_tiff();
     tiled_layouts_refused(&press);
     grey_alpha_float_strips();
     header_only_psd(&press);
