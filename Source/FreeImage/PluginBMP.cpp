@@ -1512,7 +1512,7 @@ SupportsNoPixels() {
 	return TRUE;
 }
 
-// read from BITMAPV5HEADER files; the writer embeds none
+// read from and written to BITMAPV5HEADER files
 static BOOL DLL_CALLCONV
 SupportsICCProfiles() {
 	return TRUE;
