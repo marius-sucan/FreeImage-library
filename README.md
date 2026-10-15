@@ -4,10 +4,10 @@ FreeImage is an Open Source library project for developers who would like to sup
 
 FreeImage is easy to use, fast, multithreading safe, and cross-platform (works with Windows, Linux and Mac OS X).
 
-Thanks to it's ANSI C interface, FreeImage is usable in many languages including C, C++, VB, C#, Delphi, Java and also in common scripting languages such as Perl, Python, PHP, TCL, Lua or Ruby.
+Thanks to its ANSI C interface, FreeImage is usable in many languages including C, C++, VB, C#, Delphi, Java and also in common scripting languages such as Perl, Python, PHP, TCL, Lua or Ruby.
 
 The library comes in two versions: a binary DLL distribution that can be linked against any WIN32/WIN64 C/C++ compiler and a source distribution.
-Workspace files for Microsoft Visual Studio provided, as well as makefiles for Linux, Mac OS X and other systems.
+Workspace files for Microsoft Visual Studio are provided, as well as makefiles for Linux, Mac OS X and other systems.
 
 --------
 This was initially a clone of https://sourceforge.net/p/freeimage/svn/ .
@@ -18,50 +18,92 @@ FreeImage is currently sporadically maintained by Hervé Drolon on SourceForge. 
 
 This branch of the repository is used to compile the FreeImage.DLL used in Quick Picto Viewer. It brings the following changes:
 
-## Fixes
+## Changes and fixes
 
-### Security
+### New formats and animations
 
-- applied fixes found in the Fedora F39 repository for: CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997 found at: https://src.fedoraproject.org/rpms/freeimage/tree/f39 ;
-- fixed buffer overflows in PluginICO.cpp, PSDParser.cpp, PluginTIFF.cpp (with the aforementioned patches);
-- fixed out of bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
-- fixed integer wrap around and segmentation fault in Exif.cpp;
+- added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
+- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.5 and libde265 1.1.3, animated HEIF image sequences included;
+- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0, animations included; CMYK images with a CMYK profile are saved as CMYK;
+- added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG, animations included;
+  - added the APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
+- added full support for animated WebP files, reading and writing, with an example file;
+- added full support for MNG animations (FIF_MNG=6), reading and writing;
+
+### Color management and CMYK
+
+- added color management by bundling Little CMS 2.19.1, with several new exported functions: see [Color management API](#color-management-api);
+- added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
+- AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors;
+  - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
+  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them; narrow-range PNGs load expanded to the full range;
+- the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the file's ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag) as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values;
+  - the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
+  - a color conversion that changes the pixels removes the tag;
+- fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
+- fixed CMYK pages added to or changed in multi-page files being stored as RGB;
+- fixed bugs related to CMYK support in TIFF, JPEG and PSD files;
+
+### HDR and tone mapping
+
+- added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed: FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap;
+  - bitmaps tagged "UnscaledBits" return FITM_UNSCALED;
+  - PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping;
+  - 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL);
+  - floating-point RGB bitmaps always return FITM_REQUIRED;
+- added FreeImage_ConvertToLinear();
+- the results of the tone mappers carry a profile of the image's colors, for color management;
+- fixed the tone-mapping algorithms misbehaving with extreme values;
+
+### Resizing and rotation
+
+- FreeImage_Rescale() is faster for 8-bit greyscale, 24-bit and 32-bit images and has a lower peak memory usage; its kernels use SSE2 and AVX2 instructions when available;
+- the image resizer and rotation are multi-threaded with OpenMP, which the makefiles now enable too; build with `make OPENMP=0` for a single-threaded library, see README.linux;
+- added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbor resampling, the fastest filter;
+- FreeImage_Rescale() can now resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter;
+- added FreeImage_RescaleRawBits();
+- fixed FreeImage_Rescale() and FreeImage_Rotate() dropping the ICC profile and returning CMYK images as RGBA;
 
 ### Large images and files
 
-- fixed JXR and BMP decoders/encoders are able now to handle images over 1300 mgpx;
-- fixed FreeImage_Copy() to not crash with very large images [over 5000 mgpx];
-- fixed FreeImage_Rescale() to work with very large images [over 5000 mgpx]; it no longer screws up the colors;
-- fixed FreeImage_Rotate() to work with very large images [over 5000 mgpx];
-- fixed the FreeImage I/O layer's 2 GB file limit on Windows;
-- fixed memory streams being limited to 2 GB buffers;
+- added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64(): memory streams with UINT64 sizes and INT64 positions; the old exports are unchanged;
+- added the TIFF_BIGTIFF_FORMAT (0x20000) save flag, to write BigTIFF files over 4 GB in size;
+- fixed the FreeImage I/O layer's 2 GB file limit on Windows, and memory streams being limited to 2 GB buffers;
+- fixed the JXR and BMP decoders and encoders on images over 1300 mgpx;
+- fixed FreeImage_Copy() crashing, and FreeImage_Rescale() and FreeImage_Rotate() failing, on very large images [over 5000 mgpx]; FreeImage_Rescale() no longer screws up the colors;
 - fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it;
-- fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
+- fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 
-### Color, CMYK and image processing
+### Loading and saving
 
-- fixed behavior with extreme values of the tone-mapping algorithms;
-- fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
-- fixed FreeImage_Rescale() and FreeImage_Rotate() dropping the ICC profile and returning CMYK images as RGBA;
-- fixed bugs related to CMYK support in TIFF, JPG and PSD files;
-- fixed FreeImage_RescaleRawBits() reading the wrong rows of FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF and FIT_RGBAF sources whose pitch is not a multiple of the sample size;
-
-### Loading, saving and multi-page
-
-- fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins and in multi-page documents opened from a handle or memory;
+- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
+- the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not support, instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - fixed file saves returning TRUE when writing failed;
-- fixed TIFF files saved to memory carrying a byte of uninitialised heap memory: a write past the end of a memory stream leaves zeros, as in a file; the stream's growth is computed in 64 bits;
+- fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins, and in multi-page documents opened from a handle or memory;
+- fixed TIFF files saved to memory carrying a byte of uninitialized heap memory: a write past the end of a memory stream leaves zeros, as in a file;
 - fixed FreeImage_SaveMultiBitmapToMemory() writing into, and crashing on, a memory stream that wraps the caller's buffer; it returns FALSE, as FreeImage_SaveToMemory() does;
+
+### Multi-page files
+
+- added FreeImage_OpenMultiBitmapU(), which takes a wchar_t file name and path;
+- FreeImage_AppendPage(), FreeImage_InsertPage(), FreeImage_DeletePage() and FreeImage_UnlockPage() now return TRUE or FALSE;
+- FreeImage_CloseMultiBitmap() returns FALSE only when the file could not be written, or when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF; that file is left as it was, and an unchanged document closes with TRUE;
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
-- fixed CMYK pages added to or changed in multi-page files being stored as RGB;
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
-- fixed multi-page GIF saving with variable frame dimensions; the logical screen is enlarged to fit every frame, and fixed a stack buffer overflow in the LZW encoder;
+- fixed multi-page GIF saving with variable frame dimensions: the logical screen is enlarged to fit every frame; fixed a stack buffer overflow in the LZW encoder;
+
+### Security
+
+- applied the fixes of the [Fedora F39 repository](https://src.fedoraproject.org/rpms/freeimage/tree/f39) for CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997, which fix buffer overflows in PluginICO.cpp, PSDParser.cpp and PluginTIFF.cpp;
+- fixed out-of-bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
+- fixed an integer wraparound and a segmentation fault in Exif.cpp;
 
 ### BMP
 
-- fixed BMPs with a V4, V5 (such as 32-bit BMPs with alpha), V2, V3 or OS/2 2.x header not loading;
-- fixed 32-bit BMPs loading fully transparent, and 16- and 32-bit BMPs with uncommon colour masks loading with wrong colours or without their alpha channel;
+- BMP files load and save the ICC profile a V5 header embeds; images without one are saved as before;
+- fixed BMPs with a V2, V3, V4, V5 (such as 32-bit BMPs with alpha) or OS/2 2.x header not loading;
+- fixed 32-bit BMPs loading fully transparent, and 16- and 32-bit BMPs with uncommon color masks loading with wrong colors or without their alpha channel;
 - fixed BMPs saved with transparency showing opaque in Windows, web browsers and other programs;
 
 ### TIFF
@@ -75,91 +117,35 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ### PSD
 
-- fixed PSD files with several alpha or spot channels failing to load, or losing their colour profile;
+- fixed PSD files with several alpha or spot channels failing to load, or losing their color profile;
 - fixed saved selections and spot channels of RGB PSD files loading as transparency;
-- fixed grayscale PSD files with transparency loading without their alpha channel: they load as RGBA;
+- fixed greyscale PSD files with transparency loading without their alpha channel: they load as RGBA;
 
 ### JPEG, JPEG 2000 and JPEG XR
 
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
-- fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
+- fixed swapped width and height when loading JPEG and RAW files with FIF_LOAD_NOPIXELS;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535;
   - the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision;
-  - added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
+  - added the J2K_UNSCALED and JP2_UNSCALED load flags, which keep the file's original values instead, tagged "UnscaledBits";
 - many fixes related to JPEG XR;
 
-### Other formats and build
+### Other formats
 
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
-- fixed PCX, TGA and PSD files that are damaged allocating gigabytes or showing uninitialised memory; uncompressed and odd-width 16-colour PCX decoding wrongly;
-- fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing such files is now much faster;
+- fixed damaged PCX, TGA and PSD files allocating gigabytes or showing uninitialized memory, and uncompressed and odd-width 16-color PCX files decoding wrongly;
+- fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing them is now much faster;
 - fixed PFM images being saved and loaded upside down; PFM files saved by older FreeImage versions now load flipped;
 - fixed the G3 plugin hanging on a damaged fax file;
+
+### Miscellaneous
+
+- FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the color's alpha;
+- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
+- almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 - fixed Makefile.mingw not building with MinGW-w64 on Windows;
 
 ...and many other fixes.
-
-## Changes
-
-### New formats and animations
-
-- added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
-- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.5 and libde265 1.1.3;
-- added animated HEIC/HEIF reading (HEIF image sequences);
-- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0; save JPEG XL animations implemented as well; CMYK images with a CMYK profile are saved as CMYK;
-- added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG; save APNG animations implemented as well;
-  - added APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
-- added full support for animated WebP files and example file; save WebP animations implemented as well;
-- added full support for MNG animations (FIF_MNG=6), reader and writer;
-
-### Color management
-
-- added color management by bundling Little CMS 2.19.1: several new exported functions are available, see [Color management API](#color-management-api);
-- added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
-- BMP files load and save the ICC profile a V5 header embeds, for color management; images without one are saved as before;
-- AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors, for color management;
-  - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
-  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them; narrow-range PNGs load expanded to the full range;
-- the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values;
-  - the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
-  - a color conversion that changes the pixels removes the tag;
-
-### HDR and tone mapping
-
-- added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap;
-  - bitmaps tagged "UnscaledBits" return FITM_UNSCALED;
-  - PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping;
-  - 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL);
-  - floating-point RGB bitmaps always return FITM_REQUIRED;
-- added FreeImage_ConvertToLinear();
-- the results of the tone mappers carry a profile of the image's colors, for color management;
-
-### Resizing and rotation
-
-- FreeImage_Rescale() is now faster for 8-bit greyscale, 24-bit and 32-bit images and has a lower peak memory usage, the kernels utilize SSE2 and AVX2 instructions when available;
-- multi-threaded image resizer and rotation using OpenMP pragma; the makefiles now enable OpenMP too. Build it with `make OPENMP=0` for a single-threaded library; see README.linux;
-- added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbour resampling, the fastest filter;
-- FreeImage_Rescale() can now resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter;
-- added FreeImage_RescaleRawBits();
-
-### Loading, saving and multi-page
-
-- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
-- the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not declare instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
-- FreeImage_AppendPage(), FreeImage_InsertPage(), FreeImage_DeletePage() and FreeImage_UnlockPage() now return TRUE or FALSE; FreeImage_CloseMultiBitmap() returns FALSE only when the file could not be written;
-- FreeImage_CloseMultiBitmap() returns FALSE when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, and leaves the file as it was; an unchanged document closes with TRUE;
-- added FreeImage_OpenMultiBitmapU(), which takes a wchar_t for the file name and path;
-
-### Large files
-
-- added FreeImage_OpenMemory64(), FreeImage_AcquireMemory64(), FreeImage_SeekMemory64() and FreeImage_TellMemory64(): memory streams with UINT64 sizes and INT64 positions; the old exports are unchanged;
-- the TIFF writer takes the flag TIFF_BIGTIFF_FORMAT (0x20000) to write BigTIFF files, over 4 GB in size;
-
-### Other
-
-- FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the colour's alpha;
-- FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
-- almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 ## Bundled libraries
 
@@ -220,5 +206,5 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 ## Bugs or limitations identified
 
 - AVIF, HEIF, PNG and JPEG XR files without an ICC profile whose code points say PQ, HLG, SMPTE 428 or a logarithmic curve get no profile: color management takes them as sRGB; the code points are in the CICP tag;
-- saving WEBP files is extremely slow at 16000 x 16000 px;
-- images over 5000 mgpx saved as JXR might be malformed; only Freeimage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;
+- saving WebP files is extremely slow at 16000 x 16000 px;
+- images over 5000 mgpx saved as JXR might be malformed; only FreeImage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;
