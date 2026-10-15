@@ -1467,6 +1467,63 @@ static void test_tonemapped_profiles(void) {
     FreeImage_Unload(light);
 }
 
+/* ----------------------------------------------------------------------------------------------
+   FreeImage_MakeThumbnail of light: tone mapped, and described as the operators describe their output
+   ---------------------------------------------------------------------------------------------- */
+
+static void test_thumbnails(void) {
+    FIBITMAP *light, *thumb;
+    FITAG *tag = NULL;
+    BYTE cicp[4];
+    unsigned i;
+    char what[96];
+    printf("thumbnails of light\n");
+
+    /* tagged BT.2020: resampled and cloned, RGBF and RGBAF */
+    for (i = 0; i < 4; i++) {
+        const FREE_IMAGE_TYPE type = (i & 1) ? FIT_RGBAF : FIT_RGBF;
+        const int big = (i < 2);
+        snprintf(what, sizeof(what), "a %s thumbnail of %s light tagged BT.2020", big ? "resampled" : "cloned", (type == FIT_RGBAF) ? "RGBAF" : "RGBF");
+        light = makeFloat(type, big ? 300 : 50, big ? 200 : 40, 0, 4);
+        set_cicp(light, 9, 8, 0, 1);
+        FreeImage_SetMetadataKeyValue(FIMD_COMMENTS, light, "Comment", "kept");
+        FreeImage_SetDotsPerMeterX(light, 3780);
+        thumb = FreeImage_MakeThumbnail(light, 64, TRUE);
+        CHECK(thumb && FreeImage_GetImageType(thumb) == FIT_BITMAP && FreeImage_GetBPP(thumb) == 24, "%s: not a 24-bit bitmap", what);
+        if (thumb) {
+            CHECK(cicp_transfer(thumb, cicp) == 13 && cicp[0] == 9, "%s: the CICP tag says %d/%d, not display samples", what, cicp[0], cicp[1]);
+            check_code_profile(thumb, 9, 13, ref_srgb, what);
+            CHECK(FreeImage_GetMetadata(FIMD_COMMENTS, thumb, "Comment", &tag), "%s: the source's metadata is lost", what);
+            CHECK(FreeImage_GetDotsPerMeterX(thumb) == 3780, "%s: the resolution is lost", what);
+            FreeImage_Unload(thumb);
+        }
+        FreeImage_Unload(light);
+    }
+
+    /* light in a linear ProPhoto profile, RGBF and RGBAF */
+    for (i = 0; i < 2; i++) {
+        snprintf(what, sizeof(what), "a thumbnail of %s light in a ProPhoto profile", i ? "RGBAF" : "RGBF");
+        light = makeFloat(i ? FIT_RGBAF : FIT_RGBF, 300, 200, 0, 4);
+        attach_profile(light, linear_prophoto("Linear ProPhoto RGB"));
+        thumb = FreeImage_MakeThumbnail(light, 64, TRUE);
+        CHECK(thumb != NULL, "%s: none", what);
+        if (thumb) {
+            check_colorant_profile(thumb, light, what);
+            CHECK(cicp_transfer(thumb, cicp) == -1, "%s: a CICP tag", what);
+            FreeImage_Unload(thumb);
+        }
+        FreeImage_Unload(light);
+    }
+
+    /* not converted: the light keeps its tag */
+    light = makeFloat(FIT_RGBF, 300, 200, 0, 4);
+    set_cicp(light, 9, 8, 0, 1);
+    thumb = FreeImage_MakeThumbnail(light, 64, FALSE);
+    CHECK(thumb && FreeImage_GetImageType(thumb) == FIT_RGBF && cicp_transfer(thumb, cicp) == 8 && cicp[0] == 9, "an unconverted thumbnail of light: not RGBF tagged linear BT.2020");
+    FreeImage_Unload(thumb);
+    FreeImage_Unload(light);
+}
+
 int main(void) {
     FreeImage_Initialise(FALSE);
     test_types();
@@ -1481,6 +1538,7 @@ int main(void) {
     test_linear_profiles();
     test_tonemapped();
     test_tonemapped_profiles();
+    test_thumbnails();
     printf("%d checks, %d failures\n", checks, failures);
     FreeImage_DeInitialise();
     return failures ? 1 : 0;

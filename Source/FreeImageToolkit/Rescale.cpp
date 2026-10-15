@@ -235,6 +235,7 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 		thumbnail = FreeImage_Rescale(dib, new_width, new_height, FILTER_BILINEAR);
 	}
 
+	bool tone_mapped = false;
 	if((thumbnail != NULL) && (image_type != FIT_BITMAP) && convert) {
 		// convert to a standard bitmap
 		FIBITMAP *bitmap = NULL;
@@ -258,11 +259,18 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 				break;
 			case FIT_RGBF:
 				bitmap = FreeImage_ToneMapping(thumbnail, FITMO_DRAGO03);
+				tone_mapped = (bitmap != NULL);
 				break;
 			case FIT_RGBAF:
 				// no way to keep the transparency yet ...
 				FIBITMAP *rgbf = FreeImage_ConvertToRGBF(thumbnail);
+				if(rgbf) {
+					// the operator describes its output by it
+					const FIICCPROFILE *icc = FreeImage_GetICCProfile(thumbnail);
+					FreeImage_CreateICCProfile(rgbf, icc->data, (long)icc->size);
+				}
 				bitmap = FreeImage_ToneMapping(rgbf, FITMO_DRAGO03);
+				tone_mapped = (bitmap != NULL);
 				FreeImage_Unload(rgbf);
 				break;
 		}
@@ -272,8 +280,10 @@ FreeImage_MakeThumbnail(FIBITMAP *dib, int max_pixel_size, BOOL convert) {
 		}
 	}
 
-	// copy metadata from src to dst
-	FreeImage_CloneMetadata(thumbnail, dib);
+	// copy metadata from src to dst; a tone mapping operator copied it already, its color description rewritten
+	if(!tone_mapped) {
+		FreeImage_CloneMetadata(thumbnail, dib);
+	}
 
 	return thumbnail;
 }
