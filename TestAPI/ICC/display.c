@@ -194,8 +194,9 @@ static int write_two_page_tiff(const char *path, const Bytes *cmyk_icc, const By
     return 1;
 }
 
-/* CMYK, an alpha and spp - 5 more extra samples with the press profile, by libtiff: 8-bit contiguous or 16-bit planar; tagged: SampleFormat unsigned */
-static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep, int spp, int tagged) {
+/* CMYK, an alpha and spp - 5 more extra samples with the press profile, by libtiff: 8-bit contiguous or 16-bit planar; tagged: SampleFormat
+   unsigned; kind 1: the alpha premultiplies the inks, 2: an unspecified extra sample comes before it */
+static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep, int spp, int tagged, int kind) {
     static BYTE row[W * 6 * 2];
     uint16_t extra[2] = { EXTRASAMPLE_UNASSALPHA, EXTRASAMPLE_UNSPECIFIED };
     const int planes = deep ? spp : 1, line = deep ? W * 2 : W * spp;
@@ -203,6 +204,8 @@ static int write_cmyka_tiff(const char *path, const Bytes *icc, int deep, int sp
     TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
     int s, y, x, ok = 1;
     if (!t) { if (f) fclose(f); return 0; }
+    if (kind == 1) extra[0] = EXTRASAMPLE_ASSOCALPHA;
+    if (kind == 2) { extra[0] = EXTRASAMPLE_UNSPECIFIED; extra[1] = EXTRASAMPLE_UNASSALPHA; }
     TIFFSetField(t, TIFFTAG_IMAGEWIDTH, W); TIFFSetField(t, TIFFTAG_IMAGELENGTH, H);
     TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, deep ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
     TIFFSetField(t, TIFFTAG_EXTRASAMPLES, spp - 4, extra);
@@ -356,14 +359,20 @@ static void make_fixtures(void) {
     save_fixture("unlinkable profile TIFF", FIF_TIFF, broken, TIFF_DEFAULT, 0, "dsp_broken.tif");
     if (write_two_page_tiff(scratch("dsp_2p.tif"), &press, &adobe)) add("2-page TIFF", FIF_TIFF, 0, 2, scratch("dsp_2p.tif"));
     else fail("2-page TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka.tif"), &press, 0, 6, 0)) add("CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka.tif"), &press, 0, 6, 0, 0)) add("CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka.tif"));
     else fail("CMYK + alpha TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka16.tif"), &press, 1, 6, 0)) add("16-bit planar CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka16.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka16.tif"), &press, 1, 6, 0, 0)) add("16-bit planar CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka16.tif"));
     else fail("16-bit planar CMYK + alpha TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka5.tif"), &press, 0, 5, 0)) add("5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka5.tif"), &press, 0, 5, 0, 0)) add("5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5.tif"));
     else fail("5-sample CMYK + alpha TIFF: fixture not saved");
-    if (write_cmyka_tiff(scratch("dsp_cmyka5_16.tif"), &press, 1, 5, 1)) add("16-bit planar 5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5_16.tif"));
+    if (write_cmyka_tiff(scratch("dsp_cmyka5_16.tif"), &press, 1, 5, 1, 0)) add("16-bit planar 5-sample CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka5_16.tif"));
     else fail("16-bit planar 5-sample CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka_pre.tif"), &press, 0, 5, 0, 1)) add("premultiplied CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka_pre.tif"));
+    else fail("premultiplied CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka_pre16.tif"), &press, 1, 5, 0, 1)) add("16-bit planar premultiplied CMYK + alpha TIFF", FIF_TIFF, 0, 1, scratch("dsp_cmyka_pre16.tif"));
+    else fail("16-bit planar premultiplied CMYK + alpha TIFF: fixture not saved");
+    if (write_cmyka_tiff(scratch("dsp_cmyka_2nd.tif"), &press, 0, 6, 0, 2)) add("CMYK + alpha TIFF, an unspecified extra sample first", FIF_TIFF, 0, 1, scratch("dsp_cmyka_2nd.tif"));
+    else fail("CMYK + alpha TIFF, an unspecified extra sample first: fixture not saved");
     if (write_cmyka_jxl(scratch("dsp_cmyka.jxl"), &press)) add("CMYK + alpha JPEG XL", FIF_JXL, 0, 1, scratch("dsp_cmyka.jxl"));
     else fail("CMYK + alpha JPEG XL: fixture not saved");
     /* cjxl's XYB: the colours are the image, K included */

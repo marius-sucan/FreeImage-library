@@ -51,6 +51,7 @@ Fixes:
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. Added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
 - fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
 - fixed CMYK TIFFs with an alpha channel, and some RGB TIFFs with extra channels, failing to load;
+- fixed TIFF extra channels that are not alpha, such as saved selections and spot channels, loading as transparency, and premultiplied TIFF alpha being taken for straight alpha; tiled TIFFs with extra channels now load;
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;

@@ -534,11 +534,10 @@ static void header_only_cmyk_tiff(const Bytes *press) {
     }
 }
 
-/* tiles are copied as they are: a layout FreeImage stores in pixels of another size is refused, not written past the image */
+/* tiles are copied as they are, or RGB and CMYK sample by sample: a layout FreeImage stores in pixels of another size is refused, not written past the image */
 static void tiled_layouts_refused(const Bytes *press) {
     static const struct { int photometric, bits, spp; const char *name; } FILES[] = {
-        { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }, { PHOTOMETRIC_SEPARATED, 16, 6, "16-bit CMYK + 2 extra samples" },
-        { PHOTOMETRIC_SEPARATED, 8, 5, "8-bit CMYK + alpha" }, { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
+        { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }, { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
     };
     static const int FLAGS[4] = { TIFF_DEFAULT, FIF_LOAD_NOPIXELS, TIFF_CMYK, TIFF_CMYK | FIF_LOAD_NOPIXELS };
     const char *path = scratch("icc_tiled_layout.tif");
@@ -620,6 +619,246 @@ static void extra_sample_tiffs(const Bytes *press) {
         }
         if (plain) FreeImage_Unload(plain);
         if (inks) FreeImage_Unload(inks);
+    }
+}
+
+/* ------------------------------------------------------------------ the ExtraSamples tag */
+
+#define XS_W 37
+#define XS_H 21
+
+/* sample c of pixel x, y of write_xs_tiff's files: 0 and the maximum often, the rest spread */
+static unsigned xs_sample(int bits, int x, int y, int c) {
+    const unsigned max = (bits == 8) ? 255u : 65535u, k = (unsigned)(x + 2 * y + 3 * c) % 7;
+    unsigned h = (unsigned)x * 73856093u ^ (unsigned)y * 19349663u ^ (unsigned)c * 83492791u;
+    if (k == 0) return 0;
+    if (k == 1) return max;
+    h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+    return h % (max + 1);
+}
+
+static float xs_float(int x, int y, int c) { return (float)xs_sample(32, x, y, c) / 65535.0f; }
+
+static void xs_put(BYTE *p, int bits, int x, int y, int c) {
+    if (bits == 32) { const float f = xs_float(x, y, c); memcpy(p, &f, 4); }
+    else if (bits == 16) { const uint16_t v = (uint16_t)xs_sample(16, x, y, c); memcpy(p, &v, 2); }
+    else *p = (BYTE)xs_sample(8, x, y, c);
+}
+
+/* the ExtraSamples entry (338) renamed Matteing (32995), the tag it replaced */
+static int rename_to_matteing(const char *path) {
+    static BYTE d[1 << 16];
+    FILE *f = fopen(path, "r+b");
+    size_t size;
+    unsigned ifd, n, i;
+    if (!f) return 0;
+    size = fread(d, 1, sizeof(d), f);
+    ifd = d[4] | d[5] << 8 | d[6] << 16 | (unsigned)d[7] << 24;
+    n = (ifd + 2 <= size) ? (unsigned)(d[ifd] | d[ifd + 1] << 8) : 0;
+    for (i = 0; i < n && ifd + 14 + 12 * i <= size; i++) {
+        BYTE *e = d + ifd + 2 + 12 * i;
+        if (e[0] == 0x52 && e[1] == 0x01) {
+            e[0] = 0xE3; e[1] = 0x80;
+            fseek(f, (long)(ifd + 2 + 12 * i), SEEK_SET);
+            fwrite(e, 1, 2, f);
+            fclose(f);
+            return 1;
+        }
+    }
+    fclose(f);
+    return 0;
+}
+
+/* 37x21 samples of bits each (32: float) in strips (layout 0), planes (1) or 16x16 tiles (2); types: the ExtraSamples values as
+   digits, "" for no tag, "m" for Matteing; inkset 0 for none */
+static int write_xs_tiff(const char *path, int photometric, int bits, int spp, int layout, const char *types, int inkset) {
+    static BYTE buf[16 * 16 * 8 * 4];
+    const int bytes = bits / 8, n = (int)strlen(types);
+    TIFF *t;
+    int s, x, y, c, tx, ty;
+    FILE *f = fopen(path, "w+b");
+    if (!f) return 0;
+    t = TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap);
+    if (!t) { fclose(f); return 0; }
+    TIFFSetField(t, TIFFTAG_IMAGEWIDTH, XS_W); TIFFSetField(t, TIFFTAG_IMAGELENGTH, XS_H);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, photometric);
+    if (inkset) TIFFSetField(t, TIFFTAG_INKSET, inkset);
+    TIFFSetField(t, TIFFTAG_PLANARCONFIG, layout == 1 ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG);
+    if (bits == 32) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+    if (n) {
+        uint16_t es[4];
+        if (types[0] == 'm') {
+            es[0] = EXTRASAMPLE_ASSOCALPHA;
+            TIFFSetField(t, TIFFTAG_EXTRASAMPLES, 1, es);
+        } else {
+            for (c = 0; c < n; c++) es[c] = (uint16_t)(types[c] - '0');
+            TIFFSetField(t, TIFFTAG_EXTRASAMPLES, n, es);
+        }
+    }
+    if (photometric == PHOTOMETRIC_PALETTE) {
+        static uint16_t map[3][256];
+        for (c = 0; c < 256; c++) { map[0][c] = (uint16_t)(c * 257); map[1][c] = (uint16_t)((255 - c) * 257); map[2][c] = (uint16_t)((c * 7 & 255) * 257); }
+        TIFFSetField(t, TIFFTAG_COLORMAP, map[0], map[1], map[2]);
+    }
+    if (layout == 2) {
+        TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
+        for (ty = 0; ty < XS_H; ty += 16) {
+            for (tx = 0; tx < XS_W; tx += 16) {
+                BYTE *p = buf;
+                for (y = ty; y < ty + 16; y++) for (x = tx; x < tx + 16; x++) for (c = 0; c < spp; c++, p += bytes) xs_put(p, bits, x, y, c);
+                TIFFWriteTile(t, buf, tx, ty, 0, 0);
+            }
+        }
+    } else {
+        TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 5);
+        for (s = 0; s < (layout == 1 ? spp : 1); s++) {
+            for (y = 0; y < XS_H; y++) {
+                BYTE *p = buf;
+                for (x = 0; x < XS_W; x++) for (c = (layout == 1 ? s : 0); c < (layout == 1 ? s + 1 : spp); c++, p += bytes) xs_put(p, bits, x, y, c);
+                TIFFWriteScanline(t, buf, y, (uint16_t)s);
+            }
+        }
+    }
+    TIFFClose(t);
+    return (types[0] == 'm') ? rename_to_matteing(path) : 1;
+}
+
+/* a premultiplied colour divided by its alpha, as FreeImage rounds it */
+static unsigned xs_straight(unsigned c, unsigned a, unsigned max) {
+    unsigned long long v;
+    if (a == 0 || a >= max) return c;
+    v = ((unsigned long long)c * max + a / 2) / a;
+    return v > max ? max : (unsigned)v;
+}
+
+/* the colours and alpha (sample alpha, -1 for none) that are not the file's: RGB, CMYK as RGB, the inks of TIFF_CMYK, or grey and palette indices and their trns table */
+static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int assoc, int inks) {
+    const unsigned max = (bits == 8) ? 255u : 65535u;
+    unsigned wrong = 0;
+    int x, y, c;
+    BYTE trns[256];
+    memset(trns, 255, sizeof(trns));
+    for (y = 0; y < XS_H; y++) {
+        const BYTE *r = FreeImage_GetScanLine(d, XS_H - 1 - y);
+        for (x = 0; x < XS_W; x++) {
+            if (photometric == PHOTOMETRIC_RGB && bits == 32) {
+                const float *p = (const float *)r + (alpha >= 0 ? 4 : 3) * x;
+                const float a = (alpha >= 0) ? xs_float(x, y, alpha) : 1.0f;
+                for (c = 0; c < 3; c++) {
+                    float e = xs_float(x, y, c);
+                    if (assoc && a > 0) e /= a;
+                    wrong += p[c] != e;
+                }
+                if (alpha >= 0) wrong += p[3] != a;
+            } else if (photometric == PHOTOMETRIC_RGB || photometric == PHOTOMETRIC_SEPARATED) {
+                const int colours = (photometric == PHOTOMETRIC_RGB) ? 3 : 4, step = (inks || alpha >= 0) ? 4 : 3;
+                const unsigned a = (alpha >= 0) ? xs_sample(bits, x, y, alpha) : 0;
+                unsigned want[4], got[4];
+                for (c = 0; c < colours; c++) want[c] = assoc ? xs_straight(xs_sample(bits, x, y, c), a, max) : xs_sample(bits, x, y, c);
+                if (bits == 16) {
+                    const WORD *p = (const WORD *)r + step * x;
+                    for (c = 0; c < step; c++) got[c] = p[c];
+                } else {
+                    const BYTE *p = r + step * x;
+                    if (inks) for (c = 0; c < 4; c++) got[c] = p[c];
+                    else { got[0] = p[FI_RGBA_RED]; got[1] = p[FI_RGBA_GREEN]; got[2] = p[FI_RGBA_BLUE]; got[3] = (step == 4) ? p[FI_RGBA_ALPHA] : 0; }
+                }
+                if (inks) {
+                    for (c = 0; c < 4; c++) wrong += got[c] != want[c];
+                    continue;
+                }
+                if (photometric == PHOTOMETRIC_SEPARATED) {
+                    for (c = 0; c < 3; c++) want[c] = (max - want[c]) * (max - want[3]) / max;
+                }
+                for (c = 0; c < 3; c++) wrong += got[c] != want[c];
+                if (alpha >= 0) wrong += got[3] != a;
+            } else {
+                unsigned g = xs_sample(8, x, y, 0);
+                if (alpha >= 0) {
+                    const unsigned a = xs_sample(8, x, y, alpha);
+                    if (assoc && photometric == PHOTOMETRIC_MINISBLACK) g = xs_straight(g, a, 255);
+                    trns[g] = (BYTE)a;
+                }
+                wrong += r[x] != g;
+            }
+        }
+    }
+    if (alpha >= 0 && photometric != PHOTOMETRIC_RGB && photometric != PHOTOMETRIC_SEPARATED) {
+        const BYTE *t = FreeImage_GetTransparencyTable(d);
+        wrong += !t || FreeImage_GetTransparencyCount(d) != 256 || memcmp(t, trns, 256) != 0;
+    }
+    return wrong;
+}
+
+/* the layout a load has: RGB(A) of the file's depth, the 4 inks of TIFF_CMYK, or 8 bits, with a trns table when there is an alpha */
+static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks) {
+    const FREE_IMAGE_TYPE type = FreeImage_GetImageType(d);
+    if (inks) return (bits == 8) ? (type == FIT_BITMAP && FreeImage_GetBPP(d) == 32) : (type == FIT_RGBA16);
+    if (photometric == PHOTOMETRIC_RGB || photometric == PHOTOMETRIC_SEPARATED) {
+        if (bits == 8) return type == FIT_BITMAP && FreeImage_GetBPP(d) == ((alpha >= 0) ? 32u : 24u);
+        if (bits == 16) return type == ((alpha >= 0) ? FIT_RGBA16 : FIT_RGB16);
+        return type == ((alpha >= 0) ? FIT_RGBAF : FIT_RGBF);
+    }
+    return type == FIT_BITMAP && FreeImage_GetBPP(d) == 8 && (FreeImage_IsTransparent(d) ? 1 : 0) == (alpha >= 0);
+}
+
+/* TIFF 6.0: the alpha is the first extra sample (the last samples) typed 1 (premultiplied colours) or 2; 0 is no alpha. Without the
+   tag, against the specification, the first extra sample is the alpha: FreeImage 3.18 saves 8-bit and float alphas so. Inks
+   other than CMYK are refused. */
+static void extra_samples_tag(void) {
+    enum { XS_RGB = PHOTOMETRIC_RGB, XS_CMYK = PHOTOMETRIC_SEPARATED, XS_GREY = PHOTOMETRIC_MINISBLACK, XS_WHITE = PHOTOMETRIC_MINISWHITE, XS_PAL = PHOTOMETRIC_PALETTE };
+    static const struct { int photometric, bits, spp, layout; const char *types; int alpha, assoc; } XS[] = {
+        { XS_RGB, 8, 4, 0, "", 3, 0 }, { XS_RGB, 8, 4, 0, "0", -1, 0 }, { XS_RGB, 8, 4, 0, "2", 3, 0 }, { XS_RGB, 8, 4, 0, "1", 3, 1 },
+        { XS_RGB, 8, 4, 0, "m", 3, 1 }, { XS_RGB, 8, 4, 0, "02", 3, 0 }, { XS_RGB, 8, 5, 0, "02", 4, 0 }, { XS_RGB, 8, 5, 0, "20", 3, 0 },
+        { XS_RGB, 8, 5, 0, "2", 3, 0 }, { XS_RGB, 8, 5, 1, "01", 4, 1 }, { XS_RGB, 8, 6, 0, "000", -1, 0 }, { XS_RGB, 8, 4, 1, "0", -1, 0 },
+        { XS_RGB, 8, 4, 2, "0", -1, 0 }, { XS_RGB, 8, 4, 2, "1", 3, 1 }, { XS_RGB, 8, 6, 2, "002", 5, 0 },
+        { XS_RGB, 16, 4, 0, "0", -1, 0 }, { XS_RGB, 16, 4, 0, "1", 3, 1 }, { XS_RGB, 16, 5, 1, "02", 4, 0 }, { XS_RGB, 16, 5, 2, "10", 3, 1 },
+        { XS_RGB, 32, 4, 0, "", 3, 0 }, { XS_RGB, 32, 4, 0, "0", -1, 0 }, { XS_RGB, 32, 4, 0, "1", 3, 1 }, { XS_RGB, 32, 4, 2, "0", -1, 0 },
+        { XS_CMYK, 8, 5, 0, "", 4, 0 }, { XS_CMYK, 8, 5, 0, "0", -1, 0 }, { XS_CMYK, 8, 5, 0, "1", 4, 1 }, { XS_CMYK, 8, 6, 0, "02", 5, 0 },
+        { XS_CMYK, 8, 6, 1, "02", 5, 0 }, { XS_CMYK, 8, 5, 2, "2", 4, 0 }, { XS_CMYK, 8, 6, 2, "00", -1, 0 }, { XS_CMYK, 8, 5, 2, "1", 4, 1 },
+        { XS_CMYK, 16, 6, 1, "10", 4, 1 }, { XS_CMYK, 16, 6, 2, "02", 5, 0 }, { XS_CMYK, 16, 5, 0, "m", 4, 1 },
+        { XS_GREY, 8, 2, 0, "", 1, 0 }, { XS_GREY, 8, 2, 0, "0", -1, 0 }, { XS_GREY, 8, 2, 0, "1", 1, 1 }, { XS_GREY, 8, 3, 0, "02", 2, 0 },
+        { XS_GREY, 8, 3, 1, "02", 2, 0 }, { XS_GREY, 8, 4, 0, "000", -1, 0 },
+        { XS_PAL, 8, 2, 0, "2", 1, 0 }, { XS_PAL, 8, 2, 0, "0", -1, 0 }, { XS_PAL, 8, 2, 0, "1", 1, 1 }, { XS_WHITE, 8, 2, 0, "1", 1, 1 }
+    };
+    static const char *LAYOUT[3] = { "strips", "planes", "tiles" };
+    const char *path = scratch("icc_extra_samples_tag.tif");
+    unsigned i;
+    int k, spp;
+    char what[160];
+    for (i = 0; i < sizeof(XS) / sizeof(XS[0]); i++) {
+        const int cmyk = XS[i].photometric == XS_CMYK;
+        if (!write_xs_tiff(path, XS[i].photometric, XS[i].bits, XS[i].spp, XS[i].layout, XS[i].types, cmyk ? INKSET_CMYK : 0)) { fail("cannot write %s", path); return; }
+        for (k = 0; k < (cmyk ? 2 : 1); k++) {
+            const int flags = k ? TIFF_CMYK : TIFF_DEFAULT;
+            /* palette and min-is-white samples are not premultiplied colours */
+            const int assoc = XS[i].assoc && XS[i].photometric != XS_PAL && XS[i].photometric != XS_WHITE;
+            FIBITMAP *full = FreeImage_Load(FIF_TIFF, path, flags);
+            snprintf(what, sizeof(what), "%d-bit %s TIFF, %d samples in %s, ExtraSamples %s, flags %d", XS[i].bits,
+                cmyk ? "CMYK" : XS[i].photometric == XS_RGB ? "RGB" : XS[i].photometric == XS_PAL ? "palette" : "grey", XS[i].spp, LAYOUT[XS[i].layout],
+                XS[i].types[0] ? XS[i].types : "absent", flags);
+            if (!full) { fail("%s: not loaded", what); continue; }
+            if (!xs_layout(full, XS[i].photometric, XS[i].bits, k ? -1 : XS[i].alpha, k)) {
+                fail("%s: %u-bit type %d, %s", what, FreeImage_GetBPP(full), (int)FreeImage_GetImageType(full), XS[i].alpha >= 0 ? "the alpha is not kept" : "an alpha that is none");
+            } else {
+                /* TIFF_CMYK leaves the alpha out, its inks straight */
+                const unsigned wrong = xs_wrong(full, XS[i].photometric, XS[i].bits, XS[i].alpha, assoc, k);
+                CHECK(wrong == 0, "%s: %u values are not the file's", what, wrong);
+            }
+            same_as_full(what, full, FreeImage_Load(FIF_TIFF, path, flags | FIF_LOAD_NOPIXELS));
+        }
+        remove(path);
+    }
+    /* inks other than CMYK have no RGB rendering */
+    for (spp = 4; spp <= 6; spp += 2) {
+        if (!write_xs_tiff(path, XS_CMYK, 8, spp, 0, "", INKSET_MULTIINK)) { fail("cannot write %s", path); return; }
+        for (k = 0; k < 4; k++) {
+            FIBITMAP *dib = FreeImage_Load(FIF_TIFF, path, ((k & 1) ? TIFF_CMYK : 0) | ((k & 2) ? FIF_LOAD_NOPIXELS : 0));
+            CHECK(!dib, "%d inks, not CMYK, flags %d: loaded", spp, k);
+            if (dib) FreeImage_Unload(dib);
+        }
+        remove(path);
     }
 }
 
@@ -1200,6 +1439,7 @@ int main(int argc, char **argv) {
     tiled_cmyk_tiff(&press);
     header_only_cmyk_tiff(&press);
     extra_sample_tiffs(&press);
+    extra_samples_tag();
     tiled_layouts_refused(&press);
     grey_alpha_float_strips();
     header_only_psd(&press);

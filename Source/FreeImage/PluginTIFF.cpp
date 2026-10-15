@@ -1325,6 +1325,179 @@ FindLoadMethod(TIFF *tif, FREE_IMAGE_TYPE image_type, int flags) {
 	return loadMethod;
 }
 
+/**
+The sample holding the alpha, by the ExtraSamples tag
+@param tif LibTIFF TIFF Handle
+@param photometric TIFFTAG_PHOTOMETRIC tiff tag
+@param samplesperpixel TIFFTAG_SAMPLESPERPIXEL tiff tag
+@param associated Set to TRUE when the colours are premultiplied by the alpha
+@return Returns the sample's index, -1 when no sample is an alpha
+*/
+static int
+FindAlphaSample(TIFF *tif, uint16_t photometric, uint16_t samplesperpixel, BOOL *associated) {
+	*associated = FALSE;
+
+	int colours = 0;
+	switch(photometric) {
+		case PHOTOMETRIC_MINISWHITE:
+		case PHOTOMETRIC_MINISBLACK:
+		case PHOTOMETRIC_PALETTE:
+			colours = 1;
+			break;
+		case PHOTOMETRIC_RGB:
+		case PHOTOMETRIC_YCBCR:
+		case PHOTOMETRIC_CIELAB:
+		case PHOTOMETRIC_ICCLAB:
+		case PHOTOMETRIC_ITULAB:
+			colours = 3;
+			break;
+		case PHOTOMETRIC_SEPARATED:
+			colours = 4;
+			break;
+		default:
+			return -1;
+	}
+	if((int)samplesperpixel <= colours) {
+		return -1;
+	}
+
+	uint16_t count = 0;
+	const uint16_t *types = NULL;
+	// fails without the tag, though libtiff then makes up unspecified extra samples
+	if(!TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &count, &types)) {
+		// FreeImage 3.18 saves 8-bit and float alphas without the tag
+		return colours;
+	}
+
+	// the extra samples are the last ones
+	const int first = (int)samplesperpixel - (int)count;
+	for(int s = MAX(first, colours); types && (s < (int)samplesperpixel); s++) {
+		const uint16_t type = types[s - first];
+		if((type == EXTRASAMPLE_ASSOCALPHA) || (type == EXTRASAMPLE_UNASSALPHA)) {
+			*associated = (type == EXTRASAMPLE_ASSOCALPHA) ? TRUE : FALSE;
+			return s;
+		}
+	}
+	return -1;
+}
+
+/**
+Copy pixels sample by sample: the first colour_bytes of each, and its alpha to alpha, if not NULL
+@param alpha_step Bytes from one alpha to the next
+@param alpha_offset Where the alpha is in a source pixel
+@param alpha_bytes Bytes of the alpha
+@param count Number of pixels
+*/
+static void
+CopySamples(BYTE *dst, unsigned dst_Bpp, const BYTE *src, unsigned src_Bpp, unsigned colour_bytes, BYTE *alpha, unsigned alpha_step, unsigned alpha_offset, unsigned alpha_bytes, unsigned count) {
+	for(unsigned x = 0; x < count; x++, dst += dst_Bpp, src += src_Bpp) {
+		AssignPixel(dst, src, colour_bytes);
+		if(alpha) {
+			AssignPixel(alpha, src + alpha_offset, alpha_bytes);
+			alpha += alpha_step;
+		}
+	}
+}
+
+// premultiplied colours divided by their alpha
+static inline void
+Unpremultiply(BYTE *colours, unsigned count, unsigned a) {
+	if((a > 0) && (a < 255)) {
+		for(unsigned c = 0; c < count; c++) {
+			const unsigned v = ((unsigned)colours[c] * 255u + a / 2) / a;
+			colours[c] = (v > 255) ? 255 : (BYTE)v;
+		}
+	}
+}
+
+static inline void
+Unpremultiply(WORD *colours, unsigned count, unsigned a) {
+	if((a > 0) && (a < 65535)) {
+		for(unsigned c = 0; c < count; c++) {
+			const UINT64 v = ((UINT64)colours[c] * 65535u + a / 2) / a;
+			colours[c] = (v > 65535) ? 65535 : (WORD)v;
+		}
+	}
+}
+
+static inline void
+Unpremultiply(float *colours, unsigned count, float a) {
+	if(a > 0) {
+		for(unsigned c = 0; c < count; c++) {
+			colours[c] /= a;
+		}
+	}
+}
+
+/**
+Undo premultiplied alpha in an RGBA image, or in CMYK inks whose alpha is the plane alpha
+*/
+static void
+UnpremultiplyImage(FIBITMAP *dib, FIBITMAP *alpha) {
+	if(!FreeImage_HasPixels(dib)) {
+		return;
+	}
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(dib);
+
+	for(unsigned y = 0; y < height; y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, y);
+		const BYTE *plane = alpha ? FreeImage_GetScanLine(alpha, y) : NULL;
+
+		if((image_type == FIT_BITMAP) && (FreeImage_GetBPP(dib) == 32)) {
+			for(unsigned x = 0; x < width; x++, line += 4) {
+				Unpremultiply(line, plane ? 4 : 3, plane ? plane[x] : line[FI_RGBA_ALPHA]);
+			}
+		} else if(image_type == FIT_RGBA16) {
+			WORD *pixel = (WORD*)line;
+			for(unsigned x = 0; x < width; x++, pixel += 4) {
+				Unpremultiply(pixel, plane ? 4 : 3, plane ? ((const WORD*)plane)[x] : pixel[3]);
+			}
+		} else if(image_type == FIT_RGBAF) {
+			float *pixel = (float*)line;
+			for(unsigned x = 0; x < width; x++, pixel += 4) {
+				Unpremultiply(pixel, 3, pixel[3]);
+			}
+		}
+	}
+}
+
+/**
+CMYK as RGB, or as its inks with TIFF_CMYK; the alpha goes into the RGBA, or along with the inks for FIF_LOAD_DISPLAY_ICC
+@param alpha The alpha plane, or NULL; the function takes it
+@param has_alpha The file has an alpha
+@return Returns the image
+*/
+static FIBITMAP*
+FinishCMYK(FIBITMAP *dib, FIBITMAP *alpha, BOOL has_alpha, BOOL asCMYK, BOOL header_only) {
+	if(asCMYK) {
+		SetCMYKAlpha(dib, alpha);
+		return dib;
+	}
+
+	// a header gets the layout of the converted image too
+	ConvertCMYKtoRGBA(dib);
+
+	if(has_alpha) {
+		FreeImage_SetChannel(dib, alpha, FICC_ALPHA);
+		FreeImage_Unload(alpha);
+		return dib;
+	}
+	FreeImage_Unload(alpha);
+
+	FIBITMAP *rgb = RemoveAlphaChannel(dib);
+	if(rgb) {
+		FreeImage_Unload(dib);
+		return rgb;
+	}
+	// three inks leave no fourth channel to remove
+	if(!header_only && ((FreeImage_GetBPP(dib) == 32) || (FreeImage_GetImageType(dib) == FIT_RGBA16))) {
+		FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
+	}
+	return dib;
+}
+
 // ==========================================================
 // TIFF thumbnail routines
 // ==========================================================
@@ -1525,9 +1698,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
  
 		// ---------------------------------------------------------------------------------
 
+		// inks other than CMYK have no RGB rendering
+		uint16_t inkset = INKSET_CMYK;
+		if((photometric == PHOTOMETRIC_SEPARATED) && TIFFGetField(tif, TIFFTAG_INKSET, &inkset) && (inkset != INKSET_CMYK)) {
+			throw "TIFF images of inks other than CMYK are not supported";
+		}
+
+		BOOL associated = FALSE;
+		const int alpha_sample = FindAlphaSample(tif, photometric, samplesperpixel, &associated);
+
+		// RGB of 8 or 16 bits or float loads its colours and its alpha, if any, alone
+		uint16_t sampleformat = SAMPLEFORMAT_UINT;
+		TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sampleformat);
+		const BOOL rgb_samples = (photometric == PHOTOMETRIC_RGB) && (samplesperpixel > 3) &&
+			((((bitspersample == 8) || (bitspersample == 16)) && (sampleformat == SAMPLEFORMAT_UINT)) || ((bitspersample == 32) && (sampleformat == SAMPLEFORMAT_IEEEFP)));
+		const uint16_t bitmap_spp = rgb_samples ? ((alpha_sample >= 0) ? 4 : 3) : samplesperpixel;
+
+		const BOOL display = (flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC;
+
 		// get image data type
 
-		FREE_IMAGE_TYPE image_type = ReadImageType(tif, bitspersample, samplesperpixel);
+		FREE_IMAGE_TYPE image_type = ReadImageType(tif, bitspersample, bitmap_spp);
 
 		// get the most appropriate loading method
 
@@ -1570,24 +1761,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					bParseError = TRUE;
 				}
 			}
-			// TIFFReadRGBAImage always deliveres 3 or 4 samples per pixel images
-			// (RGB or RGBA, see below). Cut-off possibly present channels (additional 
-			// alpha channels) from e.g. Photoshop. Any CMYK(A..) is now treated as RGB,
-			// any additional alpha channel on RGB(AA..) is lost on conversion to RGB(A)
+			// libtiff's RGBA holds the first extra sample: the alpha when it is that one
+			const uint16_t rgba_spp = (alpha_sample == 3) ? 4 : 3;
 
-			if(samplesperpixel > 4) { // TODO Write to Extra Channels
-				FreeImage_OutputMessageProc(s_format_id, "Warning: %d additional alpha channel(s) ignored", samplesperpixel-4);
-				samplesperpixel = 4;
-			}
-
-			// create a new DIB (take care of different samples-per-pixel in case 
-			// of converted CMYK image (RGB conversion is on sample per pixel less)
-
-			if (photometric == PHOTOMETRIC_SEPARATED && samplesperpixel == 4) {
-				samplesperpixel = 3;
-			}
-
-			dib = CreateImageType(header_only, image_type, width, height, bitspersample, samplesperpixel);
+			dib = CreateImageType(header_only, image_type, width, height, bitspersample, rgba_spp);
 			if (dib == NULL) {
 				// free the raster pointer and output an error if allocation failed
 				if(raster) {
@@ -1609,7 +1786,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				uint32_t *row = &raster[0];
 
-				if (samplesperpixel == 4) {
+				if (rgba_spp == 4) {
 					// 32-bit RGBA
 					for (uint32_t y = 0; y < height; y++) {
 						BYTE *bits = FreeImage_GetScanLine(dib, y);
@@ -1653,6 +1830,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// 8-bit + 8-bit alpha layer loading
 			// ---------------------------------------------------------------------------------
 			const uint16_t dst_spp = 2;
+			const BOOL has_alpha = (alpha_sample >= 0);
+			// a premultiplied grey is divided by its alpha
+			const BOOL unpremultiply = associated && (photometric == PHOTOMETRIC_MINISBLACK);
 
 			// create a new 8-bit DIB
 			dib = CreateImageType(header_only, image_type, width, height, bitspersample, MIN(dst_spp, samplesperpixel));
@@ -1699,7 +1879,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				for (uint32_t y = 0; y < height; y += rowsperstrip) {
 					const int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
-					if (nrow * src_width * dst_spp * sizeof(BYTE) > static_cast<size_t>(bufsz)) {
+					if (nrow * src_width * samplesperpixel * sizeof(BYTE) > static_cast<size_t>(bufsz)) {
 						free(buf);
 						throw FI_MSG_ERROR_CORRUPTED_IMAGE;
 					}
@@ -1715,13 +1895,18 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						const BYTE *b = buf + l * src_line;
 
 						for(uint32_t x = 0; x < src_width; x++) {
-							// copy the 8-bit layer
-							*p = b[0];
-							// convert the 8-bit alpha layer to a trns table
-							trns[ b[0] ] = b[1];
+							BYTE value = b[0];
+							if(has_alpha) {
+								if(unpremultiply) {
+									Unpremultiply(&value, 1, b[alpha_sample]);
+								}
+								// convert the 8-bit alpha layer to a trns table
+								trns[value] = b[alpha_sample];
+							}
+							*p = value;
 
 							p++;
-							b += dst_spp;
+							b += samplesperpixel;
 						} 
 						bits -= dst_pitch;
 					}
@@ -1742,7 +1927,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					int32_t nrow = (y + rowsperstrip > height ? height - y : rowsperstrip);
 
 					if ((TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 0), grey, nrow * src_line) == -1) ||
-						(TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, 1), alpha, nrow * src_line) == -1)) {
+						(has_alpha && (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, (uint16_t)alpha_sample), alpha, nrow * src_line) == -1))) {
 						bParseError = TRUE;
 						bits -= (size_t)nrow * dst_pitch;
 						continue;
@@ -1754,10 +1939,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						BYTE *a = alpha + l * src_line;
 
 						for(uint32_t x = 0; x < (uint32_t)(src_line); x++) {
-							// copy the 8-bit layer
-							*p = g[0];
-							// convert the 8-bit alpha layer to a trns table
-							trns[ g[0] ] = a[0];
+							BYTE value = g[0];
+							if(has_alpha) {
+								if(unpremultiply) {
+									Unpremultiply(&value, 1, a[0]);
+								}
+								// convert the 8-bit alpha layer to a trns table
+								trns[value] = a[0];
+							}
+							*p = value;
 
 							p++;
 							g++;
@@ -1771,8 +1961,10 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 			}
 			
-			FreeImage_SetTransparencyTable(dib, &trns[0], 256);
-			FreeImage_SetTransparent(dib, TRUE);
+			if(has_alpha) {
+				FreeImage_SetTransparencyTable(dib, &trns[0], 256);
+				FreeImage_SetTransparent(dib, TRUE);
+			}
 
 		} else if(loadMethod == LoadAsCMYK) {
 			// ---------------------------------------------------------------------------------
@@ -1783,7 +1975,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// is recognized. Where all other formats are handled straight-forward, this
 			// format has to be handled special 
 
-			BOOL isCMYKA = (photometric == PHOTOMETRIC_SEPARATED) && (samplesperpixel > 4);
+			const BOOL isCMYKA = (alpha_sample >= 0);
 
 			// We use a temp dib to store the alpha for the CMYKA to RGBA conversion
 			// NOTE this is until we have Extra channels implementation.
@@ -1794,8 +1986,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BYTE *alpha_bits = NULL;
 			unsigned alpha_Bpp = 0;
 
-			// CMYK keeps it for FIF_LOAD_DISPLAY_ICC
-			if(isCMYKA && (!asCMYK || ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) && !header_only) {
+			// CMYK keeps it for FIF_LOAD_DISPLAY_ICC; premultiplied inks need it either way
+			const BOOL keep_alpha = isCMYKA && (!asCMYK || display);
+			if((keep_alpha || (isCMYKA && associated)) && !header_only) {
 				if(bitspersample == 16) {
 					alpha = FreeImage_AllocateT(FIT_UINT16, width, height);
 				} else if (bitspersample == 8) {
@@ -1841,6 +2034,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				const tmsize_t dst_line = FreeImage_GetLine(dib);
 				const unsigned dib_pitch = FreeImage_GetPitch(dib);
 				const unsigned srcBpp = bitspersample * samplesperpixel / 8;
+				const unsigned alpha_offset = isCMYKA ? alpha_sample * Bpc : 0;
 
 				// In the tiff file the lines are save from up to down 
 				// In a DIB the lines must be saved from down to up
@@ -1870,35 +2064,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						// - loop for strips -
 						
 						if(src_line != dst_line) {
-							// CMYKA+
-							if(alpha) {
-								for (int l = 0; l < strips; l++) {					
-									for(BYTE *pixel = bits, *al_pixel = alpha_bits, *src_pixel =  buf + l * src_line; pixel < bits + dib_pitch; pixel += dibBpp, al_pixel += alpha_Bpp, src_pixel += srcBpp) {
-										// copy pixel byte by byte
-										BYTE b = 0;
-										for( ; b < dibBpp; ++b) {
-											pixel[b] =  src_pixel[b];
-										}
-										// TODO write the remaining bytes to extra channel(s)
-										
-										// HACK write the first alpha to a separate dib (assume BYTE or WORD)
-										al_pixel[0] = src_pixel[b];
-										if(Bpc > 1) {
-											al_pixel[1] = src_pixel[b + 1];
-										}
-										
-									}
-									bits -= dib_pitch;
+							// the inks, and the alpha to its plane
+							for (int l = 0; l < strips; l++) {
+								CopySamples(bits, dibBpp, buf + l * src_line, srcBpp, dibBpp, alpha_bits, alpha_Bpp, alpha_offset, Bpc, width);
+								bits -= dib_pitch;
+								if(alpha) {
 									alpha_bits -= alpha_pitch;
-								}
-							}
-							else {
-								// alpha/extra channels alloc failed
-								for (int l = 0; l < strips; l++) {
-									for(BYTE* pixel = bits, * src_pixel =  buf + l * src_line; pixel < bits + dst_line; pixel += dibBpp, src_pixel += srcBpp) {
-										AssignPixel(pixel, src_pixel, dibBpp);
-									}
-									bits -= dib_pitch;
 								}
 							}
 						}
@@ -1927,34 +2098,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						// - loop for channels (planes) -
 						
 						for(uint16_t sample = 0; sample < samplesperpixel; sample++) {
-							
-							if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, sample), buf, strips * src_line) == -1) {
-								// libtiff zeroes a strip it cannot read
-								bParseError = TRUE;
-							} 
-									
 							BYTE *dst_strip = dib_strip;
 							unsigned dst_pitch = dib_pitch;
 							uint16_t ch = sample;
 							unsigned Bpp = dibBpp;
 
 							if(sample >= chCount) {
-								// TODO Write to Extra Channel
-								
-								// HACK redirect write to temp alpha
-								if(alpha && sample == chCount) {
-
-									dst_strip = al_strip;
-									dst_pitch = alpha_pitch;
-
-									ch = 0;
-									Bpp = alpha_Bpp;
+								// the alpha goes to its plane, the other extra samples nowhere
+								if(!alpha || (sample != alpha_sample)) {
+									continue;
 								}
-								else {
-									break; 
-								}
+								dst_strip = al_strip;
+								dst_pitch = alpha_pitch;
+								ch = 0;
+								Bpp = alpha_Bpp;
 							}
-							
+
+							if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, sample), buf, strips * src_line) == -1) {
+								// libtiff zeroes a strip it cannot read
+								bParseError = TRUE;
+							}
+
 							const unsigned channelOffset = ch * Bpc;			
 							
 							// - loop for strips in block -
@@ -1983,37 +2147,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 				free(buf);
 
-			} // !header_only
-
-			// a header gets the layout of the converted image too
-			if(!asCMYK) {
-				ConvertCMYKtoRGBA(dib);
-
-				// The ICC Profile is invalid, clear it
-				iccSize = 0;
-				iccBuf = NULL;
-
-				if(isCMYKA) {
-					// HACK until we have Extra channels. (ConvertCMYKtoRGBA will then do the work)
-
-					FreeImage_SetChannel(dib, alpha, FICC_ALPHA);
+				// premultiplied inks divided by the alpha, which TIFF_CMYK then drops
+				if(associated && alpha) {
+					UnpremultiplyImage(dib, alpha);
+				}
+				if(alpha && !keep_alpha) {
 					FreeImage_Unload(alpha);
 					alpha = NULL;
 				}
-				else {
-					FIBITMAP *t = RemoveAlphaChannel(dib);
-					if(t) {
-						FreeImage_Unload(dib);
-						dib = t;
-					}
-					else if(!header_only) {
-						FreeImage_OutputMessageProc(s_format_id, "Cannot allocate memory for buffer. CMYK image converted to RGB + pending Alpha");
-					}
-				}
-			} else if(alpha) {
-				SetCMYKAlpha(dib, alpha);
-				alpha = NULL;
+
+			} // !header_only
+
+			if(!asCMYK) {
+				// The ICC Profile is invalid, clear it
+				iccSize = 0;
+				iccBuf = NULL;
 			}
+			dib = FinishCMYK(dib, alpha, isCMYKA, asCMYK, header_only);
 
 		} else if(loadMethod == LoadAsGenericStrip) {
 			// ---------------------------------------------------------------------------------
@@ -2021,7 +2171,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			// ---------------------------------------------------------------------------------
 
 			// create a new DIB
-			const uint16_t chCount = MIN<uint16_t>(samplesperpixel, 4);
+			const uint16_t chCount = MIN<uint16_t>(bitmap_spp, 4);
 			dib = CreateImageType(header_only, image_type, width, height, bitspersample, chCount);
 			if (dib == NULL) {
 				throw FI_MSG_ERROR_MEMORY;
@@ -2043,6 +2193,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				const unsigned dst_pitch = FreeImage_GetPitch(dib);
 				const unsigned Bpp = FreeImage_GetBPP(dib) / 8;
 				const unsigned srcBpp = bitspersample * samplesperpixel / 8;
+				const unsigned Bpc = bitspersample / 8;
+				const unsigned alpha_offset = (alpha_sample >= 0) ? alpha_sample * Bpc : 0;
 
 				// In the tiff file the lines are save from up to down 
 				// In a DIB the lines must be saved from down to up
@@ -2079,6 +2231,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 								bits -= dst_pitch;
 							}
 						}
+						else if(rgb_samples) {
+							// the colours, and the alpha, if any, after them
+							for (int l = 0; l < strips; l++) {
+								CopySamples(bits, Bpp, buf + l * src_line, srcBpp, 3 * Bpc, (alpha_sample >= 0) ? bits + 3 * Bpc : NULL, Bpp, alpha_offset, Bpc, width);
+								bits -= dst_pitch;
+							}
+						}
 						else {
 							// pixels of different sizes: each gets what both hold
 							const unsigned n = MIN(Bpp, srcBpp);
@@ -2093,7 +2252,6 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 				else if(planar_config == PLANARCONFIG_SEPARATE) {
 					
-					const unsigned Bpc = bitspersample / 8;
 					BYTE* dib_strip = bits;
 					// - loop for strip blocks -
 					
@@ -2103,19 +2261,18 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						// - loop for channels (planes) -
 						
 						for(uint16_t sample = 0; sample < samplesperpixel; sample++) {
-							
+							// RGB takes its colours and alpha; a sample past the fourth or past the image pixel is dropped
+							const int channel = (rgb_samples && (sample >= 3)) ? ((sample == alpha_sample) ? 3 : -1) : sample;
+							if((channel < 0) || (channel >= chCount) || ((channel + 1) * Bpc > Bpp)) {
+								continue;
+							}
+
 							if (TIFFReadEncodedStrip(tif, TIFFComputeStrip(tif, y, sample), buf, strips * src_line) == -1) {
 								// ignore errors as they can be frequent and not really valid errors, especially with fax images
-								bThrowMessage = TRUE;	
-							} 
-									
-							// a sample past the fourth or past the image pixel is dropped
-							if((sample >= chCount) || ((sample + 1) * Bpc > Bpp)) {
-								// TODO Write to Extra Channel
-								break; 
+								bThrowMessage = TRUE;
 							}
-							
-							const unsigned channelOffset = sample * Bpc;			
+
+							const unsigned channelOffset = channel * Bpc;
 							
 							// - loop for strips in block -
 							
@@ -2152,6 +2309,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				SwapRedBlue32(dib);
 #endif
 
+				// premultiplied colours divided by the alpha
+				if(associated && rgb_samples) {
+					UnpremultiplyImage(dib, NULL);
+				}
+
 			} // !header only
 			
 		} else if(loadMethod == LoadAsTiled) {
@@ -2162,15 +2324,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			uint32_t tileWidth, tileHeight;
 			uint32_t src_line = 0;
 
+			// CMYK with extra samples keeps its inks, and its alpha apart, as the strip loader does
+			const BOOL cmyk_samples = (photometric == PHOTOMETRIC_SEPARATED) && (samplesperpixel > 4) && ((bitspersample == 8) || (bitspersample == 16));
+			const uint16_t chCount = cmyk_samples ? 4 : bitmap_spp;
+			FIBITMAP *alpha = NULL;
+
 			// create a new DIB
-			dib = CreateImageType( header_only, image_type, width, height, bitspersample, samplesperpixel);
+			dib = CreateImageType( header_only, image_type, width, height, bitspersample, chCount);
 			if (dib == NULL) {
 				// a standard bitmap holds no more than 32 bits per pixel
-				throw ((image_type == FIT_BITMAP) && (bitspersample * samplesperpixel > 32)) ? "Tiled TIFF images of this sample layout are not supported" : FI_MSG_ERROR_MEMORY;
+				throw ((image_type == FIT_BITMAP) && (bitspersample * chCount > 32)) ? "Tiled TIFF images of this sample layout are not supported" : FI_MSG_ERROR_MEMORY;
 			}
 
-			// tiles are copied as they are: the image rows must be the file's
-			if((planar_config == PLANARCONFIG_CONTIG) && ((tmsize_t)FreeImage_GetLine(dib) != TIFFScanlineSize(tif))) {
+			// RGB and CMYK pixels of another size are copied sample by sample
+			const BOOL by_sample = (rgb_samples || cmyk_samples) && ((tmsize_t)FreeImage_GetLine(dib) != TIFFScanlineSize(tif));
+
+			// other tiles are copied as they are: the image rows must be the file's
+			if((planar_config == PLANARCONFIG_CONTIG) && !by_sample && ((tmsize_t)FreeImage_GetLine(dib) != TIFFScanlineSize(tif))) {
 				throw "Tiled TIFF images of this sample layout are not supported";
 			}
 
@@ -2214,6 +2384,23 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				// In the tiff file the lines are saved from up to down 
 				// In a DIB the lines must be saved from down to up
 				BYTE *bits = FreeImage_GetScanLine(dib, height - 1);
+
+				const unsigned dstBpp = FreeImage_GetBPP(dib) / 8;
+				const unsigned srcBpp = bitspersample * samplesperpixel / 8;
+				const unsigned Bpc = bitspersample / 8;
+				const unsigned colour_bytes = (cmyk_samples ? 4 : 3) * Bpc;
+				const unsigned alpha_offset = (alpha_sample >= 0) ? alpha_sample * Bpc : 0;
+
+				// CMYK keeps it for FIF_LOAD_DISPLAY_ICC; premultiplied inks need it either way
+				const BOOL keep_alpha = cmyk_samples && (alpha_sample >= 0) && (!asCMYK || display);
+				if(keep_alpha || (cmyk_samples && (alpha_sample >= 0) && associated)) {
+					alpha = (bitspersample == 16) ? FreeImage_AllocateT(FIT_UINT16, width, height) : FreeImage_Allocate(width, height, 8);
+					if(!alpha) {
+						FreeImage_OutputMessageProc(s_format_id, "Failed to allocate temporary alpha channel");
+					}
+				}
+				BYTE *alpha_bits = alpha ? FreeImage_GetScanLine(alpha, height - 1) : NULL;
+				const unsigned alpha_pitch = alpha ? FreeImage_GetPitch(alpha) : 0;
 				
 				for (uint32_t y = 0; y < height; y += tileHeight) {						
 					int32_t nrows = (y + tileHeight > height ? height - y : tileHeight);					
@@ -2224,6 +2411,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						// read one tile; libtiff zeroes a tile it cannot read
 						if (TIFFReadTile(tif, tileBuffer, x, y, 0, 0) < 0) {
 							bParseError = TRUE;
+						}
+						if(by_sample) {
+							const uint32_t count = MIN(tileWidth, width - x);
+							for(int k = 0; k < nrows; k++) {
+								BYTE *dst = bits - (size_t)k * dst_pitch + (size_t)x * dstBpp;
+								BYTE *a = NULL;
+								if(alpha_bits) {
+									a = alpha_bits - (size_t)k * alpha_pitch + (size_t)x * Bpc;
+								} else if(!cmyk_samples && (alpha_sample >= 0)) {
+									a = dst + colour_bytes;
+								}
+								CopySamples(dst, dstBpp, tileBuffer + (size_t)k * tileRowSize, srcBpp, colour_bytes, a, alpha_bits ? Bpc : dstBpp, alpha_offset, Bpc, count);
+							}
+							continue;
 						}
 						// convert to strip
 						if(x + tileWidth > width) {
@@ -2241,6 +2442,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 
 					bits -= nrows * dst_pitch;
+					if(alpha_bits) {
+						alpha_bits -= nrows * alpha_pitch;
+					}
 				}
 
 				free(tileBuffer);
@@ -2251,21 +2455,27 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					SwapRedBlue32(dib);
 				}
 #endif
+
+				// premultiplied colours divided by the alpha, which TIFF_CMYK then drops
+				if(associated && (rgb_samples || alpha)) {
+					UnpremultiplyImage(dib, alpha);
+				}
+				if(alpha && !keep_alpha) {
+					FreeImage_Unload(alpha);
+					alpha = NULL;
+				}
 			}
 			else if(planar_config == PLANARCONFIG_SEPARATE) {
 				throw "Separated tiled TIFF images are not supported";
 			}
 
 			// as the strip loader, RGB unless TIFF_CMYK; a header gets that layout too
-			if ((photometric == PHOTOMETRIC_SEPARATED) && !asCMYK) {
-				ConvertCMYKtoRGBA(dib);
-				iccSize = 0;
-				iccBuf = NULL;
-				FIBITMAP *rgb = RemoveAlphaChannel(dib);
-				if (rgb) {
-					FreeImage_Unload(dib);
-					dib = rgb;
+			if (photometric == PHOTOMETRIC_SEPARATED) {
+				if (!asCMYK) {
+					iccSize = 0;
+					iccBuf = NULL;
 				}
+				dib = FinishCMYK(dib, alpha, alpha_sample >= 0, asCMYK, header_only);
 			}
 
 
