@@ -50,7 +50,7 @@ Fixes:
 - fixed saved selections and spot channels of RGB PSD files loading as transparency;
 - fixed grayscale PSD files with transparency loading without their alpha channel: they load as RGBA;
 - fixed JPEG 2000 images of 1 to 7 and 9 to 15 bits loading unscaled, a 12-bit one up to 4095 of 65535; the FIMD_CUSTOM tag "SignificantBits" (FIDT_BYTE) keeps the file's precision. Added flags: J2K_UNSCALED and JP2_UNSCALED to keep the file's original values instead, tagged "UnscaledBits";
-- fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged profile;
+- fixed TIFF files with both an ICC profile and Exif data crashing on load, or loading with a damaged color profile;
 - fixed CMYK TIFFs with an alpha channel, and some RGB TIFFs with extra channels, failing to load;
 - fixed TIFF extra channels that are not alpha, such as saved selections and spot channels, loading as transparency, and premultiplied TIFF alpha being taken for straight alpha; tiled TIFFs with extra channels now load;
 - fixed tiled 8-bit greyscale and palette TIFFs with transparency loading blank, and 16-bit greyscale TIFFs with transparency (now RGBA16), half-float RGBA TIFFs (now RGBAF) and 16-bit CIELab TIFFs loading garbled;
@@ -58,7 +58,6 @@ Fixes:
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
 - fixed swapped width and height dimensions when loading JPEG and RAW files using FIF_LOAD_NOPIXELS;
 - fixed JPEG files loaded with JPEG_EXIFROTATE losing their ICC profile and Exif thumbnail when rotated by 90°;
-- many fixes related to JPEG XR
 - fixed the FreeImage I/O layer's 2 GB file limit on Windows;
 - fixed memory streams being limited to 2 GB buffers;
 - fixed file saves returning TRUE when writting failed;
@@ -67,6 +66,7 @@ Fixes:
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing such files is now much faster;
 - fixed PFM images being saved and loaded upside down; PFM files saved by older FreeImage versions now load flipped;
+- many fixes related to JPEG XR;
 - and many other fixes
 
 Changes:
@@ -100,7 +100,7 @@ Changes:
 - the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the color description of the file, its ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag), as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values; the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer; a color conversion that changes the pixels removes the tag;
 - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed, FITM_NONE (0), FITM_OPTIONAL (1), FITM_REQUIRED (2), FITM_PQ (3), FITM_UNSCALED (4), or FITM_ERROR (-1) for a NULL or unknown bitmap. Bitmaps tagged "UnscaledBits" return FITM_UNSCALED; PQ gives FITM_PQ, whose curve FreeImage_ConvertToLinear() undoes before the tone mapping; 16-bit images are taken as encoded for display unless they are linear (camera RAW at 16 bits, a linear profile) or steeper than a display curve (FITM_OPTIONAL), or use no more than 12 of their 16 bits (FITM_OPTIONAL); Floating-point RGB bitmaps always return FITM_REQUIRED;
 - added FreeImage_ConvertToLinear();
-- the results of FreeImage_ConvertToLinear() and of the tone mappers carry a profile of the image's colors, for color management;
+- the results the tone mappers carry a profile of the image's colors, for color management;
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 
 | Formats | Library | Bundled version | Upgraded from (r1910) |
