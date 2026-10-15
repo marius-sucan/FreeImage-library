@@ -78,6 +78,9 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed FreeImage_Copy() crashing, and FreeImage_Rescale() and FreeImage_Rotate() failing, on very large images [over 5000 mgpx]; FreeImage_Rescale() no longer screws up the colors;
 - fixed TIFF saves past 4 GB returning TRUE with a file that cannot be opened, and multi-page TIFFs crossing 4 GB losing the page that crossed it;
 - fixed PSD saves whose pixels pass 2 GB being written as version 1 PSD, which Photoshop reads up to 2 GB: they are written as PSB, as PSD_PSB asks;
+- fixed BMP saves over 4 GB writing a broken file and returning TRUE: such a save is refused;
+- fixed MNG files holding an embedded image of 4 GB or more being misread past it, and MNG frames of 4 GB or more failing to save;
+- fixed JNG saves of 4 GB or more writing no image data yet returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load;
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 
 ### Loading and saving
