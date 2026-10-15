@@ -487,6 +487,12 @@ The alpha SetCMYKAlpha gave dib, or NULL; the caller unloads it
 FIBITMAP* TakeCMYKAlpha(FIBITMAP *dib);
 
 /**
+dst, made from src, takes src's CMYK flag when it has src's image type and depth
+@see See definition in BitmapAccess.cpp
+*/
+void CopyCMYKFlag(FIBITMAP *dst, FIBITMAP *src);
+
+/**
 A frame of a file with one ICC profile for every frame, in that profile's colors (NULL: sRGB) as *converted;
 *converted is NULL when the frame already has them, and FALSE is returned when they cannot be converted.
 size is unsigned, not DWORD: MinGW's DWORD depends on whether windows.h came first

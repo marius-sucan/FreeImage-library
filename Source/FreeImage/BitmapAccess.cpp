@@ -743,6 +743,13 @@ TakeCMYKAlpha(FIBITMAP *dib) {
 	return alpha;
 }
 
+void
+CopyCMYKFlag(FIBITMAP *dst, FIBITMAP *src) {
+	if (dst && src && (FreeImage_GetImageType(dst) == FreeImage_GetImageType(src)) && (FreeImage_GetBPP(dst) == FreeImage_GetBPP(src))) {
+		FreeImage_GetICCProfile(dst)->flags |= (WORD)(FreeImage_GetICCProfile(src)->flags & FIICC_COLOR_IS_CMYK);
+	}
+}
+
 // ----------------------------------------------------------
 
 FREE_IMAGE_COLOR_TYPE DLL_CALLCONV

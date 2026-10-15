@@ -1466,7 +1466,7 @@ static void cmyk_save_flags(const Bytes *press) {
             free(plain.data);
             free(flagged.data);
 
-            /* CMYK without its flag, as FreeImage_Rescale leaves it: the save flag says what it is */
+            /* CMYK without its flag, as one made from raw bits: the save flag says what it is */
             for (k = 0; k < 3; k++) {
                 FIBITMAP *src = FreeImage_Clone(ink[d]), *back;
                 Bytes b;
@@ -1494,6 +1494,86 @@ static void cmyk_save_flags(const Bytes *press) {
     remove(path);
 
     for (d = 0; d < 2; d++) { FreeImage_Unload(rgba[d]); FreeImage_Unload(ink[d]); }
+    FreeImage_Unload(rgb16);
+    FreeImage_Unload(rgb);
+}
+
+/* Rescale and Rotate keep the CMYK flag of a result with the source's type and depth */
+static void cmyk_flag_kept(const Bytes *press) {
+    static const char *NAMES[4] = { "CMYK", "16-bit CMYK", "32-bit RGBA", "RGBA16" };
+    static const char *OPS[10] = { "Rescale", "Rescale nearest", "RescaleRect", "RescaleRect omitting metadata", "Rotate 90",
+                                   "Rotate 180", "Rotate 270", "Rotate 30", "RotateEx", "MakeThumbnail" };
+    FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb16, *src[4];
+    unsigned x, y;
+    int i, k, v;
+    for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(rgb, y); for (x = 0; x < 37 * 3; x++) p[x] = rnd() & 255; }
+    rgb16 = FreeImage_ConvertToRGB16(rgb);
+    src[0] = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
+    src[1] = FreeImage_ConvertToCMYK(rgb16, press->data, press->size, 0);
+    src[2] = FreeImage_ConvertTo32Bits(rgb);
+    src[3] = FreeImage_ConvertToRGBA16(rgb);
+    for (y = 0; y < 23; y++) {
+        BYTE *p = FreeImage_GetScanLine(src[2], y);
+        FIRGBA16 *q = (FIRGBA16 *)FreeImage_GetScanLine(src[3], y);
+        for (x = 0; x < 37; x++) { p[4 * x + FI_RGBA_ALPHA] = rnd() & 255; q[x].alpha = (WORD)rnd(); }
+    }
+
+    for (i = 0; i < 4; i++) {
+        const int cmyk = (i < 2);
+        FIBITMAP *bare = FreeImage_Clone(src[i]), *out[2][10];
+        FreeImage_DestroyICCProfile(bare);
+        FreeImage_GetICCProfile(bare)->flags = 0;
+        /* v 0: the image; v 1: the same samples without the flag, whose results give the pixels */
+        for (v = 0; v < 2; v++) {
+            FIBITMAP *d = v ? bare : src[i];
+            out[v][0] = FreeImage_Rescale(d, 50, 31, FILTER_CATMULLROM);
+            out[v][1] = FreeImage_Rescale(d, 18, 11, FILTER_NEAREST);
+            out[v][2] = FreeImage_RescaleRect(d, 20, 12, 3, 2, 30, 20, FILTER_BILINEAR, 0);
+            out[v][3] = FreeImage_RescaleRect(d, 20, 12, 3, 2, 30, 20, FILTER_BILINEAR, FI_RESCALE_OMIT_METADATA);
+            out[v][4] = FreeImage_Rotate(d, 90, NULL);
+            out[v][5] = FreeImage_Rotate(d, 180, NULL);
+            out[v][6] = FreeImage_Rotate(d, 270, NULL);
+            out[v][7] = FreeImage_Rotate(d, 30, NULL);
+            out[v][8] = FreeImage_RotateEx(d, 15, 2, 1, 18, 11, TRUE);
+            out[v][9] = FreeImage_MakeThumbnail(d, 20, FALSE);
+        }
+        for (k = 0; k < 10; k++) {
+            if ((k == 8) && (i & 1)) {
+                /* RotateEx takes FIT_BITMAP only */
+                CHECK(!out[0][8], "%s, RotateEx: not refused", NAMES[i]);
+                continue;
+            }
+            CHECK(out[0][k] && out[1][k] && same_plane(out[0][k], out[1][k]), "%s, %s: not the pixels of the same samples without the flag", NAMES[i], OPS[k]);
+            CHECK(out[0][k] && ((FreeImage_GetColorType(out[0][k]) == FIC_CMYK) == cmyk), "%s, %s: %s", NAMES[i], OPS[k], cmyk ? "the CMYK flag is lost" : "flagged CMYK");
+        }
+        for (v = 0; v < 2; v++) for (k = 0; k < 10; k++) if (out[v][k]) FreeImage_Unload(out[v][k]);
+        FreeImage_Unload(bare);
+    }
+
+    /* a thumbnail converted from RGBA16 to 8 bits per sample has other channels in the bytes: no flag */
+    for (i = 0; i < 2; i++) {
+        FIBITMAP *t = FreeImage_MakeThumbnail(src[i], 20, TRUE);
+        CHECK(t && FreeImage_GetImageType(t) == FIT_BITMAP && FreeImage_GetBPP(t) == 32 && ((FreeImage_GetColorType(t) == FIC_CMYK) == (i == 0)),
+              "%s, MakeThumbnail converting: %s", NAMES[i], i ? "flagged CMYK" : "the CMYK flag is lost");
+        if (t) FreeImage_Unload(t);
+    }
+
+    /* the flag on a transparent palette image, which rescales to 32 bits: not CMYK */
+    {
+        FIBITMAP *pal = FreeImage_ColorQuantize(rgb, FIQ_WUQUANT), *r = NULL;
+        BYTE trns[256];
+        for (k = 0; k < 256; k++) trns[k] = (BYTE)(k * 7);
+        if (pal) {
+            FreeImage_SetTransparencyTable(pal, trns, 256);
+            FreeImage_GetICCProfile(pal)->flags |= FIICC_COLOR_IS_CMYK;
+            r = FreeImage_Rescale(pal, 20, 12, FILTER_BILINEAR);
+        }
+        CHECK(r && FreeImage_GetBPP(r) == 32 && FreeImage_GetColorType(r) == FIC_RGBALPHA, "flagged palette image, Rescale to 32 bits: not RGBA");
+        if (r) FreeImage_Unload(r);
+        if (pal) FreeImage_Unload(pal);
+    }
+
+    for (i = 0; i < 4; i++) FreeImage_Unload(src[i]);
     FreeImage_Unload(rgb16);
     FreeImage_Unload(rgb);
 }
@@ -1611,6 +1691,7 @@ int main(int argc, char **argv) {
     grey_alpha_psd();
     cmyk_pages_cached(&press);
     cmyk_save_flags(&press);
+    cmyk_flag_kept(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

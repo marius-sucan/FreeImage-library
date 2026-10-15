@@ -729,6 +729,7 @@ FreeImage_RotateEx(FIBITMAP *dib, double angle, double x_shift, double y_shift, 
 
 			// copy metadata from src to dst
 			FreeImage_CloneMetadata(dst, dib);
+			CopyCMYKFlag(dst, dib);
 			
 			return dst;
 		}

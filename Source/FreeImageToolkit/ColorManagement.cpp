@@ -2354,7 +2354,7 @@ SaveAsCMYK(FIBITMAP *dib, BOOL cmyk_flag, int format_id) {
 	if (!cmyk_flag) {
 		return FALSE;
 	}
-	// no profile: the flag is all there is (Rescale and Rotate drop the CMYK flag)
+	// no profile: the flag is all there is, as for CMYK made from raw bits
 	const DWORD space = icc->data ? FreeImage_GetICCProfileColorSpace(icc->data, icc->size) : 0;
 	if ((space != 0) && (space != FICMS_COLORSPACE_CMYK)) {
 		FreeImage_OutputMessageProc(format_id, "Warning: the CMYK flag is ignored for an image with a non-CMYK ICC profile");
