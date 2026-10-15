@@ -114,7 +114,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ### Color management
 
-- added color management by bundling Little CMS 2.19.1: several new exported functions are available, see [Color management functions](#color-management-functions);
+- added color management by bundling Little CMS 2.19.1: several new exported functions are available, see [Color management API](#color-management-api);
 - added FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
 - BMP files load and save the ICC profile a V5 header embeds, for color management; images without one are saved as before;
 - AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors, for color management;
@@ -178,19 +178,44 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 | JPEG XL | [libjxl](https://github.com/libjxl/libjxl) + highway (v1.2.0), brotli (v1.2.0) | 0.12.0 | not included |
 | ICC profiles | [LittleCMS](https://github.com/mm2/Little-CMS) | 2.19.1 | not included |
 
-## Color management functions
+## Color management API
 
-- FreeImage_ConvertToICCProfile() converts an image from its embedded ICC profile, or from sRGB when it has none, to any RGB, grey or CMYK profile; FreeImage_ApplyICCProfile() does it in place, for showing images;
+### Functions
+
+- FreeImage_ConvertToICCProfile() converts an image from its embedded ICC profile, or from sRGB when it has none, to any RGB, grey or CMYK profile;
+- FreeImage_ApplyICCProfile() does the same in place, for showing images;
 - FreeImage_ConvertToCMYK() and FreeImage_ConvertCMYKToRGB() convert between RGB and CMYK with a profile, or without one as FreeImage's loaders do;
 - FreeImage_SoftProof() shows how a printer would reproduce an image;
 - FreeImage_GetBuiltInICCProfile() gives sRGB, linear sRGB, grey, linear grey, Adobe RGB (1998) compatible, Display P3 and ProPhoto RGB profiles;
 - FreeImage_GetICCProfileDescription() and FreeImage_GetICCProfileColorSpace() read profile details;
-- the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type; a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders. FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
-- flags: FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION; FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
-- results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey. FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
-- to display an image: load it with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files with JPEG_CMYK, TIFF_CMYK, PSD_CMYK, JXL_CMYK or JXR_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB. This must be done before FreeImage_ConvertTo*() and any call that changes the bit depth, which drop the profile;
-- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on. CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files come back as 24- or 48-bit RGB, or 32- or 64-bit RGBA with their alpha channel; grey images stay grey; float images are not changed, and neither are PQ images (a CICP tag, or an ICC profile's cicp tag, saying PQ), which keep their light for the tone mappers and the CICP tag FreeImage_MustTonemap() reads. A profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted. The image then carries the profile it was converted to. The flag is ignored with FIF_LOAD_NOPIXELS;
-- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use the image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
+- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use when an image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
+- FreeImage_ApplyDisplayICCProfile() does what FIF_LOAD_DISPLAY_ICC does, to an image loaded without it;
+
+### Flags
+
+- FICMS_INTENT_PERCEPTUAL (0), FICMS_INTENT_RELATIVE_COLORIMETRIC, FICMS_INTENT_SATURATION or FICMS_INTENT_ABSOLUTE_COLORIMETRIC, combined with FICMS_BLACKPOINT_COMPENSATION;
+- FreeImage_SoftProof() also takes FICMS_GAMUT_CHECK and FICMS_SIMULATE_PAPER;
+
+### How conversions work
+
+- the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type;
+- a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders;
+- FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
+- results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none;
+- palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey;
+- FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
+
+### Displaying images
+
+- load the image with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files with JPEG_CMYK, TIFF_CMYK, PSD_CMYK, JXL_CMYK or JXR_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB;
+- this must be done before FreeImage_ConvertTo*() and any call that changes the bit depth, which drop the profile;
+- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on;
+  - CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files come back as 24- or 48-bit RGB, or 32- or 64-bit RGBA with their alpha channel;
+  - grey images stay grey;
+  - float images are not changed, and neither are PQ images (a CICP tag, or an ICC profile's cicp tag, saying PQ), which keep their light for the tone mappers and the CICP tag FreeImage_MustTonemap() reads;
+  - a profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted;
+  - the image then carries the profile it was converted to;
+  - the flag is ignored with FIF_LOAD_NOPIXELS;
 
 ## Bugs or limitations identified
 
