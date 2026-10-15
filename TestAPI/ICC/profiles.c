@@ -537,7 +537,7 @@ static void header_only_cmyk_tiff(const Bytes *press) {
 /* tiles are copied as they are, or RGB and CMYK sample by sample: a layout FreeImage stores in pixels of another size is refused, not written past the image */
 static void tiled_layouts_refused(const Bytes *press) {
     static const struct { int photometric, bits, spp; const char *name; } FILES[] = {
-        { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }, { PHOTOMETRIC_MINISBLACK, 32, 2, "float grey + alpha" }
+        { PHOTOMETRIC_SEPARATED, 8, 2, "2-ink 8-bit" }
     };
     static const int FLAGS[4] = { TIFF_DEFAULT, FIF_LOAD_NOPIXELS, TIFF_CMYK, TIFF_CMYK | FIF_LOAD_NOPIXELS };
     const char *path = scratch("icc_tiled_layout.tif");
@@ -757,8 +757,8 @@ static unsigned xs_straight(unsigned c, unsigned a, unsigned max) {
     return v > max ? max : (unsigned)v;
 }
 
-/* the colours and alpha (sample alpha, -1 for none) that are not the file's: RGB, CMYK as RGB, the inks of TIFF_CMYK, 16-bit grey as RGBA16 or
-   alone, or 8-bit grey and palette indices and their trns table */
+/* the colours and alpha (sample alpha, -1 for none) that are not the file's: RGB, CMYK as RGB, the inks of TIFF_CMYK, 16-bit and float grey
+   as RGBA16 and RGBAF or alone, or 8-bit grey and palette indices and their trns table */
 static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int assoc, int inks) {
     const unsigned max = (bits == 8) ? 255u : 65535u;
     unsigned wrong = 0;
@@ -799,6 +799,18 @@ static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int 
                 }
                 for (c = 0; c < 3; c++) wrong += got[c] != want[c];
                 if (alpha >= 0) wrong += got[3] != a;
+            } else if (bits == 32) {
+                /* min-is-white greys are turned in an RGBAF (1 - grey), premultiplied ones divided */
+                const float *p = (const float *)r;
+                float g = xs_float(x, y, 0);
+                if (alpha >= 0) {
+                    const float a = xs_float(x, y, alpha);
+                    if (photometric == PHOTOMETRIC_MINISWHITE) g = 1.0f - g;
+                    else if (assoc && a > 0) g /= a;
+                    wrong += (p[4 * x] != g) + (p[4 * x + 1] != g) + (p[4 * x + 2] != g) + (p[4 * x + 3] != a);
+                } else {
+                    wrong += p[x] != g;
+                }
             } else if (bits == 16) {
                 /* min-is-white greys are turned in an RGBA16, premultiplied ones divided */
                 const WORD *p = (const WORD *)r;
@@ -829,8 +841,8 @@ static unsigned xs_wrong(FIBITMAP *d, int photometric, int bits, int alpha, int 
     return wrong;
 }
 
-/* the layout a load has: RGB(A) of the file's depth (float for half), the 4 inks of TIFF_CMYK, RGBA16 or UINT16 for 16-bit grey, or
-   8 bits, with a trns table when there is an alpha */
+/* the layout a load has: RGB(A) of the file's depth (float for half), the 4 inks of TIFF_CMYK, RGBA16 or UINT16 for 16-bit grey,
+   RGBAF or FLOAT for float grey, or 8 bits, with a trns table when there is an alpha */
 static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks) {
     const FREE_IMAGE_TYPE type = FreeImage_GetImageType(d);
     if (inks) return (bits == 8) ? (type == FIT_BITMAP && FreeImage_GetBPP(d) == 32) : (type == FIT_RGBA16);
@@ -840,6 +852,7 @@ static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks
         return type == ((alpha >= 0) ? FIT_RGBAF : FIT_RGBF);
     }
     if (bits == 16) return type == ((alpha >= 0) ? FIT_RGBA16 : FIT_UINT16);
+    if (bits == 32) return type == ((alpha >= 0) ? FIT_RGBAF : FIT_FLOAT);
     return type == FIT_BITMAP && FreeImage_GetBPP(d) == 8 && (FreeImage_IsTransparent(d) ? 1 : 0) == (alpha >= 0);
 }
 
@@ -865,7 +878,9 @@ static void extra_samples_tag(void) {
         { XS_GREY, 16, 2, 0, "", 1, 0 }, { XS_GREY, 16, 2, 0, "0", -1, 0 }, { XS_GREY, 16, 2, 0, "2", 1, 0 }, { XS_GREY, 16, 2, 1, "1", 1, 1 },
         { XS_GREY, 16, 3, 2, "02", 2, 0 }, { XS_GREY, 16, 2, 2, "m", 1, 1 }, { XS_WHITE, 16, 2, 0, "2", 1, 0 }, { XS_WHITE, 16, 3, 2, "00", -1, 0 },
         { XS_RGB, XS_HALF, 3, 0, "", -1, 0 }, { XS_RGB, XS_HALF, 3, 1, "", -1, 0 }, { XS_RGB, XS_HALF, 3, 2, "", -1, 0 },
-        { XS_RGB, XS_HALF, 4, 0, "", 3, 0 }, { XS_RGB, XS_HALF, 4, 0, "0", -1, 0 }, { XS_RGB, XS_HALF, 4, 1, "1", 3, 1 }, { XS_RGB, XS_HALF, 5, 2, "02", 4, 0 }
+        { XS_RGB, XS_HALF, 4, 0, "", 3, 0 }, { XS_RGB, XS_HALF, 4, 0, "0", -1, 0 }, { XS_RGB, XS_HALF, 4, 1, "1", 3, 1 }, { XS_RGB, XS_HALF, 5, 2, "02", 4, 0 },
+        { XS_GREY, 32, 2, 0, "", 1, 0 }, { XS_GREY, 32, 2, 0, "0", -1, 0 }, { XS_GREY, 32, 2, 1, "2", 1, 0 }, { XS_GREY, 32, 2, 2, "1", 1, 1 },
+        { XS_GREY, 32, 3, 0, "02", 2, 0 }, { XS_GREY, 32, 2, 0, "m", 1, 1 }, { XS_WHITE, 32, 2, 0, "2", 1, 0 }, { XS_WHITE, 32, 3, 1, "00", -1, 0 }
     };
     static const char *LAYOUT[3] = { "strips", "planes", "tiles" };
     const char *path = scratch("icc_extra_samples_tag.tif");
@@ -906,16 +921,17 @@ static void extra_samples_tag(void) {
         }
         remove(path);
     }
-    /* a grey profile stays with a 16-bit grey, not with the RGBA16 of a grey and an alpha */
+    /* a grey profile stays with a 16-bit or float grey, not with the RGBA16 or RGBAF of a grey and an alpha */
     {
         const Bytes grey = builtin(FICMS_PROFILE_GRAY);
         xs_icc = &grey;
-        for (k = 0; k < 2; k++) {
+        for (k = 0; k < 4; k++) {
+            const int alpha = k & 1, bits = (k & 2) ? 32 : 16;
             FIBITMAP *dib;
-            if (!write_xs_tiff(path, XS_GREY, 16, 2, 0, k ? "2" : "0", 0)) { fail("cannot write %s", path); break; }
+            if (!write_xs_tiff(path, XS_GREY, bits, 2, 0, alpha ? "2" : "0", 0)) { fail("cannot write %s", path); break; }
             dib = FreeImage_Load(FIF_TIFF, path, TIFF_DEFAULT);
-            CHECK(dib && FreeImage_GetICCProfile(dib)->size == (k ? 0 : grey.size), "16-bit grey with %s and a grey profile: a profile of %u bytes",
-                k ? "an alpha" : "an unspecified sample", dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0u);
+            CHECK(dib && FreeImage_GetICCProfile(dib)->size == (alpha ? 0 : grey.size), "%d-bit grey with %s and a grey profile: a profile of %u bytes", bits,
+                alpha ? "an alpha" : "an unspecified sample", dib ? (unsigned)FreeImage_GetICCProfile(dib)->size : 0u);
             if (dib) FreeImage_Unload(dib);
             remove(path);
         }
@@ -965,37 +981,6 @@ static void cielab16_tiff(void) {
     CHECK(head && FreeImage_GetBPP(head) == 24 && FreeImage_GetImageType(head) == FIT_BITMAP, "16-bit CIELab: the header-only load is not 24-bit RGB");
     for (k = 0; k < 2; k++) { if (dib[k]) FreeImage_Unload(dib[k]); remove(paths[k]); }
     if (head) FreeImage_Unload(head);
-}
-
-/* striped grey + float alpha loads its grey, contiguous or planar */
-static void grey_alpha_float_strips(void) {
-    const char *path = scratch("icc_grey_alpha.tif");
-    int layout, r, x;
-    for (layout = 0; layout < 2; layout++) {
-        FIBITMAP *dib, *head;
-        unsigned wrong = 0;
-        if (!write_test_tiff(path, PHOTOMETRIC_MINISBLACK, 32, 2, layout, NULL)) { fail("cannot write %s", path); return; }
-        dib = FreeImage_Load(FIF_TIFF, path, TIFF_DEFAULT);
-        head = FreeImage_Load(FIF_TIFF, path, FIF_LOAD_NOPIXELS);
-        remove(path);
-        CHECK(head && FreeImage_GetImageType(head) == FIT_FLOAT, "%s grey + float alpha: header-only load", layout ? "planar" : "contiguous");
-        if (head) FreeImage_Unload(head);
-        if (!dib || FreeImage_GetImageType(dib) != FIT_FLOAT) {
-            fail("%s grey + float alpha: not loaded as FIT_FLOAT", layout ? "planar" : "contiguous");
-            if (dib) FreeImage_Unload(dib);
-            continue;
-        }
-        /* the writer's float i is (i % 97) / 96: file row r, pixel x is float r * 96 + 2x, or r * 48 + x in the grey plane */
-        for (r = 0; r < 32; r++) {
-            const float *line = (const float *)FreeImage_GetScanLine(dib, 31 - r);
-            for (x = 0; x < 48; x++) {
-                const int i = layout ? r * 48 + x : r * 96 + 2 * x;
-                wrong += line[x] != (i % 97) / 96.0f;
-            }
-        }
-        CHECK(wrong == 0, "%s grey + float alpha: %u pixels are not the file's grey", layout ? "planar" : "contiguous", wrong);
-        FreeImage_Unload(dib);
-    }
 }
 
 static void put16(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 8); p[1] = (BYTE)v; }
@@ -1547,7 +1532,6 @@ int main(int argc, char **argv) {
     extra_samples_tag();
     cielab16_tiff();
     tiled_layouts_refused(&press);
-    grey_alpha_float_strips();
     header_only_psd(&press);
     cmyk_alpha_psd(&press);
     display_info_psd();

@@ -74,7 +74,7 @@ typedef enum {
 	LoadAsTiled			= 4,
 	LoadAsLogLuv		= 5,
 	LoadAsHalfFloat		= 6,
-	LoadAsGrey16		= 7
+	LoadAsGreyExtra		= 7
 } TIFFLoadMethod;
 
 // ----------------------------------------------------------
@@ -1311,9 +1311,10 @@ FindLoadMethod(TIFF *tif, FREE_IMAGE_TYPE image_type, int flags) {
 			// and convert to a 8-bit image with a transparency table
 			if((samplesperpixel > 1) && (bitspersample == 8)) {
 				loadMethod = LoadAs8BitTrns;
-			} else if((samplesperpixel > 1) && (bitspersample == 16) && ((image_type == FIT_RGBA16) || (image_type == FIT_UINT16))) {
-				// 16-bit grey with extra samples: RGBA with an alpha, the grey alone without
-				loadMethod = LoadAsGrey16;
+			} else if((samplesperpixel > 1) && (((bitspersample == 16) && ((image_type == FIT_RGBA16) || (image_type == FIT_UINT16))) ||
+				((bitspersample == 32) && ((image_type == FIT_RGBAF) || (image_type == FIT_FLOAT))))) {
+				// 16-bit or float grey with extra samples: RGBA with an alpha, the grey alone without
+				loadMethod = LoadAsGreyExtra;
 			} else {
 				loadMethod = LoadAsGenericStrip;
 			}
@@ -1400,6 +1401,23 @@ CopySamples(BYTE *dst, unsigned dst_Bpp, const BYTE *src, unsigned src_Bpp, unsi
 		if(alpha) {
 			AssignPixel(alpha, src + alpha_offset, alpha_bytes);
 			alpha += alpha_step;
+		}
+	}
+}
+
+/**
+Grey samples as RGBA, red, green and blue the grey (turned: max - grey), or as the grey alone when alpha is -1
+@param alpha The alpha sample, -1 for none
+*/
+template<class T> static void
+GreyToRGBA(T *dst, const T *src, uint32_t width, uint16_t samplesperpixel, int alpha, BOOL turn, T max) {
+	for(uint32_t x = 0; x < width; x++, src += samplesperpixel) {
+		if(alpha >= 0) {
+			dst[0] = dst[1] = dst[2] = turn ? (T)(max - src[0]) : src[0];
+			dst[3] = src[alpha];
+			dst += 4;
+		} else {
+			*dst++ = src[0];
 		}
 	}
 }
@@ -1873,14 +1891,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		TIFFGetFieldDefaulted(tif, TIFFTAG_SAMPLEFORMAT, &sampleformat);
 		const BOOL rgb_samples = (photometric == PHOTOMETRIC_RGB) && (samplesperpixel > 3) &&
 			((((bitspersample == 8) || (bitspersample == 16)) && (sampleformat == SAMPLEFORMAT_UINT)) || ((bitspersample == 32) && (sampleformat == SAMPLEFORMAT_IEEEFP)));
-		// half-float RGB loads as RGBF or RGBAF, 16-bit grey with extra samples as RGBA16 with an alpha or UINT16 without
+		// half-float RGB loads as RGBF or RGBAF, 16-bit or float grey with extra samples as RGBA16 or RGBAF with an alpha, UINT16 or FLOAT without
 		const BOOL half_samples = (photometric == PHOTOMETRIC_RGB) && (samplesperpixel >= 3) && (bitspersample == 16) && (sampleformat == SAMPLEFORMAT_IEEEFP);
-		const BOOL grey16_samples = ((photometric == PHOTOMETRIC_MINISBLACK) || (photometric == PHOTOMETRIC_MINISWHITE)) && (samplesperpixel > 1) &&
-			(bitspersample == 16) && (sampleformat == SAMPLEFORMAT_UINT);
+		const BOOL grey_samples = ((photometric == PHOTOMETRIC_MINISBLACK) || (photometric == PHOTOMETRIC_MINISWHITE)) && (samplesperpixel > 1) &&
+			(((bitspersample == 16) && (sampleformat == SAMPLEFORMAT_UINT)) || ((bitspersample == 32) && (sampleformat == SAMPLEFORMAT_IEEEFP)));
 		uint16_t bitmap_spp = samplesperpixel;
 		if(rgb_samples || half_samples) {
 			bitmap_spp = (alpha_sample >= 0) ? 4 : 3;
-		} else if(grey16_samples) {
+		} else if(grey_samples) {
 			bitmap_spp = (alpha_sample >= 0) ? 4 : 1;
 		}
 
@@ -2676,9 +2694,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 			} // !header only
 
-		} else if(loadMethod == LoadAsGrey16) {
+		} else if(loadMethod == LoadAsGreyExtra) {
 			// ---------------------------------------------------------------------------------
-			// 16-bit grey with extra samples: RGBA16 with an alpha, the grey alone without
+			// 16-bit or float grey with extra samples: RGBA16 or RGBAF with an alpha, the grey alone without
 			// ---------------------------------------------------------------------------------
 
 			const BOOL has_alpha = (alpha_sample >= 0);
@@ -2706,19 +2724,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 
 				// RGB has no min-is-white: its greys are turned
-				const WORD flip = (has_alpha && (photometric == PHOTOMETRIC_MINISWHITE)) ? 0xFFFF : 0;
+				const BOOL turn = has_alpha && (photometric == PHOTOMETRIC_MINISWHITE);
 
 				for(uint32_t y = 0; y < height; y++) {
-					const WORD *src = (const WORD*)reader.GetRow(y);
-					WORD *dst = (WORD*)FreeImage_GetScanLine(dib, height - 1 - y);
-					for(uint32_t x = 0; x < width; x++, src += samplesperpixel) {
-						if(has_alpha) {
-							dst[0] = dst[1] = dst[2] = (WORD)(src[0] ^ flip);
-							dst[3] = src[alpha_sample];
-							dst += 4;
-						} else {
-							*dst++ = src[0];
-						}
+					if(bitspersample == 16) {
+						GreyToRGBA((WORD*)FreeImage_GetScanLine(dib, height - 1 - y), (const WORD*)reader.GetRow(y), width, samplesperpixel, alpha_sample, turn, (WORD)65535);
+					} else {
+						GreyToRGBA((float*)FreeImage_GetScanLine(dib, height - 1 - y), (const float*)reader.GetRow(y), width, samplesperpixel, alpha_sample, turn, 1.0F);
 					}
 				}
 				if(reader.Damaged()) {
