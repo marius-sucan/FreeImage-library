@@ -745,7 +745,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define PNM_SAVE_RAW        0       //! if set the writer saves in RAW format (i.e. P4, P5 or P6)
 #define PNM_SAVE_ASCII      1       //! if set the writer saves in ASCII format (i.e. P1, P2 or P3)
 #define PSD_DEFAULT         0
-#define PSD_CMYK			1		//! reads tags for separated CMYK (default is conversion to RGB)
+#define PSD_CMYK			1		//! load CMYK images as CMYK, not converted to RGB; save the 4 channels of a 32- or 64-bit image as C, M, Y, K, unconverted, unless it has a non-CMYK ICC profile
 #define PSD_LAB				2		//! reads tags for CIELab (default is conversion to RGB)
 #define PSD_NONE			0x0100	//! save without any compression
 #define PSD_RLE				0x0200	//! save using RLE compression
@@ -761,7 +761,7 @@ typedef void (DLL_CALLCONV *FI_InitProc)(Plugin *plugin, int format_id);
 #define TARGA_LOAD_RGB888   1       //! if set the loader converts RGB555 and ARGB8888 -> RGB888.
 #define TARGA_SAVE_RLE		2		//! if set, the writer saves with RLE compression
 #define TIFF_DEFAULT        0
-#define TIFF_CMYK			0x0001	//! reads/stores tags for separated CMYK (use | to combine with compression flags)
+#define TIFF_CMYK			0x0001	//! load CMYK images as CMYK, not converted to RGB; save the 4 channels of a 32- or 64-bit image as C, M, Y, K, unconverted, unless it has a non-CMYK ICC profile (use | to combine with compression flags)
 #define TIFF_PACKBITS       0x0100  //! save using PACKBITS compression
 #define TIFF_DEFLATE        0x0200  //! save using DEFLATE compression (a.k.a. ZLIB compression) - obsolete, will save as TIFF_ADOBE_DEFLATE
 #define TIFF_ADOBE_DEFLATE  0x0400  //! save using ADOBE DEFLATE compression

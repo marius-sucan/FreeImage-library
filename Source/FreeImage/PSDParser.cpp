@@ -2365,7 +2365,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 		if(bitsperpixel == 32) {
 			// 32-bit images : check for CMYK or alpha transparency
 
-			if((((iccProfile->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) || ((flags & PSD_CMYK) == PSD_CMYK))) {
+			if(SaveAsCMYK(dib, (flags & PSD_CMYK) == PSD_CMYK, FIF_PSD)) {
 				colourMode = PSDP_CMYK;
 			}
 			samplesperpixel = 4;
@@ -2394,7 +2394,7 @@ bool psdParser::Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page,
 		// 64-bit RGBA
 		samplesperpixel = 4;
 		bitspersample = bitsperpixel / samplesperpixel;
-		if((((iccProfile->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) || ((flags & PSD_CMYK) == PSD_CMYK))) {
+		if(SaveAsCMYK(dib, (flags & PSD_CMYK) == PSD_CMYK, FIF_PSD)) {
 			colourMode = PSDP_CMYK;
 		}
 	} else if(image_type == FIT_RGBF) {

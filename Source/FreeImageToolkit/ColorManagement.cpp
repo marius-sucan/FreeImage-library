@@ -2345,6 +2345,24 @@ FreeImage_GetICCProfileColorSpace(const void *profile, DWORD size) {
 	return space;
 }
 
+BOOL
+SaveAsCMYK(FIBITMAP *dib, BOOL cmyk_flag, int format_id) {
+	const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+	if ((icc->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) {
+		return TRUE;
+	}
+	if (!cmyk_flag) {
+		return FALSE;
+	}
+	// no profile: the flag is all there is (Rescale and Rotate drop the CMYK flag)
+	const DWORD space = icc->data ? FreeImage_GetICCProfileColorSpace(icc->data, icc->size) : 0;
+	if ((space != 0) && (space != FICMS_COLORSPACE_CMYK)) {
+		FreeImage_OutputMessageProc(format_id, "Warning: the CMYK flag is ignored for an image with a non-CMYK ICC profile");
+		return FALSE;
+	}
+	return TRUE;
+}
+
 BOOL DLL_CALLCONV
 FreeImage_SetDisplayICCProfile(const void *profile, DWORD size, int flags) {
 	if (((flags & 0xFF) > FICMS_INTENT_ABSOLUTE_COLORIMETRIC) || (flags & ~(0xFF | FICMS_BLACKPOINT_COMPENSATION))) {

@@ -1015,17 +1015,21 @@ static FIBITMAP *load_memory(FREE_IMAGE_FORMAT fif, const Bytes *b, int flags) {
     return dib;
 }
 
-static Bytes save_memory(FREE_IMAGE_FORMAT fif, FIBITMAP *dib) {
+static Bytes save_memory_flags(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags) {
     Bytes b = { NULL, 0 };
     FIMEMORY *m = FreeImage_OpenMemory(NULL, 0);
     BYTE *data;
     DWORD size;
-    if (FreeImage_SaveToMemory(fif, dib, m, 0) && FreeImage_AcquireMemory(m, &data, &size) && (b.data = (BYTE *)malloc(size))) {
+    if (FreeImage_SaveToMemory(fif, dib, m, flags) && FreeImage_AcquireMemory(m, &data, &size) && (b.data = (BYTE *)malloc(size))) {
         memcpy(b.data, data, size);
         b.size = size;
     }
     FreeImage_CloseMemory(m);
     return b;
+}
+
+static Bytes save_memory(FREE_IMAGE_FORMAT fif, FIBITMAP *dib) {
+    return save_memory_flags(fif, dib, 0);
 }
 
 static void header_only_psd(const Bytes *press) {
@@ -1426,6 +1430,74 @@ static void cmyk_pages_cached(const Bytes *press) {
     if (changed) FreeImage_Unload(changed);
 }
 
+/* TIFF_CMYK and PSD_CMYK on save: the 4 channels as the inks, unless the image has a non-CMYK profile */
+static void cmyk_save_flags(const Bytes *press) {
+    static const struct { FREE_IMAGE_FORMAT fif; int flag; const char *name; } FMT[2] = { { FIF_TIFF, TIFF_CMYK, "TIFF" }, { FIF_PSD, PSD_CMYK, "PSD" } };
+    static const char *KIND[3] = { "without a profile", "with a CMYK profile but no CMYK flag", "with an unreadable profile" };
+    const char *path = scratch("icc_cmyk_flag.tif");
+    Bytes srgb = builtin(FICMS_PROFILE_SRGB);
+    BYTE junk[300];
+    FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb16, *rgba[2], *ink[2];
+    FIMULTIBITMAP *mb;
+    unsigned x, y;
+    int f, d, k;
+    for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(rgb, y); for (x = 0; x < 37 * 3; x++) p[x] = rnd() & 255; }
+    for (x = 0; x < sizeof(junk); x++) junk[x] = rnd() & 255;
+    rgb16 = FreeImage_ConvertToRGB16(rgb);
+    ink[0] = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
+    ink[1] = FreeImage_ConvertToCMYK(rgb16, press->data, press->size, 0);
+    rgba[0] = FreeImage_ConvertTo32Bits(rgb);
+    rgba[1] = FreeImage_ConvertToRGBA16(rgb);
+    for (y = 0; y < 23; y++) {
+        BYTE *p = FreeImage_GetScanLine(rgba[0], y);
+        FIRGBA16 *q = (FIRGBA16 *)FreeImage_GetScanLine(rgba[1], y);
+        for (x = 0; x < 37; x++) { p[4 * x + FI_RGBA_ALPHA] = rnd() & 255; q[x].alpha = (WORD)rnd(); }
+    }
+    for (d = 0; d < 2; d++) FreeImage_CreateICCProfile(rgba[d], srgb.data, srgb.size);
+
+    for (f = 0; f < 2; f++) {
+        for (d = 0; d < 2; d++) {
+            const char *rgba_name = d ? "RGBA16" : "32-bit RGBA", *cmyk_name = d ? "16-bit CMYK" : "CMYK";
+            Bytes plain = save_memory_flags(FMT[f].fif, rgba[d], 0), flagged;
+            clear_messages();
+            flagged = save_memory_flags(FMT[f].fif, rgba[d], FMT[f].flag);
+            CHECK(plain.size && flagged.size == plain.size && !memcmp(flagged.data, plain.data, plain.size), "%s with an sRGB profile, %s_CMYK: not saved as RGBA", rgba_name, FMT[f].name);
+            CHECK(strstr(last_message, "non-CMYK") != NULL, "%s with an sRGB profile, %s_CMYK: no warning", rgba_name, FMT[f].name);
+            free(plain.data);
+            free(flagged.data);
+
+            /* CMYK without its flag, as FreeImage_Rescale leaves it: the save flag says what it is */
+            for (k = 0; k < 3; k++) {
+                FIBITMAP *src = FreeImage_Clone(ink[d]), *back;
+                Bytes b;
+                if (k == 0) FreeImage_DestroyICCProfile(src);
+                if (k == 2) FreeImage_CreateICCProfile(src, junk, sizeof(junk));
+                FreeImage_GetICCProfile(src)->flags &= ~FIICC_COLOR_IS_CMYK;
+                b = save_memory_flags(FMT[f].fif, src, FMT[f].flag);
+                back = b.size ? load_memory(FMT[f].fif, &b, FMT[f].flag) : NULL;
+                CHECK(back && FreeImage_GetColorType(back) == FIC_CMYK && same_plane(back, src), "%s %s, %s_CMYK: not saved as CMYK", cmyk_name, KIND[k], FMT[f].name);
+                if (back) FreeImage_Unload(back);
+                FreeImage_Unload(src);
+                free(b.data);
+            }
+        }
+    }
+
+    /* one flag for every page: an RGBA page with an RGB profile stays RGBA next to a CMYK one */
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, TRUE, FALSE, TRUE, 0);
+    FreeImage_AppendPage(mb, ink[0]);
+    FreeImage_AppendPage(mb, rgba[0]);
+    CHECK(FreeImage_CloseMultiBitmap(mb, TIFF_CMYK), "CMYK and RGBA pages, TIFF_CMYK: not saved");
+    mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, TIFF_CMYK);
+    CHECK(mb && FreeImage_GetPageCount(mb) == 2 && page_digest(mb, 0) == digest(ink[0]) && page_digest(mb, 1) == digest(rgba[0]), "CMYK and RGBA pages, TIFF_CMYK: came back changed");
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    remove(path);
+
+    for (d = 0; d < 2; d++) { FreeImage_Unload(rgba[d]); FreeImage_Unload(ink[d]); }
+    FreeImage_Unload(rgb16);
+    FreeImage_Unload(rgb);
+}
+
 /* a little-endian Exif APP1 payload: ColorSpace, and an interoperability index when one is given */
 static unsigned make_exif(BYTE *out, WORD color_space, const char *index) {
     BYTE *t = out + 6;
@@ -1538,6 +1610,7 @@ int main(int argc, char **argv) {
     rgb_extra_psd();
     grey_alpha_psd();
     cmyk_pages_cached(&press);
+    cmyk_save_flags(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

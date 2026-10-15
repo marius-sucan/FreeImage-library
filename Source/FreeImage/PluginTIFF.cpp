@@ -2886,7 +2886,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 			else if(bitsperpixel == 32) {
 				// 32-bit images : check for CMYK or alpha transparency
 
-				if((((iccProfile->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) || ((flags & TIFF_CMYK) == TIFF_CMYK))) {
+				if(SaveAsCMYK(dib, (flags & TIFF_CMYK) == TIFF_CMYK, s_format_id)) {
 					// CMYK support
 					photometric = PHOTOMETRIC_SEPARATED;
 					TIFFSetField(out, TIFFTAG_INKSET, INKSET_CMYK);
@@ -2911,7 +2911,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 
 			samplesperpixel = 4;
 			bitspersample = bitsperpixel / samplesperpixel;
-			if((((iccProfile->flags & FIICC_COLOR_IS_CMYK) == FIICC_COLOR_IS_CMYK) || ((flags & TIFF_CMYK) == TIFF_CMYK))) {
+			if(SaveAsCMYK(dib, (flags & TIFF_CMYK) == TIFF_CMYK, s_format_id)) {
 				// CMYK support
 				photometric = PHOTOMETRIC_SEPARATED;
 				TIFFSetField(out, TIFFTAG_INKSET, INKSET_CMYK);

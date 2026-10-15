@@ -495,6 +495,12 @@ size is unsigned, not DWORD: MinGW's DWORD depends on whether windows.h came fir
 BOOL ConvertToFileProfile(FIBITMAP *dib, const void *profile, unsigned size, FIBITMAP **converted);
 
 /**
+A 32-bit or RGBA16 image is saved as CMYK when flagged CMYK, or given the CMYK save flag without a non-CMYK ICC profile
+@see See definition in ColorManagement.cpp
+*/
+BOOL SaveAsCMYK(FIBITMAP *dib, BOOL cmyk_flag, int format_id);
+
+/**
 Attach the color description of a file, its ITU-T H.273 code points, as the FIMD_CUSTOM tag "CICP":
 4 FIDT_BYTE values, color primaries, transfer characteristics, matrix coefficients and the full range flag.
 Nothing is attached when the first three are all 2, unspecified.
