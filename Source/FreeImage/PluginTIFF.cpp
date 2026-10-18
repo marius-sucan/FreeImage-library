@@ -1374,10 +1374,14 @@ FindAlphaSample(TIFF *tif, uint16_t photometric, uint16_t samplesperpixel, BOOL 
 		// FreeImage 3.18 saves 8-bit and float alphas without the tag
 		return colours;
 	}
+	// libtiff keeps the count of a type list it could not allocate
+	if((count > 0) && !types) {
+		throw FI_MSG_ERROR_MEMORY;
+	}
 
 	// the extra samples are the last ones
 	const int first = (int)samplesperpixel - (int)count;
-	for(int s = MAX(first, colours); types && (s < (int)samplesperpixel); s++) {
+	for(int s = MAX(first, colours); s < (int)samplesperpixel; s++) {
 		const uint16_t type = types[s - first];
 		if((type == EXTRASAMPLE_ASSOCALPHA) || (type == EXTRASAMPLE_UNASSALPHA)) {
 			*associated = (type == EXTRASAMPLE_ASSOCALPHA) ? TRUE : FALSE;
@@ -2103,12 +2107,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 					
 				if(!alpha) {
-					FreeImage_OutputMessageProc(s_format_id, "Failed to allocate temporary alpha channel");
-				} else {
-					alpha_bits = FreeImage_GetScanLine(alpha, height - 1);
-					alpha_pitch = FreeImage_GetPitch(alpha);
-					alpha_Bpp = FreeImage_GetBPP(alpha) / 8;
+					throw FI_MSG_ERROR_MEMORY;
 				}
+				alpha_bits = FreeImage_GetScanLine(alpha, height - 1);
+				alpha_pitch = FreeImage_GetPitch(alpha);
+				alpha_Bpp = FreeImage_GetBPP(alpha) / 8;
 				
 			}
 			
@@ -2503,7 +2506,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				if(keep_alpha || (cmyk_samples && (alpha_sample >= 0) && associated)) {
 					alpha = (bitspersample == 16) ? FreeImage_AllocateT(FIT_UINT16, width, height) : FreeImage_Allocate(width, height, 8);
 					if(!alpha) {
-						FreeImage_OutputMessageProc(s_format_id, "Failed to allocate temporary alpha channel");
+						free(tileBuffer);
+						throw FI_MSG_ERROR_MEMORY;
 					}
 				}
 				BYTE *alpha_bits = alpha ? FreeImage_GetScanLine(alpha, height - 1) : NULL;

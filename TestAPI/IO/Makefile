@@ -6,7 +6,7 @@ include ../../Makefile.openmp
 
 TESTS   = bigfile memstream bigsave streams writefail
 CFLAGS ?= -O1 -g -w
-INC     = -I../../Dist
+INC     = -I../../Dist -I../../Source/LibJXL/lib/include
 LIB     = ../../Dist/libfreeimage.a -lstdc++ -lm -lpthread $(OPENMP_LDFLAGS)
 
 # Makefile.gnu's C++ flags, relative to here: the instrumented objects have to be built like the library's

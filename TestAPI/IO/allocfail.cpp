@@ -15,6 +15,10 @@
 #include "FreeImage.h"
 #define CMS_NO_REGISTER_KEYWORD 1
 #include "../../Source/LibLCMS2/include/lcms2.h"
+#ifndef _WIN32
+#include "../../Source/LibTIFF4/tiffio.h"
+#include <jxl/encode.h>
+#endif
 
 static int failures = 0;
 
@@ -792,6 +796,211 @@ static int webp_anim_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- CMYK + alpha: no load or save drops the alpha */
+
+static tmsize_t t_read(thandle_t h, void *b, tmsize_t n) { return (tmsize_t)fread(b, 1, (size_t)n, (FILE *)h); }
+static tmsize_t t_write(thandle_t h, void *b, tmsize_t n) { return (tmsize_t)fwrite(b, 1, (size_t)n, (FILE *)h); }
+static toff_t t_seek(thandle_t h, toff_t o, int w) { fseek((FILE *)h, (long)o, w); return (toff_t)ftell((FILE *)h); }
+static int t_close(thandle_t h) { return fclose((FILE *)h); }
+static toff_t t_size(thandle_t h) { long p = ftell((FILE *)h), s; fseek((FILE *)h, 0, SEEK_END); s = ftell((FILE *)h); fseek((FILE *)h, p, SEEK_SET); return (toff_t)s; }
+static int t_map(thandle_t h, void **b, toff_t *s) { (void)h; (void)b; (void)s; return 0; }
+static void t_unmap(thandle_t h, void *b, toff_t s) { (void)h; (void)b; (void)s; }
+
+/* 32 x 16 CMYK and an alpha, by libtiff: 8-bit strips, or 16-bit 16 x 16 tiles */
+static int write_cmyka_tiff(const char *path, int tiled) {
+    static BYTE buf[16 * 16 * 5 * 2];
+    uint16_t extra = EXTRASAMPLE_UNASSALPHA;
+    FILE *f = fopen(path, "w+b");
+    TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    int ok = 1;
+    if (!t) { if (f) fclose(f); return 0; }
+    for (size_t i = 0; i < sizeof(buf); i++) buf[i] = (BYTE)(i * 7 + (i >> 5));
+    TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 32); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 16);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, tiled ? 16 : 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 5);
+    TIFFSetField(t, TIFFTAG_EXTRASAMPLES, 1, &extra);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_SEPARATED); TIFFSetField(t, TIFFTAG_INKSET, INKSET_CMYK);
+    TIFFSetField(t, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+    if (tiled) {
+        TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
+        for (int x = 0; x < 32; x += 16) ok = ok && (TIFFWriteTile(t, buf, x, 0, 0, 0) >= 0);
+    } else {
+        TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 16);
+        for (int y = 0; y < 16; y++) ok = ok && (TIFFWriteScanline(t, buf + y * 32 * 5, y, 0) >= 0);
+    }
+    TIFFClose(t);
+    return ok;
+}
+
+/* 32 x 16 CMYK and an alpha with the press profile, by libjxl, lossless */
+static int write_cmyka_jxl(const char *path) {
+    static BYTE px[32 * 16 * 4], k[32 * 16];
+    JxlPixelFormat pf = { 4, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 }, pk = { 1, JXL_TYPE_UINT8, JXL_NATIVE_ENDIAN, 0 };
+    JxlEncoder *enc = JxlEncoderCreate(NULL);
+    JxlEncoderFrameSettings *fs = NULL;
+    JxlBasicInfo bi;
+    JxlExtraChannelInfo alpha, black;
+    size_t cap = 1 << 16, pos = 0;
+    BYTE *out = NULL;
+    int ok = 0;
+    if (!enc) return 0;
+    for (size_t i = 0; i < sizeof(px); i++) px[i] = (BYTE)(i * 5 + (i >> 4));
+    for (size_t i = 0; i < sizeof(k); i++) k[i] = (BYTE)(i * 3);
+    JxlEncoderInitBasicInfo(&bi);
+    bi.xsize = 32; bi.ysize = 16; bi.bits_per_sample = 8; bi.num_color_channels = 3;
+    bi.alpha_bits = 8; bi.num_extra_channels = 2; bi.uses_original_profile = JXL_TRUE;
+    JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &alpha);
+    JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_BLACK, &black);
+    alpha.bits_per_sample = black.bits_per_sample = 8;
+    if (JxlEncoderSetBasicInfo(enc, &bi) == JXL_ENC_SUCCESS && JxlEncoderSetExtraChannelInfo(enc, 0, &alpha) == JXL_ENC_SUCCESS &&
+        JxlEncoderSetExtraChannelInfo(enc, 1, &black) == JXL_ENC_SUCCESS && JxlEncoderSetICCProfile(enc, s_press, s_press_size) == JXL_ENC_SUCCESS) {
+        fs = JxlEncoderFrameSettingsCreate(enc, NULL);
+    }
+    if (fs && JxlEncoderSetFrameLossless(fs, JXL_TRUE) == JXL_ENC_SUCCESS && JxlEncoderAddImageFrame(fs, &pf, px, sizeof(px)) == JXL_ENC_SUCCESS &&
+        JxlEncoderSetExtraChannelBuffer(fs, &pk, k, sizeof(k), 1) == JXL_ENC_SUCCESS && (out = (BYTE *)malloc(cap)) != NULL) {
+        JxlEncoderCloseInput(enc);
+        for (;;) {
+            uint8_t *next = out + pos;
+            size_t avail = cap - pos;
+            JxlEncoderStatus st = JxlEncoderProcessOutput(enc, &next, &avail);
+            pos = (size_t)(next - out);
+            if (st == JXL_ENC_NEED_MORE_OUTPUT) {
+                BYTE *more = (BYTE *)realloc(out, cap * 2);
+                if (!more) break;
+                out = more;
+                cap *= 2;
+                continue;
+            }
+            if (st == JXL_ENC_SUCCESS) {
+                FILE *f = fopen(path, "wb");
+                ok = f && (fwrite(out, 1, pos, f) == pos);
+                if (f) fclose(f);
+            }
+            break;
+        }
+    }
+    free(out);
+    JxlEncoderDestroy(enc);
+    return ok;
+}
+
+typedef struct { FREE_IMAGE_FORMAT fif; int cmyk_flag; char path[512]; } CMYKAFile;
+static CMYKAFile s_cmyka[5];
+static int s_cmyka_count = 0;
+/* the files a case covers */
+static int s_from = 0, s_to = 0;
+
+static void cmyka_add(FREE_IMAGE_FORMAT fif, int cmyk_flag, const char *path) {
+    s_cmyka[s_cmyka_count].fif = fif;
+    s_cmyka[s_cmyka_count].cmyk_flag = cmyk_flag;
+    snprintf(s_cmyka[s_cmyka_count].path, sizeof(s_cmyka[0].path), "%s", path);
+    s_cmyka_count++;
+}
+
+/* TIFF strips, TIFF tiles, JPEG XL, then the JPEG XR files of ../JXR/data if there; needs the press profile */
+static int cmyka_setup(void) {
+    const char *dir = getenv("IO_TEST_TMP");
+    char path[512];
+    snprintf(path, sizeof(path), "%s/fi_io_cmyka.tif", (dir && *dir) ? dir : ".");
+    if (!write_cmyka_tiff(path, 0)) return 0;
+    cmyka_add(FIF_TIFF, TIFF_CMYK, path);
+    snprintf(path, sizeof(path), "%s/fi_io_cmyka_tiles.tif", (dir && *dir) ? dir : ".");
+    if (!write_cmyka_tiff(path, 1)) return 0;
+    cmyka_add(FIF_TIFF, TIFF_CMYK, path);
+    snprintf(path, sizeof(path), "%s/fi_io_cmyka.jxl", (dir && *dir) ? dir : ".");
+    if (!write_cmyka_jxl(path)) return 0;
+    cmyka_add(FIF_JXL, JXL_CMYK, path);
+    if (access("../JXR/data/cmyka40.jxr", R_OK) == 0 && access("../JXR/data/cmyka80.jxr", R_OK) == 0) {
+        cmyka_add(FIF_JXR, JXR_CMYK, "../JXR/data/cmyka40.jxr");
+        cmyka_add(FIF_JXR, JXR_CMYK, "../JXR/data/cmyka80.jxr");
+    }
+    return 1;
+}
+
+static int s_messages = 0;
+static void counted_message(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; s_messages++; }
+
+/* the type, size and CMYK flag of ref, and its alpha, or 0 after a warning: a tile libtiff could not read stays blank */
+static int same_alpha(FIBITMAP *ref, FIBITMAP *got, int warned) {
+    FREE_IMAGE_TYPE type;
+    unsigned x, y;
+    if (!ref || !got) return 0;
+    type = FreeImage_GetImageType(ref);
+    if ((type != FreeImage_GetImageType(got)) || (FreeImage_GetBPP(ref) != FreeImage_GetBPP(got)) ||
+        (FreeImage_GetWidth(ref) != FreeImage_GetWidth(got)) || (FreeImage_GetHeight(ref) != FreeImage_GetHeight(got)) ||
+        ((FreeImage_GetICCProfile(ref)->flags ^ FreeImage_GetICCProfile(got)->flags) & FIICC_COLOR_IS_CMYK)) return 0;
+    for (y = 0; y < FreeImage_GetHeight(ref); y++) {
+        const BYTE *p = FreeImage_GetScanLine(ref, y), *q = FreeImage_GetScanLine(got, y);
+        for (x = 0; x < FreeImage_GetWidth(ref); x++) {
+            unsigned want = 0, have = 0;
+            if ((type == FIT_BITMAP) && (FreeImage_GetBPP(ref) == 32)) { want = p[4 * x + FI_RGBA_ALPHA]; have = q[4 * x + FI_RGBA_ALPHA]; }
+            if (type == FIT_RGBA16) { want = ((const WORD *)p)[4 * x + 3]; have = ((const WORD *)q)[4 * x + 3]; }
+            if ((have != want) && (have || !warned)) return 0;
+        }
+    }
+    return 1;
+}
+
+/* a case that cannot start fails once and ends its sweep */
+static int cannot_start(void) {
+    return (fail_at > 1) ? NOT_REACHED : CASE_BROKEN;
+}
+
+/* plain and FIF_LOAD_DISPLAY_ICC loads: NULL, or the alpha a load without failures gives */
+static int cmyka_load_case(void) {
+    static const int flags[2] = { 0, FIF_LOAD_DISPLAY_ICC };
+    FIBITMAP *ref[10] = { NULL }, *got[10] = { NULL };
+    int warned[10] = { 0 };
+    int i, k, n = 0, whole = 1;
+    for (i = s_from; i < s_to; i++) {
+        for (k = 0; k < 2; k++, n++) ref[n] = FreeImage_Load(s_cmyka[i].fif, s_cmyka[i].path, flags[k]);
+    }
+    for (i = 0; i < n; i++) {
+        if (!ref[i]) return cannot_start();
+    }
+    FreeImage_SetOutputMessage(counted_message);
+
+    armed = 1;
+    for (i = s_from, n = 0; i < s_to; i++) {
+        for (k = 0; k < 2; k++, n++) {
+            const int before = s_messages;
+            got[n] = FreeImage_Load(s_cmyka[i].fif, s_cmyka[i].path, flags[k]);
+            warned[n] = (s_messages != before);
+        }
+    }
+    armed = 0;
+
+    for (i = 0; i < n; i++) {
+        if (got[i] && !same_alpha(ref[i], got[i], warned[i])) whole = 0;
+        FreeImage_Unload(got[i]);
+        FreeImage_Unload(ref[i]);
+    }
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* documents opened with the CMYK flag: no save of their unchanged CMYK + alpha page succeeds */
+static int cmyka_save_case(void) {
+    FIMULTIBITMAP *doc[5] = { NULL };
+    FIMEMORY *mem[5] = { NULL };
+    int i, saved = 0;
+    for (i = s_from; i < s_to; i++) {
+        doc[i] = FreeImage_OpenMultiBitmap(s_cmyka[i].fif, s_cmyka[i].path, FALSE, TRUE, TRUE, s_cmyka[i].cmyk_flag);
+        mem[i] = FreeImage_OpenMemory(NULL, 0);
+        if (!doc[i] || !mem[i]) return cannot_start();
+    }
+
+    armed = 1;
+    for (i = s_from; i < s_to; i++) saved += FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, doc[i], mem[i], 0) ? 1 : 0;
+    armed = 0;
+
+    for (i = s_from; i < s_to; i++) {
+        FreeImage_CloseMultiBitmap(doc[i], 0);
+        FreeImage_CloseMemory(mem[i]);
+    }
+    if (seen < fail_at) return NOT_REACHED;
+    return !saved ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -826,6 +1035,25 @@ int main(void) {
         sweep("FIF_LOAD_DISPLAY_ICC load: converted, as loaded or NULL", icc_display_load_case);
         sweep("APNG save, frames in different profiles: TRUE only for a file that loads", apng_case);
         sweep("WebP animation, frames in different profiles: TRUE only for a file that loads", webp_anim_case);
+        if (!cmyka_setup()) {
+            report("CMYK + alpha: the test files", 0);
+        } else {
+            s_from = 0; s_to = 2;
+            sweep("CMYK + alpha TIFF loads, strips and tiles: their alpha, or NULL", cmyka_load_case);
+            s_from = 2; s_to = 3;
+            sweep("CMYK + alpha JPEG XL loads: their alpha, or NULL", cmyka_load_case);
+            if (s_cmyka_count > 3) {
+                s_from = 3; s_to = s_cmyka_count;
+                sweep("CMYK + alpha JPEG XR loads, 8- and 16-bit: their alpha, or NULL", cmyka_load_case);
+            } else {
+                printf("  %-60s %s\n", "CMYK + alpha JPEG XR: no ../JXR/data/cmyka40.jxr", "skipped");
+            }
+            s_from = 0; s_to = s_cmyka_count;
+            sweep("CMYK + alpha documents opened with their CMYK flag: no save succeeds", cmyka_save_case);
+        }
+        for (int i = 0; i < s_cmyka_count; i++) {
+            if (s_cmyka[i].fif != FIF_JXR) remove(s_cmyka[i].path);
+        }
     }
 #endif
     printf("--- %d failure(s) ---\n", failures);

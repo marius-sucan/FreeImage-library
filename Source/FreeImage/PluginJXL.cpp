@@ -1221,6 +1221,11 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk, BOOL kee
 		}
 		return dib;
 	}
+	// the inks mean nothing without the ICC profile, which the header pass may have failed to read
+	if(reader->orig_icc.empty()) {
+		FreeImage_OutputMessageProc(s_format_id, "Cannot decode the CMYK image: its ICC profile could not be read");
+		return NULL;
+	}
 
 	const BOOL deep = (reader->info.bits_per_sample > 8) ? TRUE : FALSE;
 	const BOOL alpha = ((!keep_cmyk || keep_alpha) && (reader->info.alpha_bits > 0)) ? TRUE : FALSE;
@@ -1307,6 +1312,11 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk, BOOL kee
 	}
 	if(keep_cmyk) {
 		FIBITMAP *plane = !alpha ? NULL : deep ? FreeImage_AllocateT(FIT_UINT16, width, height) : FreeImage_Allocate(width, height, 8);
+		if(alpha && !plane) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_DIB_MEMORY);
+			FreeImage_Unload(cmyk);
+			return NULL;
+		}
 		if(plane) {
 			const size_t line = (size_t)width * (deep ? 2 : 1);
 			for(unsigned y = 0; y < height; y++) {

@@ -1979,12 +1979,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		FIBITMAP *alpha = NULL;
 		if(keep_cmyk && ((flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {
 			const PKPixelFormatGUID &rows_format = GetRowsFormat(in_guid_format);
-			if(IsEqualGUID(rows_format, GUID_PKPixelFormat40bppCMYKAlpha)) {
-				alpha = FreeImage_Allocate(width, height, 8);
-			} else if(IsEqualGUID(rows_format, GUID_PKPixelFormat80bppCMYKAlpha)) {
-				alpha = FreeImage_AllocateT(FIT_UINT16, width, height);
+			const BOOL deep = IsEqualGUID(rows_format, GUID_PKPixelFormat80bppCMYKAlpha);
+			if(deep || IsEqualGUID(rows_format, GUID_PKPixelFormat40bppCMYKAlpha)) {
+				alpha = deep ? FreeImage_AllocateT(FIT_UINT16, width, height) : FreeImage_Allocate(width, height, 8);
+				if(!alpha) {
+					throw FI_MSG_ERROR_DIB_MEMORY;
+				}
+				SetCMYKAlpha(dib, alpha);
 			}
-			SetCMYKAlpha(dib, alpha);
 		}
 
 		// copy pixels into the dib, perform pixel conversion if needed
