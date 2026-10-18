@@ -3,6 +3,7 @@
 #include "common.h"
 #include "../../Source/LibTIFF4/tiffio.h"
 #include <jxl/encode.h>
+#include <dirent.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
@@ -1042,6 +1043,90 @@ static void multipage_save(void) {
     }
 }
 
+/* the spool files CloseMultiBitmap left beside a scratch file, or -1 */
+static int spools_left(const char *name) {
+    const char *dir = getenv("ICC_TEST_TMP");
+    DIR *d = opendir((dir && *dir) ? dir : ".");
+    struct dirent *e;
+    int n = 0;
+    if (!d) return -1;
+    while ((e = readdir(d)) != NULL) {
+        if (!strncmp(e->d_name, name, strlen(name)) && strstr(e->d_name, ".fispool")) n++;
+    }
+    closedir(d);
+    return n;
+}
+
+/* a save that would write an unchanged CMYK page without its alpha fails, and the file stays as it was */
+static void multipage_cmyk_alpha(void) {
+    const Fixture *cmyka = find("5-sample CMYK + alpha TIFF"), *plain = find("2-page TIFF");
+    int i, k;
+    for (i = 0; i < fixture_count; i++) {
+        const Fixture *f = &fixtures[i];
+        const int drops = strstr(f->name, "CMYK + alpha") && !strstr(f->name, "XYB");
+        const int flags[3] = { base_flags(f), f->flags | FIF_LOAD_DISPLAY_ICC, f->flags };
+        /* TIFF has no 16-bit RGB writer */
+        if (strstr(f->name, "555 ") || strstr(f->name, "565 ")) continue;
+        for (k = 0; k < 3; k++) {
+            FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(f->fif, f->path, FALSE, TRUE, TRUE, flags[k]);
+            FIMEMORY *out = FreeImage_OpenMemory(NULL, 0);
+            int saved;
+            clear_messages();
+            saved = mb && FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, mb, out, 0);
+            if (drops && k < 2) CHECK(mb && !saved && strstr(last_message, "alpha"), "%s, flags 0x%x: saved without its alpha", f->name, flags[k]);
+            else CHECK(saved, "%s, flags 0x%x: the document was not saved", f->name, flags[k]);
+            if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+            FreeImage_CloseMemory(out);
+        }
+    }
+    if (cmyka && plain) {
+        const char *path = scratch("dsp_cmyka_close.tif");
+        const int flags[2] = { TIFF_CMYK, FIF_LOAD_DISPLAY_ICC };
+        FIBITMAP *extra = noise(24);
+        Bytes src = read_file(cmyka->path), now;
+        FIMULTIBITMAP *mb;
+        FIMEMORY *in, *out;
+        for (k = 0; k < 2; k++) {
+            const int spools = spools_left("dsp_cmyka_close.tif");
+            CHECK(write_file(path, src.data, src.size), "CMYK + alpha TIFF: copy not written");
+            mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, FALSE, TRUE, flags[k]);
+            CHECK(mb && FreeImage_AppendPage(mb, extra), "CMYK + alpha TIFF, flags 0x%x: page not appended", flags[k]);
+            clear_messages();
+            CHECK(mb && !FreeImage_CloseMultiBitmap(mb, 0) && strstr(last_message, "alpha"), "CMYK + alpha TIFF, flags 0x%x: closed with the alpha dropped", flags[k]);
+            now = read_file(path);
+            CHECK(same_bytes(&src, now.data, now.size), "CMYK + alpha TIFF, flags 0x%x: the file was changed", flags[k]);
+            CHECK(spools_left("dsp_cmyka_close.tif") == spools, "CMYK + alpha TIFF, flags 0x%x: a spool file was left", flags[k]);
+            free(now.data);
+        }
+
+        /* a page the caller changed is saved as given */
+        in = FreeImage_OpenMemory(src.data, src.size);
+        out = FreeImage_OpenMemory(NULL, 0);
+        mb = FreeImage_LoadMultiBitmapFromMemory(FIF_TIFF, in, TIFF_CMYK);
+        {
+            FIBITMAP *p = mb ? FreeImage_LockPage(mb, 0) : NULL;
+            if (p) FreeImage_UnlockPage(mb, p, TRUE);
+            CHECK(p && FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, mb, out, 0), "CMYK + alpha TIFF: the changed page was not saved");
+        }
+        if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+        FreeImage_CloseMemory(out);
+        FreeImage_CloseMemory(in);
+        free(src.data);
+
+        /* CMYK without an alpha still closes */
+        src = read_file(plain->path);
+        write_file(path, src.data, src.size);
+        mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, FALSE, TRUE, TIFF_CMYK);
+        CHECK(mb && FreeImage_AppendPage(mb, extra) && FreeImage_CloseMultiBitmap(mb, 0), "2-page TIFF, TIFF_CMYK: not closed with a page appended");
+        mb = FreeImage_OpenMultiBitmap(FIF_TIFF, path, FALSE, TRUE, TRUE, 0);
+        CHECK(mb && FreeImage_GetPageCount(mb) == 3, "2-page TIFF, TIFF_CMYK: the appended page was not saved");
+        if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+        free(src.data);
+        remove(path);
+        FreeImage_Unload(extra);
+    }
+}
+
 /* an image saved with the display's profile loads unchanged */
 static void reload_is_identity(const Display *d) {
     const Fixture *f = find("Adobe RGB JPEG");
@@ -1358,6 +1443,7 @@ int main(int argc, char **argv) {
     flag_rules();
     FreeImage_SetDisplayICCProfile(p3.data, p3.size, FLAGS_0x101);
     multipage_save();
+    multipage_cmyk_alpha();
     intents();
     threads();
 

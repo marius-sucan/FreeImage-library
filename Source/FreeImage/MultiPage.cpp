@@ -696,6 +696,9 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 		// write all the pages to the file using handle and io
 		
 		int count = 0;
+		// the original pages, with pixels, never in the display's colors, but with a CMYK page's alpha kept
+		const int read_flags = (DisplayICCLoadFlags(header->fif, header->load_flags) & ~(FIF_LOAD_NOPIXELS | FIF_LOAD_DISPLAY_ICC))
+			| (DisplayICCLoadFlags(header->fif, FIF_LOAD_DISPLAY_ICC) & FIF_LOAD_DISPLAY_ICC);
 		
 		for (BlockListIterator i = header->m_blocks.begin(); i != header->m_blocks.end(); i++) {
 			if (success) {
@@ -704,11 +707,20 @@ FreeImage_SavePages(PluginNode *node, MULTIBITMAPHEADER *header, FreeImageIO *io
 					{
 						for (int j = i->getStart(); j <= i->getEnd(); j++) {
 
-							// load the original source data, with pixels even if the bitmap was opened header-only, never in the display's colors
 							dib = (header->node->m_plugin->load_proc != NULL) ?
-								header->node->m_plugin->load_proc(&header->io, header->handle, j, DisplayICCLoadFlags(header->fif, header->load_flags) & ~(FIF_LOAD_NOPIXELS | FIF_LOAD_DISPLAY_ICC), data_read) : NULL;
+								header->node->m_plugin->load_proc(&header->io, header->handle, j, read_flags, data_read) : NULL;
 
 							if (dib == NULL) {
+								success = FALSE;
+								break;
+							}
+							// no plugin saves a CMYK page's alpha: fail rather than drop it
+							FIBITMAP *alpha = TakeCMYKAlpha(dib);
+							if (alpha != NULL) {
+								FreeImage_Unload(alpha);
+								FreeImage_Unload(dib);
+								dib = NULL;
+								FreeImage_OutputMessageProc(node->m_id, "Page %d is CMYK with an alpha channel, which cannot be saved", count);
 								success = FALSE;
 								break;
 							}

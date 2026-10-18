@@ -96,7 +96,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 - added FreeImage_OpenMultiBitmapU(), which takes a wchar_t file name and path;
 - FreeImage_AppendPage(), FreeImage_InsertPage(), FreeImage_DeletePage() and FreeImage_UnlockPage() now return TRUE or FALSE;
-- FreeImage_CloseMultiBitmap() returns FALSE only when the file could not be written, or when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF; that file is left as it was, and an unchanged document closes with TRUE;
+- FreeImage_CloseMultiBitmap() returns FALSE only when the file could not be written, when a document opened with read_only=0 was changed in a format that has no writer, such as AVIF or HEIF, or when a CMYK page would lose its alpha channel; that file is left as it was, and an unchanged document closes with TRUE;
 - fixed every multi-page document being parsed twice over, once to count its pages and again to read them;
 - fixed FreeImage_LockPage() getting slower the further into an animated GIF it went; reading an n-frame file from beginning to end cost O(n^2);
 - fixed multi-page GIF saving with variable frame dimensions: the logical screen is enlarged to fit every frame; fixed a stack buffer overflow in the LZW encoder;
