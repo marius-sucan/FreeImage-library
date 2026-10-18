@@ -358,6 +358,8 @@ FreeImage_GetCacheLoadFlags(FREE_IMAGE_FORMAT fif) {
 			return PSD_CMYK;
 		case FIF_JXL:
 			return JXL_CMYK;
+		case FIF_JXR:
+			return JXR_CMYK;
 		default:
 			return 0;
 	}
@@ -397,7 +399,7 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	return dib;
 }
 
-// lossless cache round trip (WebP and JPEG XL default to lossy)
+// lossless cache round trip (WebP, JPEG XL and JPEG XR default to lossy)
 static int
 FreeImage_GetCacheFlags(FREE_IMAGE_FORMAT fif) {
 	switch (fif) {
@@ -406,6 +408,8 @@ FreeImage_GetCacheFlags(FREE_IMAGE_FORMAT fif) {
 		case FIF_JXL:
 			// effort 1: the fastest
 			return JXL_LOSSLESS | 0x10000;
+		case FIF_JXR:
+			return JXR_LOSSLESS;
 		default:
 			return 0;
 	}

@@ -8,7 +8,7 @@ ordinary round-trip testing never reaches: error paths, unexercised save flags,
 | test | what it covers |
 |---|---|
 | `regress` | Round-trips 11 pixel formats and 8- and 16-bit CMYK x 3 quality settings and prints a size + checksum per output. **Diff the output before and after a change**: any difference on an existing combination is a regression. Also asserts which formats `JXR_LOSSLESS` round-trips bit-exactly, CMYK back as CMYK with `JXR_CMYK`. |
-| `edge` | 13 formats, CMYK of 8 and 16 bits among them, x 8 tiny sizes x 5 quality settings, 520 round-trips - including the low-quality YUV 4:2:0 plus two-level-overlap path, which the codec rejects below two macroblocks of width. Each file must be in a pixel format of T.832 Table A.6, CMYK in 32bppCMYK or 64bppCMYK, and load back with the type and depth saved, CMYK as CMYK with `JXR_CMYK`. Also `JXR_PROGRESSIVE`, partial-file cleanup, and float CMYK, which T.832 lacks, refused. Run under ASan. |
+| `edge` | 13 formats, CMYK of 8 and 16 bits among them, x 8 tiny sizes x 5 quality settings, 520 round-trips - including the low-quality YUV 4:2:0 plus two-level-overlap path, which the codec rejects below two macroblocks of width. Each file must be in a pixel format of T.832 Table A.6, CMYK in 32bppCMYK or 64bppCMYK, and load back with the type and depth saved, CMYK as CMYK with `JXR_CMYK`. Through the multi-page cache, each format appended to a new document, and a CMYK file's page changed, comes back and is saved as a lossless save gives it, CMYK as CMYK. Also `JXR_PROGRESSIVE`, partial-file cleanup, and float CMYK, which T.832 lacks, refused. Run under ASan. |
 | `narrowio` | A lossless save through `FreeImage_SaveToHandle` and the reload through `FreeImage_LoadFromHandle`, with a `FreeImageIO` of the test's own (64-bit positions through `fseeko`/`ftello`). |
 | `meta` | ICC + EXIF + XMP round-trip, covering `WriteMetadata`'s return value and `ReadProfile`. |
 | `tags` | The 14 Exif tags the container holds as descriptive metadata (strings, the ratings, the UTF-16 XPTitle, the two-SHORT PageNumber), each alone, all together, all together with XMP, IPTC, Exif, GPS and an ICC profile, and only those short enough to sit in their IFD entry, saved lossless: the pixels and the tags must come back, and every file list its IFD entries in ascending tag order (T.832 A.7.2), the values stored past them at even offsets (A.7.5). A tag of a type the container does not take is left out, the others kept. A file whose IFD also holds entries that change nothing, COLOR_SPACE 0xFFFF, IMAGE_TYPE, an unspecified PTM_COLOR_INFO, PROFILE_LEVEL_CONTAINER, PADDING_DATA and a private one, must load its pixels without writing to stderr. Then a TIFF with a PageNumber, `Wrapper/FreeImagePlus/test/test.tif` (or argv[1]). |
@@ -35,7 +35,8 @@ Scratch files are written to `$JXR_TEST_TMP`, or the current directory.
   integer format under lossless. `not bit-exact (expected for this format)` on the
   16-bit packed and float formats is correct: JPEG XR's float pipeline works in a
   fixed-point internal space, and 16bpp 565/555 loses bits through the codec.
-- `edge` - `520/520 round-trips ok`, progressive output differing from sequential,
+- `edge` - `520/520 round-trips ok`, `ok` for every format through the multi-page
+  cache, progressive output differing from sequential,
   and no file left behind by a refused save.
 - `narrowio` - `save -> ok`, `reload -> ok`, `pixels -> exact`.
 - `meta` - ICC profile back identical, XMP present. `EXIF_MAIN` returning fewer tags

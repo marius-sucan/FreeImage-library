@@ -1,4 +1,4 @@
-/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE; every save in a pixel format of T.832 Table A.6, CMYK in a CMYK one */
+/* FreeImage 3 - JPEG XR edge cases: tiny images, JXR_PROGRESSIVE; every save in a pixel format of T.832 Table A.6, CMYK in a CMYK one; the page cache */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,6 +58,63 @@ static int rt(FREE_IMAGE_TYPE t,int bpp,int cmyk,int w,int h,int flags){
     FreeImage_Unload(d);
     return ok?1:0;
 }
+static int same(FIBITMAP*a,FIBITMAP*b){
+    unsigned y,n;
+    if(!a||!b) return 0;
+    if(FreeImage_GetWidth(a)!=FreeImage_GetWidth(b)||FreeImage_GetHeight(a)!=FreeImage_GetHeight(b)
+       ||FreeImage_GetBPP(a)!=FreeImage_GetBPP(b)||FreeImage_GetImageType(a)!=FreeImage_GetImageType(b)
+       ||FreeImage_GetColorType(a)!=FreeImage_GetColorType(b))
+        return 0;
+    n=FreeImage_GetLine(a);
+    for(y=0;y<FreeImage_GetHeight(a);y++)
+        if(memcmp(FreeImage_GetScanLine(a,y),FreeImage_GetScanLine(b,y),n)) return 0;
+    return 1;
+}
+/* a page through the multi-page cache comes back as a lossless save gives it, CMYK as CMYK; NULL, or what failed */
+static const char *paged(FREE_IMAGE_TYPE t,int bpp,int cmyk){
+    const int lf=cmyk?JXR_CMYK:0;
+    const char *bad=NULL;
+    char doc[1024];
+    FIBITMAP *d=mk(t,64,48,bpp), *want=NULL, *p=NULL, *b, *changed=NULL;
+    FIMULTIBITMAP *m;
+    int exact;
+    if(!d) return "not allocated";
+    if(cmyk) FreeImage_GetICCProfile(d)->flags|=FIICC_COLOR_IS_CMYK;
+    snprintf(doc, sizeof(doc), "%s", tmppath("fi_jxr_pages.jxr"));
+    if(FreeImage_Save(FIF_JXR,d,OUT,JXR_LOSSLESS)) want=FreeImage_Load(FIF_JXR,OUT,lf);
+    exact=same(d,want);
+    /* appended to a new document */
+    m=FreeImage_OpenMultiBitmap(FIF_JXR,doc,TRUE,FALSE,TRUE,0);
+    if(!want||!m||!FreeImage_AppendPage(m,d)) bad="not appended";
+    else if(!(p=FreeImage_LockPage(m,0))||!same(p,want)) bad="appended page changed";
+    if(p) FreeImage_UnlockPage(m,p,FALSE);
+    if(m && !FreeImage_CloseMultiBitmap(m,JXR_LOSSLESS) && !bad) bad="not saved";
+    if(!bad){
+        b=FreeImage_Load(FIF_JXR,doc,lf);
+        if(exact ? !same(b,d) : (!b||FreeImage_GetImageType(b)!=t||FreeImage_GetBPP(b)!=(unsigned)bpp)) bad="saved page changed";
+        if(b) FreeImage_Unload(b);
+    }
+    /* the page of a CMYK file, changed */
+    if(!bad && cmyk){
+        m=FreeImage_OpenMultiBitmap(FIF_JXR,OUT,FALSE,FALSE,TRUE,JXR_CMYK);
+        p=m?FreeImage_LockPage(m,0):NULL;
+        if(p && FreeImage_Invert(p)) changed=FreeImage_Clone(p);
+        if(p) FreeImage_UnlockPage(m,p,TRUE);
+        p=changed?FreeImage_LockPage(m,0):NULL;
+        if(!same(p,changed)) bad="changed page came back changed";
+        if(p) FreeImage_UnlockPage(m,p,FALSE);
+        if(m && !FreeImage_CloseMultiBitmap(m,JXR_LOSSLESS) && !bad) bad="changed page not saved";
+        if(!bad){
+            b=FreeImage_Load(FIF_JXR,OUT,JXR_CMYK);
+            if(!same(b,changed)) bad="changed page saved changed";
+            if(b) FreeImage_Unload(b);
+        }
+    }
+    if(changed) FreeImage_Unload(changed);
+    if(want) FreeImage_Unload(want);
+    FreeImage_Unload(d);
+    return bad;
+}
 int main(void){
     static const struct{const char*n;FREE_IMAGE_TYPE t;int bpp;int cmyk;} F[]={
         {"1bpp",FIT_BITMAP,1},{"8bpp",FIT_BITMAP,8},{"16bpp",FIT_BITMAP,16},
@@ -82,6 +139,14 @@ int main(void){
         printf(" ok\n");
     }
     printf("--> %d/%d round-trips ok\n\n",total-fails,total);
+
+    printf("=== the multi-page cache (64x48, lossless) ===\n");
+    for(i=0;i<(int)(sizeof(F)/sizeof(F[0]));i++){
+        const char *r=paged(F[i].t,F[i].bpp,F[i].cmyk);
+        printf("  %-7s %s\n",F[i].n,r?r:"ok");
+        if(r) fails++;
+    }
+    printf("\n");
 
     printf("=== JXR_PROGRESSIVE ===\n");
     {   FIBITMAP *d=mk(FIT_BITMAP,64,48,24); FIBITMAP *b;
