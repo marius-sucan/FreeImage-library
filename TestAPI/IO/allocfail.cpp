@@ -1,6 +1,7 @@
 /* FreeImage 3 - I/O test: every allocation libfreeimage.a makes, failed in turn, crashes nothing */
 /* malloc, calloc and realloc are wrapped at link time, new(std::nothrow) replaced; each case runs in a child per failed allocation */
 #include <new>
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,12 @@ static int should_fail(void) {
     return armed && (++seen == fail_at);
 }
 
+/* a failed allocation sets errno, as the C library's do */
+static void *no_memory(void) {
+    errno = ENOMEM;
+    return NULL;
+}
+
 /* blocks allocated and not freed: a load that fails has to give back what it took */
 static long live = 0;
 
@@ -61,20 +68,20 @@ void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t s);
 void *__real_realloc(void *p, size_t n);
 void __real_free(void *p);
-void *__wrap_malloc(size_t n) { void *p = should_fail() ? NULL : __real_malloc(n); if (p) live++; return p; }
-void *__wrap_calloc(size_t n, size_t s) { void *p = should_fail() ? NULL : __real_calloc(n, s); if (p) live++; return p; }
-void *__wrap_realloc(void *p, size_t n) { void *q = should_fail() ? NULL : __real_realloc(p, n); if (!p && q) live++; return q; }
+void *__wrap_malloc(size_t n) { void *p = should_fail() ? no_memory() : __real_malloc(n); if (p) live++; return p; }
+void *__wrap_calloc(size_t n, size_t s) { void *p = should_fail() ? no_memory() : __real_calloc(n, s); if (p) live++; return p; }
+void *__wrap_realloc(void *p, size_t n) { void *q = should_fail() ? no_memory() : __real_realloc(p, n); if (!p && q) live++; return q; }
 void __wrap_free(void *p) { if (p) live--; __real_free(p); }
 }
 
 /* new(std::nothrow) too: the code that uses it checks for NULL */
 static void *counted(void *p) { if (p) live++; return p; }
-void *operator new(size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? NULL : __real_malloc(n ? n : 1)); }
-void *operator new[](size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? NULL : __real_malloc(n ? n : 1)); }
+void *operator new(size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? no_memory() : __real_malloc(n ? n : 1)); }
+void *operator new[](size_t n, const std::nothrow_t &) noexcept { return counted(should_fail() ? no_memory() : __real_malloc(n ? n : 1)); }
 
 /* the throwing operator new, failed only for the cases that set fail_new (STL nodes, plugin state) */
 static int fail_new = 0;
-void *operator new(size_t n) { if (fail_new && should_fail()) throw std::bad_alloc(); void *p = __real_malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return counted(p); }
+void *operator new(size_t n) { if (fail_new && should_fail()) { no_memory(); throw std::bad_alloc(); } void *p = __real_malloc(n ? n : 1); if (!p) throw std::bad_alloc(); return counted(p); }
 void *operator new[](size_t n) { return operator new(n); }
 /* through the wrapped free, so that deletes are counted */
 void operator delete(void *p) noexcept { free(p); }
@@ -916,11 +923,8 @@ static int cmyka_setup(void) {
     return 1;
 }
 
-static int s_messages = 0;
-static void counted_message(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; s_messages++; }
-
-/* the type, size and CMYK flag of ref, and its alpha, or 0 after a warning: a tile libtiff could not read stays blank */
-static int same_alpha(FIBITMAP *ref, FIBITMAP *got, int warned) {
+/* the type, size, CMYK flag and alpha of ref: a conversion short of memory may take another route to its colors */
+static int same_alpha(FIBITMAP *ref, FIBITMAP *got) {
     FREE_IMAGE_TYPE type;
     unsigned x, y;
     if (!ref || !got) return 0;
@@ -934,7 +938,7 @@ static int same_alpha(FIBITMAP *ref, FIBITMAP *got, int warned) {
             unsigned want = 0, have = 0;
             if ((type == FIT_BITMAP) && (FreeImage_GetBPP(ref) == 32)) { want = p[4 * x + FI_RGBA_ALPHA]; have = q[4 * x + FI_RGBA_ALPHA]; }
             if (type == FIT_RGBA16) { want = ((const WORD *)p)[4 * x + 3]; have = ((const WORD *)q)[4 * x + 3]; }
-            if ((have != want) && (have || !warned)) return 0;
+            if (have != want) return 0;
         }
     }
     return 1;
@@ -949,7 +953,6 @@ static int cannot_start(void) {
 static int cmyka_load_case(void) {
     static const int flags[2] = { 0, FIF_LOAD_DISPLAY_ICC };
     FIBITMAP *ref[10] = { NULL }, *got[10] = { NULL };
-    int warned[10] = { 0 };
     int i, k, n = 0, whole = 1;
     for (i = s_from; i < s_to; i++) {
         for (k = 0; k < 2; k++, n++) ref[n] = FreeImage_Load(s_cmyka[i].fif, s_cmyka[i].path, flags[k]);
@@ -957,20 +960,15 @@ static int cmyka_load_case(void) {
     for (i = 0; i < n; i++) {
         if (!ref[i]) return cannot_start();
     }
-    FreeImage_SetOutputMessage(counted_message);
 
     armed = 1;
     for (i = s_from, n = 0; i < s_to; i++) {
-        for (k = 0; k < 2; k++, n++) {
-            const int before = s_messages;
-            got[n] = FreeImage_Load(s_cmyka[i].fif, s_cmyka[i].path, flags[k]);
-            warned[n] = (s_messages != before);
-        }
+        for (k = 0; k < 2; k++, n++) got[n] = FreeImage_Load(s_cmyka[i].fif, s_cmyka[i].path, flags[k]);
     }
     armed = 0;
 
     for (i = 0; i < n; i++) {
-        if (got[i] && !same_alpha(ref[i], got[i], warned[i])) whole = 0;
+        if (got[i] && !same_alpha(ref[i], got[i])) whole = 0;
         FreeImage_Unload(got[i]);
         FreeImage_Unload(ref[i]);
     }
@@ -1001,6 +999,132 @@ static int cmyka_save_case(void) {
     return !saved ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- TIFF: a read short of memory is no damaged strip */
+
+/* 32 x 24 by libtiff: RGB in LZW strips of 8 rows, or RGBA in deflate 16 x 16 tiles */
+static int write_coded_tiff(const char *path, int tiled) {
+    static BYTE buf[4 * 16 * 16 * 4];
+    uint16_t extra = EXTRASAMPLE_UNASSALPHA;
+    FILE *f = fopen(path, "w+b");
+    TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    int ok = 1;
+    if (!t) { if (f) fclose(f); return 0; }
+    for (size_t i = 0; i < sizeof(buf); i++) buf[i] = (BYTE)(i * 11 + (i >> 6));
+    TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 32); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 24);
+    TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, tiled ? 4 : 3);
+    if (tiled) TIFFSetField(t, TIFFTAG_EXTRASAMPLES, 1, &extra);
+    TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB); TIFFSetField(t, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+    TIFFSetField(t, TIFFTAG_COMPRESSION, tiled ? COMPRESSION_ADOBE_DEFLATE : COMPRESSION_LZW);
+    if (tiled) {
+        TIFFSetField(t, TIFFTAG_TILEWIDTH, 16); TIFFSetField(t, TIFFTAG_TILELENGTH, 16);
+        for (int i = 0; i < 4; i++) ok = ok && (TIFFWriteTile(t, buf + i * 16 * 16 * 4, (i & 1) * 16, (i >> 1) * 16, 0, 0) >= 0);
+    } else {
+        TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 8);
+        for (int y = 0; y < 24; y++) ok = ok && (TIFFWriteScanline(t, buf + y * 32 * 3, y, 0) >= 0);
+    }
+    TIFFClose(t);
+    return ok;
+}
+
+/* three 8 x 8 RGB pages in LZW, by libtiff */
+static int write_pages_tiff(const char *path) {
+    static BYTE row[8 * 3];
+    FILE *f = fopen(path, "w+b");
+    TIFF *t = f ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    int ok = 1;
+    if (!t) { if (f) fclose(f); return 0; }
+    for (int p = 0; p < 3; p++) {
+        TIFFSetField(t, TIFFTAG_SUBFILETYPE, FILETYPE_PAGE); TIFFSetField(t, TIFFTAG_PAGENUMBER, p, 3);
+        TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 8); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 8);
+        TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 3);
+        TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_RGB); TIFFSetField(t, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+        TIFFSetField(t, TIFFTAG_COMPRESSION, COMPRESSION_LZW); TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 8);
+        for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8 * 3; x++) row[x] = (BYTE)(p * 50 + y * 8 + x);
+            ok = ok && (TIFFWriteScanline(t, row, y, 0) >= 0);
+        }
+        ok = ok && TIFFWriteDirectory(t);
+    }
+    TIFFClose(t);
+    return ok;
+}
+
+static char s_coded[4][512];
+
+/* LZW strips, deflate tiles and a FreeImage TIFF_JPEG save with a thumbnail in a SubIFD: libtiff's, zlib's and libjpeg's allocations */
+static int coded_setup(void) {
+    const char *dir = getenv("IO_TEST_TMP");
+    FIBITMAP *dib = pattern(FIT_BITMAP, 32, 24, 24), *thumb = pattern(FIT_BITMAP, 16, 16, 24), *back = NULL;
+    int ok;
+    snprintf(s_coded[0], sizeof(s_coded[0]), "%s/fi_io_lzw.tif", (dir && *dir) ? dir : ".");
+    snprintf(s_coded[1], sizeof(s_coded[1]), "%s/fi_io_deflate_tiles.tif", (dir && *dir) ? dir : ".");
+    snprintf(s_coded[2], sizeof(s_coded[2]), "%s/fi_io_jpeg.tif", (dir && *dir) ? dir : ".");
+    snprintf(s_coded[3], sizeof(s_coded[3]), "%s/fi_io_pages.tif", (dir && *dir) ? dir : ".");
+    ok = dib && thumb && FreeImage_SetThumbnail(dib, thumb) && write_pages_tiff(s_coded[3]);
+    ok = ok && write_coded_tiff(s_coded[0], 0) && write_coded_tiff(s_coded[1], 1) && FreeImage_Save(FIF_TIFF, dib, s_coded[2], TIFF_JPEG);
+    /* the thumbnail made it into the file */
+    ok = ok && (back = FreeImage_Load(FIF_TIFF, s_coded[2], 0)) != NULL && FreeImage_GetThumbnail(back);
+    FreeImage_Unload(back);
+    FreeImage_Unload(thumb);
+    FreeImage_Unload(dib);
+    return ok;
+}
+
+/* same type, size and pixels */
+static int same_pixels(FIBITMAP *ref, FIBITMAP *got) {
+    unsigned y;
+    if (!ref || !got || (FreeImage_GetImageType(ref) != FreeImage_GetImageType(got)) || (FreeImage_GetBPP(ref) != FreeImage_GetBPP(got)) ||
+        (FreeImage_GetWidth(ref) != FreeImage_GetWidth(got)) || (FreeImage_GetHeight(ref) != FreeImage_GetHeight(got))) return 0;
+    for (y = 0; y < FreeImage_GetHeight(ref); y++) {
+        if (memcmp(FreeImage_GetScanLine(ref, y), FreeImage_GetScanLine(got, y), FreeImage_GetLine(ref))) return 0;
+    }
+    return 1;
+}
+
+/* NULL, or every pixel of a load without failures: loaded alone, and as page 0 of a document, which reads its directory again */
+static int coded_load_case(void) {
+    FIBITMAP *ref[3], *got[3], *page[3];
+    FIMULTIBITMAP *doc[3];
+    int i, whole = 1;
+    for (i = 0; i < 3; i++) {
+        ref[i] = FreeImage_Load(FIF_TIFF, s_coded[i], 0);
+        doc[i] = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[i], FALSE, TRUE, TRUE, 0);
+        if (!ref[i] || !doc[i]) return cannot_start();
+    }
+
+    armed = 1;
+    for (i = 0; i < 3; i++) {
+        got[i] = FreeImage_Load(FIF_TIFF, s_coded[i], 0);
+        page[i] = FreeImage_LockPage(doc[i], 0);
+    }
+    armed = 0;
+
+    for (i = 0; i < 3; i++) {
+        if ((got[i] && !same_pixels(ref[i], got[i])) || (page[i] && !same_pixels(ref[i], page[i]))) whole = 0;
+        FreeImage_Unload(got[i]);
+        if (page[i]) FreeImage_UnlockPage(doc[i], page[i], FALSE);
+        FreeImage_CloseMultiBitmap(doc[i], 0);
+        FreeImage_Unload(ref[i]);
+    }
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* a three-page document opened short of memory: all three pages, or no document */
+static int pages_case(void) {
+    FIMULTIBITMAP *doc;
+    int pages = 0;
+
+    armed = 1;
+    doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[3], FALSE, TRUE, TRUE, 0);
+    if (doc) pages = FreeImage_GetPageCount(doc);
+    armed = 0;
+
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    if (seen < fail_at) return NOT_REACHED;
+    return (!doc || (pages == 3)) ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -1023,6 +1147,13 @@ int main(void) {
     sweep("EXR save: TRUE only for a file that loads", exr_save);
     sweep("JNG save: TRUE only for a file that loads", jng_save);
     sweep("TIFF load: no crash", tiff_load);
+    if (coded_setup()) {
+        sweep("TIFF loads, LZW strips, deflate tiles, JPEG: NULL or every pixel", coded_load_case);
+        sweep("TIFF document of three pages: all three, or not opened", pages_case);
+    } else {
+        report("TIFF: the test files", 0);
+    }
+    for (int i = 0; i < 4; i++) remove(s_coded[i]);
     sweep("PSD load with IPTC: no crash, no tag without its value, no leak", psd_iptc_case);
     if (!icc_setup()) {
         report("color management: the test profiles", 0);

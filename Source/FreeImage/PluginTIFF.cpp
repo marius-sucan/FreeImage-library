@@ -1134,10 +1134,16 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		// Save opens it: classic TIFF or BigTIFF depends on the image
 		return fio;
 	}
+	errno = 0;
 	fio->tif = TIFFFdOpen((thandle_t)fio, "", "r");
-	if(fio->tif == NULL) {
+	// short of memory, libtiff can also leave out a tag it could not allocate, the JPEG tables of the pixels among them
+	if((fio->tif == NULL) || (errno == ENOMEM)) {
+		const BOOL memory = (errno == ENOMEM);
+		if(fio->tif) {
+			TIFFClose(fio->tif);
+		}
 		free(fio);
-		FreeImage_OutputMessageProc(s_format_id, "Error while opening TIFF: data is invalid");
+		FreeImage_OutputMessageProc(s_format_id, memory ? FI_MSG_ERROR_MEMORY : "Error while opening TIFF: data is invalid");
 		return NULL;
 	}
 	return fio;
@@ -1163,9 +1169,15 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 		TIFF *tif = (TIFF *)fio->tif;
 		int nr_ifd = 0;
 
+		// a directory libtiff could not read short of memory hides the pages after it
+		errno = 0;
 		do {
 			nr_ifd++;
 		} while (TIFFReadDirectory(tif));
+		if(errno == ENOMEM) {
+			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+			return 0;
+		}
 				
 		return nr_ifd;
 	}
@@ -1755,7 +1767,9 @@ ReadThumbnail(FreeImageIO *io, fi_handle handle, void *data, TIFF *tiff, FIBITMA
 
 				// this code can cause unwanted recursion causing an overflow, because of the way TIFFSetSubDirectory work
 				
-				if(TIFFSetSubDirectory(tiff, subIFD_offsets[0])) {
+				// a directory read short of memory can lack a tag, the JPEG tables of its pixels among them
+				errno = 0;
+				if(TIFFSetSubDirectory(tiff, subIFD_offsets[0]) && (errno != ENOMEM)) {
 					// load the thumbnail
 					int page = -1; 
 					int flags = TIFF_DEFAULT;
@@ -1826,8 +1840,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		tif = fio->tif;
 
 		if (page != -1) {
+			errno = 0;
 			if (!tif || !TIFFSetDirectory(tif, (uint16_t)page)) {
 				throw "Error encountered while opening TIFF file";			
+			}
+			// a tag libtiff could not allocate is left out of the directory
+			if (errno == ENOMEM) {
+				throw FI_MSG_ERROR_MEMORY;
 			}
 		}
 		
@@ -1920,6 +1939,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// a strip or tile that cannot be read (a cut or damaged file) stays blank, and the others load
 		BOOL bParseError = FALSE;
+		// unless memory ran out: the allocators of libtiff and its codecs set ENOMEM
+		errno = 0;
 
 		if(loadMethod == LoadAsRBGA) {
 			// ---------------------------------------------------------------------------------
@@ -2412,7 +2433,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				free(buf);
 				
 				if(bThrowMessage) {
-					FreeImage_OutputMessageProc(s_format_id, "Warning: parsing error. Image may be incomplete or contain invalid data !");
+					bParseError = TRUE;
 				}
 				
 #if FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR
@@ -2755,6 +2776,11 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw FI_MSG_ERROR_UNSUPPORTED_FORMAT;
 		}
 		
+		// a read that ran out of memory leaves no damage to show
+		if(bParseError && (errno == ENOMEM)) {
+			throw FI_MSG_ERROR_MEMORY;
+		}
+
 		// copy ICC profile data (must be done after FreeImage_Allocate, and before ReadMetadata frees iccBuf)
 
 		FreeImage_CreateICCProfile(dib, iccBuf, iccSize);
