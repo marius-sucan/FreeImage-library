@@ -814,6 +814,9 @@ void freeTileInfo(CWMImageStrCodec * pSC)
 {
     size_t iTile;
 
+    if(pSC->pTile == NULL) // FreeImage: not allocated when StrDecInit failed
+        return;
+
     if((pSC->m_param.uQPMode & 1) != 0) // not DC uniform
         for(iTile = 0; iTile <= pSC->WMISCP.cNumOfSliceMinus1V; iTile ++)
             freeQuantizer(pSC->pTile[iTile].pQuantizerDC);

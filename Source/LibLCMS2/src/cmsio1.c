@@ -365,6 +365,7 @@ cmsPipeline* CMSEXPORT _cmsReadInputLUT(cmsHPROFILE hProfile, cmsUInt32Number In
 
             // The profile owns the Lut, so we need to copy it
             Lut = cmsPipelineDup(Lut);
+            if (Lut == NULL) return NULL; // FreeImage: out of memory, as _cmsReadOutputLUT checks
 
             // We need to adjust data only for Lab16 on output
             if (OriginalType != cmsSigLut16Type || cmsGetPCS(hProfile) != cmsSigLabData)
@@ -484,6 +485,7 @@ cmsPipeline* BuildRGBOutputMatrixShaper(cmsHPROFILE hProfile)
     InvShapes[2] = cmsReverseToneCurve(Shapes[2]);
 
     if (!InvShapes[0] || !InvShapes[1] || !InvShapes[2]) {
+        cmsFreeToneCurveTriple(InvShapes); // FreeImage: the curves that were reversed
         return NULL;
     }
 

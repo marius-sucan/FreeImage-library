@@ -903,10 +903,19 @@ static void cmyka_add(FREE_IMAGE_FORMAT fif, int cmyk_flag, const char *path) {
     s_cmyka_count++;
 }
 
+/* an RGBA JPEG XR in frequency order, which holds an index table, by FreeImage */
+static char s_jxr_indexed[512];
+
 /* TIFF strips, TIFF tiles, JPEG XL, then the JPEG XR files of ../JXR/data if there; needs the press profile */
 static int cmyka_setup(void) {
     const char *dir = getenv("IO_TEST_TMP");
     char path[512];
+    FIBITMAP *rgba = pattern(FIT_BITMAP, 32, 16, 32);
+    int saved;
+    snprintf(s_jxr_indexed, sizeof(s_jxr_indexed), "%s/fi_io_indexed.jxr", (dir && *dir) ? dir : ".");
+    saved = rgba && FreeImage_Save(FIF_JXR, rgba, s_jxr_indexed, JXR_PROGRESSIVE | JXR_LOSSLESS);
+    FreeImage_Unload(rgba);
+    if (!saved) return 0;
     snprintf(path, sizeof(path), "%s/fi_io_cmyka.tif", (dir && *dir) ? dir : ".");
     if (!write_cmyka_tiff(path, 0)) return 0;
     cmyka_add(FIF_TIFF, TIFF_CMYK, path);
@@ -976,27 +985,61 @@ static int cmyka_load_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
-/* documents opened with the CMYK flag: no save of their unchanged CMYK + alpha page succeeds */
+/* documents opened with the CMYK flag: no save of their unchanged CMYK + alpha page succeeds, none leaves a block allocated */
 static int cmyka_save_case(void) {
     FIMULTIBITMAP *doc[5] = { NULL };
     FIMEMORY *mem[5] = { NULL };
     int i, saved = 0;
+    long before;
     for (i = s_from; i < s_to; i++) {
         doc[i] = FreeImage_OpenMultiBitmap(s_cmyka[i].fif, s_cmyka[i].path, FALSE, TRUE, TRUE, s_cmyka[i].cmyk_flag);
         mem[i] = FreeImage_OpenMemory(NULL, 0);
         if (!doc[i] || !mem[i]) return cannot_start();
+        /* a first save fills what stays allocated */
+        FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, doc[i], mem[i], 0);
+        FreeImage_CloseMemory(mem[i]);
+    }
+    before = live;
+    for (i = s_from; i < s_to; i++) {
+        mem[i] = FreeImage_OpenMemory(NULL, 0);
+        if (!mem[i]) return cannot_start();
     }
 
     armed = 1;
     for (i = s_from; i < s_to; i++) saved += FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, doc[i], mem[i], 0) ? 1 : 0;
     armed = 0;
 
-    for (i = s_from; i < s_to; i++) {
-        FreeImage_CloseMultiBitmap(doc[i], 0);
-        FreeImage_CloseMemory(mem[i]);
-    }
+    for (i = s_from; i < s_to; i++) FreeImage_CloseMemory(mem[i]);
+    const int whole = (live == before);
+    for (i = s_from; i < s_to; i++) FreeImage_CloseMultiBitmap(doc[i], 0);
     if (seen < fail_at) return NOT_REACHED;
-    return !saved ? CASE_OK : CASE_BROKEN;
+    return (!saved && whole) ? CASE_OK : CASE_BROKEN;
+}
+
+/* plain loads, which hold no display transform, of the CMYK + alpha files and the indexed JPEG XR: nothing left allocated */
+static int cmyka_leak_case(void) {
+    FIBITMAP *got[6] = { NULL };
+    const char *path[6];
+    FREE_IMAGE_FORMAT fif[6];
+    int i, n = 0;
+    long before;
+    for (i = 0; i < s_cmyka_count; i++, n++) { path[n] = s_cmyka[i].path; fif[n] = s_cmyka[i].fif; }
+    path[n] = s_jxr_indexed; fif[n++] = FIF_JXR;
+    /* a first load fills what stays allocated */
+    for (i = 0; i < n; i++) {
+        got[i] = FreeImage_Load(fif[i], path[i], 0);
+        if (!got[i]) return cannot_start();
+        FreeImage_Unload(got[i]);
+    }
+    before = live;
+
+    armed = 1;
+    for (i = 0; i < n; i++) got[i] = FreeImage_Load(fif[i], path[i], 0);
+    armed = 0;
+
+    for (i = 0; i < n; i++) FreeImage_Unload(got[i]);
+    if (seen < fail_at) return NOT_REACHED;
+    return (live == before) ? CASE_OK : CASE_BROKEN;
 }
 
 /* --------------------------------------------------------------- TIFF: a read short of memory is no damaged strip */
@@ -1081,15 +1124,28 @@ static int same_pixels(FIBITMAP *ref, FIBITMAP *got) {
     return 1;
 }
 
-/* NULL, or every pixel of a load without failures: loaded alone, and as page 0 of a document, which reads its directory again */
+/* NULL, or every pixel of a load without failures: loaded alone, and as page 0 of a document, which reads its directory again;
+   nothing left allocated */
 static int coded_load_case(void) {
     FIBITMAP *ref[3], *got[3], *page[3];
     FIMULTIBITMAP *doc[3];
     int i, whole = 1;
+    long before;
     for (i = 0; i < 3; i++) {
         ref[i] = FreeImage_Load(FIF_TIFF, s_coded[i], 0);
+        if (!ref[i]) return cannot_start();
+        /* a first document fills what stays allocated */
         doc[i] = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[i], FALSE, TRUE, TRUE, 0);
-        if (!ref[i] || !doc[i]) return cannot_start();
+        page[i] = doc[i] ? FreeImage_LockPage(doc[i], 0) : NULL;
+        if (!page[i]) return cannot_start();
+        FreeImage_UnlockPage(doc[i], page[i], FALSE);
+        FreeImage_CloseMultiBitmap(doc[i], 0);
+    }
+    /* an open document holds its directory: counted once it is closed */
+    before = live;
+    for (i = 0; i < 3; i++) {
+        doc[i] = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[i], FALSE, TRUE, TRUE, 0);
+        if (!doc[i]) return cannot_start();
     }
 
     armed = 1;
@@ -1104,16 +1160,23 @@ static int coded_load_case(void) {
         FreeImage_Unload(got[i]);
         if (page[i]) FreeImage_UnlockPage(doc[i], page[i], FALSE);
         FreeImage_CloseMultiBitmap(doc[i], 0);
-        FreeImage_Unload(ref[i]);
     }
+    whole = whole && (live == before);
+    for (i = 0; i < 3; i++) FreeImage_Unload(ref[i]);
     if (seen < fail_at) return NOT_REACHED;
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
-/* a three-page document opened short of memory: all three pages, or no document */
+/* a three-page document opened short of memory: all three pages, or no document, and nothing left allocated */
 static int pages_case(void) {
     FIMULTIBITMAP *doc;
     int pages = 0;
+    long before;
+    /* a first open fills what stays allocated */
+    doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[3], FALSE, TRUE, TRUE, 0);
+    if (!doc) return cannot_start();
+    FreeImage_CloseMultiBitmap(doc, 0);
+    before = live;
 
     armed = 1;
     doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_coded[3], FALSE, TRUE, TRUE, 0);
@@ -1122,7 +1185,7 @@ static int pages_case(void) {
 
     if (doc) FreeImage_CloseMultiBitmap(doc, 0);
     if (seen < fail_at) return NOT_REACHED;
-    return (!doc || (pages == 3)) ? CASE_OK : CASE_BROKEN;
+    return ((!doc || (pages == 3)) && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
 #endif /* !_WIN32 */
@@ -1148,8 +1211,8 @@ int main(void) {
     sweep("JNG save: TRUE only for a file that loads", jng_save);
     sweep("TIFF load: no crash", tiff_load);
     if (coded_setup()) {
-        sweep("TIFF loads, LZW strips, deflate tiles, JPEG: NULL or every pixel", coded_load_case);
-        sweep("TIFF document of three pages: all three, or not opened", pages_case);
+        sweep("TIFF loads, LZW strips, deflate tiles, JPEG: NULL or every pixel, no leak", coded_load_case);
+        sweep("TIFF document of three pages: all three, or not opened, no leak", pages_case);
     } else {
         report("TIFF: the test files", 0);
     }
@@ -1180,11 +1243,13 @@ int main(void) {
                 printf("  %-60s %s\n", "CMYK + alpha JPEG XR: no ../JXR/data/cmyka40.jxr", "skipped");
             }
             s_from = 0; s_to = s_cmyka_count;
-            sweep("CMYK + alpha documents opened with their CMYK flag: no save succeeds", cmyka_save_case);
+            sweep("CMYK + alpha documents opened with their CMYK flag: no save succeeds, no leak", cmyka_save_case);
+            sweep("CMYK + alpha plain loads, an indexed JPEG XR: no leak", cmyka_leak_case);
         }
         for (int i = 0; i < s_cmyka_count; i++) {
             if (s_cmyka[i].fif != FIF_JXR) remove(s_cmyka[i].path);
         }
+        remove(s_jxr_indexed);
     }
 #endif
     printf("--- %d failure(s) ---\n", failures);

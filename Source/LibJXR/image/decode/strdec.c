@@ -2707,7 +2707,9 @@ Int StrIODecInit(CWMImageStrCodec* pSC)
 
 Int StrIODecTerm(CWMImageStrCodec* pSC)
 {
-	detachISRead(pSC, pSC->pIOHeader);
+	if (pSC->pIOHeader->pWS != NULL) { // FreeImage: not attached when StrIODecInit failed
+		detachISRead(pSC, pSC->pIOHeader);
+	}
 
 	free(pSC->m_ppBitIO);
 	free(pSC->pIndexTable);
@@ -3632,6 +3634,7 @@ Int ImageStrDecInit(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CTXSTRCODEC* pct
 		// if primary image is safe to allocate, alpha channel is certainly safe
 		pb = malloc(cb);
 		if (pb == NULL) {
+			free(pSC); // FreeImage: nothing else holds the codec block yet
 			return WMP_errOutOfMemory;
 		}
 		memset(pb, 0, cb);
@@ -3706,6 +3709,12 @@ Int ImageStrDecInit(CWMImageInfo* pII, CWMIStrCodecParam *pSCP, CTXSTRCODEC* pct
 	PERFTIMER_STOP(pSC->m_fMeasurePerf, pSC->m_ptEncDecPerf);
 
 Cleanup:
+	if (WMP_errSuccess != err && pSC != NULL) { // FreeImage: a failed init frees what it allocated
+		pSC->m_pNextSC = pNextSC;
+		StrDecTerm(pSC);
+		free(pNextSC);
+		free(pSC);
+	}
 	return WMP_errSuccess == err ? ICERR_OK : ICERR_ERROR;
 }
 
