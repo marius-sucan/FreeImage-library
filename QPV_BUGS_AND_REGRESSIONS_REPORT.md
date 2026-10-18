@@ -4,6 +4,91 @@
 **Compared Branches**: `origin/main` (`4cccd9aa7`) $\rightarrow$ `qpv` (`d497fb956`, 616 commits ahead)  
 **Scope**: Full line-by-line audit of `Source/FreeImage/*`, `Source/FreeImageToolkit/*`, `Source/Metadata/*`, `Wrapper/*`, and build/project configurations.
 
+> **Verified 2026-10-18 against `qpv` at `f5081b1`.** This report was written by another AI model and has been checked claim by claim: see [Verification results](#verification-results) below. Each finding now opens with its own **Verification** block; the original text under it is unchanged. The commit hashes above do not exist in this repository: the audited code is `d521037`, 616 commits ahead of `origin/main` (`a976f39`).
+
+---
+
+## Verification results
+
+Checked on 2026-10-18 at `qpv` `f5081b1`, which has five code commits more than the audited `d521037` (a9262be, e461fc8, ce201d8, 59ea9d5, f5081b1). Each claim was read against the code at HEAD and in `origin/main` (found by function name, since the report's line numbers drift), and most were reproduced with small programs linked against a fresh build of HEAD: crafted files, AddressSanitizer on the file under test, fault injection (a failing `operator new`, `RLIMIT_FSIZE`, `--wrap`) and A/B runs against `main`'s code. The rigs and crafted files are in `.claude/scratch/qpv-report-verify/` (untracked; see its README.txt).
+
+**Bottom line**
+- Of the 44 findings (the report says 46), **11 hold as described, 24 hold in part and 9 do not hold at all**.
+- No finding is Critical. One is **High**: PSD-01, two heap overflows from crafted PSD/PSB files, both inherited from `origin/main`. 8 are Medium, 26 Low and 9 None; the report had 3 Critical, 29 High and 12 Medium.
+- Few of the confirmed parts are regressions caused by `qpv`: CORE-02, two parts of TMO-01, PNG-01 (1), HDR-01 (2), the Exif profile of JPEG-01 (2) and BUILD-01 (3). Most of the rest is upstream behaviour that `main` shares, or bugs in code `main` does not have.
+- Checking the report turned up a **High regression it missed**: a 55-byte JNG makes `FreeImage_Load` loop forever (2decc36).
+- Only one listed part was fixed after the report was written: JXR-01 (6), by ce201d8.
+
+### Verdict per finding
+
+**Verdict**: Confirmed = the bug is real as described (details may differ); Partly = some parts are real, others are not; Not a bug = no part holds. **Regression**: Yes = `qpv` broke what worked in `main`; No = the same in `main`; New code = a bug in code `main` does not have.
+
+| ID | Reported | Verdict | Regression? | Verified severity | In short |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| CORE-01 | Critical | Partly | No | Low | A refused save deletes an existing file; `main` truncates it to 0 bytes, so no content is lost that `main` kept. |
+| CORE-02 | Critical | **Confirmed** | **Yes** | Medium | Crash in `CacheFile::readFile` after one failed spool write (reproduced). |
+| CORE-03 | High | **Confirmed** | No (`main` let `bad_alloc` escape) | Medium | Out of memory wedges the page cache until close; small leaks. |
+| CORE-04 | High | Partly | No | Low | Windows only, and the spool keeps the new content. |
+| CORE-05 | High | Not a bug | | None | Cached pages come back as stored, by design. |
+| CORE-06 | High | **Confirmed** | No | Medium | `DeletePage(0)` writes a GIF with no colour table at all. |
+| CORE-07 | High | Partly | No | Low | `GetLine` wraps for rows of 512 MiB and more; upstream code. |
+| CORE-08 | High | Not a bug | | None | Zero-size dibs are refused on every path. |
+| CORE-09 | Medium | Not a bug | | None | Harmless; a NULL stream returns NULL. |
+| CORE-10 | Medium | Partly | Deliberate | Low | The INT64 callbacks are a documented choice; the wrapper does not leak. |
+| CMS-01 | Critical | **Confirmed** | New code | Medium | Device CMYK of a 16-bit min-is-white image is inverted; no memory corruption. |
+| CMS-02 | High | Not a bug | | None | Deliberate and documented; no inversion. |
+| CMS-03 | High | Partly | New code | Low | Float frames of JPEG XL animations skip the profile conversion. |
+| CMS-04 | High | Partly | No | Low | Rescale drops the profile of 16-bit min-is-white images. |
+| CMS-05 | Medium | Not a bug | | None | Upstream; the tag only duplicates the kept profile. |
+| CMS-06 | High | **Confirmed** | New code | Low | `ConvertToLinear` inverts 16-bit min-is-white images. |
+| CMS-07 | High | **Confirmed** | New code | Low | 8-bit PQ images get `FITM_NONE`. |
+| CMS-08 | High | Partly | New code | Low | 4 of 6 profile corner cases are real. |
+| TMO-01 | High | Partly | **Yes** (2 of 4 parts, 9b55043) | Medium | Black + one colour turns black or white; m > 1 inverts the tones. |
+| TK-01 | High | Partly | No | Low | No over-read; 1-bit rotation replaces the palette. |
+| TIFF-01 | High | Partly | No | Low | Multi-page thumbnails are mis-tagged but still reload. |
+| TIFF-02 | High | Not a bug | | None | libtiff refuses RowsPerStrip 0; no overflow. |
+| PSD-01 | High | Partly | No | **High** | Heap overflow WRITE (negative height) and READ (RLE table size wraps). |
+| PSD-02 | Medium | Partly | No | Low | 6-byte over-read on a short Exif tag made by the caller. |
+| BMP-01 | High | Partly | No (part 1 by design) | Low | Only the cut-file 0xFF case is wrong. |
+| BMP-02 | High | Partly | Mixed | Low | RLE8 delta past the row end; OS/2 64-byte header. |
+| PNG-01 | Medium | Partly | **Yes** (c637684) | Low | A cICP the loader cannot read silences gAMA. |
+| APNG-01 | High | Partly | New code | Low | Grey-profiled frames are composited unconverted; multi-frame saves drop text. |
+| MNG-01 | High | Partly | Mostly no | Low | JNG min-is-white colour type; header-only bpp of JNG with alpha. |
+| MNG-02 | High | Partly | New code | Low | Salvage gap in a cut CRC; the writer forces BACK mandatory; a missing IEND swallows a frame. |
+| GIF-01 | High | Partly | No | Low | Interlaced saves of 2 to 4 rows drop rows. |
+| WEBP-01 | High | Partly | No | Low | A CMYK still save is written as BGRA. |
+| JXR-01 | High | Not a bug | | None | Misquoted; part 6 was fixed by ce201d8. |
+| PNM-01 | High | **Confirmed** | No | Medium | A 19-byte header gives a 2.6 GB blank image. |
+| HDR-01 | High | Partly | **Yes** (part 2) | Low | Out of memory mid-file returns a partial image. |
+| EXR-01 | Medium | **Confirmed** | No | Low | Narrow uncompressed files cut early are refused. |
+| RAW-01 | High | Not a bug | | None | No call site reads past the buffer. |
+| AVIF-01 | Medium | Partly | New code | Low | Out of memory returns the untransformed image. |
+| HEIF-01 | Medium | **Confirmed** | New code | Low | Sequences ignore their nclx colour description. |
+| JPEG-01 | Medium | Partly | Mostly no | Low | Leaks on a failed save; greyscale loads keep RGB profiles. |
+| J2K-01 | Medium | Not a bug | | None | OpenJPEG already clamps every sample. |
+| TGA-01 | High | **Confirmed** | No | Low | Only on non-default (RGB-order or big-endian) builds. |
+| PLUG-01 | Medium | Partly | Mostly no | Medium | Unbounded allocations (RAS, IFF, WBMP, DXT); DXT decode; XBM X10 count. |
+| BUILD-01 | Medium | **Confirmed** | Yes (part 3) | Medium | MinGW build lacks the AVIF `mif3` flag; MSVC test project lacks a file. |
+
+### Bugs the report missed
+
+Found while checking the findings above.
+
+| Where | Bug | Regression? | Severity |
+| :--- | :--- | :--- | :--- |
+| `MNGHelper.cpp` `mng_ReadChunks` | A JNG (or an MNG holding one) whose alpha `IDAT` comes before the first `JDAT` and which ends at a chunk boundary makes `FreeImage_Load` loop forever. With no chunk header left and no JPEG data yet, the loop continues with the stale chunk name, and a stale `IDAT` is exempt from the bad-CRC throw. Reproduced with a 55-byte file, also with `FIF_LOAD_NOPIXELS` and through `FIF_MNG`. | Yes (2decc36) | High |
+| `MultiPage.cpp` | Out of memory: `FreeImage_SavePageToBlock` leaks its `FIMEMORY` when `writeFile` throws (about 512 KB for a 196 KB page), `FreeImage_LoadPageFromCache` leaks `compressed_data` when `readFile` throws, and a throw from `m_blocks.push_back` / `insert` after a page is stored leaves its blocks unreferenced until close. `RememberPageMetadata` silently drops the animation tags when its allocations fail. | New code (`main` had no `catch`) | Low |
+| `PluginJXL.cpp` `AddFrame` | The animation writer converts a frame to the animation layout (`ConvertTo*`, which drops the profile) before `ConvertToFileProfile`, so a tagged frame not already in that layout is recoloured from the default space: an Adobe RGB 0.5 RGBF frame is written as 0.5001 linear instead of about 0.2178. Tested for RGBF only. | New code | Low |
+| `PluginJPEG.cpp` `Save` | A failing output write longjmps out of `jpeg_write_scanlines` past `free(target)`: about 3 KB leaked per failed save. | No (same in `main`) | Low |
+| `PluginDDS.cpp` `LoadDXT` | Widths that are not a multiple of 4 decode wrong: one block per block row is skipped, so the rows shift. | No (same in `main`) | Low |
+
+### Errors in the report itself
+
+- The commit hashes `4cccd9aa7` and `d497fb956` do not exist; the audited code is `d521037`. The summary table lists 44 findings, not 46.
+- Quoted code that exists in no revision (HEAD, `d521037` or `main`): `bool CacheFile::cleanupMemCache()` with `if (!cleanupMemCache()) return NULL;` (CORE-02), the `HasPixels` form of `FreeImage_GetLine` (CORE-07), both checks of CORE-08, the 1-bit guard of TK-01, the `th_bpp` condition of TGA-01, `CopyICCProfile` (CMS-04), `BuildTables` / `m_tables` (CMS-06), `nBytes += oResource._Size` (PSD-01), `if (y == 0) throw` (HDR-01), the `IsWindowed` call (JXR-01) and `gets` (RAW-01). Functions named that do not exist: `SetDeviceOut` and `Combine` (CMS-01), `ValidateBitfields` (BMP-02), `SynthesizeExifProfile` (JPEG-01), `LoadStill` (HEIF-01).
+- Labelled regressions although `main` behaves the same: CORE-01, CORE-04, CORE-06, CMS-04, CMS-05, TK-01, TIFF-01, PSD-02, GIF-01, and most of BMP-02 and JPEG-01. CORE-07's text blames a `qpv` change to `CalculateLine` that never happened. Three findings labelled regressions are not bugs at all: CORE-08, CORE-09 and JXR-01.
+- Impacts claimed that do not occur: memory corruption (CMS-01, TK-01), infinite loops (TIFF-02, PSD-01 part 1), an unreadable file (BMP-02 part 1), a thumbnail ignored on reload (TIFF-01), metadata missing from header-only loads (AVIF-01).
+
 ---
 
 ## Executive Summary
@@ -18,9 +103,11 @@ The `qpv` branch introduces major architectural additions and rewrites over `ori
 
 Across these changes, **46 verified bugs and regressions** (several encompassing multiple closely related sub-bugs) were identified. The table below summarizes all findings by severity and subsystem.
 
+> *Verification: the summary table lists 44 findings, not 46. 11 hold as described, 24 in part and 9 not at all, and none is Critical; see [Verification results](#verification-results).*
+
 ---
 
-## Summary Table of Findings
+## Summary Table of Findings (as reported, before verification)
 
 | ID | Severity | Category | File(s) | Summary |
 | :--- | :--- | :--- | :--- | :--- |
@@ -80,6 +167,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-01] `FreeImage_Save` and `FreeImage_SaveU` truncate and delete existing target files on invalid inputs
+
+> **Verification (2026-10-18): Partly: the behaviour is real, the regression is not.** Verified severity **Low** (reported Critical).
+>
+> 1. `fopen(filename, "w+b")` runs before any argument check: **pre-existing**. `origin/main`'s `FreeImage_Save` opens the file the same way, so the existing content is already truncated to 0 bytes there.
+> 2. `qpv` added `remove()` / `_wremove()` on failure: **true and deliberate** ("do not leave a partial image behind"; it also catches a failing `fclose`). It removes a file whose content `fopen` had already destroyed, so nothing is lost that `main` kept.
+> 3. Tested at HEAD (`lead/core01.cpp`): a 14-byte file is gone after a refused save with a NULL dib, a `FIF_LOAD_NOPIXELS` dib, `FIF_UNKNOWN`, `FIF_AVIF` (read-only) and `FIT_COMPLEX` to GIF. `main` leaves a 0-byte file for the same calls.
+>
+> Still worth doing: check `fif`, `save_proc`, `HasPixels` and `SupportsExport*` before opening, or save to a temporary name and rename.
+
 - **Severity**: **Critical** (Data Loss Regression vs `origin/main`)
 - **Location**: `Source/FreeImage/Plugin.cpp:470-563`
 - **Code**:
@@ -109,6 +205,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-02] `CacheFile::lockBlock` self-evicts `m_current_block->data` after a single `cleanupMemCache` disk error, causing an immediate `NULL` dereference in `readFile`
+
+> **Verification (2026-10-18): Confirmed.** Verified severity **Medium** (reported Critical). Regression: **yes** (`main` ignored spool write errors and always evicted, so its list never stayed over-full).
+>
+> - The quoted code is wrong: `cleanupMemCache()` is `void` and `lockBlock()` never checks it. The mechanism holds anyway: after one failed flush the memory list stays at `CACHE_SIZE + 1`; `lockBlock()` of a block already in memory does not move it to the front, so its own `cleanupMemCache()` call can flush and free the very block it returns.
+> - Reproduced (`lead/core02.cpp`): `FreeImage_OpenMultiBitmap(FIF_TIFF, ..., keep_cache_in_memory = FALSE)`, 32 one-block pages, the 33rd append under `RLIMIT_FSIZE` (EFBIG, as on a full disk), the limit lifted, then `FreeImage_LockPage(0)`: SIGSEGV in `memcpy` in `CacheFile::readFile` (NULL source), called from `FreeImage_LoadPageFromCache` and `FreeImage_LockPage`. Without the refused write the page loads.
+> - Needs an on-disk cache and a spool write that fails once and later succeeds (a full disk that is then freed).
+
 - **Severity**: **Critical** (Crash / `NULL` Pointer Dereference)
 - **Location**: `Source/FreeImage/CacheFile.cpp:178-201`, `225-266`, `319-338`
 - **Code**:
@@ -156,6 +259,17 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-03] `CacheFile` permanent wedging (`m_current_block != NULL`) and memory/block leaks when `std::bad_alloc` is thrown
+
+> **Verification (2026-10-18): Confirmed (all four parts; details differ).** Verified severity **Medium** (reported High). Regression: **no**: `CacheFile` is the same in `main`, which has no `catch` at all, so there `std::bad_alloc` escaped the C API.
+>
+> Tested by failing the n-th `operator new` in the test program (196 runs, on a direct `CacheFile` driver and through the public API). No exception escaped and nothing crashed.
+> 1. `writeFile` wedge: **confirmed**. A throw from `allocateBlock()` (CacheFile.cpp:367) while block 2 or later is locked leaves `m_current_block` set for good. Afterwards every `AppendPage` returns FALSE, `LockPage` of earlier cached pages returns NULL and `CloseMultiBitmap` returns FALSE. A new file is never written; an existing file is left untouched with all edits lost. The blocks stay in the cache lists and `close()` frees them: held, not leaked.
+> 2. `lockBlock` reload: **confirmed** (only a disk cache with more than 32 blocks). `m_current_block` is set before `new BYTE[]`; a failure there wedges the cache the same way.
+> 3. `allocateBlock`: **confirmed, broader**. A throw from `new BYTE[]` leaks the `Block`; a throw from `push_front` leaks the `Block` and its 64 KB (LSan).
+> 4. `RememberPageMetadata` throwing after a stored page: **confirmed (differs)**. Only pages with `FIMD_ANIMATION` tags; the blocks are held until close, not leaked. `FreeImage_SavePageToBlock` has no `catch` of its own; its callers do.
+>
+> Related leaks the report missed are listed under "Bugs the report missed".
+
 - **Severity**: **High** (State Corruption & Memory Leak)
 - **Location**: `Source/FreeImage/CacheFile.cpp:204-218`, `230-237`, `352-375`; `Source/FreeImage/MultiPage.cpp:993-1012`, `1063-1084`, `1294-1320`
 - **Root Cause & Impact**:
@@ -170,6 +284,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-04] `FreeImage_CloseMultiBitmap` on Windows deletes destination file before `renameFile`
+
+> **Verification (2026-10-18): Partly: pre-existing, and now Windows-only.** Verified severity **Low** (reported High). Regression: **no**.
+>
+> 1. The quote drops the guard: the remove is inside `#ifdef _WIN32` (MultiPage.cpp:902-905). POSIX renames over the target atomically, and a failed rename keeps the original and drops the spool (tested with a failing `rename`). On Windows, a rename that fails after the remove leaves nothing at the path, but the spool holding the new content is kept and the message names both paths. `main` removed before renaming on every platform; `qpv` fixed POSIX in 6267d80.
+> 2. A remove that fails (sharing violation) makes the rename fail and leaves the spool: **true, Windows-only, minor**; the original stays intact. Same in `main`.
+
 - **Severity**: **High** (Data Loss Regression on Windows)
 - **Location**: `Source/FreeImage/MultiPage.cpp:885-900`
 - **Code**:
@@ -193,6 +313,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-05] MultiPage cached (`BLOCK_REFERENCE`) vs uncached (`BLOCK_CONTINUEUS`) load-flag and color-space mismatch
+
+> **Verification (2026-10-18): Not a bug (by design).** Verified severity **None** (reported High).
+>
+> A cached page is a bitmap the caller handed in (`AppendPage`, `InsertPage`, `UnlockPage(changed)`), and it comes back as stored. That is the documented design (`DISPLAY-ICC-PLAN.md` §2.2: "nothing: these are the app's own pixels", and §4.9, readable at `0abf265^`), and `TestAPI/ICC/profiles.c:1389` checks it.
+> 1. Tested: a page loaded with flags 0 from a CMYK TIFF is RGB. Changed and unlocked, it re-locks as RGB with the digest it was handed in with. Only an appended CMYK page comes back CMYK, because it is the caller's own. `SavePages` writes the same bytes, so `LockPage` and the saved file agree.
+> 2. `FIF_LOAD_DISPLAY_ICC`: a changed page is already display-referred and tagged; converting it again would be an identity.
+> 3. `FIF_LOAD_NOPIXELS`: a header-only page cannot be stored (`UnlockPage(TRUE)` fails), so cached pages always have pixels, and the flag is documented as "not supported by all plugins".
+
 - **Severity**: **High** (Behavioral Bug)
 - **Location**: `Source/FreeImage/MultiPage.cpp:350-398`, `1189-1208`
 - **Code**:
@@ -220,6 +348,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-06] MultiPage GIF palette destruction on `FreeImage_UnlockPage(..., TRUE)` or `FreeImage_DeletePage(bitmap, 0)`
+
+> **Verification (2026-10-18): Confirmed, pre-existing.** Verified severity **Medium** (reported High). Regression: **no** (`main` sets `GlobalPalette` on page 0 only and saves the same way).
+>
+> 1. Tags per page: **confirmed**. `NoLocalPalette` goes on every page, `GlobalPalette` on page 0 only (a deliberate choice, 14550e7).
+> 2. `UnlockPage(changed)` on a page > 0: **confirmed (differs)**. The cached one-page GIF has no colour table, so re-locking that page in the same session gives a grey ramp. The saved file is intact, though: the page's animation tags are restored and frame 1 is written without a local table, using page 0's global one (checked with Pillow too).
+> 3. `DeletePage(0)`: **confirmed**. The file is written with no global and no local colour table, and FreeImage and Pillow both decode every frame as grey.
+>
+> Fix hint: when page 0 has no `GlobalPalette`, `Save` writes the dib's own palette as the global table.
+
 - **Severity**: **High** (Color Corruption Regression)
 - **Location**: `Source/FreeImage/PluginGIF.cpp:1176-1207`, `1303`, `1354`, `1463`, `1517`, `1670`
 - **Root Cause & Impact**:
@@ -232,6 +369,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-07] `FreeImage_GetLine` / `FreeImage_GetPitch` 32-bit unsigned multiplication overflow on wide bitmaps
+
+> **Verification (2026-10-18): Partly: real, but upstream.** Verified severity **Low** (reported High). Regression: **no**.
+>
+> 1. `FreeImage_GetLine` multiplies in 32 bits: **confirmed**, and `GetPitch`, built from it, wraps too. `FIT_RGBAF` width 2^25, 32-bit width 2^27 and 8-bit width 2^29 all give `GetLine` = `GetPitch` = 0.
+> 2. "`qpv` updated `CalculateLine` to 64-bit": **false**. `main`'s `CalculateLine` and `GetLine` are identical to HEAD's.
+> 3. Such bitmaps can be allocated: **confirmed**, for rows of 512 MiB to 4 GiB.
+> 4. "Memory corruption": **confirmed (differs)**. `GetScanLine` stays inside the buffer (the rows alias), but callers sizing from `GetLine` misbehave: `FreeImage_Copy` returns the wrong pixels, and `FreeImage_FlipHorizontal` reads before its 0-byte buffer (ASan heap-buffer-overflow READ; SIGSEGV without ASan). No write overflow was found.
+
 - **Severity**: **High** (Integer Overflow / Heap Corruption)
 - **Location**: `Source/FreeImage/BitmapAccess.cpp:1211-1222` vs `Source/Utilities.h:332-336`
 - **Code**:
@@ -249,6 +394,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-08] Zero-dimension `FIBITMAP` with `FreeImage_HasPixels() == TRUE` via `FreeImage_CreateView` / `FreeImage_AllocateHeaderForBits` causes `SIGFPE`
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported High).
+>
+> Neither quoted check exists in HEAD, `d521037` or `main`. `FreeImage_AllocateBitmap` rejects a zero width or height on every path, external bits included (BitmapAccess.cpp:314). So `CreateView(dib, x, y, x, y2)`, `AllocateHeaderForBits` and `ConvertFromRawBitsEx` with a zero dimension all return NULL (tested at 8 and 24 bpp), and `FreeImage_Copy` / `FreeImage_Paste` never see such a dib. `main` has the same check.
+
 - **Severity**: **High** (`SIGFPE` Crash Regression)
 - **Location**: `Source/FreeImage/BitmapAccess.cpp:258-263`, `Source/FreeImageToolkit/CopyPaste.cpp:803-829`, `453`, `535`
 - **Code**:
@@ -276,6 +426,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-09] `_MemoryWriteProc` lacks a `size == 0 || count == 0` guard; `FreeImage_LoadMultiBitmapFromMemory` crashes on `stream == NULL`
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported Medium).
+>
+> 1. `_MemoryWriteProc` with a zero size or count returns `count` and may grow the buffer, unlike `fwrite`: **pre-existing and harmless**. `main` behaves the same (HEAD also zero-fills a seek gap that `main` leaves uninitialised), and there is no memory-safety effect.
+> 2. `FreeImage_LoadMultiBitmapFromMemory(fif, NULL, flags)` crashes: **false**. `_MemoryTellProc` returns -1 for a NULL handle (FreeImageIO.cpp:239), the page count is 0 and the call returns NULL (tested on 41 readable formats). Only a hand-built `FIMEMORY` with `data == NULL` crashes, which the API cannot produce, and `main` crashes on that too.
+
 - **Severity**: **Medium** (Regression / Crash)
 - **Location**: `Source/FreeImage/FreeImageIO.cpp:133-188`, `Source/FreeImage/MultiPage.cpp:1430-1460`
 - **Root Cause & Impact**:
@@ -289,6 +445,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CORE-10] Breaking ABI change in `FI_SeekProc` / `FI_TellProc` and memory leak in `fipMultiPage::unlockPage`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported Medium).
+>
+> 1. `FI_SeekProc` / `FI_TellProc` take `INT64`: **true, deliberate and documented** (7de5c34: "only old Windows binaries with callbacks of their own would break: QPV and the wrappers implement none"; comment at `FreeImage.h:596`; the .NET, Delphi, VB6, C++/CLI and AHK wrappers were updated). It breaks only binaries that are not rebuilt and implement their own callbacks, on Win32, Win64 and 32-bit POSIX. On LP64 Linux `long` already is 64-bit.
+> 2. `fipMultiPage::unlockPage` leaks: **false**. `FreeImage_UnlockPage` unloads the page on every FALSE return for a locked page (MultiPage.cpp:1239-1351). It leaves alone only a bitmap that is not a locked page, which is a caller error and the same in `main`. LSan is clean on the real wrapper.
+
 - **Severity**: **Medium** (ABI Compatibility & Memory Leak)
 - **Location**: `Source/FreeImage.h:598-599`, `Wrapper/FreeImagePlus/src/fipMultiPage.cpp:136-144`
 - **Root Cause & Impact**:
@@ -302,6 +464,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-01] `ColorConverter::CreateTransform`: Skipping Little CMS transform when `m_device_out && in.Same(out)` reinterprets `float*` scanlines as `WORD*` and inverts `FIT_UINT16` `FIC_MINISWHITE`
+
+> **Verification (2026-10-18): Confirmed, but the impact differs.** Verified severity **Medium** (reported Critical). New `qpv` code (`main` has no colour management).
+>
+> - The shortcut at `ColorManagement.cpp:958` ignores the formats when the output is device CMYK, and `Same()` is an exact byte comparison. Device CMYK is what `FreeImage_ConvertToCMYK(dib, NULL, 0, 0)` selects. (`SetDeviceOut` and `Combine` do not exist; `FreeImage_ConvertCMYKToRGB` takes the format-checked branch and is fine.)
+> - Scenario 2: **confirmed, broader**. A `FIT_UINT16` min-is-white image needs no profile at all, since the built-in source and device profiles are the same pointer. Samples 0/16384/49152/65535 give K = 65535/49151/16383/0, the reverse of the min-is-black equivalent (0/16384/49152/65535). With a Little CMS gray profile the result is right.
+> - Scenario 1: **confirmed (differs)**. Only a float image carrying FreeImage's built-in sRGB bytes (RGBF/RGBAF) or built-in gray bytes (FLOAT) is affected; any other profile, Little CMS's own sRGB included, gets a transform. The float row is read as `WORD`s, which gives wrong pixels but stays in bounds: **no memory corruption** (ASan clean in `Separate`). The built-in gray uses the sRGB curve, not gamma 2.2.
+>
+> Fix hint: take the device shortcut only when the sample sizes match (`T_BYTES`) and the input has no `T_FLAVOR`.
+
 - **Severity**: **Critical** (Memory/Pixel Corruption & Image Inversion)
 - **Location**: `Source/FreeImageToolkit/ColorManagement.cpp:958`, `1224-1226`, `1262-1264`
 - **Code**:
@@ -334,6 +505,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-02] `ColorConverter::SetSource` mutating `m_px.model = MODEL_RGB` for 8-bit greyscale images with an embedded RGB ICC profile breaks `FreeImage_ApplyICCProfile`, `FreeImage_ConvertToICCProfile`, and `ToDisplay`
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported High).
+>
+> Switching an 8-bit grey image that carries an RGB profile to the RGB model is deliberate ("a grey palette may come with an RGB profile", ColorManagement.cpp:886-888; `TestAPI/ICC/convert.c` encodes the same rule), and Little CMS cannot link `TYPE_GRAY_8` to an RGB profile.
+> 1. `FreeImage_ConvertToICCProfile(dib, NULL, 0, 0)` returns 24-bit RGB: true and documented ("palettes ... become 24- or 32-bit, or 8-bit grey"). "Attaches an sRGB profile" is false: the result is untagged.
+> 2. `FreeImage_ApplyICCProfile` recolours the palette, so the type becomes `FIC_PALETTE`: true and documented ("a palette changes its colours"). The colours shown match `ConvertToICCProfile` exactly.
+> 3. Min-is-white inversion: **false**. The table is built from `palette[i]`, and min-is-white and min-is-black images show identical greys.
+> 4. Display path: **false**. `ToDisplay` picks the grey target before `SetSource`, and the in-place 8-bit path honours `reversed` (tested with sRGB and ProPhoto display profiles).
+
 - **Severity**: **High** (Color / Palette Corruption)
 - **Location**: `Source/FreeImageToolkit/ColorManagement.cpp:135-141`, `251-253`, `884-894`, `1135-1150`, `2160-2194`, `2231-2246`
 - **Code**:
@@ -358,6 +538,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-03] `ConvertToFileProfile`: `TwinCache` short-circuit ignores floating-point default linear profiles (`FICMS_PROFILE_LINEAR_SRGB` / `FICMS_PROFILE_LINEAR_GRAY`) and `MODEL_RGB` vs `MODEL_GRAY` mismatches
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). New `qpv` code.
+>
+> 1. Float frames skip the conversion: **confirmed, in both directions** (untagged linear RGBF against an sRGB file profile; sRGB-tagged RGBF against a NULL one). Only the JPEG XL animation writer passes float frames: an sRGB-tagged RGBAF page next to an untagged one is stored wrong (0.2140 instead of 0.5, and 0.5 instead of 0.2140). WebP, APNG and MNG never pass floats.
+> 2. RGB vs grey twins: **false**. Every non-JPEG XL caller's target profile is RGB only, JPEG XL animations use RGB layouts, and grey into an sRGB twin is exact (R = G = B).
+
 - **Severity**: **High** (Skipped Linear $\leftrightarrow$ sRGB & RGB $\leftrightarrow$ Gray Conversion)
 - **Location**: `Source/FreeImageToolkit/ColorManagement.cpp:2490-2525`, `1837-1856`
 - **Code**:
@@ -384,6 +570,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-04] `CopyICCProfile` silently drops the ICC profile on `FIT_UINT16` `FIC_MINISWHITE` images in `FreeImage_RescaleRect` and `FreeImage_ConvertTo*`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). Regression: **no** (`main`'s `RescaleRect` never keeps a profile).
+>
+> The quoted `CopyICCProfile` is not HEAD's: BitmapAccess.cpp:746-771 copies the bytes itself, requires the same image type and depth, and never calls `FreeImage_CreateICCProfile`.
+> 1. `FreeImage_Rescale` / `RescaleRect` / `MakeThumbnail` drop the profile of a `FIT_UINT16` min-is-white image: **confirmed (differs)**. `RescaleRect` copies the profile before `CloneMetadata` (Rescale.cpp:90), while the result is still typed min-is-black. Rotate, Clone, Copy and `ConvertToUINT16` keep the profile, as do min-is-black and 8-bit min-is-white images.
+> 2. `ConvertTo*` drop it through `CopyICCProfile`: **false**. They never call it; those that drop profiles drop them for min-is-black too (upstream behaviour, documented).
+>
+> Fix hint: call `CloneMetadata` first. The order proposed under CMS-05 is the one that causes this.
+
 - **Severity**: **High** (Regression: Silent ICC Profile Loss)
 - **Location**: `Source/Utilities.h:769-793`, `Source/FreeImageToolkit/Rescale.cpp:89-95`, `Source/FreeImage/BitmapAccess.cpp:747-771`, `784-796`
 - **Code**:
@@ -425,6 +620,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-05] `FreeImage_Copy`, `FreeImage_EnlargeCanvas`, and `FreeImage_Rotate` erase `FIMD_EXIF_MAIN` `"InterColorProfile"` metadata
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported Medium).
+>
+> 1. "`qpv` modified `FreeImage_DestroyICCProfile`": **false**. Removing the Exif `InterColorProfile` tag there is upstream code (r1806, 3.18.0; `main` BitmapAccess.cpp:1103).
+> 2. `Copy` / `EnlargeCanvas` lose the tag: **pre-existing** (same order in `main`) and harmless. The ICC profile itself is kept and the tag only duplicates it; loaders strip it, and a stale copy is what would hurt (the TIFF writer writes it over the real profile: tested).
+> 3. `Rotate`: **false**. The tag and the profile survive (tested at 90 and 30 degrees, and `RotateEx`).
+
 - **Severity**: **Medium** (Regression: Lost Metadata Tag)
 - **Location**: `Source/FreeImageToolkit/CopyPaste.cpp:599-617`, `Source/FreeImageToolkit/Background.cpp:888-906`, `Source/FreeImageToolkit/ClassicRotate.cpp:868-869`, `895-896`, `912-913`
 - **Root Cause & Impact**:
@@ -440,6 +642,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-06] `FreeImage_ConvertToLinear` ignores `FIC_MINISWHITE` on `FIT_UINT16` images
+
+> **Verification (2026-10-18): Confirmed.** Verified severity **Low** (reported High). New `qpv` code.
+>
+> `BuildTables`, `m_tables` and `m_width` do not exist (the quote is invented), but the mechanism holds: `FIT_UINT16` maps to `IN_GREY16` and the colour type is never checked. A 16-bit min-is-white TIFF with samples 0/16384/32768/65535 linearises to 0/0.0509/0.2140/1.0, while its min-is-black equivalent gives 1.0/0.5225/0.2140/0. `FreeImage_ConvertToICCProfile` honours min-is-white. (Upstream's `ConvertTo8Bits` and `ConvertToStandardType` ignore it too.)
+
 - **Severity**: **High** (Bug: Inverted Linear-Light Image)
 - **Location**: `Source/FreeImage/ConversionLinear.cpp:259-277`, `398-400`, `588-591`, `614-627`
 - **Code**:
@@ -459,6 +666,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-07] 8-bit (`FIT_BITMAP`) PQ-encoded images are skipped by `ToDisplay` (`FIF_LOAD_DISPLAY_ICC`) but return `FITM_NONE` from `FreeImage_MustTonemap`
+
+> **Verification (2026-10-18): Confirmed.** Verified severity **Low** (reported High). New `qpv` code.
+>
+> `ToDisplay` keeps every PQ-tagged `FIT_BITMAP` and 16-bit image unconverted (ColorManagement.cpp:2143-2159), and `MustTonemap` returns `FITM_NONE` for any `FIT_BITMAP` before looking at the transfer (MustTonemap.cpp:542). An 8-bit PNG with cICP 9/16/0/1 loaded with `FIF_LOAD_DISPLAY_ICC` keeps its pixels and gets `FITM_NONE`, although README says "PQ gives FITM_PQ". `FreeImage_ConvertToLinear` handles the image correctly. Producers: 8-bit PQ PNG, AVIF and HEIF files.
+
 - **Severity**: **High** (Bug: Unhandled 8-bit PQ HDR Images)
 - **Location**: `Source/FreeImage/MustTonemap.cpp:541-543` vs `Source/FreeImageToolkit/ColorManagement.cpp:2155-2159`
 - **Code**:
@@ -485,6 +697,16 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [CMS-08] Multiple ICC/CICP/UnscaledBits bugs in `ConversionLinear.cpp` and `AttachCICPProfile` (`ColorManagement.cpp`)
+
+> **Verification (2026-10-18): Partly (4 of 6 parts).** Verified severity **Low** (reported High). New `qpv` code.
+>
+> - 1a. A 4-bit 0, 17, ..., 255 grey palette and a keyed narrow-range grey image are `FIC_PALETTE`: **true**, the upstream colour-type rule.
+> - 1b. `AttachCICPProfile` gives them an RGB profile: **not a bug**. It is deliberate (the PNG writer keeps such images as palettes, whose embeddable profile must be RGB) and equivalent for neutral pixels.
+> - 1c. `ConvertToLinear` rejects a GRAY profile on a 4-bit grey image: **confirmed** (136 maps to 0.2462 by the sRGB curve instead of 0.5333). The keyed narrow-range half is unreachable: narrow range implies a CICP tag, which outranks the profile.
+> - 2. An RGB profile on an 8-bit min-is-black image is rejected: **confirmed** (a grey JPEG saved with an RGB profile reloads like that). The `MustTonemap` part holds only for `FIT_UINT16`.
+> - 3. A GRAY profile with only an `AToB0` LUT falls back to the sRGB curve: **confirmed** (legal, rare).
+> - 4. `ConvertThroughProfile` ignores `UnscaledBits`: **confirmed**. 12-bit unscaled RGB16 through a LUT profile (test3.icc) gives 0.0013/0.0026/0.0053 instead of 0.0512/0.2155/1.0; reachable with `J2K_UNSCALED` / `JP2_UNSCALED` and a LUT colr profile.
+
 - **Severity**: **High** (Bug: Rejected/Mismatched ICC Profiles & UnscaledBits in Linear Conversion)
 - **Location**: `Source/FreeImage/ConversionLinear.cpp:331-343`, `475-492`, `525-540`; `Source/FreeImageToolkit/ColorManagement.cpp:2576-2581`
 - **Code**:
@@ -510,6 +732,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [TMO-01] `tmoReinhard05.cpp` & `tmoColorConvert.cpp`: Division by zero (`log(maxLum) - log(minLum) == 0`), exploding contrast exponent `m`, and unguarded `+Inf` in `FreeImage_TmoReinhard05Ex`
+
+> **Verification (2026-10-18): Partly: two real regressions.** Verified severity **Medium** (reported High). Regression: **yes for 1b and 2** (9b55043 made `minLum` skip zero pixels while `Llav` still counts them).
+>
+> - 1a. Uniform positive image (`maxLum == minLum`): **pre-existing**. HEAD and `main` agree: a sane grey up to L of about 69, all black from L = 86.7 in both.
+> - 1b. Black background + one colour: **confirmed (differs), a regression**. HEAD gets `k = m = +inf`: the lit pixels turn white and lose their hue (f·L < 1) or the whole image turns black (f·L > 1). `main` gives a sane result.
+> - 2. Zero pixels + a narrow positive range: **confirmed, a regression**. k and m grow past 1 (m from 0.81 to 44 as black covers 1/64 to 56/64 of a 0.5 to 0.8 ramp; every lit pixel is white once half the image is black). Also, with m > 1 the public `FreeImage_ToneMapping(FITMO_REINHARD05)` inverts the tone order (0.01 maps to 255, 1.0 to 145). The report's "k = 20..1000" is overstated (19 at 87.5 % black). Real photos take the other formula.
+> - 3. +Inf poisons `Cav`: **pre-existing**, and `main` is worse (one +Inf sample blacks out the whole image for every parameter set). HEAD only zeroes that channel, and only when a ≠ 1 and c ≠ 0.
+
 - **Severity**: **High** (Regression: `NaN` / All-Black Output Image & Exploding Exponent `m`)
 - **Location**: `Source/FreeImage/tmoReinhard05.cpp:40-44`, `94-107`, `140-156`, `228-235`; `Source/FreeImage/tmoColorConvert.cpp:285-288`, `564-584`
 - **Code**:
@@ -545,6 +775,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [TK-01] `ClassicRotate.cpp`: `FreeImage_Rotate` overwrites custom 1-bit palettes on all rotations (including 360°), and `Rotate90`/`Rotate270` read past the heap buffer on 1-bit views
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). Regression: **no** (same loops, guard and palette code in `main`).
+>
+> 1. Over-read past the heap on 1-bit views, and padding bits rotated into pixels: **false**. The loops do run to `src_pitch`, but the destination bounds `break` comes before `*sbits` is read, so source bytes past the line are never touched. ASan is clean on views at the parent's last row and on a tightly wrapped buffer, while a mutant that reads before the `break` fires on the same inputs. Padding bits all 0 or all 1 give identical, exact rotations. The quoted guard `((x << 3) + b < dst_width)` exists in no revision.
+> 2. The 1-bit palette is rebuilt as black/white: **confirmed**. Red/blue comes out white/black at 90, 180, 360 and -360 degrees, a black/grey palette is inverted, and the transparency table and background colour are dropped at 90/180/270. At ±360 they are kept (the report is wrong there); only the palette is replaced.
+
 - **Severity**: **High** (Regression: Heap Buffer Over-Read & Palette Corruption)
 - **Location**: `Source/FreeImageToolkit/ClassicRotate.cpp:359`, `548`, `808-815`, `854-866`
 - **Code**:
@@ -580,6 +816,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [TIFF-01] `PluginTIFF.cpp`: Saving a multipage TIFF page with a thumbnail tags the thumbnail SubIFD as `FILETYPE_PAGE` instead of `FILETYPE_REDUCEDIMAGE`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). Regression: **no** (same branch in `main`).
+>
+> - The mis-tag is real: a multi-page save passes `page >= 0` for the thumbnail SubIFD too, which gets `NewSubfileType` 2 plus PageNumber and PageName instead of 1 (dumped; single-page saves write 1).
+> - The impact is false: `ReadThumbnail` never looks at the subfile type ("subfiletype" appears only on the save side), and the page-0 thumbnail reloads through `FreeImage_Load` and `LockPage(0)`. Pages 1 and later lose theirs through the unrelated `thumbnailCount` guard, whatever their tag.
+
 - **Severity**: **High** (Regression: Corrupted Thumbnail SubIFD in Multipage TIFFs)
 - **Location**: `Source/FreeImage/PluginTIFF.cpp:2842`, `2991-3002`, `3039-3044`, `3217-3239`
 - **Code**:
@@ -605,6 +847,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [TIFF-02] `PluginTIFF.cpp`: `rowsperstrip == 0` causes infinite loops in strip readers; `PageCount` leaves active directory at last IFD; `LoadAsRBGA` 32-bit overflow
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported High).
+>
+> 1. `RowsPerStrip = 0`: libtiff refuses it while reading the directory (tif_dir.c:371, `goto badvalue32`), so the open fails before any strip loop. Crafted files on the strip, CMYK, LogLuv and RGBA paths return NULL at once.
+> 2. `PageCount` position: single-image loads (page -1) never call it, and multi-page loads always seek with `TIFFSetDirectory` (tested both ways on a 2-page file).
+> 3. `LoadAsRBGA` overflow: `tmsize_t` is `int64_t` on every build, and libtiff checks its own products.
+
 - **Severity**: **High** (Infinite Loop / Bug)
 - **Location**: `Source/FreeImage/PluginTIFF.cpp:1160-1174`, `1809`, `1824`, `1856`, `1936`, `2163`, `2323`, `2627`
 - **Root Cause & Impact**:
@@ -617,6 +866,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [PSD-01] `PSDParser.cpp`: Infinite loop on negative `oResource._Size`, missing `<= 0` dimension checks in `psdHeaderInfo::Read`, and 32-bit overflow in RLE line-size table allocations
+
+> **Verification (2026-10-18): Partly: two real memory-safety bugs, both pre-existing.** Verified severity **High**. Regression: **no** (`main`'s header read, `nHeight` and RLE table are identical).
+>
+> 1. A negative resource size loops forever: **false**. The real loop never adds `_Size` (sizes of 0 or less are skipped); -1, -2, -1000000 and 0xFFFFFFFF return at once.
+> 2. Missing dimension checks: **confirmed (differs)**. A zero width or height fails cleanly, but a **negative** height passes: `_Height` is signed and the only bound is `> 30000` for version 1. `const unsigned nHeight` (PSDParser.cpp:1578) then becomes about 4.29e9 while the allocator takes the absolute value, and the load ends in a **heap-buffer-overflow WRITE** in `ReadImageLine` (PSDParser.cpp:1488) called from `ReadImageData` (1736). The file is 104 bytes; this was re-run independently with an ASan build of `PSDParser.cpp`. PSB widths over 300000 are not enforced but stay bounded.
+> 3. RLE line-size table: **confirmed**. `new (std::nothrow) DWORD[nChannels*nHeight]` (1754) multiplies in 32 bits; 56 channels × 77,000,000 rows wraps to 17,032,704 entries and the largest-line scan reads past them (**heap-buffer-overflow READ**, ASan).
+>
+> Fix hint: reject `_Width <= 0 || _Height <= 0` (and the PSB limits) in `psdHeaderInfo::Read`; size the table as `(size_t)nChannels * nHeight`.
+
 - **Severity**: **High** (Infinite Loop / Heap Corruption / OOB)
 - **Location**: `Source/FreeImage/PSDParser.cpp:337-343`, `1277`, `1301-1314`, `1679`, `1754`, `1763`, `1772`, `1787`, `2205-2209`
 - **Root Cause & Impact**:
@@ -629,6 +887,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [PSD-02] `PSDParser.cpp`: Unchecked `tag_value` in `psd_write_exif_profile_raw` and in-place mutation of caller's thumbnail in `psdThumbnail::Write`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported Medium). Regression: **no**.
+>
+> 1. `psd_write_exif_profile_raw` compares 6 bytes before checking the tag: **confirmed**. An `ExifRaw` tag of 3 bytes saved as PSD gives an ASan heap-buffer-overflow READ of 6 bytes (PSDParser.cpp:251). It is the same in `main`, and `jpeg_write_exif_profile_raw` (PluginJPEG.cpp:947) has the same order. It needs a short tag made by the caller: the loaders check the "Exif\0\0" signature.
+> 2. `psdThumbnail::Write` mutates the caller's thumbnail and seeks to `SEEK_END`: **false**. The swap depends on the `isBGR` argument, which `Save` always passes as `false` (tested: bytes unchanged), and `SEEK_END` resumes after the thumbnail just written.
+
 - **Severity**: **Medium** (Crash / Unexpected Input Mutation)
 - **Location**: `Source/FreeImage/PSDParser.cpp:248-258`, `872-875`, `900`
 - **Root Cause & Impact**:
@@ -638,6 +902,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [BMP-01] `PluginBMP.cpp`: 32-bit BMP transparency regressions in `CarriesAlpha` and `SetAlphaFromUnusedByte`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High).
+>
+> 1. An all-zero alpha reloads opaque: **by design**, the trade-off accepted in 8722330 (BMP spec conformance item L1; ImageMagick, stb, WIC and Firefox read such files the same way). Even a V5 file then writes a zero alpha mask.
+> 2. `CarriesAlpha` ignores `FreeImage_IsTransparent`: **not a bug**. For 32-bit images, transparency follows the colour type and the alpha bytes, not the `SetTransparent` flag, throughout the library.
+> 3. A cut 32-bit `BI_RGB` file whose unused byte is 0xFF reads as transparent: **confirmed (minor)**. `SetAlphaFromUnusedByte` also scans the zero-filled rows that were never decoded; this is `qpv`'s salvage code.
+
 - **Severity**: **High** (Regression: Lost Transparency & False Transparency on Truncated BMPs)
 - **Location**: `Source/FreeImage/PluginBMP.cpp:742-755`, `1013-1022`, `1775-1795`, `1828`
 - **Code**:
@@ -667,6 +938,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [BMP-02] `PluginBMP.cpp`: Saving a default 16-bit RGB555 DIB (`masks == 0`) with an ICC profile writes zero bitfield masks; 16-bit RGB565 omits big-endian swap; `DecodeRLE8` / `LoadPixelDataRLE4` RLE bugs; `LoadOS22XBMP` 64-byte header offset bug
+
+> **Verification (2026-10-18): Partly; the impacts are overstated.** Verified severity **Low** (reported High).
+>
+> 1. A 16-bit image with an ICC profile writes zero V5 masks: the masks are 0, but "unreadable" is **false**. There is no `ValidateBitfields`: zero colour masks mean the default 555 layout (PluginBMP.cpp:967) and the file reloads. `main` writes zero masks too.
+> 2. Missing big-endian swap of the non-V5 masks: **pre-existing**, big-endian only.
+> 3. `DecodeRLE8` delta clamp `width + 1`: **confirmed**, and worse than stated. A delta past the end of the row followed by a run returns early, and on row 0 the whole image comes back NULL ("Error decoding RLE8"). Malformed streams only; `qpv`'s rewritten decoder.
+> 4. `LoadPixelDataRLE4` `int` arithmetic and unclamped delta: **pre-existing and guarded**. The loop-top and per-write clamps keep it in bounds (ASan clean); a real overflow needs an allocation over 2 GB, which fails first.
+> 5. OS/2 2.x 64-byte header with `bfOffBits == 0`: **confirmed, pre-existing**. Only 40 header bytes are read and the seek check uses 40, so the other 24 are decoded as pixels (tested). Affects such files whose `bfOffBits` is 54 or less.
+
 - **Severity**: **High** (Regression: Unreadable Saved BMP, RLE Bugs, and Corrupted OS/2 2.x BMP Load)
 - **Location**: `Source/FreeImage/PluginBMP.cpp:328`, `359`, `382-384`, `512`, `519-521`, `541-543`, `1162`, `1204`, `1224`, `1259`, `1829-1842`, `1930-1950`
 - **Root Cause & Impact**:
@@ -683,6 +963,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [PNG-01] `PluginPNG.cpp` & `MustTonemap.cpp`: `ConfigureDecoder` suppresses `gAMA` even when CICP code points are unspecified; `ExpandNarrowRange` fails on `FIF_LOAD_NOPIXELS` for 8-bit `FIC_MINISBLACK` and modifies pixels instead of palette on 8-bit `PNG_COLOR_TYPE_PALETTE` greyscale ramps
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported Medium).
+>
+> 1. A cICP chunk the loader cannot read (code points 2/2) suppresses `gAMA`: **confirmed**, a change from `main` (c637684). libpng flags any cICP, `ConfigureDecoder` counts it as a colour description, and `ReadsCICP` then rejects it: gAMA 1.0 + cICP 2/2/0/1 loads as 64/128/192/255, untagged, instead of 136/186/224/255. PNG 3 lets cICP outrank gAMA only "if understood by the decoder". The cICP precedence work kept "gAMA off for any cICP" on purpose, so this one needs a decision. Fix hint, if wanted: count only a readable cICP.
+> 2. `ExpandNarrowRange` on header-only loads and grey-ramp palettes: **false**. Header-only and full loads agree in every case tested (8-bit grey, identity grey `PLTE`, with and without `tRNS`), and remapping the indices of an identity palette gives exactly the colours a palette remap would.
+
 - **Severity**: **Medium** (Bug: Ignored Gamma Chunk & Narrow-Range Palette Bug)
 - **Location**: `Source/FreeImage/PluginPNG.cpp:587-591`, `810-811`, `976-980`; `Source/FreeImage/MustTonemap.cpp:183`, `194-209`
 - **Code**:
@@ -711,6 +997,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [APNG-01] `PluginAPNG.cpp`: Grayscale APNG with Gray ICC profile loses profile on `APNG_PLAYBACK` and uses wrong curve in `APNG_LINEAR_BLEND`; `RenderFrame` ignores `flags` changes; post-`IDAT` duplicate `PLTE` breaks load; multi-frame save drops metadata
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). New `qpv` code.
+>
+> 1. A grey ICC profile is lost in `APNG_PLAYBACK`: **confirmed (differs)**. Dropping it is right (a GRAY profile cannot tag RGBA; `CopyColorDescription` checks the source profile, not the destination), but the grey frames are composited without being converted through their profile, so a gamma 1.0 grey shows up to 73 levels off (gamma 1.8: 19; an sRGB-curve grey: 0). MNG playback converts every layer. The sRGB curve for `APNG_LINEAR_BLEND` is documented. Only third-party files are affected: FreeImage's APNG writer keeps RGB profiles only.
+> 2. `RenderFrame` ignores changed flags: **false**. The flags are fixed per open handle.
+> 3. A `PLTE` after `IDAT` is routed ahead of it: true, but such a file is invalid anyway. libpng rejects the duplicate ("PLTE: duplicate", not "Too many PLTE chunks") with or without FreeImage's routing, which exists for files whose only `PLTE` comes late.
+> 4. Multi-frame saves drop comments, XMP and `tIME`: **confirmed**. `CompressFrame` writes only `pHYs` and `iCCP`/`sRGB`; a lone untagged page, saved as a plain PNG, keeps them.
+
 - **Severity**: **High** (Multiple Bugs in New `PluginAPNG`)
 - **Location**: `Source/FreeImage/PluginAPNG.cpp:459`, `580-618`, `716-725`, `747-785`, `929-945`; `Source/FreeImage/MustTonemap.cpp:136-139`
 - **Root Cause & Impact**:
@@ -727,6 +1021,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [MNG-01] `MNGHelper.cpp` & `PluginMNG.cpp`: Invalid JNG save for 8-bit `FIC_MINISWHITE`, `FIF_LOAD_NOPIXELS` BPP mismatch on JNG with alpha, unconditional `SwapLong` in `mng_WriteJNG`, and global `bKGD` 8-bit shift bug
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High).
+>
+> 1. Min-is-white saved as JNG: **confirmed**. The `JHDR` says colour type 10 over a 1-component JPEG (pre-existing: `main` does the same), and the grey profile is left out with a warning (new). FreeImage reloads the file correctly; other decoders may not.
+> 2. `FIF_LOAD_NOPIXELS` on a JNG with alpha reports 24 bpp where a full load gives 32: **confirmed, pre-existing**.
+> 3. `SwapLong` in `mng_WriteJNG`: **pre-existing**, big-endian only.
+> 4. Top-level `bKGD` shifted `>> 8`: **not a bug**. MNG 1.0 §4.6: "In the MNG top level, all of these chunks are written as though for 16-bit RGBA PNG datastreams."
+
 - **Severity**: **High** (Multiple Bugs in JNG/MNG)
 - **Location**: `Source/FreeImage/MNGHelper.cpp:1141`, `1249`, `1347-1358`, `1387-1392`, `1407`; `Source/FreeImage/PluginMNG.cpp:501-513`, `1046-1050`
 - **Root Cause & Impact**:
@@ -742,6 +1044,15 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [MNG-02] `MNGHelper.cpp` & `PluginMNG.cpp`: Memory leaks on `realloc` failure, unchecked EOF on chunk CRC, advisory `BACK` treated as mandatory, 0-byte local `tRNS` breaking `libpng`, and missing `IEND` swallowing frames
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). Checking it turned up a High hang the report missed (see "Bugs the report missed").
+>
+> - 1a. `realloc` leaks: **pre-existing**, out of memory only (chunk lengths are bounded by the file size).
+> - 1b. The EOF check ignores the CRC: **confirmed (differs)**. A JNG cut 0 to 2 bytes into the CRC of a chunk after `JDAT` returns NULL ("bad CRC") instead of salvaging; cuts inside the payload or after the chunk salvage. `crc_file` is uninitialised only for the first chunk and can only force a mismatch. `main` returns NULL for every cut, so this is a gap in 2decc36's salvage.
+> - 2. Advisory `BACK` treated as mandatory: **confirmed (differs)**. Using an advisory background when reading is allowed (§4.3.1: "Applications can use them if they choose to"), but the writer always sets `mandatory_background = 1` from the page's background colour, so a transparent PNG with a `bKGD` chunk, re-saved as MNG, plays back opaque.
+> - 3. A 0-length local `tRNS`: **not a bug**. MNG 1.0 signals inheritance only with an empty `PLTE`, and libpng ignores a 0-length `tRNS` as benign.
+> - 4. A missing `IEND` swallows frames: **confirmed (differs)**. The scan runs to the next `IEND`, not to the end of the file, and the next image is lost (1 page instead of 2). Malformed files only.
+
 - **Severity**: **High** (Memory Leak, Uninitialized Read, and Spec Bugs in MNG/JNG)
 - **Location**: `Source/FreeImage/MNGHelper.cpp:868`, `949`, `969`, `978`, `1038`, `1077`; `Source/FreeImage/PluginMNG.cpp:304-335`, `501-513`, `1194`, `1251-1255`, `1576`, `1987`
 - **Root Cause & Impact**:
@@ -758,6 +1069,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [GIF-01] `PluginGIF.cpp`: Interlaced GIF `Save` drops rows when `height <= 4`, `Load` has an off-by-one out-of-bounds write on `transparent_color == size`, and big-endian `Save` passes byte-swapped `width` to `CompressStart`
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High). Regression: **no**.
+>
+> 1. Interlaced saves of 2 to 4 row images drop rows: **confirmed, pre-existing** (`main`'s `Save` has the same `if`; `qpv` fixed only `Load`). It is reachable when the "Interlaced" animation tag is 1, e.g. when a loaded interlaced GIF is saved again: heights 2, 3 and 4 keep one row; heights 1, 5 and 6 are fine.
+> 2. `transparent_color <= size` writes out of bounds: **false**. `table` is `BYTE[256]`, `size` is at most 256 and only `size` entries are used. The only effect: a transparent index equal to the palette size gives an all-opaque table.
+> 3. A byte-swapped width reaches `CompressStart`: **confirmed, big-endian only**, pre-existing.
+
 - **Severity**: **High** (Regression: Corrupted Interlaced GIFs & OOB Write)
 - **Location**: `Source/FreeImage/PluginGIF.cpp:1408-1415`, `1484-1489`, `1693`, `1703-1726`
 - **Code**:
@@ -795,6 +1113,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [WEBP-01] `PluginWebP.cpp`: Still WebP `Save` (`!as_frame`) does not convert 32-bit CMYK or non-RGB ICC profiles; single-frame animation metadata is stripped by `WebPMuxAssemble`; 1-page multipage WebP with offset saved as animation; misleading warning on `VP8X`-only truncated WebP
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High).
+>
+> 1. A still WebP save writes 32-bit CMYK as BGRA: **confirmed, pre-existing** (`main`'s still path is the same). K becomes alpha and the CMYK profile is written. It needs an explicit `*_CMYK` load flag. Untagged pages of a multi-page WebP take the same path; only pages with animation tags are converted.
+> 2. One full-canvas frame loses `ANIM`/`ANMF`: true, but libwebp's `MuxCleanup` does that on purpose, and one frame's duration and loop count show nothing.
+> 3. One page with an offset is written as an animation: **not a bug**. A still image cannot hold an offset or a larger canvas; the file reloads as one page with all its tags.
+> 4. A warning on a cut `VP8X`-only file: **false**. libwebp refuses a mux without an image, so only the parsing error is printed.
+
 - **Severity**: **High** (Bug: Corrupted CMYK WebP Save & Animation Metadata Bugs)
 - **Location**: `Source/FreeImage/PluginWebP.cpp:307-312`, `762-825`, `1076-1118`, `1142-1191`, `1222-1234`
 - **Root Cause & Impact**:
@@ -814,6 +1140,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [JXR-01] `PluginJXR.cpp`: `CopyBandedPixels` passes current stream position `image_pos` instead of `uImageOffset` to `IsWindowed`, breaking windowed JXR banded decoding
+
+> **Verification (2026-10-18): Not a bug (part 6 fixed since).** Verified severity **None** (reported High).
+>
+> - 1 to 4. The quoted call does not exist. The real one is `IsWindowed(pWS, image_pos) || (bHasAlpha && IsWindowed(pWS, uAlphaOffset))` (PluginJXR.cpp:1783), and the stream sits at the codestream start by design (`ReadContainer` ends with `SetPos(uImageOffset)`, and jxrlib's own `Copy` relies on it). A signature mismatch returns TRUE, which gives the safe full-height band, not FALSE. Instrumented: a windowed file shows `GetPos == uImageOffset`, a full-height band and all 8 orientations exact; forcing FALSE makes the same file fail. The bands are 128 rows, not 64.
+> - 5. `(UINT64)width * height * bpp / 8` can wrap: true but harmless. When it wraps the raster is at least 2^61 bytes, and the allocation right after is refused.
+> - 6. An out-of-memory `cmyk_alpha` plane is ignored: **fixed since** by ce201d8 (JPEG XR and JPEG XL loads now fail; tested).
+
 - **Severity**: **High** (Regression: Broken Windowed JXR Decoding & 64-bit Overflow)
 - **Location**: `Source/FreeImage/PluginJXR.cpp:1750-1792`, `1909`, `1980-1988`
 - **Code**:
@@ -841,6 +1174,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [PNM-01] `PluginPNM.cpp`: Raw PBM/PGM/PPM (`P4`, `P5`, `P6`) bypasses `y > 0` and `PlausibleImageSize` on EOF, allocating multi-GB bitmaps from a 15-byte header
+
+> **Verification (2026-10-18): Confirmed (details differ), pre-existing.** Verified severity **Medium** (reported High). Regression: **no** (`main` allocates the same and returns the same blank image, without the warning; HEAD is also faster on such files).
+>
+> - No PNM variant checks the size before allocating: "unlike ASCII" is wrong (a 19-byte P3 header also allocates 2.6 GB before it fails). Raw files then keep the bitmap at EOF on purpose ("raw data always kept what it read", a156574).
+> - `P6\n30000 30000\n255\n` (19 bytes, not 15) takes 2.6 GB and returns a blank 30000×30000 image with "0 of 30000 rows"; P5 takes 887 MB and P4 (15 bytes) 118 MB.
+>
+> Fix hint: bound raw rasters by the bytes left in the file before allocating, as BMP does since 0fe40ec, and return NULL when nothing was read.
+
 - **Severity**: **High** (Bug: DoS Allocation & 0-Row Blank Image on Truncated Header)
 - **Location**: `Source/FreeImage/PluginPNM.cpp:365`, `571-592`
 - **Code**:
@@ -864,6 +1205,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [HDR-01] `PluginHDR.cpp`: Calling `rgbe_ReadPixels_RLE(..., width, 1)` per row breaks flat HDR files when pixel 0 of any row has `R=2, G=2, B<128` and masks mid-image `malloc` OOM as a partial image
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported High).
+>
+> 1. Reading row by row breaks flat files whose rows start with (2, 2, B < 128): **false premise**. `main` also reads one row per call, and Radiance's own `freadcolrs` tests every scanline the same way; no conforming writer produces such a pixel (the largest mantissa is at least 128). HEAD keeps the rows before the bad one, where `main` returned NULL.
+> 2. Out of memory mid-file is reported as a cut file: **confirmed, new on `qpv`**. Failing the per-row `malloc` on row 1 or 2 returns a partial image where `main` returned NULL. This contradicts the out-of-memory-fails rule of 59ea9d5 and ce201d8.
+
 - **Severity**: **High** (Regression: False Format Error on Valid Flat HDRs & Masked OOM)
 - **Location**: `Source/FreeImage/PluginHDR.cpp:406-428`, `678-733`
 - **Code**:
@@ -891,6 +1238,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [EXR-01] `PluginEXR.cpp`: `CheckDataWindow` rejects truncated scanline EXR files before `ReadEachBlock` can salvage them
+
+> **Verification (2026-10-18): Confirmed.** Verified severity **Low** (reported Medium). Regression: **no** (`main` refuses every cut EXR).
+>
+> The `chunks * 16 <= stream_bytes` bound (PluginEXR.cpp:205) holds only for complete files. A 1×4000 FLOAT `EXR_NONE` file cut at 10 to 75 % of its data is refused ("chunk table alone needs 64000 bytes") and salvaged at 90 %; a 2×4000 RGB file is refused below 50 %; ZIP-compressed and 64-pixel-wide files salvage at every cut.
+>
+> Fix hint: bound by the header plus 8 bytes per chunk, since the offset table precedes all chunk data.
+
 - **Severity**: **Medium** (Bug in Partial-EXR Recovery)
 - **Location**: `Source/FreeImage/PluginEXR.cpp:200-210`, `590-615`
 - **Root Cause & Impact**:
@@ -899,6 +1253,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [RAW-01] `PluginRAW.cpp`: `LibRaw_freeimage_datastream::gets` lacks NUL termination on long lines and fails on EOF without `\n`; `scanf_one` fails on NUL padding
+
+> **Verification (2026-10-18): Not a bug in effect.** Verified severity **None** (reported High).
+>
+> 1. `gets` can leave a full buffer without a NUL: the deviation is real and **pre-existing** (`main` has the same `memset` and up-to-length loop; the quoted code is not HEAD's), but no LibRaw call site reads past it. The ten `fgets` callers terminate their buffers or compare with `strncmp` and short literals, and `parse_mos` never calls it.
+> 2. At EOF without a newline: `NULL` is returned, but the buffer keeps what was read. Only `parse_rollei` checks, and a valid Rollei header ends with a newline.
+> 3. `scanf_one` and NUL padding: **false**. None of LibRaw's own streams skips a leading NUL; FreeImage's is more lenient than theirs.
+
 - **Severity**: **High** (Buffer Over-Read / Parsing Bug)
 - **Location**: `Source/FreeImage/PluginRAW.cpp:168-196`
 - **Code**:
@@ -929,6 +1290,12 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [AVIF-01] `PluginAVIF.cpp`: `ApplyTransforms` silently returns an uncropped/unrotated image on OOM; `LoadHeader` omits Exif/XMP metadata and multi-page frame seek
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported Medium). New `qpv` code.
+>
+> 1. Out of memory in the `clap` or `irot` step returns the untransformed image: **confirmed**, though not silently (a "Could not apply the ... rotation" warning is printed). With the rotation's allocation refused, a 256×512 image comes back 512×256, while a header-only load reports the rotated size. This contradicts the out-of-memory-fails rule.
+> 2. `LoadHeader` omits metadata and the page seek: **false**. `AttachMetadata` is called in `LoadHeader` (PluginAVIF.cpp:627) and has been since the plugin's first commit; header-only and decoded pages agree in 44 page pairs (size, type, ICC, Exif, XMP, CICP, FrameTime).
+
 - **Severity**: **Medium** (Bug in New `PluginAVIF`)
 - **Location**: `Source/FreeImage/PluginAVIF.cpp:371-411`, `605-631`
 - **Root Cause & Impact**:
@@ -938,6 +1305,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [HEIF-01] `PluginHEIF.cpp`: Animated HEIF (`heics`) sequences ignore `nclx` (`colr`) CICP color descriptions
+
+> **Verification (2026-10-18): Confirmed.** Verified severity **Low** (reported Medium). New `qpv` code.
+>
+> `ReadSampleEntry` reads a `colr` box only when it is `prof` or `rICC`, and no code attaches CICP to sequence frames. A sequence whose sample entry carries nclx 12/13/6 (Display P3) loads with no CICP tag and no profile, so P3, BT.2020, PQ and HLG frames are taken as sRGB. Stills get theirs (the still path is `AttachCICP`; there is no `LoadStill`). libheif's track decoder ignores that box too.
+
 - **Severity**: **Medium** (Bug in New `PluginHEIF`)
 - **Location**: `Source/FreeImage/PluginHEIF.cpp:1170-1185` vs `1717-1765`
 - **Root Cause & Impact**:
@@ -946,6 +1318,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [JPEG-01] `PluginJPEG.cpp` & `Exif.cpp`: `Save` leaks `cinfo` on `malloc` failure; `JPEG_GREYSCALE` attaches RGB/CMYK ICC profiles to 8-bit greyscale output; `jpeg_read_exif_dir` aborts on truncated IFD1; `ReplaceWithRotated` overwrites swapped DPI
+
+> **Verification (2026-10-18): Partly.** Verified severity **Low** (reported Medium).
+>
+> 1. `Save` leaks the libjpeg object when a `malloc` fails: **confirmed, pre-existing** (`Save` is the same as `main`'s; about 99 KB per failed save). Also, not in the report: a failing output write longjmps past `free(target)` (about 3 KB per save, reachable on a full disk), same in `main`.
+> 2. `JPEG_GREYSCALE` keeps an RGB or CMYK profile. An embedded RGB profile: **pre-existing** (same in `main`). The Adobe RGB profile made for Exif ColorSpace 2 (`IsExifAdobeRGB`; there is no `SynthesizeExifProfile`) is attached too: **new on `qpv`**. CMYK: unreachable, `JPEG_GREYSCALE` on a CMYK file fails on both.
+> 3. `jpeg_read_exif_dir` returns FALSE on a bad IFD1: **not a bug in effect**. The IFD0, Exif, GPS and Interop tags are stored by then and every caller ignores the return value, so only the thumbnail is lost, as the comment says. Same in `main`.
+> 4. `ReplaceWithRotated` undoes Rotate's DPI swap: **false premise**. `FreeImage_Rotate` never swaps DPI (there is no `DotsPerMeter` in ClassicRotate.cpp, at HEAD or in `main`), and both builds give the same, unswapped values. What is real: a 90° or 270° Exif rotation does not swap the X and Y resolution (pre-existing).
+
 - **Severity**: **Medium** (Regressions in JPEG & Exif)
 - **Location**: `Source/FreeImage/PluginJPEG.cpp:776-787`, `1261-1264`, `1319-1324`, `1753-1758`; `Source/Metadata/Exif.cpp:803-808`, `1034-1045`
 - **Root Cause & Impact**:
@@ -965,6 +1345,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [J2K-01] `J2KHelper.cpp`: `SampleScale::operator()` fails to clamp out-of-range DWT values when `m_table.empty()`, causing integer wrap-around
+
+> **Verification (2026-10-18): Not a bug.** Verified severity **None** (reported Medium).
+>
+> OpenJPEG 2.5.4 clamps every sample after the inverse wavelet transform, 5-3 and 9-7 alike, to [0, 2^prec - 1] or to the signed range (`opj_tcd_dc_level_shift_decode`, tcd.c:2328-2352). Lossy encodes at rates 8, 30 and 100 (8 and 16-bit, signed and unsigned, 12-bit scaled and unscaled) never left the range, and FreeImage's samples matched OpenJPEG's in 18 of 18 cases. `main` casts the same way.
+
 - **Severity**: **Medium** (Bug: Pixel Wrap-Around on Wavelet Overshoot)
 - **Location**: `Source/FreeImage/J2KHelper.cpp:184-207`
 - **Code**:
@@ -984,6 +1369,11 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [TGA-01] `PluginTARGA.cpp`: `Save` swaps channels/endianness on `dib` instead of `thumbnail` when writing a TGA 2.0 postage stamp
+
+> **Verification (2026-10-18): Confirmed, but only on non-default builds; pre-existing.** Verified severity **Low**, and **None** on default builds (reported High).
+>
+> `SwapRedBlue32(dib)` / `swapShortPixels(dib)` act on the caller's dib after the main image is written and leave the thumbnail unswapped, but that code is compiled only under `FREEIMAGE_COLORORDER_RGB` or on big-endian hosts. RGB order is the default only on big-endian hosts and no makefile or project defines either macro, so x86-64 and ARM64 Linux, Windows and macOS builds are unaffected ("macOS/Linux RGB builds" is wrong). An 8-bit dib with a 24-bit thumbnail cannot occur (equal bpp is required). Same in `main`; it was left open by decision in the earlier qpv-vs-main review.
+
 - **Severity**: **High** (Bug: Corrupts Caller's `dib` and Writes Wrong Thumbnail Order)
 - **Location**: `Source/FreeImage/PluginTARGA.cpp:1668-1673`
 - **Code**:
@@ -1008,6 +1398,14 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [PLUG-01] Smaller Plugins (`PluginIFF`, `PluginPCX`, `PluginTARGA`, `PluginRAS`, `PluginWBMP`, `PluginDDS`, `PluginXBM`): 0-row partial images on EOF, missing `PlausibleImageSize`, and XBM dimension/padding bugs
+
+> **Verification (2026-10-18): Partly.** Verified severity **Medium** (reported Medium). Mostly **pre-existing**.
+>
+> 1. A file that ends right after its header returns a blank image (IFF, PCX, TGA, RAS, WBMP): **true, pre-existing and deliberate** (f3b5313: "still returned when it holds no row at all, as before"). `main` returns the same bitmaps, without a warning.
+> 2. No size bound before allocating: **confirmed, broader, pre-existing**. RAS (raw and RLE), IFF (raw and RLE), WBMP and DDS DXT allocate from the header: 48 bytes give 391 MB (IFF), 32 bytes 519 MB (RAS), 8 bytes 519 MB (WBMP) and 136 bytes 519 MB (DXT); IFF can reach about 12.9 GB. PCX and TGA are bounded at HEAD, where `main` allocated 261 MB and 1 GB.
+>    DXT `width &= ~3`: **confirmed (differs), pre-existing**. 1×1 to 3×3 DXT files return NULL, and, worse, any width that is not a multiple of 4 decodes wrong (block rows shift: a 6×8 file comes out 4×8 with wrong rows).
+> 3. XBM: (a) the dimension checks are **pre-existing**; zero and negative sizes return NULL at HEAD (`main` hangs on some). A wrapping `int` product combined with a 4 GB allocation was not tested and is likely real. (b) The X10 row count: **confirmed (differs)**, `qpv` code. Valid files load; cut files with padding report too few rows, or NULL after one row (`main` hangs on them).
+
 - **Severity**: **Medium** (Bugs in Partial-Image Handling & Input Validation)
 - **Location**:
   - `Source/FreeImage/PluginIFF.cpp:545-555`, `597`
@@ -1031,6 +1429,13 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 ---
 
 #### [BUILD-01] Outdated source list generators (`gensrclist.sh`, `genfipsrclist.sh`), missing `-DAVIF_ENABLE_EXPERIMENTAL_MINI=1` in `Makefile.mingw`, and missing `testToneMapping.cpp` in `Test.2017.vcxproj`
+
+> **Verification (2026-10-18): Confirmed (details differ).** Verified severity **Medium** (reported Medium).
+>
+> 1. `gensrclist.sh` / `genfipsrclist.sh` are stale: **confirmed**. They name the deleted OpenEXR 2.2 directories and lack `OpenEXR/OpenEXR`, `OpenEXRCore` and `LibDeflate`. "`.cc` files are dropped" is **false**: the `egrep` pattern is unanchored. Nothing runs these scripts; `Makefile.srcs` is maintained by hand.
+> 2. `Makefile.mingw` lacks `-DAVIF_ENABLE_EXPERIMENTAL_MINI=1`: **confirmed (differs)**. Every other makefile and `LibAVIF.2017.vcxproj` (not `FreeImage.2017.vcxproj`) define it. Without it libavif rejects the `mif3` brand, so `FIF_AVIF` does not claim the file and `FIF_HEIF` does, then fails ("AV1" not built in). Simulated: the three corpus `mif3` files fail; HEAD loads them as AVIF.
+> 3. `TestAPI/Test.2017.vcxproj` lacks `testToneMapping.cpp`: **confirmed**. `MainTestSuite.cpp:115` calls `testToneMapping()`, so an MSVC build fails to link; `TestAPI/Makefile` builds `*.cpp` and is fine.
+
 - **Severity**: **Medium** (Build System Regressions)
 - **Location**: `gensrclist.sh`, `genfipsrclist.sh`, `Makefile.mingw:45`, `TestAPI/Test.2017.vcxproj`
 - **Root Cause & Impact**:
