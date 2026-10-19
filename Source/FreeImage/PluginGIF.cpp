@@ -79,6 +79,8 @@ struct GIFinfo {
 	unsigned logical_height;
 	unsigned max_right;			// frame extents written so far
 	unsigned max_bottom;
+	int written_gct_size;		// entries of the Global Color Table page 0 wrote, or 0
+	RGBQUAD written_gct[256];
 
 	//GIF_PLAYBACK cache: the last canvas handed out
 	struct PlaybackCache {
@@ -110,7 +112,8 @@ struct GIFinfo {
 
 	GIFinfo() : read(0), global_color_table_offset(0), global_color_table_size(0), background_color(0),
 		cut(FALSE), canvas_cached(FALSE), canvas_width(0), canvas_height(0), loop_count(1),
-		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0)
+		lsd_offset(-1), lsd_written(FALSE), logical_width(0), logical_height(0), max_right(0), max_bottom(0),
+		written_gct_size(0)
 	{
 	}
 };
@@ -1429,6 +1432,35 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	return dib;
 }
 
+//page 0's Global Color Table has the frame's colors: the same where both define them, and every index the frame uses
+static bool
+GlobalTableHolds(const GIFinfo *info, FIBITMAP *dib, int bpp) {
+	const RGBQUAD *pal = FreeImage_GetPalette(dib);
+	if( info->written_gct_size == 0 || pal == NULL ) {
+		return false;
+	}
+	const int colors = 1 << bpp;
+	const int n = MIN(colors, info->written_gct_size);
+	for( int i = 0; i < n; i++ ) {
+		if( pal[i].rgbRed != info->written_gct[i].rgbRed || pal[i].rgbGreen != info->written_gct[i].rgbGreen || pal[i].rgbBlue != info->written_gct[i].rgbBlue ) {
+			return false;
+		}
+	}
+	if( colors > info->written_gct_size ) {
+		const unsigned width = FreeImage_GetWidth(dib), height = FreeImage_GetHeight(dib);
+		for( unsigned y = 0; y < height; y++ ) {
+			const BYTE *bits = FreeImage_GetScanLine(dib, y);
+			for( unsigned x = 0; x < width; x++ ) {
+				const int index = (bpp == 8) ? bits[x] : ((x & 1) ? (bits[x >> 1] & 0x0F) : (bits[x >> 1] >> 4));
+				if( index >= info->written_gct_size ) {
+					return false;
+				}
+			}
+		}
+	}
+	return true;
+}
+
 static BOOL DLL_CALLCONV 
 Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void *data) {
 	if( data == NULL ) {
@@ -1520,6 +1552,11 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 					globalpalette = (RGBQUAD *)FreeImage_GetTagValue(tag);
 				}
 			}
+			//a first frame that takes the global table but carries none: its own palette is that table
+			if( globalpalette == NULL && no_local_palette ) {
+				globalpalette = pal;
+				globalpalette_size = 1 << bpp;
+			}
 
 			//Logical Screen Descriptor
 			io->write_proc(&logicalwidth, 2, 1, handle);
@@ -1582,6 +1619,8 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 					io->write_proc(&globalpalette[i].rgbBlue, 1, 1, handle);
 					i++;
 				}
+				info->written_gct_size = globalpalette_size;
+				memcpy(info->written_gct, globalpalette, globalpalette_size * sizeof(RGBQUAD));
 			}
 
 			//Application Extension
@@ -1658,6 +1697,11 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		io->write_proc(&b, 1, 1, handle);
 		b = 0;
 		io->write_proc(&b, 1, 1, handle);
+
+		//a frame without a Local Color Table shows the global one: unless that holds its colors, it gets its own
+		if( no_local_palette && !GlobalTableHolds(info, dib, bpp) ) {
+			no_local_palette = false;
+		}
 
 		//Image Descriptor
 		b = GIF_BLOCK_IMAGE_DESCRIPTOR;

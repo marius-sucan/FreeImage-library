@@ -356,6 +356,143 @@ static void testPageResults(const char *lpszPathName) {
 
 // --------------------------------------------------------------------------
 
+static void setAnimationTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
+	FITAG *tag = FreeImage_CreateTag();
+	FreeImage_SetTagKey(tag, key);
+	FreeImage_SetTagType(tag, type);
+	FreeImage_SetTagCount(tag, count);
+	FreeImage_SetTagLength(tag, length);
+	FreeImage_SetTagValue(tag, value);
+	FreeImage_SetMetadata(FIMD_ANIMATION, dib, key, tag);
+	FreeImage_DeleteTag(tag);
+}
+
+// a palette image's color at x, y
+static RGBQUAD paletteColorAt(FIBITMAP *dib, unsigned x, unsigned y) {
+	BYTE index = 0;
+	FreeImage_GetPixelIndex(dib, x, y, &index);
+	return FreeImage_GetPalette(dib)[index];
+}
+
+// the colors of page 'page' of a GIF, against frame 'frame' as built below
+static BOOL gifPageHasFrameColors(const char *filename, int page, int frame, const RGBQUAD *palette) {
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_GIF, filename, FALSE, TRUE, TRUE);
+	if(!mpage) {
+		return FALSE;
+	}
+	FIBITMAP *dib = FreeImage_LockPage(mpage, page);
+	BOOL same = (dib != NULL) && (FreeImage_GetBPP(dib) == 8);
+	for(unsigned y = 0; same && y < 6; y++) {
+		for(unsigned x = 0; same && x < 8; x++) {
+			const RGBQUAD c = paletteColorAt(dib, x, y);
+			const RGBQUAD &want = palette[(frame * 50 + x + 8 * y) & 0xFF];
+			same = (c.rgbRed == want.rgbRed) && (c.rgbGreen == want.rgbGreen) && (c.rgbBlue == want.rgbBlue);
+		}
+	}
+	if(dib) {
+		FreeImage_UnlockPage(mpage, dib, FALSE);
+	}
+	FreeImage_CloseMultiBitmap(mpage, 0);
+	return same;
+}
+
+// frames that take the global color table keep their colors when they move to the front or are saved alone
+static void testGIFGlobalPalette() {
+	printf("testGIFGlobalPalette ...\n");
+
+	const char *filename = "global-palette.gif";
+	RGBQUAD palette[256];
+	for(int i = 0; i < 256; i++) {
+		palette[i].rgbRed = (BYTE)(i * 7 + 40);
+		palette[i].rgbGreen = (BYTE)(255 - i * 3);
+		palette[i].rgbBlue = (BYTE)(i * 37 + 90);
+		palette[i].rgbReserved = 0;
+	}
+
+	// three frames, all on the global table: page 0 carries it
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_GIF, filename, TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	for(int frame = 0; frame < 3; frame++) {
+		FIBITMAP *dib = FreeImage_Allocate(8, 6, 8);
+		assert(dib != NULL);
+		RGBQUAD *pal = FreeImage_GetPalette(dib);
+		for(int i = 0; i < 256; i++) {
+			pal[i] = palette[i];
+		}
+		for(unsigned y = 0; y < 6; y++) {
+			for(unsigned x = 0; x < 8; x++) {
+				BYTE index = (BYTE)((frame * 50 + x + 8 * y) & 0xFF);
+				FreeImage_SetPixelIndex(dib, x, y, &index);
+			}
+		}
+		const BYTE no_local = 1;
+		setAnimationTag(dib, "NoLocalPalette", FIDT_BYTE, 1, 1, &no_local);
+		if(frame == 0) {
+			setAnimationTag(dib, "GlobalPalette", FIDT_PALETTE, 256, sizeof(palette), palette);
+		}
+		BOOL bResult = FreeImage_AppendPage(mpage, dib);
+		assert(bResult);
+		FreeImage_Unload(dib);
+	}
+	BOOL bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	assert(gifPageHasFrameColors(filename, 1, 1, palette));
+
+	// a changed page that took the global table comes back with its colors
+	mpage = FreeImage_OpenMultiBitmap(FIF_GIF, filename, FALSE, FALSE, TRUE);
+	assert(mpage != NULL);
+	FIBITMAP *dib = FreeImage_LockPage(mpage, 2);
+	assert(dib != NULL);
+	bResult = FreeImage_UnlockPage(mpage, dib, TRUE);
+	assert(bResult);
+	dib = FreeImage_LockPage(mpage, 2);
+	assert(dib != NULL);
+	const RGBQUAD c = paletteColorAt(dib, 0, 0);
+	assert((c.rgbRed == palette[100].rgbRed) && (c.rgbGreen == palette[100].rgbGreen) && (c.rgbBlue == palette[100].rgbBlue));
+	FreeImage_UnlockPage(mpage, dib, FALSE);
+
+	// without page 0, the file still has a color table for the others
+	bResult = FreeImage_DeletePage(mpage, 0);
+	assert(bResult);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	assert(gifPageHasFrameColors(filename, 0, 1, palette));
+	assert(gifPageHasFrameColors(filename, 1, 2, palette));
+
+	// a global table of 16 colors, then a frame whose 256 colors begin with those 16
+	mpage = FreeImage_OpenMultiBitmap(FIF_GIF, filename, TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	for(int frame = 0; frame < 2; frame++) {
+		FIBITMAP *page = FreeImage_Allocate(8, 6, 8);
+		assert(page != NULL);
+		RGBQUAD *pal = FreeImage_GetPalette(page);
+		for(int i = 0; i < 256; i++) {
+			pal[i] = palette[i];
+		}
+		for(unsigned y = 0; y < 6; y++) {
+			for(unsigned x = 0; x < 8; x++) {
+				BYTE index = (BYTE)((frame * 50 + x + 8 * y) & (frame ? 0xFF : 0x0F));
+				FreeImage_SetPixelIndex(page, x, y, &index);
+			}
+		}
+		const BYTE no_local = 1;
+		setAnimationTag(page, "NoLocalPalette", FIDT_BYTE, 1, 1, &no_local);
+		if(frame == 0) {
+			setAnimationTag(page, "GlobalPalette", FIDT_PALETTE, 16, 16 * sizeof(RGBQUAD), palette);
+		}
+		bResult = FreeImage_AppendPage(mpage, page);
+		assert(bResult);
+		FreeImage_Unload(page);
+	}
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	assert(gifPageHasFrameColors(filename, 1, 1, palette));
+
+	remove(filename);
+}
+
+// --------------------------------------------------------------------------
+
 void testMultiPage(const char *lpszPathName) {
 	printf("testMultiPage ...\n");
 
@@ -378,4 +515,7 @@ void testMultiPage(const char *lpszPathName) {
 
 	// test what the page functions and the close report
 	testPageResults(lpszPathName);
+
+	// test GIF frames that take the global color table
+	testGIFGlobalPalette();
 }
