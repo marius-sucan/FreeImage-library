@@ -38,6 +38,7 @@ static const char *ERR_XBM_EOFREAD	= "EOF / read error";
 static const char *ERR_XBM_WIDTH	= "Invalid width";
 static const char *ERR_XBM_HEIGHT	= "Invalid height";
 static const char *ERR_XBM_MEMORY	= "Out of memory";
+static const char *ERR_XBM_SHORT	= "The file holds too little data for its size";
 
 /**
 Get a string from a stream. 
@@ -150,18 +151,30 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 	if(!found_declaration) 
 		return( ERR_XBM_DECL );
 
-	if(*widthP == -1 )
+	if( *widthP <= 0 )
 		return( ERR_XBM_WIDTH );
-	if( *heightP == -1 )
+	if( *heightP <= 0 )
 		return( ERR_XBM_HEIGHT );
 
 	padding = 0;
 	if ( ((*widthP % 16) >= 1) && ((*widthP % 16) <= 8) && (version == 10) )
 		padding = 1;
 
-	bytes_per_line = (*widthP + 7) / 8 + padding;
+	bytes_per_line = (int)(((INT64)*widthP + 7) / 8) + padding;
 
-	raster_length =  bytes_per_line * *heightP;
+	{
+		// the buffer size is an int, and a short file cannot claim a huge image
+		const INT64 raster = (INT64)bytes_per_line * *heightP;
+		if( raster > INT_MAX )
+			return( ERR_XBM_MEMORY );
+		const INT64 pos = io->tell_proc(handle);
+		io->seek_proc(handle, 0, SEEK_END);
+		const INT64 end = io->tell_proc(handle);
+		io->seek_proc(handle, pos, SEEK_SET);
+		if( !PlausibleImageSize((UINT64)raster, (end > pos) ? (UINT64)(end - pos) : 0, 1) )
+			return( ERR_XBM_SHORT );
+		raster_length = (int)raster;
+	}
 	*dataP = (char*) malloc( raster_length );
 	if ( *dataP == (char*) 0 )
 		return( ERR_XBM_MEMORY );
@@ -281,7 +294,8 @@ data_end:
 	if (ptr < *dataP + raster_length) {
 		memset(ptr, 0, (*dataP + raster_length) - ptr);
 	}
-	*rowsP = (bytes_per_line > 0) ? (int)(ptr - *dataP) / bytes_per_line : 0;
+	// the X10 pad byte is not stored: a row holds (width + 7) / 8 bytes
+	*rowsP = (int)((ptr - *dataP) / (bytes_per_line - padding));
 	// nothing is kept of a huge claim a few bytes long
 	if (error && !PlausibleImageSize((UINT64)raster_length, (UINT64)(io->tell_proc(handle) - data_start), 1)) {
 		*rowsP = 0;
