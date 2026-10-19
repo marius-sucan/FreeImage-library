@@ -4,7 +4,7 @@
 **Compared Branches**: `origin/main` (`4cccd9aa7`) $\rightarrow$ `qpv` (`d497fb956`, 616 commits ahead)  
 **Scope**: Full line-by-line audit of `Source/FreeImage/*`, `Source/FreeImageToolkit/*`, `Source/Metadata/*`, `Wrapper/*`, and build/project configurations.
 
-> **Verified 2026-10-18 against `qpv` at `f5081b1`.** This report was written by another AI model and has been checked claim by claim: see [Verification results](#verification-results) below. Each finding now opens with its own **Verification** block; the original text under it is unchanged. The commit hashes above do not exist in this repository: the audited code is `d521037`, 616 commits ahead of `origin/main` (`a976f39`).
+> **Verified 2026-10-18 against `qpv` at `f5081b1`.** This report was written by another AI model and has been checked claim by claim: see [Verification results](#verification-results) below. Each finding now opens with its own **Verification** block; the original text under it is unchanged. The commit hashes above do not exist in this repository: the audited code is `d521037`, 616 commits ahead of `origin/main` (`a976f39`). The **Fixed** columns of the two tables there say what has been fixed since.
 
 ---
 
@@ -16,71 +16,71 @@ Checked on 2026-10-18 at `qpv` `f5081b1`, which has five code commits more than 
 - Of the 44 findings (the report says 46), **11 hold as described, 24 hold in part and 9 do not hold at all**.
 - No finding is Critical. One is **High**: PSD-01, two heap overflows from crafted PSD/PSB files, both inherited from `origin/main`. 8 are Medium, 26 Low and 9 None; the report had 3 Critical, 29 High and 12 Medium.
 - Few of the confirmed parts are regressions caused by `qpv`: CORE-02, two parts of TMO-01, PNG-01 (1), HDR-01 (2), the Exif profile of JPEG-01 (2) and BUILD-01 (3). Most of the rest is upstream behaviour that `main` shares, or bugs in code `main` does not have.
-- Checking the report turned up a **High regression it missed**: a 55-byte JNG makes `FreeImage_Load` loop forever (2decc36).
-- Only one listed part was fixed after the report was written: JXR-01 (6), by ce201d8.
+- Checking the report turned up a **High regression it missed**: a 55-byte JNG made `FreeImage_Load` loop forever (2decc36), fixed since by e743010.
+- Fixed since the report was written: JXR-01 (6) by ce201d8, then on 2026-10-18 both heap overflows of PSD-01 (2ec7065, bb2a0a8) and the JNG hang (e743010). Every other confirmed part is still open.
 
 ### Verdict per finding
 
-**Verdict**: Confirmed = the bug is real as described (details may differ); Partly = some parts are real, others are not; Not a bug = no part holds. **Regression**: Yes = `qpv` broke what worked in `main`; No = the same in `main`; New code = a bug in code `main` does not have.
+**Verdict**: Confirmed = the bug is real as described (details may differ); Partly = some parts are real, others are not; Not a bug = no part holds. **Regression**: Yes = `qpv` broke what worked in `main`; No = the same in `main`; New code = a bug in code `main` does not have. **Fixed**: the commits that fixed it after the verification; No = still open; empty = nothing to fix.
 
-| ID | Reported | Verdict | Regression? | Verified severity | In short |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| CORE-01 | Critical | Partly | No | Low | A refused save deletes an existing file; `main` truncates it to 0 bytes, so no content is lost that `main` kept. |
-| CORE-02 | Critical | **Confirmed** | **Yes** | Medium | Crash in `CacheFile::readFile` after one failed spool write (reproduced). |
-| CORE-03 | High | **Confirmed** | No (`main` let `bad_alloc` escape) | Medium | Out of memory wedges the page cache until close; small leaks. |
-| CORE-04 | High | Partly | No | Low | Windows only, and the spool keeps the new content. |
-| CORE-05 | High | Not a bug | | None | Cached pages come back as stored, by design. |
-| CORE-06 | High | **Confirmed** | No | Medium | `DeletePage(0)` writes a GIF with no colour table at all. |
-| CORE-07 | High | Partly | No | Low | `GetLine` wraps for rows of 512 MiB and more; upstream code. |
-| CORE-08 | High | Not a bug | | None | Zero-size dibs are refused on every path. |
-| CORE-09 | Medium | Not a bug | | None | Harmless; a NULL stream returns NULL. |
-| CORE-10 | Medium | Partly | Deliberate | Low | The INT64 callbacks are a documented choice; the wrapper does not leak. |
-| CMS-01 | Critical | **Confirmed** | New code | Medium | Device CMYK of a 16-bit min-is-white image is inverted; no memory corruption. |
-| CMS-02 | High | Not a bug | | None | Deliberate and documented; no inversion. |
-| CMS-03 | High | Partly | New code | Low | Float frames of JPEG XL animations skip the profile conversion. |
-| CMS-04 | High | Partly | No | Low | Rescale drops the profile of 16-bit min-is-white images. |
-| CMS-05 | Medium | Not a bug | | None | Upstream; the tag only duplicates the kept profile. |
-| CMS-06 | High | **Confirmed** | New code | Low | `ConvertToLinear` inverts 16-bit min-is-white images. |
-| CMS-07 | High | **Confirmed** | New code | Low | 8-bit PQ images get `FITM_NONE`. |
-| CMS-08 | High | Partly | New code | Low | 4 of 6 profile corner cases are real. |
-| TMO-01 | High | Partly | **Yes** (2 of 4 parts, 9b55043) | Medium | Black + one colour turns black or white; m > 1 inverts the tones. |
-| TK-01 | High | Partly | No | Low | No over-read; 1-bit rotation replaces the palette. |
-| TIFF-01 | High | Partly | No | Low | Multi-page thumbnails are mis-tagged but still reload. |
-| TIFF-02 | High | Not a bug | | None | libtiff refuses RowsPerStrip 0; no overflow. |
-| PSD-01 | High | Partly | No | **High** | Heap overflow WRITE (negative height) and READ (RLE table size wraps). |
-| PSD-02 | Medium | Partly | No | Low | 6-byte over-read on a short Exif tag made by the caller. |
-| BMP-01 | High | Partly | No (part 1 by design) | Low | Only the cut-file 0xFF case is wrong. |
-| BMP-02 | High | Partly | Mixed | Low | RLE8 delta past the row end; OS/2 64-byte header. |
-| PNG-01 | Medium | Partly | **Yes** (c637684) | Low | A cICP the loader cannot read silences gAMA. |
-| APNG-01 | High | Partly | New code | Low | Grey-profiled frames are composited unconverted; multi-frame saves drop text. |
-| MNG-01 | High | Partly | Mostly no | Low | JNG min-is-white colour type; header-only bpp of JNG with alpha. |
-| MNG-02 | High | Partly | New code | Low | Salvage gap in a cut CRC; the writer forces BACK mandatory; a missing IEND swallows a frame. |
-| GIF-01 | High | Partly | No | Low | Interlaced saves of 2 to 4 rows drop rows. |
-| WEBP-01 | High | Partly | No | Low | A CMYK still save is written as BGRA. |
-| JXR-01 | High | Not a bug | | None | Misquoted; part 6 was fixed by ce201d8. |
-| PNM-01 | High | **Confirmed** | No | Medium | A 19-byte header gives a 2.6 GB blank image. |
-| HDR-01 | High | Partly | **Yes** (part 2) | Low | Out of memory mid-file returns a partial image. |
-| EXR-01 | Medium | **Confirmed** | No | Low | Narrow uncompressed files cut early are refused. |
-| RAW-01 | High | Not a bug | | None | No call site reads past the buffer. |
-| AVIF-01 | Medium | Partly | New code | Low | Out of memory returns the untransformed image. |
-| HEIF-01 | Medium | **Confirmed** | New code | Low | Sequences ignore their nclx colour description. |
-| JPEG-01 | Medium | Partly | Mostly no | Low | Leaks on a failed save; greyscale loads keep RGB profiles. |
-| J2K-01 | Medium | Not a bug | | None | OpenJPEG already clamps every sample. |
-| TGA-01 | High | **Confirmed** | No | Low | Only on non-default (RGB-order or big-endian) builds. |
-| PLUG-01 | Medium | Partly | Mostly no | Medium | Unbounded allocations (RAS, IFF, WBMP, DXT); DXT decode; XBM X10 count. |
-| BUILD-01 | Medium | **Confirmed** | Yes (part 3) | Medium | MinGW build lacks the AVIF `mif3` flag; MSVC test project lacks a file. |
+| ID | Reported | Verdict | Regression? | Verified severity | Fixed | In short |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| CORE-01 | Critical | Partly | No | Low | No | A refused save deletes an existing file; `main` truncates it to 0 bytes, so no content is lost that `main` kept. |
+| CORE-02 | Critical | **Confirmed** | **Yes** | Medium | No | Crash in `CacheFile::readFile` after one failed spool write (reproduced). |
+| CORE-03 | High | **Confirmed** | No (`main` let `bad_alloc` escape) | Medium | No | Out of memory wedges the page cache until close; small leaks. |
+| CORE-04 | High | Partly | No | Low | No | Windows only, and the spool keeps the new content. |
+| CORE-05 | High | Not a bug | | None | | Cached pages come back as stored, by design. |
+| CORE-06 | High | **Confirmed** | No | Medium | No | `DeletePage(0)` writes a GIF with no colour table at all. |
+| CORE-07 | High | Partly | No | Low | No | `GetLine` wraps for rows of 512 MiB and more; upstream code. |
+| CORE-08 | High | Not a bug | | None | | Zero-size dibs are refused on every path. |
+| CORE-09 | Medium | Not a bug | | None | | Harmless; a NULL stream returns NULL. |
+| CORE-10 | Medium | Partly | Deliberate | Low | No | The INT64 callbacks are a documented choice; the wrapper does not leak. |
+| CMS-01 | Critical | **Confirmed** | New code | Medium | No | Device CMYK of a 16-bit min-is-white image is inverted; no memory corruption. |
+| CMS-02 | High | Not a bug | | None | | Deliberate and documented; no inversion. |
+| CMS-03 | High | Partly | New code | Low | No | Float frames of JPEG XL animations skip the profile conversion. |
+| CMS-04 | High | Partly | No | Low | No | Rescale drops the profile of 16-bit min-is-white images. |
+| CMS-05 | Medium | Not a bug | | None | | Upstream; the tag only duplicates the kept profile. |
+| CMS-06 | High | **Confirmed** | New code | Low | No | `ConvertToLinear` inverts 16-bit min-is-white images. |
+| CMS-07 | High | **Confirmed** | New code | Low | No | 8-bit PQ images get `FITM_NONE`. |
+| CMS-08 | High | Partly | New code | Low | No | 4 of 6 profile corner cases are real. |
+| TMO-01 | High | Partly | **Yes** (2 of 4 parts, 9b55043) | Medium | No | Black + one colour turns black or white; m > 1 inverts the tones. |
+| TK-01 | High | Partly | No | Low | No | No over-read; 1-bit rotation replaces the palette. |
+| TIFF-01 | High | Partly | No | Low | No | Multi-page thumbnails are mis-tagged but still reload. |
+| TIFF-02 | High | Not a bug | | None | | libtiff refuses RowsPerStrip 0; no overflow. |
+| PSD-01 | High | Partly | No | **High** | **Yes** (2ec7065, bb2a0a8) | Heap overflow WRITE (negative height) and READ (RLE table size wraps). |
+| PSD-02 | Medium | Partly | No | Low | No | 6-byte over-read on a short Exif tag made by the caller. |
+| BMP-01 | High | Partly | No (part 1 by design) | Low | No | Only the cut-file 0xFF case is wrong. |
+| BMP-02 | High | Partly | Mixed | Low | No | RLE8 delta past the row end; OS/2 64-byte header. |
+| PNG-01 | Medium | Partly | **Yes** (c637684) | Low | No | A cICP the loader cannot read silences gAMA. |
+| APNG-01 | High | Partly | New code | Low | No | Grey-profiled frames are composited unconverted; multi-frame saves drop text. |
+| MNG-01 | High | Partly | Mostly no | Low | No | JNG min-is-white colour type; header-only bpp of JNG with alpha. |
+| MNG-02 | High | Partly | New code | Low | No | Salvage gap in a cut CRC; the writer forces BACK mandatory; a missing IEND swallows a frame. |
+| GIF-01 | High | Partly | No | Low | No | Interlaced saves of 2 to 4 rows drop rows. |
+| WEBP-01 | High | Partly | No | Low | No | A CMYK still save is written as BGRA. |
+| JXR-01 | High | Not a bug | | None | Part 6 (ce201d8) | Misquoted; part 6 was fixed by ce201d8. |
+| PNM-01 | High | **Confirmed** | No | Medium | No | A 19-byte header gives a 2.6 GB blank image. |
+| HDR-01 | High | Partly | **Yes** (part 2) | Low | No | Out of memory mid-file returns a partial image. |
+| EXR-01 | Medium | **Confirmed** | No | Low | No | Narrow uncompressed files cut early are refused. |
+| RAW-01 | High | Not a bug | | None | | No call site reads past the buffer. |
+| AVIF-01 | Medium | Partly | New code | Low | No | Out of memory returns the untransformed image. |
+| HEIF-01 | Medium | **Confirmed** | New code | Low | No | Sequences ignore their nclx colour description. |
+| JPEG-01 | Medium | Partly | Mostly no | Low | No | Leaks on a failed save; greyscale loads keep RGB profiles. |
+| J2K-01 | Medium | Not a bug | | None | | OpenJPEG already clamps every sample. |
+| TGA-01 | High | **Confirmed** | No | Low | No | Only on non-default (RGB-order or big-endian) builds. |
+| PLUG-01 | Medium | Partly | Mostly no | Medium | No | Unbounded allocations (RAS, IFF, WBMP, DXT); DXT decode; XBM X10 count. |
+| BUILD-01 | Medium | **Confirmed** | Yes (part 3) | Medium | No | MinGW build lacks the AVIF `mif3` flag; MSVC test project lacks a file. |
 
 ### Bugs the report missed
 
 Found while checking the findings above.
 
-| Where | Bug | Regression? | Severity |
-| :--- | :--- | :--- | :--- |
-| `MNGHelper.cpp` `mng_ReadChunks` | A JNG (or an MNG holding one) whose alpha `IDAT` comes before the first `JDAT` and which ends at a chunk boundary makes `FreeImage_Load` loop forever. With no chunk header left and no JPEG data yet, the loop continues with the stale chunk name, and a stale `IDAT` is exempt from the bad-CRC throw. Reproduced with a 55-byte file, also with `FIF_LOAD_NOPIXELS` and through `FIF_MNG`. | Yes (2decc36) | High |
-| `MultiPage.cpp` | Out of memory: `FreeImage_SavePageToBlock` leaks its `FIMEMORY` when `writeFile` throws (about 512 KB for a 196 KB page), `FreeImage_LoadPageFromCache` leaks `compressed_data` when `readFile` throws, and a throw from `m_blocks.push_back` / `insert` after a page is stored leaves its blocks unreferenced until close. `RememberPageMetadata` silently drops the animation tags when its allocations fail. | New code (`main` had no `catch`) | Low |
-| `PluginJXL.cpp` `AddFrame` | The animation writer converts a frame to the animation layout (`ConvertTo*`, which drops the profile) before `ConvertToFileProfile`, so a tagged frame not already in that layout is recoloured from the default space: an Adobe RGB 0.5 RGBF frame is written as 0.5001 linear instead of about 0.2178. Tested for RGBF only. | New code | Low |
-| `PluginJPEG.cpp` `Save` | A failing output write longjmps out of `jpeg_write_scanlines` past `free(target)`: about 3 KB leaked per failed save. | No (same in `main`) | Low |
-| `PluginDDS.cpp` `LoadDXT` | Widths that are not a multiple of 4 decode wrong: one block per block row is skipped, so the rows shift. | No (same in `main`) | Low |
+| Where | Bug | Regression? | Severity | Fixed |
+| :--- | :--- | :--- | :--- | :--- |
+| `MNGHelper.cpp` `mng_ReadChunks` | A JNG (or an MNG holding one) whose alpha `IDAT` comes before the first `JDAT` and which ends at a chunk boundary makes `FreeImage_Load` loop forever. With no chunk header left and no JPEG data yet, the loop continues with the stale chunk name, and a stale `IDAT` is exempt from the bad-CRC throw. Reproduced with a 55-byte file, also with `FIF_LOAD_NOPIXELS` and through `FIF_MNG`. | Yes (2decc36) | High | **Yes** (e743010) |
+| `MultiPage.cpp` | Out of memory: `FreeImage_SavePageToBlock` leaks its `FIMEMORY` when `writeFile` throws (about 512 KB for a 196 KB page), `FreeImage_LoadPageFromCache` leaks `compressed_data` when `readFile` throws, and a throw from `m_blocks.push_back` / `insert` after a page is stored leaves its blocks unreferenced until close. `RememberPageMetadata` silently drops the animation tags when its allocations fail. | New code (`main` had no `catch`) | Low | No |
+| `PluginJXL.cpp` `AddFrame` | The animation writer converts a frame to the animation layout (`ConvertTo*`, which drops the profile) before `ConvertToFileProfile`, so a tagged frame not already in that layout is recoloured from the default space: an Adobe RGB 0.5 RGBF frame is written as 0.5001 linear instead of about 0.2178. Tested for RGBF only. | New code | Low | No |
+| `PluginJPEG.cpp` `Save` | A failing output write longjmps out of `jpeg_write_scanlines` past `free(target)`: about 3 KB leaked per failed save. | No (same in `main`) | Low | No |
+| `PluginDDS.cpp` `LoadDXT` | Widths that are not a multiple of 4 decode wrong: one block per block row is skipped, so the rows shift. | No (same in `main`) | Low | No |
 
 ### Errors in the report itself
 
@@ -874,6 +874,8 @@ Across these changes, **46 verified bugs and regressions** (several encompassing
 > 3. RLE line-size table: **confirmed**. `new (std::nothrow) DWORD[nChannels*nHeight]` (1754) multiplies in 32 bits; 56 channels × 77,000,000 rows wraps to 17,032,704 entries and the largest-line scan reads past them (**heap-buffer-overflow READ**, ASan).
 >
 > Fix hint: reject `_Width <= 0 || _Height <= 0` (and the PSB limits) in `psdHeaderInfo::Read`; size the table as `(size_t)nChannels * nHeight`.
+>
+> **Fixed (2026-10-18).** 2ec7065: `psdHeaderInfo::Read` refuses a width or height below 1 (part 2). bb2a0a8: an RLE image whose line-size table would have more than `UINT_MAX / 4` entries is refused before anything is allocated (part 3), and the writer, whose products wrap the same way from 268,435,457 RGBA rows, saves such an image uncompressed. The PSB limit of 300000 is not enforced, since FreeImage writes larger PSBs itself. Both crafted files now fail cleanly under ASan, and 2865 PSD and PSB files load as before.
 
 - **Severity**: **High** (Infinite Loop / Heap Corruption / OOB)
 - **Location**: `Source/FreeImage/PSDParser.cpp:337-343`, `1277`, `1301-1314`, `1679`, `1754`, `1763`, `1772`, `1787`, `2205-2209`
