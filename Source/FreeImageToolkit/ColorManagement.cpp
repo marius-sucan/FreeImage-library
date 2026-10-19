@@ -955,7 +955,9 @@ bool ColorConverter::
 CreateTransform(bool same_buffer) {
 	const Profile &in = m_device_in ? m_device : m_source;
 	const Profile &out = m_device_out ? m_device : m_destination;
-	if (!m_proof.handle && in.Same(out) && (m_device_out || (m_in_format == m_out_format))) {
+	// the device CMYK separation reads the samples as they are: the stage's sample size, min-is-black
+	const bool separable = m_device_out && (T_BYTES(m_in_format) == T_BYTES(m_out_format)) && !T_FLAVOR(m_in_format);
+	if (!m_proof.handle && in.Same(out) && (separable || (m_in_format == m_out_format))) {
 		return true;
 	}
 

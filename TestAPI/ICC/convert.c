@@ -643,6 +643,51 @@ static void wrappers(const Bytes *press, const Bytes *adobe) {
     FreeImage_Unload(rgb);
 }
 
+/* device CMYK of min-is-white and float samples: as their 16-bit min-is-black twins */
+static void device_cmyk_samples(void) {
+    FIBITMAP *white = FreeImage_AllocateT(FIT_UINT16, 256, 256, 16, 0, 0, 0), *grey = FreeImage_AllocateT(FIT_UINT16, 256, 256, 16, 0, 0, 0);
+    FIBITMAP *rgb16 = FreeImage_AllocateT(FIT_RGB16, 256, 256, 48, 0, 0, 0), *gf = FreeImage_AllocateT(FIT_FLOAT, 256, 256, 32, 0, 0, 0);
+    FIBITMAP *rgbf = FreeImage_AllocateT(FIT_RGBF, 256, 256, 96, 0, 0, 0);
+    FIBITMAP *pairs[3][2];
+    const char *names[3] = { "FIT_UINT16 min-is-white", "FIT_FLOAT tagged built-in grey", "FIT_RGBF tagged built-in sRGB" };
+    const Bytes sgrey = builtin(FICMS_PROFILE_GRAY), srgb = builtin(FICMS_PROFILE_SRGB);
+    int x, y, i, c;
+
+    for (y = 0; y < 256; y++) {
+        for (x = 0; x < 256; x++) {
+            const WORD v = (WORD)(y * 256 + x);
+            FIRGB16 *p = (FIRGB16 *)FreeImage_GetScanLine(rgb16, y) + x;
+            FIRGBF *q = (FIRGBF *)FreeImage_GetScanLine(rgbf, y) + x;
+            ((WORD *)FreeImage_GetScanLine(white, y))[x] = (WORD)(65535 - v);
+            ((WORD *)FreeImage_GetScanLine(grey, y))[x] = v;
+            ((float *)FreeImage_GetScanLine(gf, y))[x] = v / 65535.0f;
+            p->red = v; p->green = (WORD)(v * 7); p->blue = (WORD)(65535 - v);
+            q->red = p->red / 65535.0f; q->green = p->green / 65535.0f; q->blue = p->blue / 65535.0f;
+        }
+    }
+    set_minis_white(white);
+    FreeImage_CreateICCProfile(gf, sgrey.data, sgrey.size);
+    FreeImage_CreateICCProfile(rgbf, srgb.data, srgb.size);
+
+    pairs[0][0] = FreeImage_ConvertToCMYK(white, NULL, 0, 0); pairs[0][1] = FreeImage_ConvertToCMYK(grey, NULL, 0, 0);
+    pairs[1][0] = FreeImage_ConvertToCMYK(gf, NULL, 0, 0); pairs[1][1] = FreeImage_ConvertToCMYK(grey, NULL, 0, 0);
+    pairs[2][0] = FreeImage_ConvertToCMYK(rgbf, NULL, 0, 0); pairs[2][1] = FreeImage_ConvertToCMYK(rgb16, NULL, 0, 0);
+    for (i = 0; i < 3; i++) {
+        /* the min-is-white samples are exact, the float ones within a step */
+        int worst = 0;
+        for (y = 0; pairs[i][0] && pairs[i][1] && y < 256; y++) {
+            const WORD *a = (const WORD *)FreeImage_GetScanLine(pairs[i][0], y), *b = (const WORD *)FreeImage_GetScanLine(pairs[i][1], y);
+            for (c = 0; c < 256 * 4; c++) {
+                if (abs((int)a[c] - (int)b[c]) > worst) worst = abs((int)a[c] - (int)b[c]);
+            }
+        }
+        CHECK(pairs[i][0] && pairs[i][1] && worst <= (i ? 1 : 0), "device CMYK of %s: off by %d", names[i], worst);
+        if (pairs[i][0]) FreeImage_Unload(pairs[i][0]);
+        if (pairs[i][1]) FreeImage_Unload(pairs[i][1]);
+    }
+    FreeImage_Unload(white); FreeImage_Unload(grey); FreeImage_Unload(rgb16); FreeImage_Unload(gf); FreeImage_Unload(rgbf);
+}
+
 /* ------------------------------------------------------------------ soft proofing */
 
 static void soft_proof(const Bytes *press, const Bytes *p3) {
@@ -950,6 +995,7 @@ int main(int argc, char **argv) {
         matrix(173, 101, big_tags, 3, big_dsts, 4, flags_one, 1);
     }
     wrappers(&press, &dsts[2].bytes);
+    device_cmyk_samples();
     soft_proof(&press, &dsts[3].bytes);
     if (!digest_only) {
         views(&dsts[3].bytes);
