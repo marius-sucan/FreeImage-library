@@ -311,6 +311,22 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 		}
 
+		if(!header_only) {
+			// a short file cannot claim a huge image: raw samples fill the raster, ASCII ones take more bytes
+			const BOOL bitmap = (id_two == '1') || (id_two == '4');
+			const UINT64 bpp = bitmap ? 1 : (((id_two == '3') || (id_two == '6')) ? 24 : 8) * ((maxval > 255) ? 2 : 1);
+			const UINT64 pitch = (((UINT64)width * bpp + 7) / 8 + 3) & ~(UINT64)3;
+			const UINT64 raster = (height && (pitch > ~(UINT64)0 / (UINT64)height)) ? ~(UINT64)0 : pitch * (UINT64)height;
+			const INT64 pos = io->tell_proc(handle);
+			if(io->seek_proc(handle, 0, SEEK_END) == 0) {
+				const INT64 end = io->tell_proc(handle);
+				if(!PlausibleImageSize(raster, (end > pos) ? (UINT64)(end - pos) : 0, (id_two <= '3') ? 2 : 1)) {
+					throw "The file holds too little data for its size";
+				}
+			}
+			io->seek_proc(handle, pos, SEEK_SET);
+		}
+
 		// Create a new DIB
 
 		switch (id_two) {
