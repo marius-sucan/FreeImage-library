@@ -261,6 +261,20 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			throw FI_MSG_ERROR_MAGIC_NUMBER;
 		}
 
+		if (!header_only && ((header.depth == 1) || (header.depth == 8) || (header.depth == 24) || (header.depth == 32))) {
+			// a short file cannot claim a huge image: an RLE run of 3 bytes yields at most 256
+			const UINT64 pitch = (((UINT64)header.width * header.depth + 7) / 8 + 3) & ~(UINT64)3;
+			const UINT64 raster = (header.height && (pitch > ~(UINT64)0 / header.height)) ? ~(UINT64)0 : pitch * header.height;
+			const INT64 pos = io->tell_proc(handle);
+			io->seek_proc(handle, 0, SEEK_END);
+			const INT64 end = io->tell_proc(handle);
+			io->seek_proc(handle, pos, SEEK_SET);
+			const INT64 pixels = pos + (INT64)header.maplength;
+			if (!PlausibleImageSize(raster, (end > pixels) ? (UINT64)(end - pixels) : 0, (header.type == RT_BYTE_ENCODED) ? 128 : 1)) {
+				throw "The file holds too little data for its size";
+			}
+		}
+
 		// Allocate a new DIB
 
 		switch(header.depth) {
