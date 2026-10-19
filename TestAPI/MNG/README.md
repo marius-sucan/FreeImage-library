@@ -165,8 +165,10 @@ is not zlib, a cut stream, a lying size field, 9 MB of zeros, a grey profile
 in a colour JNG, bytes that are no profile, a bad one before a good one -
 loaded standalone and as an MNG frame, without a profile; and each of them as
 an MNG's global iCCP ahead of BACK and a BASI fill, and as the fill's own;
-and BASI chunks of 8 to 30 bytes in every colour type and sample depth, PNG's
-and others.
+a JNG whose alpha comes before its JPEG data, cut at every length, standalone
+and as an MNG frame, where a load that does not return within 60 s fails the
+run; and BASI chunks of 8 to 30 bytes in every colour type and sample depth,
+PNG's and others.
 
 `make asan-run` is the one that matters here. The plugin parses the container by
 hand - chunk headers, lengths, the extent of each embedded datastream, the

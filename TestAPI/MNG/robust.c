@@ -2,6 +2,10 @@
 /* scratch files: $MNG_TEST_TMP or the current directory */
 
 #include <stdarg.h>
+#ifndef _WIN32
+#include <signal.h>
+#include <unistd.h>
+#endif
 
 #include "mngbuild.h"
 
@@ -25,6 +29,16 @@ static void ok(const char *fmt, ...) {
 }
 
 static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg; }
+
+#ifndef _WIN32
+/* a load that never returns fails here instead of hanging the suite */
+static void watchdog(int sig) {
+	static const char text[] = "  FAIL a load did not return within 60 s\n";
+	(void)sig;
+	if (write(1, text, sizeof(text) - 1) < 0) _exit(4);
+	_exit(3);
+}
+#endif
 
 #define W 16
 #define H 16
@@ -639,6 +653,96 @@ out:
 	free(zeros);
 }
 
+/* a JNG whose alpha IDAT comes before its JDAT, cut at every length, standalone and as an MNG frame */
+static void test_jng_alpha_first(void) {
+	FIBITMAP *img = FreeImage_Allocate(W, H, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+	BYTE *jng = NULL;
+	DWORD jng_size = 0;
+	const DWORD jhdr_end = 8 + 12 + 16;
+	Buf alpha, rest, file, mng;
+	size_t pos, cut;
+	unsigned i;
+	int f;
+
+	printf("a JNG whose alpha comes first, cut at every length\n");
+	fflush(stdout);
+
+	for (i = 0; i < FreeImage_GetPitch(img) * H; i++) {
+		FreeImage_GetBits(img)[i] = (BYTE)(i * 7 + 3);
+	}
+	if (!FreeImage_SaveToMemory(FIF_JNG, img, mem, 0) || !FreeImage_AcquireMemory(mem, &jng, &jng_size) || jng_size < jhdr_end) {
+		fail("no JNG to reorder");
+		FreeImage_CloseMemory(mem);
+		FreeImage_Unload(img);
+		return;
+	}
+
+	/* JHDR, the IDAT chunks, then JDAT and the rest */
+	buf_init(&alpha);
+	buf_init(&rest);
+	for (pos = jhdr_end; pos + 12 <= jng_size;) {
+		const size_t size = 12 + (((size_t)jng[pos] << 24) | ((size_t)jng[pos + 1] << 16) | ((size_t)jng[pos + 2] << 8) | jng[pos + 3]);
+		if (pos + size > jng_size) {
+			break;
+		}
+		buf_add(memcmp(jng + pos + 4, "IDAT", 4) ? &rest : &alpha, jng + pos, size);
+		pos += size;
+	}
+	buf_init(&file);
+	buf_add(&file, jng, jhdr_end);
+	buf_add(&file, alpha.data, alpha.size);
+	buf_add(&file, rest.data, rest.size);
+
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 10, 1, 1, 0, 1 | (1 << 4));
+	buf_add(&mng, file.data + 8, file.size - 8);
+	mng_mend(&mng);
+
+	{
+		FIMEMORY *in = FreeImage_OpenMemory(file.data, (DWORD)file.size);
+		FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_JNG, in, 0);
+		if (!alpha.size || !dib || FreeImage_GetBPP(dib) != 32) {
+			fail("the reordered JNG did not load with its alpha");
+		} else {
+			ok("the reordered JNG loads with its alpha");
+		}
+		FreeImage_Unload(dib);
+		FreeImage_CloseMemory(in);
+	}
+
+#ifndef _WIN32
+	signal(SIGALRM, watchdog);
+	alarm(60);
+#endif
+	for (cut = 8; cut < file.size; cut++) {
+		for (f = 0; f < 2; f++) {
+			FIMEMORY *in = FreeImage_OpenMemory(file.data, (DWORD)cut);
+			FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_JNG, in, f ? FIF_LOAD_NOPIXELS : 0);
+			FreeImage_Unload(dib);
+			FreeImage_CloseMemory(in);
+		}
+	}
+	for (cut = 8; cut < mng.size; cut++) {
+		FIMEMORY *in = FreeImage_OpenMemory(mng.data, (DWORD)cut);
+		FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_MNG, in, 0);
+		FreeImage_Unload(dib);
+		FreeImage_CloseMemory(in);
+	}
+#ifndef _WIN32
+	alarm(0);
+#endif
+	ok("%d cuts of the JNG, raw and header-only, and %d of it as an MNG frame, all returned", (int)(file.size - 8), (int)(mng.size - 8));
+
+	buf_free(&mng);
+	buf_free(&file);
+	buf_free(&rest);
+	buf_free(&alpha);
+	FreeImage_CloseMemory(mem);
+	FreeImage_Unload(img);
+}
+
 /* BASI chunks of every length, with colour types and sample depths PNG has and has not */
 static void test_basi_fields(void) {
 	static const BYTE types[7] = { 0, 2, 3, 4, 6, 7, 255 };
@@ -695,6 +799,7 @@ int main(void) {
 	test_off_canvas();
 	test_garbage();
 	test_jng_iccp();
+	test_jng_alpha_first();
 	test_basi_fields();
 
 	FreeImage_DeInitialise();

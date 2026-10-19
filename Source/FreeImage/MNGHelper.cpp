@@ -935,9 +935,12 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 			mng_SwapLong(&mLength);
 			mChunkName[4] = '\0';
 
-			if(!have_header && hJpegMemory) {
-				// a JNG cut between chunks decodes the JPEG data it holds
+			if(!have_header) {
 				FreeImage_OutputMessageProc(format_id, "Error while parsing chunks: unexpected end of file");
+				if(!hJpegMemory) {
+					throw (const char*)NULL;
+				}
+				// a JNG cut between chunks decodes the JPEG data it holds
 				if(dib) FreeImage_Unload(dib);
 				dib = mng_LoadFromMemoryHandle(hJpegMemory, flags);
 				break;
