@@ -256,6 +256,7 @@
     <ClCompile Include="testMPageStream.cpp" />
     <ClCompile Include="testPlugins.cpp" />
     <ClCompile Include="testThumbnail.cpp" />
+    <ClCompile Include="testToneMapping.cpp" />
     <ClCompile Include="testTools.cpp" />
     <ClCompile Include="testWrappedBuffer.cpp" />
   </ItemGroup>
