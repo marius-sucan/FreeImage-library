@@ -404,6 +404,162 @@ static BOOL testToneMappingHandlesFlatImages() {
 	return TRUE;
 }
 
+/** RGBF image with columns [0, black) black and the rest from value(x) */
+static FIBITMAP* createBlackAndLit(unsigned width, unsigned height, unsigned black, float r, float g, float b, BOOL ramp) {
+	FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBF, width, height);
+	if(!dib) return NULL;
+	for(unsigned y = 0; y < height; y++) {
+		FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, y);
+		for(unsigned x = 0; x < width; x++) {
+			float scale = 0;
+			if(x >= black) {
+				// a log ramp 0.01 to 1 over the lit columns, or one color
+				const float t = (width > black + 1) ? (float)(x - black) / (float)(width - black - 1) : 0;
+				scale = ramp ? 0.01F * powf(100.0F, t) : 1.0F;
+			}
+			pixel[x].red   = r * scale;
+			pixel[x].green = g * scale;
+			pixel[x].blue  = b * scale;
+		}
+	}
+	return dib;
+}
+
+static BOOL testReinhard05BlackAndOneColor() {
+	const float colors[2][3] = { { 0.8F, 0.3F, 0.1F }, { 80.0F, 30.0F, 10.0F } };
+
+	for(int c = 0; c < 2; c++) {
+		FIBITMAP *dib = createBlackAndLit(32, 32, 16, colors[c][0], colors[c][1], colors[c][2], FALSE);
+		if(!dib) return FALSE;
+		FIBITMAP *dst = FreeImage_ToneMapping(dib, FITMO_REINHARD05);
+		FreeImage_Unload(dib);
+		if(!dst) return FALSE;
+
+		// the lit half keeps its hue: neither black nor a white or grey
+		const BYTE *bits = FreeImage_GetScanLine(dst, 0) + 3 * 20;
+		const BOOL ok = (bits[FI_RGBA_RED] > bits[FI_RGBA_GREEN]) && (bits[FI_RGBA_GREEN] > bits[FI_RGBA_BLUE]);
+		FreeImage_Unload(dst);
+		if(!ok) return FALSE;
+	}
+	return TRUE;
+}
+
+static BOOL testReinhard05KeepsToneOrder() {
+	// half black, then a log ramp: brighter input never maps darker
+	for(unsigned black = 1; black <= 48; black += 15) {
+		FIBITMAP *dib = createBlackAndLit(64, 4, black, 1, 1, 1, TRUE);
+		if(!dib) return FALSE;
+		FIBITMAP *dst = FreeImage_ToneMapping(dib, FITMO_REINHARD05);
+		FreeImage_Unload(dib);
+		if(!dst) return FALSE;
+
+		const BYTE *bits = FreeImage_GetScanLine(dst, 0);
+		BOOL ok = TRUE;
+		for(unsigned x = black + 1; x < 64; x++) {
+			if(bits[3 * x + FI_RGBA_RED] < bits[3 * (x - 1) + FI_RGBA_RED]) ok = FALSE;
+		}
+		// and the ramp is not one flat white
+		if(bits[3 * black + FI_RGBA_RED] == bits[3 * 63 + FI_RGBA_RED]) ok = FALSE;
+		FreeImage_Unload(dst);
+		if(!ok) return FALSE;
+	}
+	return TRUE;
+}
+
+static BOOL testReinhard05BrightFlatImages() {
+	const float values[3] = { 90.0F, 1000.0F, 12345.0F };
+
+	for(int v = 0; v < 6; v++) {
+		const float value = values[v % 3];
+		FIBITMAP *dib = createBlackAndLit(16, 16, 0, value, value, value, FALSE);
+		if(!dib) return FALSE;
+		if(v >= 3) {
+			// nearly flat: every other pixel two float steps brighter
+			const float brighter = nextafterf(nextafterf(value, FLT_MAX), FLT_MAX);
+			for(unsigned y = 0; y < 16; y++) {
+				FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, y);
+				for(unsigned x = (y & 1); x < 16; x += 2) {
+					pixel[x].red = pixel[x].green = pixel[x].blue = brighter;
+				}
+			}
+		}
+		FIBITMAP *dst = FreeImage_ToneMapping(dib, FITMO_REINHARD05);
+		FreeImage_Unload(dib);
+		if(!dst) return FALSE;
+		// light in, light out
+		const BOOL ok = (FreeImage_GetScanLine(dst, 8)[3 * 8] > 0);
+		FreeImage_Unload(dst);
+		if(!ok) return FALSE;
+	}
+	return TRUE;
+}
+
+/** mean of one channel of a 24-bit image, without the pixel at (0, 0) */
+static double channelMean(FIBITMAP *dib, int channel) {
+	double sum = 0;
+	unsigned count = 0;
+	for(unsigned y = 0; y < FreeImage_GetHeight(dib); y++) {
+		const BYTE *bits = FreeImage_GetScanLine(dib, y);
+		for(unsigned x = (y == 0) ? 1 : 0; x < FreeImage_GetWidth(dib); x++) {
+			sum += bits[3 * x + channel];
+			count++;
+		}
+	}
+	return count ? (sum / count) : 0;
+}
+
+static BOOL testReinhard05InfiniteChannel() {
+	FIBITMAP *clean = createScene(FIT_RGBF, 64, 64, 200.0);
+	FIBITMAP *dib = createScene(FIT_RGBF, 64, 64, 200.0);
+	if(!clean || !dib) return FALSE;
+	((FIRGBF*)FreeImage_GetScanLine(dib, 0))[0].green = (float)HUGE_VAL;
+
+	// the channel averages of the complete algorithm
+	FIBITMAP *a = FreeImage_TmoReinhard05Ex(clean, 0, 0, 0.5, 0.5);
+	FIBITMAP *b = FreeImage_TmoReinhard05Ex(dib, 0, 0, 0.5, 0.5);
+	FreeImage_Unload(clean);
+	FreeImage_Unload(dib);
+	if(!a || !b) return FALSE;
+	const BOOL ok = fabs(channelMean(a, FI_RGBA_GREEN) - channelMean(b, FI_RGBA_GREEN)) < 3.0;
+	FreeImage_Unload(a);
+	FreeImage_Unload(b);
+	return ok;
+}
+
+static BOOL testReinhard05IgnoresOneBlackPixel() {
+	// one black sample does not move the key of the whole image
+	const unsigned width = 256, height = 64;
+	FIBITMAP *clean = createScene(FIT_RGBF, width, height, 200.0);
+	FIBITMAP *dib = createScene(FIT_RGBF, width, height, 200.0);
+	if(!clean || !dib) return FALSE;
+	FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, 0);
+	pixel[0].red = pixel[0].green = pixel[0].blue = 0;
+
+	BOOL ok = TRUE;
+	for(int complete = 0; ok && (complete < 2); complete++) {
+		FIBITMAP *a = complete ? FreeImage_TmoReinhard05Ex(clean, 0, 0, 0.5, 0.5) : FreeImage_ToneMapping(clean, FITMO_REINHARD05);
+		FIBITMAP *b = complete ? FreeImage_TmoReinhard05Ex(dib, 0, 0, 0.5, 0.5) : FreeImage_ToneMapping(dib, FITMO_REINHARD05);
+		ok = (a != NULL) && (b != NULL);
+		double sum = 0;
+		unsigned count = 0;
+		for(unsigned y = 0; ok && y < height; y++) {
+			const BYTE *pa = FreeImage_GetScanLine(a, y);
+			const BYTE *pb = FreeImage_GetScanLine(b, y);
+			for(unsigned x = (y == 0) ? 3 : 0; x < width * 3; x++) {
+				sum += abs((int)pa[x] - (int)pb[x]);
+				count++;
+			}
+		}
+		// the rest of the image renders as without it
+		if(ok && (sum / count > 0.5)) ok = FALSE;
+		if(a) FreeImage_Unload(a);
+		if(b) FreeImage_Unload(b);
+	}
+	FreeImage_Unload(clean);
+	FreeImage_Unload(dib);
+	return ok;
+}
+
 // ----------------------------------------------------------
 
 void testToneMapping() {
@@ -428,5 +584,20 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testToneMappingHandlesFlatImages();
+	assert(bResult);
+
+	bResult = testReinhard05BlackAndOneColor();
+	assert(bResult);
+
+	bResult = testReinhard05KeepsToneOrder();
+	assert(bResult);
+
+	bResult = testReinhard05BrightFlatImages();
+	assert(bResult);
+
+	bResult = testReinhard05InfiniteChannel();
+	assert(bResult);
+
+	bResult = testReinhard05IgnoresOneBlackPixel();
 	assert(bResult);
 }

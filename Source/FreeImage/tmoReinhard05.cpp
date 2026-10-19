@@ -94,13 +94,19 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 	if((m == 0) || (a != 1) && (c != 1)) {
 		// avoid these calculations if its not needed after ...
 		LuminanceFromY(Y, &maxLum, &minLum, &Lav, &Llav);
-		k = (log(maxLum) - Llav) / (log(maxLum) - log(minLum));
-		if(k < 0) {
-			// pow(k, 1.4F) is undefined ...
-			// there's an ambiguity about the calculation of Llav between Reinhard papers and the various implementations  ...
-			// try another world adaptation luminance formula using instead 'worldLum = log(Llav)'
-			k = (log(maxLum) - log(Llav)) / (log(maxLum) - log(minLum));
-			if(k < 0) m = 0.3F;
+		// a range of 0.01% or less is flat: no key, k stays 0
+		const float range = log(maxLum) - log(minLum);
+		if(range > 1e-4F) {
+			k = (log(maxLum) - Llav) / range;
+			if(k < 0) {
+				// pow(k, 1.4F) is undefined ...
+				// there's an ambiguity about the calculation of Llav between Reinhard papers and the various implementations  ...
+				// try another world adaptation luminance formula using instead 'worldLum = log(Llav)'
+				k = (log(maxLum) - log(Llav)) / range;
+				if(k < 0) m = 0.3F;
+			}
+			// rounding must not take the contrast past 1, where the curve runs backwards
+			if(k > 1) k = 1;
 		}
 	}
 	m = (m > 0) ? m : (float)(0.3 + 0.7 * pow(k, 1.4F));
@@ -136,22 +142,25 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 
 		Cav[0] = Cav[1] = Cav[2] = 0;
 		if((a != 1) && (c != 0)) {
-			// channel averages are not needed when (a == 1) or (c == 0)
+			// channel averages are not needed when (a == 1) or (c == 0); an infinite sample would make one infinite
+			size_t finite[3] = { 0, 0, 0 };
 			bits = (BYTE*)FreeImage_GetBits(dib);
 			for(y = 0; y < height; y++) {
 				float *color = (float*)bits;
 				for(x = 0; x < width; x++) {
 					for(i = 0; i < 3; i++) {
-						Cav[i] += *color;
+						if(IsFiniteValue(*color)) {
+							Cav[i] += *color;
+							finite[i]++;
+						}
 						color++;
 					}
 				}
 				// next line
 				bits += dib_pitch;
 			}
-			const float image_size = (float)width * height;
 			for(i = 0; i < 3; i++) {
-				Cav[i] /= image_size;
+				Cav[i] = finite[i] ? Cav[i] / (float)finite[i] : 0;
 			}
 		}
 

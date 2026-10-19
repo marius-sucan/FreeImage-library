@@ -248,6 +248,8 @@ typedef struct tagLuminanceStats {
 	double sumLum;		//! sum of the luminance samples
 	double sumLogLum;	//! sum of log(EPS + luminance)
 	size_t count;		//! number of usable samples
+	double sumLogPosLum;	//! sum of log(EPS + luminance) over the strictly positive samples
+	size_t positiveCount;	//! number of strictly positive samples
 } LuminanceStats;
 
 /** luminance stats of samples 'stride' floats apart (3: the Y of Yxy) */
@@ -260,7 +262,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	memset(stats, 0, sizeof(LuminanceStats));
 
 	float max_lum = -FLT_MAX, min_lum = FLT_MAX, min_pos_lum = FLT_MAX;
-	double sum_lum = 0, sum_log_lum = 0;
+	double sum_lum = 0, sum_log_lum = 0, sum_log_pos_lum = 0;
 	size_t count = 0, positive_count = 0;
 
 	// first pass : min / max / sums, skipping non finite samples
@@ -285,6 +287,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 			const float lit = (Y > 0) ? Y : 0;
 			sum_lum += lit;
 			sum_log_lum += log(2.3e-5F + lit);	// contrast constant in Tumblin paper
+			if(Y > 0) sum_log_pos_lum += log(2.3e-5F + lit);
 			count++;
 		}
 		// next line
@@ -302,6 +305,8 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	stats->sumLum       = sum_lum;
 	stats->sumLogLum    = sum_log_lum;
 	stats->count        = count;
+	stats->sumLogPosLum = sum_log_pos_lum;
+	stats->positiveCount = positive_count;
 	stats->maxLum       = max_lum;
 	stats->minLumRobust = min_lum;
 
@@ -575,10 +580,10 @@ LuminanceFromY(FIBITMAP *dib, float *maxLum, float *minLum, float *Lav, float *L
 	*maxLum = stats.maxLum;
 	// minimum positive luminance: callers take its log()
 	*minLum = (stats.minPosLum > 0) ? stats.minPosLum : stats.maxLum;
-	// average luminance
+	// average luminance, black samples included
 	*Lav = (float)(stats.sumLum / (double)stats.count);
-	// average log luminance, a.k.a. world adaptation luminance
-	*Llav = (float)exp(stats.sumLogLum / (double)stats.count);
+	// average log luminance, a.k.a. world adaptation luminance: over the samples the minimum is taken from
+	*Llav = (float)exp((stats.positiveCount > 0) ? stats.sumLogPosLum / (double)stats.positiveCount : stats.sumLogLum / (double)stats.count);
 
 	return TRUE;
 }

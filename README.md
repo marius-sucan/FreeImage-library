@@ -58,7 +58,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
   - floating-point RGB bitmaps always return FITM_REQUIRED;
 - added FreeImage_ConvertToLinear();
 - the results of the tone mappers carry a profile of the image's colors, for color management;
-- fixed the tone-mapping algorithms misbehaving with extreme values;
+- fixed the tone-mapping algorithms misbehaving with extreme values, flat images and large black areas;
 
 ### Resizing and rotation
 
