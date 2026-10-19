@@ -338,7 +338,7 @@ bool psdHeaderInfo::Read(FreeImageIO *io, fi_handle handle) {
 			_Width = psdGetValue( header.Columns, sizeof(header.Columns) );
 			_BitsPerChannel = (short)psdGetValue( header.Depth, sizeof(header.Depth) );
 			_ColourMode = (short)psdGetValue( header.Mode, sizeof(header.Mode) );
-			if (_Version == 1 && (_Width > 30000 || _Height > 30000)) {
+			if (_Width <= 0 || _Height <= 0 || (_Version == 1 && (_Width > 30000 || _Height > 30000))) {
 				return false;
 			}
 			switch (_BitsPerChannel) {
