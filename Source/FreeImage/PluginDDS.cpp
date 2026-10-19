@@ -552,7 +552,7 @@ public:
 	}
 };
 
-template <class DECODER> void DecodeDXTBlock (BYTE *dstData, const BYTE *srcBlock, long dstPitch, int bw, int bh) {
+template <class DECODER> void DecodeDXTBlock (BYTE *dstData, const BYTE *srcBlock, ptrdiff_t dstPitch, int bw, int bh) {
 	DECODER decoder;
 	decoder.Setup(srcBlock);
 	for (int y = 0; y < bh; y++) {
@@ -728,59 +728,32 @@ LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int 
 	typedef typename DECODER::INFO INFO;
 	typedef typename INFO::Block Block;
 
-	// get the size of a line in bytes
-	int line = CalculateLine(width, FreeImage_GetBPP(dib));
+	// get the size of a line in bytes: 2 GB or more for a width of 2^29
+	const ptrdiff_t line = (ptrdiff_t)FreeImage_GetPitch(dib);
 
-	Block *input_buffer = new(std::nothrow) Block[(width + 3) / 4];
+	// the blocks of a block row; the image edges may cut the last block and the last block row
+	const int inputLine = (width + 3) / 4;
+
+	Block *input_buffer = new(std::nothrow) Block[inputLine];
 	if (!input_buffer) {
 		return 0;
 	}
 
-	const int widthRest = (int) width & 3;
-	const int heightRest = (int) height & 3;
-	const int inputLine = (width + 3) / 4;
-	int y = 0;
-
-	if (height >= 4) {
-		for (; y < height; y += 4) {
-			const int blocks = (int)io->read_proc (input_buffer, sizeof(typename INFO::Block), inputLine, handle);
-			// TODO: probably need some endian work here
-			const BYTE *pbSrc = (BYTE *)input_buffer;
-			BYTE *pbDst = FreeImage_GetScanLine (dib, height - y - 1);
-
-			if (width >= 4) {
-				for (int x = 0; x < width && x / 4 < blocks; x += 4) {
-					DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, 4, 4);
-					pbSrc += INFO::bytesPerBlock;
-					pbDst += 16;	// 4 * 4;
-				}
-			}
-			if (widthRest && (blocks == inputLine)) {
-				DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, widthRest, 4);
-			}
-			if (blocks < inputLine) {
-				delete [] input_buffer;
-				return y;
-			}
-		}
-	}
-	if (heightRest)	{
-		io->read_proc (input_buffer, sizeof (typename INFO::Block), inputLine, handle);
+	for (int y = 0; y < height; y += 4) {
+		const int blocks = (int)io->read_proc(input_buffer, sizeof(Block), inputLine, handle);
 		// TODO: probably need some endian work here
 		const BYTE *pbSrc = (BYTE *)input_buffer;
-		BYTE *pbDst = FreeImage_GetScanLine (dib, height - y - 1);
+		BYTE *pbDst = FreeImage_GetScanLine(dib, height - y - 1);
 
-		if (width >= 4) {
-			for (int x = 0; x < width; x += 4) {
-				DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, 4, heightRest);
-				pbSrc += INFO::bytesPerBlock;
-				pbDst += 16;	// 4 * 4;
-			}
+		for (int b = 0; b < blocks; b++) {
+			DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, MIN(4, width - 4 * b), MIN(4, height - y));
+			pbSrc += INFO::bytesPerBlock;
+			pbDst += 16;	// 4 * 4;
 		}
-		if (widthRest) {
-			DecodeDXTBlock<DECODER>(pbDst, pbSrc, line, widthRest, heightRest);
+		if (blocks < inputLine) {
+			delete [] input_buffer;
+			return y;
 		}
-
 	}
 
 	delete [] input_buffer;
@@ -795,9 +768,24 @@ LoadDXT_Helper(FreeImageIO *io, fi_handle handle, FIBITMAP *dib, int width, int 
 */
 static FIBITMAP *
 LoadDXT(int decoder_type, const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
-	// get image size, rounded to 32-bit
-	int width = (int)desc->dwWidth & ~3;
-	int height = (int)desc->dwHeight & ~3;
+	if ((desc->dwWidth == 0) || (desc->dwWidth > (DWORD)INT_MAX) ||
+		(desc->dwHeight == 0) || (desc->dwHeight > (DWORD)INT_MAX)) {
+		return NULL;
+	}
+	const int width = (int)desc->dwWidth;
+	const int height = (int)desc->dwHeight;
+
+	{
+		// a short file cannot claim a huge image: a block of 8 (DXT1) or 16 bytes gives 16 pixels
+		const INT64 pos = io->tell_proc(handle);
+		io->seek_proc(handle, 0, SEEK_END);
+		const INT64 end = io->tell_proc(handle);
+		io->seek_proc(handle, pos, SEEK_SET);
+		if (!PlausibleImageSize((UINT64)width * height * 4, (end > pos) ? (UINT64)(end - pos) : 0, (decoder_type == 1) ? 8 : 4)) {
+			FreeImage_OutputMessageProc(s_format_id, "The file holds too little data for its size");
+			return NULL;
+		}
+	}
 
 	// allocate a 32-bit dib
 	FIBITMAP *dib = FreeImage_Allocate(width, height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);

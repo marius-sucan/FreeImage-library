@@ -159,7 +159,8 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 ### Other formats
 
 - fixed monochrome RAW files, such as those of the Leica M Monochrom and the Pentax K-3 Mark III Monochrome;
-- fixed damaged PCX, TGA, PSD, PNM, RAS, IFF and WBMP files allocating gigabytes or showing uninitialized memory, and uncompressed and odd-width 16-color PCX files decoding wrongly;
+- fixed damaged PCX, TGA, PSD, PNM, RAS, IFF, WBMP and DDS files allocating gigabytes or showing uninitialized memory, and uncompressed and odd-width 16-color PCX files decoding wrongly;
+- fixed DXT-compressed DDS images whose width or height is not a multiple of 4 loading cropped and garbled, or not at all;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing them is now much faster;
 - fixed PFM images being saved and loaded upside down; PFM files saved by older FreeImage versions now load flipped;
 - fixed the G3 plugin hanging on a damaged fax file;
