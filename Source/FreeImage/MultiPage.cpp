@@ -1062,6 +1062,13 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 	return res;
 }
 
+// a page stored in the cache that will not join the block list
+static void
+FreeImage_DropStoredPage(MULTIBITMAPHEADER *header, const PageBlock& block) {
+	FreeImage_ForgetPageMetadata(header, block.getReference());
+	header->m_cachefile.deleteFile(block.getReference());
+}
+
 BOOL DLL_CALLCONV
 FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	if (!bitmap || !data) {
@@ -1077,8 +1084,13 @@ FreeImage_AppendPage(FIMULTIBITMAP *bitmap, FIBITMAP *data) {
 	// storing the page allocates: a plugin or the cache out of memory throws
 	try {
 		if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
-			// add the block
-			header->m_blocks.push_back(block);
+			// add the block; out of memory drops the stored page
+			try {
+				header->m_blocks.push_back(block);
+			} catch (std::bad_alloc &) {
+				FreeImage_DropStoredPage(header, block);
+				throw;
+			}
 			header->changed = TRUE;
 			header->page_count = -1;
 			return TRUE;
@@ -1117,17 +1129,23 @@ FreeImage_InsertPage(FIMULTIBITMAP *bitmap, int page, FIBITMAP *data) {
 	// storing the page and splitting the block list allocate: out of memory throws
 	try {
 		if(const PageBlock block = FreeImage_SavePageToBlock(header, data)) {
-			// add a block
-			if (page > 0) {
-				BlockListIterator block_source = FreeImage_FindBlock(bitmap, page);
+			// add a block; a page that cannot join the list is dropped from the cache
+			try {
+				if (page > 0) {
+					BlockListIterator block_source = FreeImage_FindBlock(bitmap, page);
 
-				if (block_source == header->m_blocks.end()) {
-					FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
-					return FALSE;
+					if (block_source == header->m_blocks.end()) {
+						FreeImage_DropStoredPage(header, block);
+						FreeImage_OutputMessageProc(header->fif, "FreeImage_InsertPage: page %d could not be located", page);
+						return FALSE;
+					}
+					header->m_blocks.insert(block_source, block);
+				} else {
+					header->m_blocks.push_front(block);
 				}
-				header->m_blocks.insert(block_source, block);
-			} else {
-				header->m_blocks.push_front(block);
+			} catch (std::bad_alloc &) {
+				FreeImage_DropStoredPage(header, block);
+				throw;
 			}
 
 			header->changed = TRUE;
