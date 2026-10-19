@@ -153,17 +153,23 @@ public:
 
 // --------------------------------------------------------------------------
 
-static UINT64
-psdReadSize(FreeImageIO *io, fi_handle handle, const psdHeaderInfo& header) {
+// false when the file ends first
+static bool
+psdReadSize(FreeImageIO *io, fi_handle handle, const psdHeaderInfo& header, UINT64 *size) {
 	if(header._Version == 1) {
 		BYTE Length[4];
-		io->read_proc(Length, sizeof(Length), 1, handle);
-		return psdGetLongValue(Length, sizeof(Length));
+		if(io->read_proc(Length, sizeof(Length), 1, handle) != 1) {
+			return false;
+		}
+		*size = psdGetLongValue(Length, sizeof(Length));
 	} else {
 		BYTE Length[8];
-		io->read_proc(Length, sizeof(Length), 1, handle);
-		return psdGetLongValue(Length, sizeof(Length));
+		if(io->read_proc(Length, sizeof(Length), 1, handle) != 1) {
+			return false;
+		}
+		*size = psdGetLongValue(Length, sizeof(Length));
 	}
+	return true;
 }
 
 // --------------------------------------------------------------------------
@@ -387,12 +393,16 @@ bool psdColourModeData::Read(FreeImageIO *io, fi_handle handle) {
 	}
 
 	BYTE Length[4];
-	io->read_proc(Length, sizeof(Length), 1, handle);
+	if (io->read_proc(Length, sizeof(Length), 1, handle) != 1) {
+		return false;
+	}
 
 	_Length = psdGetValue( Length, sizeof(_Length) );
 	if (0 < _Length) {
 		_plColourData = new BYTE[_Length];
-		io->read_proc(_plColourData, _Length, 1, handle);
+		if (io->read_proc(_plColourData, _Length, 1, handle) != 1) {
+			return false;
+		}
 	}
 
 	return true;
@@ -478,36 +488,48 @@ psdResolutionInfo::~psdResolutionInfo() {
 
 int psdResolutionInfo::Read(FreeImageIO *io, fi_handle handle) {
 	BYTE IntValue[4], ShortValue[2];
-	int nBytes=0, n;
+	int nBytes=0;
 
 	// Horizontal resolution in pixels per inch.
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_hRes = (short)psdGetValue(ShortValue, sizeof(_hRes) );
 
 	// 1=display horizontal resolution in pixels per inch; 2=display horizontal resolution in pixels per cm.
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	if(io->read_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(IntValue);
 	_hResUnit = psdGetValue(IntValue, sizeof(_hResUnit) );
 
 	// Display width as 1=inches; 2=cm; 3=points; 4=picas; 5=columns.
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_widthUnit = (short)psdGetValue(ShortValue, sizeof(_widthUnit) );
 
 	// Vertical resolution in pixels per inch.
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_vRes = (short)psdGetValue(ShortValue, sizeof(_vRes) );
 
 	// 1=display vertical resolution in pixels per inch; 2=display vertical resolution in pixels per cm.
-	n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-	nBytes += n * sizeof(IntValue);
+	if(io->read_proc(IntValue, sizeof(IntValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(IntValue);
 	_vResUnit = psdGetValue(IntValue, sizeof(_vResUnit) );
 
 	// Display height as 1=inches; 2=cm; 3=points; 4=picas; 5=columns.
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_heightUnit = (short)psdGetValue(ShortValue, sizeof(_heightUnit) );
 
 	return nBytes;
@@ -588,26 +610,36 @@ psdResolutionInfo_v2::~psdResolutionInfo_v2() {
 
 int psdResolutionInfo_v2::Read(FreeImageIO *io, fi_handle handle) {
 	BYTE ShortValue[2];
-	int nBytes=0, n;
+	int nBytes=0;
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Channels = (short)psdGetValue(ShortValue, sizeof(_Channels) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Rows = (short)psdGetValue(ShortValue, sizeof(_Rows) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Columns = (short)psdGetValue(ShortValue, sizeof(_Columns) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Depth = (short)psdGetValue(ShortValue, sizeof(_Depth) );
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Mode = (short)psdGetValue(ShortValue, sizeof(_Mode) );
 
 	return nBytes;
@@ -659,32 +691,42 @@ psdDisplayInfo::~psdDisplayInfo() {
 
 int psdDisplayInfo::Read(FreeImageIO *io, fi_handle handle) {
 	BYTE ShortValue[2];
-	int nBytes=0, n;
+	int nBytes=0;
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_ColourSpace = (short)psdGetValue(ShortValue, sizeof(_ColourSpace) );
 
 	for (unsigned i = 0; i < 4; ++i) {
-		n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-		nBytes += n * sizeof(ShortValue);
+		if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+			return nBytes;
+		}
+		nBytes += sizeof(ShortValue);
 		_Colour[i] = (short)psdGetValue(ShortValue, sizeof(_Colour[i]) );
 	}
 
-	n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-	nBytes += n * sizeof(ShortValue);
+	if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(ShortValue);
 	_Opacity = (short)psdGetValue(ShortValue, sizeof(_Opacity) );
 	if((_Opacity < 0) || (_Opacity > 100)) {
 		throw "Invalid DisplayInfo::Opacity value";
 	}
 
 	BYTE c[1];
-	n = (int)io->read_proc(c, sizeof(c), 1, handle);
-	nBytes += n * sizeof(c);
+	if(io->read_proc(c, sizeof(c), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(c);
 	_Kind = (BYTE)psdGetValue(c, sizeof(c));
 
-	n = (int)io->read_proc(c, sizeof(c), 1, handle);
-	nBytes += n * sizeof(c);
+	if(io->read_proc(c, sizeof(c), 1, handle) != 1) {
+		return nBytes;
+	}
+	nBytes += sizeof(c);
 
 	_padding = (BYTE)psdGetValue(c, sizeof(c));
 	if(_padding != 0) {
@@ -1205,7 +1247,10 @@ bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 	bool bSuccess = true;
 	int merged = -1;
 
-	const UINT64 nTotalBytes = psdReadSize(io, handle, _headerInfo);
+	UINT64 nTotalBytes = 0;
+	if (!psdReadSize(io, handle, _headerInfo, &nTotalBytes)) {
+		return false;
+	}
 
 	// the extra channels read: CMYK's at 8 or 16 bits, RGB's, Lab's and grey's
 	const short mode = _headerInfo._ColourMode;
@@ -1238,6 +1283,16 @@ bool psdParser::ReadLayerAndMaskInfoSection(FreeImageIO *io, fi_handle handle)	{
 	return bSuccess;
 }
 
+// a read the file ends inside stops the image resources
+static bool
+psdReadResourceBytes(FreeImageIO *io, fi_handle handle, void *buffer, unsigned size, int format_id) {
+	if(io->read_proc(buffer, size, 1, handle) == 1) {
+		return true;
+	}
+	FreeImage_OutputMessageProc(format_id, "This file contains damaged data causing an unexpected end-of-file - stop reading resources");
+	return false;
+}
+
 bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG length) {
 	psdImageResource oResource;
 	bool bSuccess = false;
@@ -1246,8 +1301,9 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 		oResource._Length = length;
 	} else {
 		BYTE Length[4];
-		int n = (int)io->read_proc(Length, sizeof(Length), 1, handle);
-
+		if(!psdReadResourceBytes(io, handle, Length, sizeof(Length), _fi_format_id)) {
+			return false;
+		}
 		oResource._Length = psdGetValue( Length, sizeof(oResource._Length) );
 	}
 
@@ -1255,15 +1311,12 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 	int nTotalBytes = oResource._Length;
 
 	while(nBytes < nTotalBytes) {
-		int n = 0;
 		oResource.Reset();
 
-		n = (int)io->read_proc(oResource._OSType, sizeof(oResource._OSType), 1, handle);
-		if(n != 1) {
-			FreeImage_OutputMessageProc(_fi_format_id, "This file contains damaged data causing an unexpected end-of-file - stop reading resources");
+		if(!psdReadResourceBytes(io, handle, oResource._OSType, sizeof(oResource._OSType), _fi_format_id)) {
 			return false;
 		}
-		nBytes += n * sizeof(oResource._OSType);
+		nBytes += sizeof(oResource._OSType);
 
 		if( (nBytes % 2) != 0 ) {
 			return false;
@@ -1273,30 +1326,40 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 
 		if ( PSD_RESOURCE == nOSType ) {
 			BYTE ID[2];
-			n = (int)io->read_proc(ID, sizeof(ID), 1, handle);
-			nBytes += n * sizeof(ID);
+			if(!psdReadResourceBytes(io, handle, ID, sizeof(ID), _fi_format_id)) {
+				return false;
+			}
+			nBytes += sizeof(ID);
 
 			oResource._ID = (short)psdGetValue( ID, sizeof(ID) );
 
 			BYTE SizeOfName;
-			n = (int)io->read_proc(&SizeOfName, sizeof(SizeOfName), 1, handle);
-			nBytes += n * sizeof(SizeOfName);
+			if(!psdReadResourceBytes(io, handle, &SizeOfName, sizeof(SizeOfName), _fi_format_id)) {
+				return false;
+			}
+			nBytes += sizeof(SizeOfName);
 
 			int nSizeOfName = psdGetValue( &SizeOfName, sizeof(SizeOfName) );
 			if ( 0 < nSizeOfName ) {
 				oResource._plName = new BYTE[nSizeOfName];
-				n = (int)io->read_proc(oResource._plName, nSizeOfName, 1, handle);
-				nBytes += n * nSizeOfName;
+				if(!psdReadResourceBytes(io, handle, oResource._plName, nSizeOfName, _fi_format_id)) {
+					return false;
+				}
+				nBytes += nSizeOfName;
 			}
 
 			if ( 0 == (nSizeOfName % 2) ) {
-				n = (int)io->read_proc(&SizeOfName, sizeof(SizeOfName), 1, handle);
-				nBytes += n * sizeof(SizeOfName);
+				if(!psdReadResourceBytes(io, handle, &SizeOfName, sizeof(SizeOfName), _fi_format_id)) {
+					return false;
+				}
+				nBytes += sizeof(SizeOfName);
 			}
 
 			BYTE Size[4];
-			n = (int)io->read_proc(Size, sizeof(Size), 1, handle);
-			nBytes += n * sizeof(Size);
+			if(!psdReadResourceBytes(io, handle, Size, sizeof(Size), _fi_format_id)) {
+				return false;
+			}
+			nBytes += sizeof(Size);
 
 			oResource._Size = psdGetValue( Size, sizeof(oResource._Size) );
 
@@ -1337,9 +1400,10 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 					// (Photoshop 4.0) Copyright flag
 					// Boolean indicating whether image is copyrighted. Can be set via Property suite or by user in File Info...
 					case PSDP_RES_COPYRIGHT:
-						n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-						nBytes += n * sizeof(ShortValue);
-						_bCopyright = (1 == psdGetValue(ShortValue, sizeof(ShortValue)));
+						if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) == 1) {
+							nBytes += sizeof(ShortValue);
+							_bCopyright = (1 == psdGetValue(ShortValue, sizeof(ShortValue)));
+						}
 						break;
 
 					// (Photoshop 4.0) Thumbnail resource for Photoshop 4.0 only
@@ -1357,9 +1421,10 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 					// 4 bytes that contain an integer between 0 and 359, which is the global
 					// lighting angle for effects layer. If not present, assumed to be 30.
 					case PSDP_RES_GLOBAL_ANGLE:
-						n = (int)io->read_proc(IntValue, sizeof(IntValue), 1, handle);
-						nBytes += n * sizeof(IntValue);
-						_GlobalAngle = psdGetValue(IntValue, sizeof(_GlobalAngle) );
+						if(io->read_proc(IntValue, sizeof(IntValue), 1, handle) == 1) {
+							nBytes += sizeof(IntValue);
+							_GlobalAngle = psdGetValue(IntValue, sizeof(_GlobalAngle) );
+						}
 						break;
 
 					// ICC profile
@@ -1370,17 +1435,19 @@ bool psdParser::ReadImageResources(FreeImageIO *io, fi_handle handle, LONG lengt
 					// (Photoshop 6.0) Indexed Color Table Count
 					// 2 bytes for the number of colors in table that are actually defined
 					case PSDP_RES_INDEXED_COLORS:
-						n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-						nBytes += n * sizeof(ShortValue);
-						_ColourCount = (short)psdGetValue(ShortValue, sizeof(ShortValue) );
+						if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) == 1) {
+							nBytes += sizeof(ShortValue);
+							_ColourCount = (short)psdGetValue(ShortValue, sizeof(ShortValue) );
+						}
 						break;
 
 					// (Photoshop 6.0) Transparency Index.
 					// 2 bytes for the index of transparent color, if any.
 					case PSDP_RES_TRANSPARENCY_INDEX:
-						n = (int)io->read_proc(ShortValue, sizeof(ShortValue), 1, handle);
-						nBytes += n * sizeof(ShortValue);
-						_TransparentIndex = (short)psdGetValue(ShortValue, sizeof(ShortValue) );
+						if(io->read_proc(ShortValue, sizeof(ShortValue), 1, handle) == 1) {
+							nBytes += sizeof(ShortValue);
+							_TransparentIndex = (short)psdGetValue(ShortValue, sizeof(ShortValue) );
+						}
 						break;
 
 					// (Photoshop 6.0) Alpha Identifiers: Photoshop's merged transparency is 0
