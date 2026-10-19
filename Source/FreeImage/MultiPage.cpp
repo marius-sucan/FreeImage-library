@@ -36,6 +36,7 @@
 #include "Plugin.h"
 #include "Utilities.h"
 #include "FreeImage.h"
+#include "../Metadata/FreeImageTag.h"
 
 #ifdef _WIN32
 #include <process.h>
@@ -292,25 +293,34 @@ FreeImage_ForgetPageMetadata(MULTIBITMAPHEADER *header, int ref) {
 	}
 }
 
-// not FreeImage_CloneMetadata(): it skips FIMD_ANIMATION
-static unsigned
+// not FreeImage_CloneMetadata(): it skips FIMD_ANIMATION; false when memory ran out, malformed tags are left behind
+static bool
 FreeImage_CopyAnimationTags(FIBITMAP *dst, FIBITMAP *src) {
-	FITAG *tag = NULL;
-	FIMETADATA *mdhandle = FreeImage_FindFirstMetadata(FIMD_ANIMATION, src, &tag);
-	unsigned count = 0;
-
-	if (mdhandle != NULL) {
-		do {
-			if (FreeImage_SetMetadata(FIMD_ANIMATION, dst, FreeImage_GetTagKey(tag), tag)) {
-				count++;
-			}
-		} while (FreeImage_FindNextMetadata(mdhandle, &tag));
-		FreeImage_FindCloseMetadata(mdhandle);
+	if (FreeImage_GetMetadataCount(FIMD_ANIMATION, src) == 0) {
+		return true;
 	}
 
-	return count;
+	FITAG *tag = NULL;
+	FIMETADATA *mdhandle = FreeImage_FindFirstMetadata(FIMD_ANIMATION, src, &tag);
+
+	if (mdhandle == NULL) {
+		return false;
+	}
+
+	bool copied = true;
+	do {
+		// FreeImage_SetMetadata refuses a tag whose count and length disagree; anything else is out of memory
+		if (!FreeImage_SetMetadata(FIMD_ANIMATION, dst, FreeImage_GetTagKey(tag), tag)
+			&& (FreeImage_GetTagCount(tag) * FreeImage_TagDataWidth(FreeImage_GetTagType(tag)) == FreeImage_GetTagLength(tag))) {
+			copied = false;
+		}
+	} while (copied && FreeImage_FindNextMetadata(mdhandle, &tag));
+	FreeImage_FindCloseMetadata(mdhandle);
+
+	return copied;
 }
 
+// out of memory throws: a page kept without its animation tags would be saved without them
 static void
 FreeImage_RememberPageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib) {
 	FreeImage_ForgetPageMetadata(header, ref);
@@ -322,9 +332,13 @@ FreeImage_RememberPageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib
 	FIBITMAP *carrier = FreeImage_Allocate(1, 1, 1, 0, 0, 0);
 
 	if (carrier == NULL) {
-		return;
+		throw std::bad_alloc();
 	}
-	if (FreeImage_CopyAnimationTags(carrier, dib) > 0) {
+	if (!FreeImage_CopyAnimationTags(carrier, dib)) {
+		FreeImage_Unload(carrier);
+		throw std::bad_alloc();
+	}
+	if (FreeImage_GetMetadataCount(FIMD_ANIMATION, carrier) > 0) {
 		try {
 			header->page_metadata[ref] = carrier;
 		} catch (std::bad_alloc &) {
@@ -337,12 +351,13 @@ FreeImage_RememberPageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib
 	}
 }
 
+// out of memory throws, as above
 static void
 FreeImage_RestorePageMetadata(MULTIBITMAPHEADER *header, int ref, FIBITMAP *dib) {
 	std::map<int, FIBITMAP *>::const_iterator i = header->page_metadata.find(ref);
 
-	if (i != header->page_metadata.end()) {
-		FreeImage_CopyAnimationTags(dib, i->second);
+	if ((i != header->page_metadata.end()) && !FreeImage_CopyAnimationTags(dib, i->second)) {
+		throw std::bad_alloc();
 	}
 }
 
@@ -401,7 +416,12 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	free(compressed_data);
 
 	if (dib != NULL) {
-		FreeImage_RestorePageMetadata(header, block.getReference(), dib);
+		try {
+			FreeImage_RestorePageMetadata(header, block.getReference(), dib);
+		} catch (std::bad_alloc &) {
+			FreeImage_Unload(dib);
+			throw;
+		}
 	}
 
 	return dib;
