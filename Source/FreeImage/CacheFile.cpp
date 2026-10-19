@@ -177,11 +177,14 @@ CacheFile::close() {
 void
 CacheFile::cleanupMemCache() {
 	if (!m_keep_in_memory) {
-		if (m_page_cache_mem.size() > CACHE_SIZE) {
-			// flush the least used block to file
+		// a block the file did not take stays in memory: flush until the cache is back to its size
+		while (m_page_cache_mem.size() > CACHE_SIZE) {
+			// flush the least used block to file, never the locked one
 
 			Block *old_block = m_page_cache_mem.back();
-			// a block the file did not take stays in memory
+			if (old_block == m_current_block) {
+				return;
+			}
 			if ((FreeImage_fseek64(m_file, (INT64)old_block->nr * BLOCK_SIZE, SEEK_SET) != 0)
 				|| (fwrite(old_block->data, BLOCK_SIZE, 1, m_file) != 1) || (fflush(m_file) != 0)) {
 				return;
@@ -202,19 +205,33 @@ CacheFile::cleanupMemCache() {
 
 int
 CacheFile::allocateBlock() {
-	Block *block = new Block;
-	block->data = new BYTE[BLOCK_SIZE];
-	block->next = 0;
+	const bool reuse = !m_free_pages.empty();
 
-	if (!m_free_pages.empty()) {
-		block->nr = *m_free_pages.begin();
-		m_free_pages.pop_front();
-	} else {
-		block->nr = m_page_count++;
+	// out of memory leaves the cache as it was
+	Block *block = new Block;
+	block->nr = reuse ? m_free_pages.front() : m_page_count;
+	block->next = 0;
+	block->data = NULL;
+	bool listed = false;
+	try {
+		block->data = new BYTE[BLOCK_SIZE];
+		m_page_cache_mem.push_front(block);
+		listed = true;
+		m_page_map[block->nr] = m_page_cache_mem.begin();
+	} catch (std::bad_alloc &) {
+		if (listed) {
+			m_page_cache_mem.pop_front();
+		}
+		delete [] block->data;
+		delete block;
+		throw;
 	}
 
-	m_page_cache_mem.push_front(block);
-	m_page_map[block->nr] = m_page_cache_mem.begin();
+	if (reuse) {
+		m_free_pages.pop_front();
+	} else {
+		m_page_count++;
+	}
 
 	cleanupMemCache();
 
@@ -227,30 +244,32 @@ CacheFile::lockBlock(int nr) {
 		PageMapIt it = m_page_map.find(nr);
 
 		if (it != m_page_map.end()) {
-			m_current_block = *(it->second);
+			Block *block = *(it->second);
 
 			// the block is swapped out to disc. load it back
 			// and remove the block from the cache. it might get cached
 			// again as soon as the memory buffer fills up
 
-			if (m_current_block->data == NULL) {
-				m_current_block->data = new BYTE[BLOCK_SIZE];
+			if (block->data == NULL) {
+				// allocated first: out of memory leaves the cache as it was
+				BYTE *data = new BYTE[BLOCK_SIZE];
 
 				// (INT64) first: a 32-bit product wraps past 4 GB
-				if ((FreeImage_fseek64(m_file, (INT64)m_current_block->nr * BLOCK_SIZE, SEEK_SET) == 0)
-					&& (fread(m_current_block->data, BLOCK_SIZE, 1, m_file) == 1)) {
-					m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_disk, it->second);
-					m_page_map[nr] = m_page_cache_mem.begin();
-				}
-				else {
-					// back to the disk list: deleteBlock() expects no data there
-					delete [] m_current_block->data;
-					m_current_block->data = NULL;
-					m_current_block = NULL;
+				if ((FreeImage_fseek64(m_file, (INT64)block->nr * BLOCK_SIZE, SEEK_SET) != 0)
+					|| (fread(data, BLOCK_SIZE, 1, m_file) != 1)) {
+					delete [] data;
 					FreeImage_OutputMessageProc(FIF_UNKNOWN, "Failed to lock a block in CacheFile");
 					return NULL;
 				}
+				block->data = data;
+				m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_disk, it->second);
+			} else {
+				// the most recently used block is the last to be flushed
+				m_page_cache_mem.splice(m_page_cache_mem.begin(), m_page_cache_mem, it->second);
 			}
+			it->second = m_page_cache_mem.begin();
+
+			m_current_block = block;
 
 			// if the memory cache size is too large, swap an item to disc
 
@@ -298,9 +317,12 @@ CacheFile::deleteBlock(int nr) {
 		m_page_map.erase(it);
 	}
 
-	// add block to free page list
+	// add block to free page list; out of memory only keeps its number from being used again
 
-	m_free_pages.push_back(nr);
+	try {
+		m_free_pages.push_back(nr);
+	} catch (std::bad_alloc &) {
+	}
 
 	return TRUE;
 }
@@ -348,28 +370,35 @@ CacheFile::writeFile(BYTE *data, INT64 size) {
 		
 		stored_alloc = alloc = allocateBlock();
 
-		do {
-			int copy_alloc = alloc;
+		// out of memory frees the blocks stored so far, and leaves none locked
+		try {
+			do {
+				int copy_alloc = alloc;
 
-			Block *block = lockBlock(copy_alloc);
+				Block *block = lockBlock(copy_alloc);
 
-			if (block == NULL) {
-				// the blocks written so far go back to the free list
-				deleteFile(stored_alloc);
-				return 0;
-			}
+				if (block == NULL) {
+					// the blocks written so far go back to the free list
+					deleteFile(stored_alloc);
+					return 0;
+				}
 
-			block->next = 0;
+				block->next = 0;
 
-			memcpy(block->data, data + s, (s + BLOCK_SIZE > size) ? (size_t)(size - s) : BLOCK_SIZE);
+				memcpy(block->data, data + s, (s + BLOCK_SIZE > size) ? (size_t)(size - s) : BLOCK_SIZE);
 
-			if (count + 1 < nr_blocks_required)
-				alloc = block->next = allocateBlock();
+				unlockBlock(copy_alloc);
 
-			unlockBlock(copy_alloc);
+				// the link is in the Block, which stays when its data is flushed
+				if (count + 1 < nr_blocks_required)
+					alloc = block->next = allocateBlock();
 
-			s += BLOCK_SIZE;			
-		} while (++count < nr_blocks_required);
+				s += BLOCK_SIZE;
+			} while (++count < nr_blocks_required);
+		} catch (std::bad_alloc &) {
+			deleteFile(stored_alloc);
+			throw;
+		}
 
 		return stored_alloc;
 	}
@@ -379,19 +408,19 @@ CacheFile::writeFile(BYTE *data, INT64 size) {
 
 void
 CacheFile::deleteFile(int nr) {
-	do {
-		Block *block = lockBlock(nr);
+	// the links are in the Blocks: no data is read back from the file
+	while (nr != 0) {
+		PageMapIt it = m_page_map.find(nr);
 
-		if (block == NULL)
+		if (it == m_page_map.end())
 			break;
 
-		int next = block->next;
+		const int next = (*(it->second))->next;
 
-		unlockBlock(nr);
-
-		deleteBlock(nr);
+		if (!deleteBlock(nr))
+			break;
 
 		nr = next;
-	} while (nr != 0);
+	}
 }
 

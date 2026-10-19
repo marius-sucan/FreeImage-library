@@ -380,8 +380,16 @@ FreeImage_LoadPageFromCache(MULTIBITMAPHEADER *header, const PageBlock& block) {
 	}
 
 	FIBITMAP *dib = NULL;
+	BOOL read = FALSE;
 
-	if (header->m_cachefile.readFile(compressed_data, block.getReference(), size)) {
+	try {
+		read = header->m_cachefile.readFile(compressed_data, block.getReference(), size);
+	} catch (std::bad_alloc &) {
+		free(compressed_data);
+		throw;
+	}
+
+	if (read) {
 		FIMEMORY *hmem = FreeImage_OpenMemory64(compressed_data, (UINT64)size);
 
 		if (hmem != NULL) {
@@ -1006,7 +1014,13 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 	}
 
 	// write the compressed data to the cache
-	int ref = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
+	int ref = 0;
+	try {
+		ref = header->m_cachefile.writeFile(compressed_data, (INT64)compressed_size);
+	} catch (std::bad_alloc &) {
+		FreeImage_CloseMemory(hmem);
+		throw;
+	}
 	// get rid of the compressed data
 	FreeImage_CloseMemory(hmem);
 
@@ -1015,7 +1029,13 @@ FreeImage_SavePageToBlock(MULTIBITMAPHEADER *header, FIBITMAP *data) {
 		return res;
 	}
 
-	FreeImage_RememberPageMetadata(header, ref, data);
+	// out of memory: the stored page goes too
+	try {
+		FreeImage_RememberPageMetadata(header, ref, data);
+	} catch (std::bad_alloc &) {
+		header->m_cachefile.deleteFile(ref);
+		throw;
+	}
 
 	res = PageBlock(BLOCK_REFERENCE, ref, (INT64)compressed_size);
 
@@ -1305,9 +1325,14 @@ FreeImage_UnlockPage(FIMULTIBITMAP *bitmap, FIBITMAP *page, BOOL changed) {
 						return FALSE;
 					}
 
-					// remember the new page's animation metadata (may allocate)
+					// remember the new page's animation metadata (may allocate); out of memory drops the new copy
 
-					FreeImage_RememberPageMetadata(header, iPage, page);
+					try {
+						FreeImage_RememberPageMetadata(header, iPage, page);
+					} catch (std::bad_alloc &) {
+						header->m_cachefile.deleteFile(iPage);
+						throw;
+					}
 
 					// commit: drop the old copy last, so a failure above never leaves the block
 					// pointing at freed data
