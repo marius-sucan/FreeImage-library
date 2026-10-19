@@ -1594,6 +1594,12 @@ FIBITMAP* psdParser::ReadImageData(FreeImageIO *io, fi_handle handle) {
 		return NULL;
 	}
 
+	// the RLE line-size table and its byte count fit 32 bits
+	if(nCompression == PSDP_COMPRESSION_RLE && (UINT64)nChannels * nHeight > UINT_MAX / sizeof(DWORD)) {
+		FreeImage_OutputMessageProc(_fi_format_id, "Unsupported RLE with %u channels of %u rows", nChannels, nHeight);
+		return NULL;
+	}
+
 	// build output buffer
 
 	FIBITMAP* bitmap = NULL;
@@ -2146,6 +2152,10 @@ bool psdParser::WriteImageData(FreeImageIO *io, fi_handle handle, FIBITMAP* dib)
 		if (_headerInfo._BitsPerChannel > 16) {
 			nCompression = PSDP_COMPRESSION_NONE;
 		}
+	}
+	// the RLE line-size table and its byte count fit 32 bits
+	if(nCompression == PSDP_COMPRESSION_RLE && (UINT64)_headerInfo._Channels * _headerInfo._Height > UINT_MAX / sizeof(DWORD)) {
+		nCompression = PSDP_COMPRESSION_NONE;
 	}
 
 	WORD CompressionValue = nCompression;
