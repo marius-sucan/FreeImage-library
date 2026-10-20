@@ -25,7 +25,7 @@ Workspace $J/agents/bmp-ico-tga (tools/, data/, bin/fil_{qpv,main} + ASan). Two 
 ## Found while fixing F1 and F2
 - DDS LoadRGB: an uncompressed row over 2 GB (32-bit, width over 536870911) overflowed `const int fileLine`, and the first short read then memset with it as a size: a 36 MB file of 536870916 x 1, enough for its size bound, segfaulted through any stream. A regression of f33e02a (main ignores the short read). **Fixed** in 2419866.
 - TGA Load neither checked nor cleared its 18-byte header, footer and extension area (main too): a shorter file loaded as FIF_TARGA decoded leftover stack bytes (0-byte files came back as images). **Fixed** in 03b8e6e.
-- FreeImage_GetLine() multiplies width by bpp in 32 bits (main too): a row of 512 MB or more reports a short line and pitch (536870916 x 32-bit: 16 bytes instead of 2147483664). The block is sized in 64 bits, so pixels stay inside it, but GetScanLine's rows overlap. Open.
+- FreeImage_GetLine() multiplied width by bpp in 32 bits (main too): a row of 512 MB or more reported a short line and pitch (536870916 x 32-bit: 16 bytes instead of 2147483664), so GetScanLine's rows overlapped, and code that sizes rows in 64 bits disagreed with it: FlipVertical and FlipHorizontal overran their buffers, Rotate asserted. **Fixed** in 1a321c4: computed in 64 bits; rows over 2 GB are refused at allocation.
 - TGA RLE read cache (open): a pixel split by the end of a cut file reads as its bytes plus zeros, or as zeros, depending on the cache size (a refill after a short read zeroes what is left); a memory stream and one without SEEK_END size it differently, so 1 cut file of 5,393 differs in that pixel.
 
 ## Cited (already reported)
