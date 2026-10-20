@@ -42,6 +42,11 @@ reproduced it independently. Nothing else below came from that file.
   amplification is plain in the side-by-sides)
 - Fix sketch: use the absolute finite maximum (stats.trueMaxLum) in LuminanceRange for Fattal02, keeping only the
   non-finite filtering; or raise the outlier budget well below what real light sources occupy (e.g. 1e-6).
+- **Fixed** in 3063d82, as sketched: LuminanceRange() returns the darkest and brightest finite samples, main's range.
+  StillLife, CandleGlass and PrismsLenses render 42.7, 38.4 and 28.0, main's renders of the same light. HDR-tests:
+  leadenhall_market_4k.hdr 113.7 -> 95.3 (main 95.3); rogland_clear_night_4k.exr 124.8 -> 77.5, main's render of its
+  light as RGBF (main's RGBAF path clips the file to [0..1] and gave 130.7). TestAPI/testToneMapping.cpp: a lamp over
+  0.09% and 0.11% of the frame renders alike.
 
 ### F2 Percentile white point: renders jump when a light source crosses 0.1% of the frame; thumbnails no longer match
 - Class: regression-vs-main (side effect of an intended robustness change)
@@ -72,6 +77,18 @@ reproduced it independently. Nothing else below came from that file.
 - Confidence: high
 - Fix sketch: keep NaN/INF filtering but use the absolute finite maximum (or a much smaller budget / a soft knee), so
   the white point varies continuously with the content.
+- **Fixed** in cbf2c7c, by the soft-knee route: the white point of Drago03 (Lmax) and Reinhard05 (key, top of the
+  output range) is the geometric mean of the brightest 0.1% of the lit samples, so a light under 0.1% counts in
+  proportion to its area and one over it is the white point as on main. sunppm 800/950/1050: Drago03 111.1, 107.7,
+  106.8 (main 106.9), Reinhard05 88.9, 79.5, 76.8. 1600x1200 at 800 ppm: Drago03 full 111.1, MakeThumbnail 107.8.
+  The absolute maximum was measured too and not taken: rogland_clear_night_4k.exr, whose stars and few lights are
+  under 0.1%, renders murky with it (Drago03 109.0, against 155.0 before and 144.1 now), and its thumbnail differs more
+  from the full render (mean difference 24.1, against 9.4 before and 14.1 now: point lights blur when resampled, so
+  no white point makes such thumbnails match). Scene "dim": Drago03 148.5 (main 136.6), 5.1% of channels clipped at
+  exposure +2 (8.6% before, main 0.5%). Nine OpenEXR photos: Drago03 within 3.1 and Reinhard05 within 1.8 of before.
+  Still open, found on the way: the bottom of Reinhard05's output range is a hard 0.1th percentile, so the render
+  steps 8 to 11 levels when black pixels cross 0.1% of the samples; a continuous black point would let one black pixel
+  move the render, which testReinhard05IgnoresOneBlackPixel forbids.
 
 ### F3 ConvertToLinear clips float samples above 1.0 when the ICC tone curve is a sampled 'curv' table
 - Class: new-bug
@@ -96,6 +113,12 @@ reproduced it independently. Nothing else below came from that file.
 - Confidence: high
 - Fix sketch: for samples outside [0,1] on a tabulated curve, extend it (e.g. pow with cmsEstimateGamma of the curve, or
   the end slope), or rebuild the table as a parametric/segmented float curve before evaluating floats.
+- **Fixed** in 255e9a5: a tone curve that does not rise from 1.0 to 2.0 goes on past 1.0 as the power law through
+  its values at 0.9 and 1.0. curvN_srgb1024.icc and test5.icc: 1.25 -> 1.659, 1.5 -> 2.509, 4.0 -> 23.2 (para3:
+  1.666, 2.537, 25.3); curv2_lin exact; (4, 2, 1) through the float TIFF 23.22, 4.82, 1.0 and Reinhard05 164, 221,
+  244, 255. Parametric curves, samples up to 1.0 and the 8- and 16-bit paths are unchanged. LUT-based profiles
+  (test3.icc, through ConvertThroughProfile) still clip: a CLUT has nothing to extend, and FreeImage_ConvertToLinear's
+  comment says so. The Photoshop note is not verified and stays open.
 - Scope of exposure: the TestAPI v2 sRGB-style profile test5.icc (rTRC/gTRC/bTRC = curv with 1024 entries, the layout of
   the widespread "sRGB IEC61966-2.1" v2 profile) clips the same way (x=1.25 and 1.5 -> 1.0000), and so does a LUT-only
   profile (test3.icc, through ConvertThroughProfile -> FreeImage_ConvertToICCProfile). FreeImage's own built-in profiles
@@ -131,6 +154,13 @@ reproduced it independently. Nothing else below came from that file.
 - Confidence: high
 - Fix sketch: `if(!data || length < 8) return FALSE;` in psd_read_exif_profile (and check dwProfileLength >= 8 after the
   signature in jpeg_read_exif_profile); make the IFD check `(ifdp - tiffp) + 2 + 12 * nde > dwLength`.
+- **Fixed** in 9639bca: the three sketched checks, plus the same class next to them: jpeg_read_exif_profile_raw compared
+  6 bytes of any block (WebP passes its EXIF chunk, which can end the file), the maker-note signatures (up to 22
+  bytes), Nikon's type byte and Fujifilm's IFD offset were read whatever the note's length, the Sigma SD1 check
+  compared 10 bytes of any Model tag, and Canon camera settings were read as shorts whatever their type (40 bytes as
+  80). An IFD whose entries run past the block is skipped whole. ASan clean on the review's HEIF, JPEG XL and PSD
+  files and on new JPEG XL and WebP ones; every tag of 439 files dumps as before; TestAPI/JXL and TestAPI/WebP
+  robust cover it, their asan-run instrumenting Exif.cpp now.
 
 ### F5 FreeImage_MustTonemap answers FITM_NONE for 8-bit PQ images (overlaps a line glimpsed in the earlier report)
 - Class: new-bug (contract)
