@@ -439,7 +439,7 @@ static FIBITMAP* LogLuminance(FIBITMAP *Y) {
 		for(unsigned y = 0; y < height; y++) {
 			float *pixel = (float*)bits;
 			for(unsigned x = 0; x < width; x++) {
-				// pin outliers and non-finite samples to the range ends
+				// non-finite samples go to the bottom of the range
 				float sample = pixel[x];
 				if(!IsFiniteValue(sample)) {
 					sample = minLum;

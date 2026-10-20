@@ -560,6 +560,54 @@ static BOOL testReinhard05IgnoresOneBlackPixel() {
 	return ok;
 }
 
+/** ordinary light, 0.02 to 0.9, with a square lamp at 2000 over 'ppm' millionths of the pixels */
+static FIBITMAP* createLampScene(unsigned width, unsigned height, unsigned ppm) {
+	FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBF, width, height);
+	if(!dib) return NULL;
+	for(unsigned y = 0; y < height; y++) {
+		FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, y);
+		for(unsigned x = 0; x < width; x++) {
+			const float level = (float)(0.02 + 0.88 * (0.5 + 0.5 * sin(x * 0.05) * cos(y * 0.07)));
+			pixel[x].red = level;
+			pixel[x].green = level * 0.9F;
+			pixel[x].blue = level * 0.7F;
+		}
+	}
+	const unsigned area = (unsigned)((double)width * height * ppm / 1e6 + 0.5);
+	const unsigned side = (unsigned)ceil(sqrt((double)area));
+	for(unsigned i = 0; i < area; i++) {
+		FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, height / 2 + i / side) + width / 2 + i % side;
+		pixel->red = pixel->green = pixel->blue = 2000.0F;
+	}
+	return dib;
+}
+
+/** mean of a 24-bit image */
+static double meanLevel(FIBITMAP *dib) {
+	double sum = 0;
+	for(unsigned y = 0; y < FreeImage_GetHeight(dib); y++) {
+		const BYTE *bits = FreeImage_GetScanLine(dib, y);
+		for(unsigned x = 0; x < FreeImage_GetWidth(dib) * 3; x++) {
+			sum += bits[x];
+		}
+	}
+	return sum / ((double)FreeImage_GetWidth(dib) * FreeImage_GetHeight(dib) * 3);
+}
+
+static BOOL testLampSizeChangesRenderSmoothly(FREE_IMAGE_TMO tmo) {
+	// a lamp of 0.09% and one of 0.11% of the frame render alike
+	FIBITMAP *small = createLampScene(512, 384, 900);
+	FIBITMAP *large = createLampScene(512, 384, 1100);
+	FIBITMAP *a = small ? FreeImage_ToneMapping(small, tmo) : NULL;
+	FIBITMAP *b = large ? FreeImage_ToneMapping(large, tmo) : NULL;
+	const BOOL ok = a && b && (fabs(meanLevel(a) - meanLevel(b)) < 20);
+	if(small) FreeImage_Unload(small);
+	if(large) FreeImage_Unload(large);
+	if(a) FreeImage_Unload(a);
+	if(b) FreeImage_Unload(b);
+	return ok;
+}
+
 // ----------------------------------------------------------
 
 void testToneMapping() {
@@ -599,5 +647,8 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testReinhard05IgnoresOneBlackPixel();
+	assert(bResult);
+
+	bResult = testLampSizeChangesRenderSmoothly(FITMO_FATTAL02);
 	assert(bResult);
 }
