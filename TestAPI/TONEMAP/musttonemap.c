@@ -1044,6 +1044,71 @@ static void test_linear(void) {
             FreeImage_Unload(dib);
         }
 
+        /* light above 1.0 through tone curves sampled into 'curv' tables: on past white, like the formula sampled */
+        {
+            static const double srgb[5] = { 2.4, 1 / 1.055, 0.055 / 1.055, 1 / 12.92, 0.04045 };
+            static const float rgb[15] = { 0.5f, 0.5f, 0.5f, 1, 1, 1, 1.25f, 1.25f, 1.25f, 1.5f, 1.5f, 1.5f, 4, 2, 1 };
+            cmsCIExyY d65 = { 0.3127, 0.3290, 1.0 };
+            WORD table[1024];
+            FIBITMAP *formula;
+            unsigned k, c, bad = 0;
+            FILE *f;
+            for (k = 0; k < 1024; k++) table[k] = (WORD)floor(ref_srgb(k / 1023.0) * 65535 + 0.5);
+            dib = FreeImage_AllocateT(FIT_RGBF, 5, 1, 8, 0, 0, 0);
+            memcpy(FreeImage_GetScanLine(dib, 0), rgb, sizeof(rgb));
+            attach_profile(dib, rgb_profile(cmsBuildParametricToneCurve(NULL, 4, srgb), -1));
+            formula = linear_of(dib, 0, "RGBF light, the sRGB formula");
+            FreeImage_DestroyICCProfile(dib);
+            attach_profile(dib, rgb_profile(cmsBuildTabulatedToneCurve16(NULL, 1024, table), -1));
+            lin = linear_of(dib, 0, "RGBF light, sRGB sampled in a table");
+            if (lin && formula) {
+                for (k = 0; k < 5; k++) for (c = 0; c < 3; c++) if (fabs(out(lin, k, c) / out(formula, k, c) - 1) > 0.1) bad++;
+                CHECK(bad == 0, "sRGB table: 1.25 -> %.4f, 1.5 -> %.4f, 4.0 -> %.4f, not within 10%% of the formula's %.4f, %.4f, %.4f",
+                      out(lin, 2, 0), out(lin, 3, 0), out(lin, 4, 0), out(formula, 2, 0), out(formula, 3, 0), out(formula, 4, 0));
+                CHECK(near(out(lin, 1, 0), 1, 1e-4) && out(lin, 2, 0) > out(lin, 1, 0) && out(lin, 3, 0) > out(lin, 2, 0) && out(lin, 4, 0) > out(lin, 3, 0),
+                      "sRGB table: 1.0, 1.25, 1.5, 4.0 give %.4f %.4f %.4f %.4f", out(lin, 1, 0), out(lin, 2, 0), out(lin, 3, 0), out(lin, 4, 0));
+                CHECK(out(lin, 4, 0) > out(lin, 4, 1) && out(lin, 4, 1) > out(lin, 4, 2), "sRGB table: (4, 2, 1) gives %.4f %.4f %.4f", out(lin, 4, 0), out(lin, 4, 1), out(lin, 4, 2));
+            }
+            FreeImage_Unload(lin);
+            FreeImage_DestroyICCProfile(dib);
+            /* a 2-entry table is linear */
+            table[0] = 0; table[1] = 65535;
+            attach_profile(dib, rgb_profile(cmsBuildTabulatedToneCurve16(NULL, 2, table), -1));
+            lin = linear_of(dib, 0, "RGBF light, a linear table");
+            CHECK(lin && near(out(lin, 3, 0), 1.5, 1e-3) && near(out(lin, 4, 0), 4, 1e-3) && near(out(lin, 4, 1), 2, 1e-3), "linear table: 1.5 -> %.4f, (4, 2) -> %.4f %.4f", lin ? out(lin, 3, 0) : -1, lin ? out(lin, 4, 0) : -1, lin ? out(lin, 4, 1) : -1);
+            FreeImage_Unload(lin);
+            FreeImage_DestroyICCProfile(dib);
+            /* test5.icc: a v2 profile of sRGB's colorants with 1024-entry tables */
+            f = fopen("../ICC/data/test5.icc", "rb");
+            if (f) {
+                BYTE data[65536];
+                long size = (long)fread(data, 1, sizeof(data), f);
+                fclose(f);
+                FreeImage_CreateICCProfile(dib, data, size);
+                lin = linear_of(dib, 0, "RGBF light, test5.icc");
+                CHECK(lin && formula && fabs(out(lin, 3, 1) / out(formula, 3, 1) - 1) < 0.1 && out(lin, 3, 1) > out(lin, 2, 1), "test5.icc: 1.25 -> %.4f, 1.5 -> %.4f", lin ? out(lin, 2, 1) : -1, lin ? out(lin, 3, 1) : -1);
+                FreeImage_Unload(lin);
+            } else {
+                printf("  skipped, not found: ../ICC/data/test5.icc\n");
+            }
+            FreeImage_Unload(formula);
+            FreeImage_Unload(dib);
+            /* a grey table */
+            dib = FreeImage_AllocateT(FIT_FLOAT, 2, 1, 8, 0, 0, 0);
+            ((float *)FreeImage_GetScanLine(dib, 0))[0] = 0.5f;
+            ((float *)FreeImage_GetScanLine(dib, 0))[1] = 2;
+            for (k = 0; k < 1024; k++) table[k] = (WORD)floor(ref_srgb(k / 1023.0) * 65535 + 0.5);
+            {
+                cmsToneCurve *grey = cmsBuildTabulatedToneCurve16(NULL, 1024, table);
+                attach_profile(dib, cmsCreateGrayProfile(&d65, grey));
+                cmsFreeToneCurve(grey);
+            }
+            lin = linear_of(dib, 0, "grey light, sRGB sampled in a table");
+            CHECK(lin && near(out(lin, 0, 0), ref_srgb(0.5), 1e-3) && fabs(out(lin, 1, 0) / pow(2.055 / 1.055, 2.4) - 1) < 0.1, "grey table: 2.0 -> %.4f", lin ? out(lin, 1, 0) : -1);
+            FreeImage_Unload(lin);
+            FreeImage_Unload(dib);
+        }
+
         /* grey */
         dib = make16(FIT_UINT16, 2, 1, FULL);
         attach_builtin(dib, FICMS_PROFILE_GRAY);

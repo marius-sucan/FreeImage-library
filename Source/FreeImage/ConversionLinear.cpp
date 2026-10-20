@@ -53,6 +53,9 @@ enum Layout {
 struct Plan {
 	Curve curve;					// NULL: the profile's tone curves, or linear light already
 	const cmsToneCurve *trc[3];		// the profile's tone curves, red, green and blue, or grey in all three
+	bool extend[3];					// a tone curve that stops at 1.0, continued as top * signal ^ exponent
+	double top[3];
+	double exponent[3];
 	bool hlg;						// the HLG display step, per pixel, after the curve
 	double weights[3];				// the luminance the HLG step reads
 	bool convert;					// the primaries matrix, after the HLG step
@@ -61,10 +64,14 @@ struct Plan {
 
 	Plan() : curve(NULL), hlg(false), convert(false), primaries(2) {
 		trc[0] = trc[1] = trc[2] = NULL;
+		extend[0] = extend[1] = extend[2] = false;
 		weights[0] = 0.2126; weights[1] = 0.7152; weights[2] = 0.0722;
 	}
 	double Apply(unsigned channel, double signal) const {
 		if (trc[channel]) {
+			if (extend[channel] && (signal > 1)) {
+				return top[channel] * pow(signal, exponent[channel]);
+			}
 			return cmsEvalToneCurveFloat(trc[channel], (cmsFloat32Number)signal);
 		}
 		return curve ? curve(signal) : signal;
@@ -364,6 +371,22 @@ PlanFromCode(Plan &plan, cmsContext context, BYTE primaries, BYTE transfer, bool
 	}
 }
 
+// Little CMS stops a sampled 'curv' table at 1.0: past it, the power law of its last tenth
+static void
+ExtendStoppingCurves(Plan &plan) {
+	for (unsigned c = 0; c < 3; c++) {
+		const cmsToneCurve *trc = plan.trc[c];
+		if (!trc || (cmsEvalToneCurveFloat(trc, 2.0f) > cmsEvalToneCurveFloat(trc, 1.0f))) {
+			continue;
+		}
+		const double top = cmsEvalToneCurveFloat(trc, 1.0f);
+		const double below = cmsEvalToneCurveFloat(trc, 0.9f);
+		plan.extend[c] = true;
+		plan.top[c] = top;
+		plan.exponent[c] = ((below > 0) && (top > below)) ? log(top / below) / log(1 / 0.9) : 0;
+	}
+}
+
 // ----------------------------------------------------------
 //   Conversion
 // ----------------------------------------------------------
@@ -574,6 +597,7 @@ ConvertToLinear(FIBITMAP *dib, int flags, cmsContext context) {
 			plan.primaries = 1;
 		}
 	}
+	ExtendStoppingCurves(plan);
 
 	// the source, in a layout the rows read
 	FIBITMAP *src = dib;
@@ -654,6 +678,7 @@ one the CICP tag names (PQ, HLG, sRGB, BT.709 and the other curves of ITU-T H.27
 profile's cicp tag or tone curves, else sRGB for 8- and 16-bit images; floating-point images without
 either are linear already. 1.0 is SDR reference white, 203 cd/m2 (ITU-R BT.2408): PQ reaches 49 and
 the HLG reference display 4.9. HLG gets the display step of BT.2100 for a 1000 cd/m2 display.
+Floating-point samples above 1.0 go on through the tone curves; a LUT-based profile clips them.
 Samples tagged "UnscaledBits" are read in their own precision. CMYK images are converted to RGB first.
 @param dib Image to convert: a standard bitmap, FIT_UINT16, FIT_RGB16, FIT_RGBA16, FIT_FLOAT, FIT_RGBF or FIT_RGBAF
 @param flags FI_LINEAR_SRGB_PRIMARIES converts the colors to sRGB's primaries; otherwise they keep the image's,
