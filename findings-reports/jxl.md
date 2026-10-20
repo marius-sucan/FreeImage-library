@@ -1,0 +1,54 @@
+# jxl agent: findings (PluginJXL.cpp, libjxl 0.12.0/highway/brotli, patches, Makefile.jxl/NDEBUG), received 2026-10-19
+Workspace W=$J/agents/jxl (bin/fijxl harness, bin/mkjxl crafts files with libjxl API, src/*.cpp). main has no JPEG XL: everything is a new bug in qpv (plugin commit 4b3d2f4, 2026-10-11; JXL-5 vendored libjxl c914936). Coverage limit: no independent JXL decoder (no Pillow jpegxl, no djxl): pixel correctness rests on libjxl conformance references and libjxl's own decode.
+
+## JXL-1 Float JPEG XL images whose colours use the sRGB curve load with only a CICP tag, and FreeImage reads them as linear light
+- Class: new-bug. Severity: Medium. Confidence: high.
+- Where: PluginJXL.cpp:805-813 (AttachColor returns early `if(IsSRGB(&reader->data_enc)) return;` "sRGB is what an untagged bitmap means"); :794-796 (JXL_ROUTE_TO_SRGB sets CICP 1/13 only); applies when ChooseOutput picks FIT_FLOAT/RGBF/RGBAF (:663-673); 4b3d2f4.
+- What: for float types FreeImage assumes linear sRGB (ColorManagement.cpp:527 DefaultProfile; AttachCICPProfile skips float at :2591 "floating point holds light"; GetCICPProfile(1,13) returns NULL). Lossless float files from cjxl/PFM input, lossy XYB files whose original encoding is sRGB, and the TO_SRGB route with float output come back sRGB-encoded with CICP 1/13 and no ICC. Only FreeImage_ConvertToLinear reads the tag correctly; ToneMapping (the AHK wrapper advises calling it directly for FITM_REQUIRED, freeimage-wrapper.ahk:1141), MakeThumbnail (Drago03 direct, Rescale.cpp:261), ConvertToICCProfile/ApplyICCProfile/SoftProof (source = linear-sRGB default), and EXR/HDR/PFM saves (tag lost) all treat the samples as linear.
+- Evidence (src/demo_float.cpp; fs1.jxl lossy 64x48 gradient via `bin/mkjxl floatsrgb fs1.jxl 1`): loaded type=11 CICP=1/13/0/1 icc=0, MustTonemap 2; ConvertToLinear vs hand-decoded sRGB mean 0 max 0; ToneMapping tmo=0 direct vs truth mean 38.25 max 85 (via ConvertToLinear 0/0); tmo=1 mean 40.08 max 83; tmo=2 mean 25.73 max 88 (8-bit levels); MakeThumbnail mean 38.25 max 85; ConvertToICCProfile(sRGB) vs loaded mean 0.203 max 0.737; EXR copy vs linear truth mean 0.220 max 0.287. Conformance lossless_pfm: same pattern (Drago mean 22.9 max 84; ICC conversion max 23.8); matches its sRGB reference read as sRGB (peak 0.0014).
+- Fix sketch: decode float output to linear light (XYB: JxlDecoderSetPreferredColorProfile linear; otherwise JxlDecoderSetOutputColorProfile with the default CMS), or at minimum attach libjxl's data ICC instead of returning early.
+
+## JXL-2 Lossless saves of float images with negative samples fail at efforts 1-3, so JXL multi-page documents refuse such pages
+- Class: new-bug. Severity: Medium. Confidence: high.
+- Where: MultiPage.cpp:436-438 (page-cache flags for FIF_JXL = JXL_LOSSLESS | 0x10000 = lossless effort 1); PluginJXL.cpp:1873-1877, :1960-1962 (float frames as 32-bit IEEE samples); libjxl enc_modular.cc:174-178 copies float bits into int32, fast predictor paths enc_encoding.cc:314/338/366 return "Residual overflow" when sign-bit values mix with positives; 4b3d2f4.
+- What: Save/SaveToMemory with JXL_LOSSLESS | (1..3 << 16) fails ("Cannot encode the image: encoder error") for FLOAT/RGBF/RGBAF with any negative sample (even -0.001 or -0.0). Negatives are routine (ConvertToLinear(FI_LINEAR_SRGB_PRIMARIES) of wide gamut, Lanczos, cjxl PFM). The cache stores every appended/inserted/edited page with these flags: AppendPage/InsertPage return FALSE, UnlockPage(changed) drops the edit. At effort 7 real images pass; small flat ones can fail (8x8 FLOAT with one -0.001 fails at efforts 1-7, passes >= 8). Positive floats, 8/16-bit, CMYK round-trip exactly.
+- Evidence (src/floatsave.cpp, effort3/4.cpp, lanczos.cpp): lossless_pfm 500x500 RGBF (241880 negatives): JXL_LOSSLESS effort 7 ok (974286 bytes); JXL_LOSSLESS|0x10000 FAILED; "FreeImage_AppendPage: the page could not be stored"; AppendPage 0, pages=0, CloseMultiBitmap 1, no file written. rgb16_pq_lossless / icc_sampled_lossy after ConvertToLinear(FI_LINEAR_SRGB_PRIMARIES): same. Lanczos-upscaled float checkerboard: e1-e3 fail, e4-e9 ok. ASan/LSan clean.
+- Fix sketch: a cache format that stores floats exactly for FIF_JXL float pages, or retry failed lossless float encodes at effort >= 8 (passed in every case tested, not proven).
+
+## JXL-3 Animations saved through the multi-page API size the canvas from the first two pages and silently crop or drop later frames
+- Class: new-bug. Severity: Medium (silent data loss; pages from FreeImage's own loaders carry LogicalWidth/Height and are safe; app-assembled mixed-size frames hit it). Confidence: high.
+- Where: PluginJXL.cpp:2259-2290 (StartAnimation canvas = union of first and second + their LogicalWidth/Height; called at :2519 when page 2 arrives); AddFrame clips silently (:2122-2132: off-canvas frames become one transparent pixel, larger ones cut); 4b3d2f4. qpv's WebP/APNG/GIF writers widen the canvas to cover every frame (PluginWebP.cpp:1074).
+- Evidence (src/sizes.cpp, src/canvas.c): append 24-bit pages 10x10, 12x8, 40x30 (no tags): jxl pages=3: 12x10 12x10 12x10 (page 2 was 40x30); webp/APNG/gif 10x10 12x8 40x30 (canvas 40x30); no message from the JXL plugin.
+- Fix sketch: hold pages until Close and size the canvas over all (as WebP), or at least warn when clipping/dropping.
+
+## JXL-4 Cut lossless (modular) JPEG XL files are refused although libjxl can return most of the decoded image
+- Class: new-bug. Severity: Low. Confidence: high.
+- Where: PluginJXL.cpp:1089-1099 (JxlDecoderFlushImage only after a JXL_DEC_FRAME_PROGRESSION event); :1115-1122 (no pixels -> NULL); 4b3d2f4. VarDCT cut files salvage fine (warning "shown at a lower resolution").
+- Evidence: patches_lossless/input.jxl (34207 bytes) cut to 90%/99%: "Cannot decode the image: the file is cut short" NULL; libjxl direct (src/flushtest.cpp) at 99%: progression events 0, pixels before flush 0, after flush 100%; src/flushtest2.cpp flushed vs full: identical pixels 56.4/91.7/99.5% at cuts 60/90/99% (black 8.5/1.7/0.4%); caveat: ~35% at 60% belong to partially decoded groups.
+- Fix sketch: on JXL_DEC_NEED_MORE_INPUT with output set, also try JxlDecoderFlushImage for non-progressive frames; keep the damaged-file warning.
+
+## JXL-5 Vendored libjxl copies an uninitialised bool for every non-XYB frame (the UBSan "load of value 7 ... 'bool'")
+- Class: new-bug (vendored libjxl, no visible effect). Severity: Low. Confidence: high.
+- Where: Source/LibJXL/lib/jxl/dec_xyb.h:36, :59 (`bool all_default_opsin;` no initialiser); dec_xyb.cc:236-241 (assigned only if xyb_encoded); GetToneMappingStage (render_pipeline/stage_tone_mapping.cc:137) copies OutputEncodingInfo by value every frame (from dec_cache.cc:300); c914936. Only real read (dec_frame.h:224-226) guarded by xyb_encoded.
+- Evidence: `ASAN_OPTIONS=max_malloc_fill_size=1000000000:malloc_fill_byte=7 bin/fijxl_asan dump cmyk8_lossless.jxl -1 4 out.npy` -> "dec_xyb.h:36:8: runtime error: load of value 7..." stack ... LoadCMYK PluginJXL.cpp:1254; same with rgba8_lossless.jxl and grey8_lossless.jxl; not with XYB rgb8_lossy.jxl; deterministic single-threaded (looked thread-related because fresh heap pages are zero). Second vendored UBSan site: enc_fast_lossless.cc:968 memcpy from NULL writer.data with 0 count (lossless effort 1 saves).
+- Fix sketch: initialise the bools (a `// FreeImage:` patch) or take upstream's fix.
+
+## Leads answered
+- Fuzz TIMEOUT (crashes/6ec6121cd150): not a hang. input_0 is a 149-byte mutated blendmodes file declaring 1024x1024 RGBA16; one full decode fails in 0.32 s (release), 2.4 s under ASan; the harness does ~20 JXL decodes -> > 20 s under ASan. input_1/input_2 there are MNG files.
+- UBSan bool: JXL-5.
+
+## Checked, no issue found (condensed)
+- NDEBUG: Makefile.jxl's -DNDEBUG reaches every LibJXL object via the .cc rule slots in Makefile.gnu, .mingw, .osx, .cygwin, .solaris, .iphone, .fip (verified in logs/qpv-rel.log); LibJXL.2017.vcxproj defines NDEBUG in all 4 configurations; vcxproj and Makefile.srcs list the same 145 .cc files; brotli asserts only with BROTLI_DEBUG/BROTLI_ENABLE_LOG.
+- Patches: patch-dictionary clear (32493e9) = upstream e39412018; stage_blending.cc check removal (9781b36) self-consistent; jxl_export.h/version.h fine for static build.
+- Conformance suite (40 cases, every frame of 5 animations, flags 0 and JXL_PLAYBACK) vs reference_image.npy through lcms: all within tolerance (alpha straight/premultiplied, blend modes, patches, upsampling, progressive, JPEG-recompressed, oriented, grey/RGB/ProPhoto/LCD ICC, CMYK); spot colour rendered by default (intended difference).
+- Header-only = full on TestAPI/JXL, conformance inputs and crafted files (incl. JXL_CMYK/JXL_PLAYBACK); orientations 1-8 match libjxl; crafted animations/layered/extra channels/CMYK-with-K-after-alpha match libjxl; durations/loops right (wrap above INT32_MAX only where long is 64-bit, PluginJXL.cpp:858/882; Windows clamps).
+- Writer: 17 layouts round-trip exactly lossless (incl. alpha-0 pixels and cache flags for non-float); INT16/UINT32/INT32/DOUBLE/COMPLEX refused cleanly; flag parsing matches header; metadata (Exif, XMP byte-exact; ICC kept lossless; sRGB ICC -> enum lossy; IPTC dropped, no box); CMYK exact lossless; FIF_LOAD_DISPLAY_ICC keeps CMYK alpha.
+- Multi-page writing: 7 frames with disposal/blend/offsets/clipping/off-canvas/zero-time = reference compositor within 1 level lossless; editing keeps untouched pages' pixels and times.
+- I/O: offsets 100/4097, no-SEEK_END handle, multi-page from handle, wrapped memory = plain file load; GetFileType 40 for every container and naked codestream; 170 non-JXL inputs: 0 false detections.
+- Truncation sweep (7 files x ~30 cuts x 5 flag sets, single and multi-page) under ASan+UBSan+LSan: no memory errors, no leaks.
+- Threads: 4 x 12 files under ASan: 144 loads identical to single-threaded hashes; runner freed on every path.
+- OOM/expansion: ulimit -v caps 2.9-7 GB: 30000x30000 fails cleanly (libjxl OOM reported as "the data is invalid or not supported", misleading); no expansion limit (12 KB cut of a 20000x20000 file returns a 1.2 GB bitmap; PNG same policy).
+- HDR: PQ files load FITM_PQ with CICP 9/16 + ICC; float FITM_REQUIRED; PQ lossy save keeps CICP.
+## Outside scope (agent notes)
+- LibJPEG jdhuff.c:529 UBSan left shift while decoding an Exif JPEG thumbnail reached from JXL Exif boxes via psd_read_exif_profile.
+- RotateExif rotates pixels but leaves the Exif Orientation tag (pre-existing convention, same in JXL/HEIF loaders).

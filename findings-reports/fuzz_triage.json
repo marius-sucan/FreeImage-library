@@ -1,0 +1,184 @@
+[
+ [
+  "06e636cd25a6",
+  "ASAN:out|psdColourModeData::Read@PSDParser.cpp:402|psdParser::Load@PSDParser.cpp:2358|Load@PluginPSD.cpp:117",
+  20,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "1b3b91640312",
+  "UBSAN|Source/FreeImage/PluginGIF.cpp:523|shift exponent N is too large for N-bit type 'int'",
+  25,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "1b4d2ef43468",
+  "EXIT|1",
+  37,
+  "no",
+  "n/a (format not in main)"
+ ],
+ [
+  "1cf7f7c7b677",
+  "UBSAN|Source/FreeImage/PluginTARGA.cpp:605|load of misaligned address X for type 'unsigned int', which require",
+  17,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "2fe4e6338e81",
+  "UBSAN|Source/LibJXR/image/decode/strdec.c:476|shift exponent N is too large for N-bit type 'int'",
+  36,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "4d27e152817f",
+  "UBSAN|Source/FreeImage/PSDParser.cpp:1368|signed integer overflow: N + N cannot be represented in type 'int'",
+  20,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "5747067950b9",
+  "UBSAN|Source/Utilities.h:297|negation of N cannot be represented in type 'int'; cast to an unsigned type to n",
+  0,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "5cf91ea3a4d5",
+  "UBSAN|Source/LibJPEG/jdmarker.c:508|index N out of bounds for type 'JHUFF_TBL *[N]'",
+  3,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "5ec6a253cee4",
+  "UBSAN|Source/FreeImage/PluginGIF.cpp:257|shift exponent N is too large for N-bit type 'int'",
+  25,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "6ec6121cd150",
+  "TIMEOUT",
+  40,
+  "no",
+  "n/a (format not in main)"
+ ],
+ [
+  "742a2d360f70",
+  "UBSAN|Source/Metadata/FIRational.cpp:154|negation of N cannot be represented in type 'int'; cast to an unsigne",
+  18,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "7a6a2bfb78a8",
+  "ASAN:heap-buffer-overflow|ConvertExifTag@TagConversion.cpp:275|FreeImage_TagToString@TagConversion.cpp:1090|to",
+  20,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "7d61aa5ebabe",
+  "UBSAN|Source/FreeImage/PluginGIF.cpp:523|signed integer overflow: N - N cannot be represented in type 'int'",
+  25,
+  "same-stack",
+  "no"
+ ],
+ [
+  "8c3b413f1eb9",
+  "UBSAN|Source/LibJXR/image/decode/strdec.c:484|shift exponent N is too large for N-bit type 'int'",
+  36,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "99d483f6b7a4",
+  "UBSAN|Source/OpenEXR/OpenEXR/ImfContextInit.cpp:122|signed integer overflow: N + N cannot be represented in ty",
+  29,
+  "same-stack",
+  "no"
+ ],
+ [
+  "adf99e55749e",
+  "UBSAN|Source/LibJXR/image/decode/strInvTransform.c:671|signed integer overflow: N * N cannot be represented in",
+  36,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "b2dd07f419f2",
+  "ASAN:stack-use-after-return|FreeImage_OutputMessageProc@FreeImage.cpp:151|Load@PluginPICT.cpp:1362|FreeImage_L",
+  33,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "cc0f80391b23",
+  "UBSAN|Source/FreeImage/PluginTARGA.cpp:573|load of misaligned address X for type 'WORD', which requires N byte",
+  17,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "d398bfa950db",
+  "UBSAN|Source/FreeImage/ConversionType.cpp:130|signed integer overflow: N - N cannot be represented in type 'in",
+  18,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "d8ed981825c9",
+  "UBSAN|Source/FreeImage/PluginGIF.cpp:446|shift exponent N is too large for N-bit type 'int'",
+  25,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "de29c6eb9a3b",
+  "UBSAN|Source/LibJXR/image/decode/strInvTransform.c:672|signed integer overflow: N * N cannot be represented in",
+  36,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "e852b61fa8b4",
+  "UBSAN|Source/FreeImage/ConversionType.cpp:138|signed integer overflow: N - N cannot be represented in type 'in",
+  18,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "f3c3e759711a",
+  "UBSAN|Source/OpenEXR/OpenEXR/ImfOpaqueAttribute.cpp:35|null pointer passed as argument N, which is declared to",
+  29,
+  "same-stack",
+  "no"
+ ],
+ [
+  "f919a29585f1",
+  "UBSAN|Source/LibJXR/image/decode/strdec.c:480|shift exponent N is too large for N-bit type 'int'",
+  36,
+  "same-stack",
+  "same-stack"
+ ],
+ [
+  "fcefc119fd83",
+  "UBSAN|Source/FreeImage/PluginGIF.cpp:442|shift exponent N is too large for N-bit type 'int'",
+  25,
+  "same-stack",
+  "same-file"
+ ],
+ [
+  "mp_2468ae650ae0",
+  "EXIT|2",
+  "mpstress (not replayed here)",
+  "",
+  ""
+ ]
+]
