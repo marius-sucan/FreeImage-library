@@ -457,13 +457,74 @@ cut:
 	}
 }
 
+// the rows LoadPixelDataRLE4() keeps, counted without its buffer, where runs flow on past the row end
+static int
+CountRowsRLE4(FreeImageIO *io, fi_handle handle, int width, int height) {
+	const INT64 start = io->tell_proc(handle);
+	const INT64 end = (INT64)width * height;
+	INT64 scanline = 0;
+	INT64 bits = 0;
+	BYTE status_byte = 0;
+	BYTE skipped[128];
+
+	while (scanline < height) {
+		const INT64 q = scanline * width + bits;
+		if (q >= end) {
+			return height;
+		}
+		if (io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
+			break;
+		}
+		if (status_byte != 0) {
+			// encoded mode
+			if (io->read_proc(skipped, sizeof(BYTE), 1, handle) != 1) {
+				break;
+			}
+			bits += MIN((INT64)status_byte, end - q);
+			continue;
+		}
+		if (io->read_proc(&status_byte, sizeof(BYTE), 1, handle) != 1) {
+			break;
+		}
+		if (status_byte == RLE_ENDOFLINE) {
+			bits = 0;
+			scanline++;
+		} else if (status_byte == RLE_ENDOFBITMAP) {
+			return height;
+		} else if (status_byte == RLE_DELTA) {
+			if (io->read_proc(skipped, sizeof(BYTE), 2, handle) != 2) {
+				break;
+			}
+			bits += skipped[0];
+			scanline += skipped[1];
+		} else {
+			// absolute mode: two pixels a byte, padded to an even byte count
+			const unsigned count = (unsigned)MIN((INT64)status_byte, end - q);
+			const unsigned bytes = (count + 1) / 2;
+			const unsigned got = io->read_proc(skipped, sizeof(BYTE), bytes, handle);
+			bits += (got < bytes) ? 2 * got : count;
+			if ((got < bytes) || ((bytes & 1) && (io->read_proc(skipped, sizeof(BYTE), 1, handle) != 1))) {
+				break;
+			}
+		}
+	}
+	if (scanline >= height) {
+		return height;
+	}
+	const INT64 stop = io->tell_proc(handle);
+	if (!PlausibleImageSize(((UINT64)width * height + 1) / 2, (stop > start) ? (UINT64)(stop - start) : 0, 64)) {
+		return 0;
+	}
+	return (int)scanline + ((bits >= width) ? 1 : 0);
+}
+
 /**
 Load image pixels for 8-bit RLE compressed dib
 @param io FreeImage IO
 @param handle FreeImage IO handle
 @param width Image width
 @param height Image height
-@param dib 8-bit image to be loaded 
+@param dib 8-bit image to be loaded, or NULL to count the rows only
 @return Returns the rows decoded: fewer than the height for a cut or damaged file
 */
 static int
@@ -516,19 +577,19 @@ DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *d
             default:
             {
                // absolute mode
+               BYTE skipped[256];
                count = (int)MIN((INT64)status_byte, width - bits);
                if (count < 0) {
                   return scanline;
                }
                if (count > 0) {
-                  BYTE *sline = FreeImage_GetScanLine(dib, scanline);
-                  if (io->read_proc((void *)(sline + bits), sizeof(BYTE) * count, 1, handle) != 1) {
+                  BYTE *dst = dib ? FreeImage_GetScanLine(dib, scanline) + bits : skipped;
+                  if (io->read_proc((void *)dst, sizeof(BYTE) * count, 1, handle) != 1) {
                      return scanline;
                   }
                   bits += count;
                }
                // skip the pixels past the row end, and the pad to an even count
-               BYTE skipped[256];
                const int rest = (status_byte - count) + (status_byte & 1);
                if ((rest > 0) && (io->read_proc(skipped, rest, 1, handle) != 1)) {
                   return scanline + ((bits >= width) ? 1 : 0);
@@ -543,14 +604,13 @@ DecodeRLE8(FreeImageIO *io, fi_handle handle, int width, int height, FIBITMAP *d
          if (count < 0) {
             return scanline;
          }
-         BYTE *sline = FreeImage_GetScanLine(dib, scanline);
          if (io->read_proc(&second_byte, sizeof(BYTE), 1, handle) != 1) {
             return scanline;
          }
-         for (int i = 0; i < count; i++) {
-            *(sline + bits) = second_byte;
-            bits++;
+         if (dib) {
+            memset(FreeImage_GetScanLine(dib, scanline) + bits, second_byte, count);
          }
+         bits += count;
       }
    }
 
@@ -594,7 +654,7 @@ WarnRows(int rows, int height) {
 	}
 }
 
-// nothing is allocated for a raster over 64 MB that the pixel data the file holds could not fill
+// nothing is allocated for a raster over 64 MB that the pixel data the file holds could not fill, or that the load would keep no row of
 static BOOL
 PixelDataCanFill(FreeImageIO *io, fi_handle handle, INT64 bitmap_bits_offset, UINT64 width, UINT64 height, unsigned bit_count, unsigned compression) {
 	const UINT64 pitch = (((width * bit_count) + 7) / 8 + 3) & ~(UINT64)3;
@@ -609,14 +669,11 @@ PixelDataCanFill(FreeImageIO *io, fi_handle handle, INT64 bitmap_bits_offset, UI
 	const UINT64 data = ((end > 0) && ((UINT64)end > (UINT64)bitmap_bits_offset)) ? (UINT64)end - (UINT64)bitmap_bits_offset : 0;
 	// RLE8 expands up to 128 times, RLE4 64 times, except where it skips pixels
 	BOOL plausible = PlausibleImageSize(raster, data, (compression == BI_RLE8) ? 128 : (compression == BI_RLE4) ? 64 : 1) ? TRUE : FALSE;
-	if (!plausible && ((compression == BI_RLE8) || (compression == BI_RLE4)) && (data >= 4)) {
-		// an RLE image that ends with its end-of-bitmap code, maybe padded, is whole however little it holds
-		BYTE tail[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
-		io->seek_proc(handle, end - 4, SEEK_SET);
-		if (io->read_proc(tail, 1, 4, handle) == 4) {
-			plausible = ((tail[2] == RLE_COMMAND) && (tail[3] == RLE_ENDOFBITMAP)) ||
-				((tail[0] == RLE_COMMAND) && (tail[1] == RLE_ENDOFBITMAP) && (tail[2] == 0) && (tail[3] == 0));
-		}
+	if (!plausible && ((compression == BI_RLE8) || (compression == BI_RLE4)) && (width <= INT_MAX) && (height <= INT_MAX)) {
+		// skipped pixels take no bytes: the stream is read as the load reads it, without the image
+		io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
+		const int rows = (compression == BI_RLE8) ? LoadPixelDataRLE8(io, handle, (int)width, (int)height, NULL) : CountRowsRLE4(io, handle, (int)width, (int)height);
+		plausible = (rows > 0) ? TRUE : FALSE;
 	}
 	io->seek_proc(handle, here, SEEK_SET);
 	return plausible;

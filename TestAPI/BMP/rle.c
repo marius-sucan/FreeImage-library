@@ -62,6 +62,85 @@ static int row_is(FIBITMAP *dib, unsigned y, const BYTE *want) {
     return dib && memcmp(FreeImage_GetScanLine(dib, y), want, FreeImage_GetWidth(dib)) == 0;
 }
 
+/* ---------- sparse images over 64 MB ---------- */
+
+/* a 4- or 8-bit RLE file of w x h: the RLE data, 'tail' bytes after it and, with a profile, a V5 header and the profile last */
+static FIBITMAP *load_sparse(unsigned bpp, unsigned w, unsigned h, const BUF *data, const BYTE *tail, unsigned tail_n,
+                             const BYTE *profile, DWORD profile_n) {
+    BUF b = { NULL, 0, 0 };
+    const unsigned colors = (bpp == 4) ? 16 : 256, header = profile ? 124 : 40;
+    const DWORD off = 14 + header + colors * 4;
+    FIMEMORY *mem;
+    FIBITMAP *dib;
+    unsigned i;
+    put8(&b, 'B'); put8(&b, 'M'); put32(&b, (DWORD)(off + data->n + tail_n + profile_n)); put32(&b, 0); put32(&b, off);
+    put32(&b, header); put32(&b, w); put32(&b, h); put16(&b, 1); put16(&b, bpp); put32(&b, (bpp == 4) ? 2 : BMP_RLE8);
+    put32(&b, (DWORD)data->n); put32(&b, 2835); put32(&b, 2835); put32(&b, colors); put32(&b, 0);
+    if (profile) {
+        for (i = 0; i < 4; i++) put32(&b, 0);
+        put32(&b, 0x4D424544);                         /* 'MBED' */
+        for (i = 0; i < 12; i++) put32(&b, 0);
+        put32(&b, 4); put32(&b, (DWORD)(header + colors * 4 + data->n + tail_n)); put32(&b, profile_n); put32(&b, 0);
+    }
+    for (i = 0; i < colors; i++) { put8(&b, i); put8(&b, i); put8(&b, i); put8(&b, 0); }
+    put(&b, data->p, data->n);
+    if (tail_n) put(&b, tail, tail_n);
+    if (profile) put(&b, profile, profile_n);
+    messages[0] = 0;
+    mem = FreeImage_OpenMemory(b.p, (DWORD)b.n);
+    dib = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
+    FreeImage_CloseMemory(mem);
+    free(b.p);
+    return dib;
+}
+
+/* RLE data that leaves every row empty but the bottom and top ones. After the top row's first run, 'last' is
+   0: end of bitmap, 1: end of line, 2: a move past the last row, 3: runs to the row end, then nothing;
+   -1: the data stops after 'rows' rows, before the top one */
+static BUF sparse(unsigned bpp, unsigned w, unsigned h, int last, unsigned rows) {
+    BUF b = { NULL, 0, 0 };
+    unsigned y, x;
+    put8(&b, 200); put8(&b, (bpp == 4) ? 0x77 : 7); put8(&b, 0); put8(&b, 0);
+    for (y = 1; y < h - 1 && y < rows; y++) { put8(&b, 0); put8(&b, 0); }
+    if (last == -1) return b;
+    put8(&b, 10); put8(&b, (bpp == 4) ? 0x33 : 3);
+    switch (last) {
+        case 0: put8(&b, 0); put8(&b, 1); break;
+        case 1: put8(&b, 0); put8(&b, 0); break;
+        case 2: put8(&b, 0); put8(&b, 2); put8(&b, 0); put8(&b, 255); break;
+        case 3: for (x = 10; x < w; x += 255) { put8(&b, (w - x < 255) ? w - x : 255); put8(&b, (bpp == 4) ? 0x55 : 5); } break;
+    }
+    return b;
+}
+
+static unsigned pixel(FIBITMAP *dib, unsigned bpp, unsigned x, unsigned y) {
+    const BYTE *row = FreeImage_GetScanLine(dib, y);
+    return (bpp == 4) ? ((row[x / 2] >> ((x & 1) ? 0 : 4)) & 15) : row[x];
+}
+
+/* the bottom row starts with 200 pixels of 7, the top one with 10 of 3 (then 5 when filled), all else is 0; no message */
+static int sparse_ok(FIBITMAP *dib, unsigned bpp, unsigned w, unsigned h, int filled) {
+    unsigned x;
+    if (!dib || FreeImage_GetWidth(dib) != w || FreeImage_GetHeight(dib) != h || FreeImage_GetBPP(dib) != bpp || messages[0]) return 0;
+    for (x = 0; x < w; x += (x < 300) ? 1 : 997) {
+        if (pixel(dib, bpp, x, 0) != ((x < 200) ? 7u : 0u)) return 0;
+        if (pixel(dib, bpp, x, h - 1) != ((x < 10) ? 3u : (filled ? 5u : 0u))) return 0;
+        if (pixel(dib, bpp, x, 1) != 0 || pixel(dib, bpp, x, h / 2) != 0 || pixel(dib, bpp, x, h - 2) != 0) return 0;
+    }
+    return pixel(dib, bpp, w - 1, h - 1) == (filled ? 5u : 0u);
+}
+
+static void expect_sparse(const char *what, unsigned bpp, unsigned w, unsigned h, int last, const BYTE *tail, unsigned tail_n,
+                          const BYTE *profile, DWORD profile_n) {
+    BUF data = sparse(bpp, w, h, last, h);
+    FIBITMAP *dib = load_sparse(bpp, w, h, &data, tail, tail_n, profile, profile_n);
+    FIICCPROFILE *icc = dib ? FreeImage_GetICCProfile(dib) : NULL;
+    report(what, sparse_ok(dib, bpp, w, h, last == 3) &&
+           (!profile || (icc && (DWORD)icc->size == profile_n && memcmp(icc->data, profile, profile_n) == 0)));
+    if (dib) FreeImage_Unload(dib);
+    free(data.p);
+}
+
 /* ---------- reading a save ---------- */
 
 static DWORD le32(const BYTE *p) { return (DWORD)p[0] | ((DWORD)p[1] << 8) | ((DWORD)p[2] << 16) | ((DWORD)p[3] << 24); }
@@ -197,6 +276,36 @@ int main(void) {
                row_is(dib, 0, bottom) && row_is(dib, 1, blank) && strstr(messages, "1 of 2 rows") != NULL);
         if (dib) FreeImage_Unload(dib);
         free(data.p);
+    }
+
+    printf("RLE images over 64 MB whose empty rows take no data: what follows the data does not count\n");
+    {
+        static const BYTE zeros[3] = { 0, 0, 0 }, junk[8] = { 0x5A, 1, 2, 3, 0xFF, 0, 1, 0 };
+        DWORD srgb_n = 0;
+        const BYTE *srgb = (const BYTE *)FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_n);
+        expect_sparse("RLE8 60000 x 1200 ending with its end of bitmap", 8, 60000, 1200, 0, NULL, 0, NULL, 0);
+        expect_sparse("  1 byte after the end of bitmap", 8, 60000, 1200, 0, zeros, 1, NULL, 0);
+        expect_sparse("  3 bytes after it", 8, 60000, 1200, 0, zeros, 3, NULL, 0);
+        expect_sparse("  8 bytes of junk after it", 8, 60000, 1200, 0, junk, sizeof junk, NULL, 0);
+        expect_sparse("  no end of bitmap: an end of line after the last row", 8, 60000, 1200, 1, NULL, 0, NULL, 0);
+        expect_sparse("  no end of bitmap: a move past the last row", 8, 60000, 1200, 2, NULL, 0, NULL, 0);
+        expect_sparse("  no end of bitmap: runs fill the last row, then the file ends", 8, 60000, 1200, 3, NULL, 0, NULL, 0);
+        expect_sparse("  V5 header with the ICC profile after the data: loads with it", 8, 60000, 1200, 0, NULL, 0, srgb, srgb_n);
+        expect_sparse("RLE4 30000 x 4500, 1 byte after the end of bitmap", 4, 30000, 4500, 0, zeros, 1, NULL, 0);
+        expect_sparse("  no end of bitmap: an end of line after the last row", 4, 30000, 4500, 1, NULL, 0, NULL, 0);
+        expect_sparse("  no end of bitmap: runs fill the last row, then the file ends", 4, 30000, 4500, 3, NULL, 0, NULL, 0);
+    }
+    {
+        /* the data stops after 600 empty rows: too little for the rows it would leave blank */
+        BUF data8 = sparse(8, 60000, 1200, -1, 600), data4 = sparse(4, 30000, 4500, -1, 600);
+        FIBITMAP *dib = load_sparse(8, 60000, 1200, &data8, NULL, 0, NULL, 0);
+        report("RLE8 60000 x 1200 cut after 600 rows: refused before allocating", !dib && strstr(messages, "too little data") != NULL);
+        if (dib) FreeImage_Unload(dib);
+        dib = load_sparse(4, 30000, 4500, &data4, NULL, 0, NULL, 0);
+        report("RLE4 30000 x 4500 cut after 600 rows: refused before allocating", !dib && strstr(messages, "too little data") != NULL);
+        if (dib) FreeImage_Unload(dib);
+        free(data8.p);
+        free(data4.p);
     }
 
     printf("RLE8 saves: bfSize the file's size, biSizeImage the RLE data's\n");
