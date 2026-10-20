@@ -229,6 +229,11 @@ FreeImage_GetInternalImageSize(BOOL header_only, unsigned width, unsigned height
 	if(!header_only) {
 		const size_t header_size = dib_size;
 
+		// rows over 2 GB are refused: the API's pitch is an int, as in many callers
+		if((((UINT64)width * bpp + 31) / 32) * 4 > (UINT64)INT_MAX) {
+			return 0;
+		}
+
 		// pixels are aligned on a 16 bytes boundary
 		dib_size += (size_t)CalculatePitch(CalculateLine(width, bpp)) * (size_t)height;
 
@@ -1207,16 +1212,23 @@ FreeImage_GetBPP(FIBITMAP *dib) {
 	return dib ? FreeImage_GetInfoHeader(dib)->biBitCount : 0;
 }
 
+// a row's bytes: width times bpp passes 32 bits from rows of 512 MB on
+static UINT64
+GetLine64(FIBITMAP *dib) {
+	return ((UINT64)FreeImage_GetWidth(dib) * FreeImage_GetBPP(dib) + 7) / 8;
+}
+
+// pixel rows stay under 2 GB; only a header-only dib can describe one past 4 GB, which saturates
 unsigned DLL_CALLCONV
 FreeImage_GetLine(FIBITMAP *dib) {
-	return dib ? ((FreeImage_GetWidth(dib) * FreeImage_GetBPP(dib)) + 7) / 8 : 0;
+	return dib ? (unsigned)MIN(GetLine64(dib), (UINT64)0xFFFFFFFFu) : 0;
 }
 
 unsigned DLL_CALLCONV
 FreeImage_GetPitch(FIBITMAP *dib) {
 	if(dib) {
 		FREEIMAGEHEADER *fih = (FREEIMAGEHEADER *)dib->data;
-		return fih->external_bits ? fih->external_pitch : (FreeImage_GetLine(dib) + 3 & ~3);
+		return fih->external_bits ? fih->external_pitch : (unsigned)MIN((GetLine64(dib) + 3) & ~(UINT64)3, (UINT64)0xFFFFFFFCu);
 	}
 	return 0;
 }

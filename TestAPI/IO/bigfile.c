@@ -376,15 +376,15 @@ static void test_tga_rle(void) {
 
 /* --- a DDS whose row is 2 GB -------------------------------------------------- */
 
-/* a 32-bit DDS of 536870916 x 1 holding 'data' bytes of its 2 GB row, sparse; the first and last pixels set when whole */
-static int write_dds_row(const char *path, INT64 data) {
+/* a 32-bit DDS of w x 1 holding 'data' bytes of its row, sparse; the first and last pixels set when whole */
+static int write_dds_row(const char *path, unsigned w, INT64 data) {
     BYTE header[128], first[4] = { 0x11, 0x22, 0x33, 0x44 }, last[4] = { 0x55, 0x66, 0x77, 0x88 };
-    const INT64 row = (INT64)536870916 * 4;
+    const INT64 row = (INT64)w * 4;
     FILE *f = fopen(path, "wb");
     int ok;
     memset(header, 0, sizeof(header));
     memcpy(header, "DDS ", 4);
-    put32(header + 4, 124); put32(header + 8, 0x1007); put32(header + 12, 1); put32(header + 16, 536870916u);
+    put32(header + 4, 124); put32(header + 8, 0x1007); put32(header + 12, 1); put32(header + 16, w);
     put32(header + 76, 32); put32(header + 80, 0x41); put32(header + 88, 32);
     put32(header + 92, 0x00FF0000); put32(header + 96, 0x0000FF00); put32(header + 100, 0x000000FF); put32(header + 104, 0xFF000000u);
     put32(header + 108, 0x1000);
@@ -397,29 +397,94 @@ static int write_dds_row(const char *path, INT64 data) {
 
 static void test_dds_2g_row(void) {
     const char *path = tmppath("fi_io_big.dds");
-    const size_t row = (size_t)((INT64)536870916 * 4);
+    const unsigned w = 536870911u;	/* a row of 2147483644 bytes, the longest a dib holds */
+    const size_t row = (size_t)w * 4;
     const int wide = sizeof(void *) > 4;
     FIBITMAP *dib;
     int ok;
 
-    printf("fi_io_big.dds: a 32-bit DDS of 536870916 x 1, its row 2 GB, sparse (2 GB of RAM)\n");
-    if (!write_dds_row(path, (INT64)536870916 * 4)) { report("write the sparse DDS", 0); remove(path); return; }
+    printf("fi_io_big.dds: 32-bit DDS rows of 2 GB, sparse (2 GB of RAM)\n");
+    if (!write_dds_row(path, w, (INT64)row)) { report("write the sparse DDS", 0); remove(path); return; }
     dib = FreeImage_Load(FIF_DDS, path, 0);
     if (wide) {
         const BYTE *p = dib ? FreeImage_GetScanLine(dib, 0) : NULL;
-        ok = p && FreeImage_GetWidth(dib) == 536870916u && FreeImage_GetHeight(dib) == 1 && FreeImage_GetBPP(dib) == 32
+        ok = p && FreeImage_GetWidth(dib) == w && FreeImage_GetHeight(dib) == 1 && FreeImage_GetBPP(dib) == 32
+            && FreeImage_GetLine(dib) == 2147483644u && FreeImage_GetPitch(dib) == 2147483644u
             && p[FI_RGBA_BLUE] == 0x11 && p[FI_RGBA_GREEN] == 0x22 && p[FI_RGBA_RED] == 0x33 && p[FI_RGBA_ALPHA] == 0x44
             && p[row - 4 + FI_RGBA_BLUE] == 0x55 && p[row - 4 + FI_RGBA_GREEN] == 0x66 && p[row - 4 + FI_RGBA_RED] == 0x77 && p[row - 4 + FI_RGBA_ALPHA] == 0x88;
-        report("FreeImage_Load: its first and last pixels", ok);
+        report("536870911 x 1: loads, line and pitch 2147483644, first and last pixels", ok);
     } else {
         report("a 32-bit process cannot hold the row: refused", dib == NULL);
     }
     if (dib) FreeImage_Unload(dib);
-    if (!write_dds_row(path, (INT64)34 << 20)) { report("write the cut DDS", 0); remove(path); return; }
+    if (!write_dds_row(path, w, (INT64)34 << 20)) { report("write the cut DDS", 0); remove(path); return; }
     dib = FreeImage_Load(FIF_DDS, path, 0);
-    report("cut 34 MB into the row: refused, no row whole", dib == NULL);
+    report("  cut 34 MB into the row: refused, no row whole", dib == NULL);
+    if (dib) FreeImage_Unload(dib);
+    if (!write_dds_row(path, 536870916u, (INT64)34 << 20)) { report("write the longer DDS", 0); remove(path); return; }
+    dib = FreeImage_Load(FIF_DDS, path, 0);
+    report("536870916 x 1, a row past 2 GB: refused", dib == NULL);
     if (dib) FreeImage_Unload(dib);
     remove(path);
+}
+
+/* --- rows of 512 MB to 2 GB, whose width times bpp passes 32 bits --------------- */
+
+/* a header-only load of a 32-bit BMP of w x 1 */
+static FIBITMAP *bmp_header_only(unsigned w) {
+    BYTE b[54];
+    FIMEMORY *mem;
+    FIBITMAP *dib;
+    memset(b, 0, sizeof(b));
+    b[0] = 'B'; b[1] = 'M'; put32(b + 2, sizeof(b)); put32(b + 10, sizeof(b));
+    put32(b + 14, 40); put32(b + 18, w); put32(b + 22, 1); put16(b + 26, 1); put16(b + 28, 32);
+    mem = FreeImage_OpenMemory(b, sizeof(b));
+    dib = FreeImage_LoadFromMemory(FIF_BMP, mem, FIF_LOAD_NOPIXELS);
+    FreeImage_CloseMemory(mem);
+    return dib;
+}
+
+static void test_long_rows(void) {
+    const unsigned w = 540000000u;
+    FIBITMAP *dib;
+
+    printf("an 8-bit image of 540000000 x 2, rows of 540 MB (2.2 GB of RAM)\n");
+    if (sizeof(void *) > 4) {
+        FIBITMAP *copy, *view;
+        BYTE *r0, *r1;
+        dib = FreeImage_Allocate((int)w, 2, 8, 0, 0, 0);
+        report("FreeImage_GetLine and FreeImage_GetPitch: 540000000", dib && FreeImage_GetLine(dib) == w && FreeImage_GetPitch(dib) == w);
+        if (!dib) return;
+        r0 = FreeImage_GetScanLine(dib, 0);
+        r1 = FreeImage_GetScanLine(dib, 1);
+        report("  row 1 starts one pitch after row 0", r1 == r0 + w);
+        r0[w - 1] = 0xAB;
+        r1[0] = 0xCD;
+        copy = FreeImage_Clone(dib);
+        report("  FreeImage_Clone keeps the last byte of row 0 and the first of row 1",
+               copy && FreeImage_GetScanLine(copy, 0)[w - 1] == 0xAB && FreeImage_GetScanLine(copy, 1)[0] == 0xCD);
+        if (copy) FreeImage_Unload(copy);
+        report("  FreeImage_FlipVertical swaps them",
+               FreeImage_FlipVertical(dib) && FreeImage_GetScanLine(dib, 1)[w - 1] == 0xAB && FreeImage_GetScanLine(dib, 0)[0] == 0xCD);
+        view = FreeImage_CreateView(dib, w - 1000, 0, w, 2);
+        report("  a view of the last 1000 columns: the parent's pitch, the byte at its end",
+               view && FreeImage_GetPitch(view) == w && FreeImage_GetLine(view) == 1000 && FreeImage_GetScanLine(view, 1)[999] == 0xAB);
+        if (view) FreeImage_Unload(view);
+        FreeImage_Unload(dib);
+    } else {
+        printf("  (skipped in a 32-bit process)\n");
+    }
+    dib = FreeImage_Allocate(536870912, 1, 32, 0, 0, 0);
+    report("32-bit 536870912 x 1, a row of 2 GB: refused", dib == NULL);
+    if (dib) FreeImage_Unload(dib);
+    dib = bmp_header_only(1000000000u);
+    report("header-only 32-bit BMP of 1000000000 x 1: line and pitch 4000000000",
+           dib && FreeImage_GetLine(dib) == 4000000000u && FreeImage_GetPitch(dib) == 4000000000u);
+    if (dib) FreeImage_Unload(dib);
+    dib = bmp_header_only(2000000000u);
+    report("  2000000000 x 1, a row past 4 GB: they saturate",
+           dib && FreeImage_GetLine(dib) == 0xFFFFFFFFu && FreeImage_GetPitch(dib) == 0xFFFFFFFCu);
+    if (dib) FreeImage_Unload(dib);
 }
 
 /* --- an SGI RLE row 3 GB into the file ---------------------------------------- */
@@ -526,6 +591,7 @@ int main(int argc, char **argv) {
     test_bmp_4g_profile();
     test_tga_rle();
     test_dds_2g_row();
+    test_long_rows();
     test_sgi_rle();
     test_webp_4g();
     FreeImage_DeInitialise();
