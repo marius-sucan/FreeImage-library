@@ -97,14 +97,10 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 		// a range of 0.01% or less is flat: no key, k stays 0
 		const float range = log(maxLum) - log(minLum);
 		if(range > 1e-4F) {
-			k = (log(maxLum) - Llav) / range;
-			if(k < 0) {
-				// pow(k, 1.4F) is undefined ...
-				// there's an ambiguity about the calculation of Llav between Reinhard papers and the various implementations  ...
-				// try another world adaptation luminance formula using instead 'worldLum = log(Llav)'
-				k = (log(maxLum) - log(Llav)) / range;
-				if(k < 0) m = 0.3F;
-			}
+			// the paper's key, from log luminances only: the same at any scale of the light
+			k = (log(maxLum) - log(Llav)) / range;
+			// the log average's 2.3e-5 can pass a very dark maximum
+			if(k < 0) k = 0;
 			// rounding must not take the contrast past 1, where the curve runs backwards
 			if(k > 1) k = 1;
 		}

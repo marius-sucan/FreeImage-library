@@ -560,6 +560,36 @@ static BOOL testReinhard05IgnoresOneBlackPixel() {
 	return ok;
 }
 
+static BOOL testReinhard05KeyFromLogLuminances() {
+	// k = (log Lmax - mean log L) / (log Lmax - log Lmin) and m = 0.3 + 0.7 k^1.4, as in the paper, at any scale
+	const float levels[3] = { 0.01F, 0.2F, 5.0F };
+	const double scales[2] = { 1, 100 };
+	BOOL ok = TRUE;
+	for(int s = 0; ok && (s < 2); s++) {
+		FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBF, 50, 10);
+		if(!dib) return FALSE;
+		double sum_log = 0;
+		for(unsigned y = 0; y < 10; y++) {
+			FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, y);
+			for(unsigned x = 0; x < 50; x++) {
+				// 40%, 40% and 20% of the pixels
+				const float level = (float)(levels[(x < 20) ? 0 : (x < 40) ? 1 : 2] * scales[s]);
+				pixel[x].red = pixel[x].green = pixel[x].blue = level;
+				sum_log += log(2.3e-5 + level);
+			}
+		}
+		const double lmax = log(levels[2] * scales[s]), lmin = log(levels[0] * scales[s]);
+		const double k = (lmax - sum_log / 500) / (lmax - lmin);
+		FIBITMAP *a = FreeImage_ToneMapping(dib, FITMO_REINHARD05);
+		FIBITMAP *b = FreeImage_TmoReinhard05Ex(dib, 0, 0.3 + 0.7 * pow(k, 1.4), 1, 0);
+		ok = a && b && (maxByteDifference(a, b) <= 2);
+		if(a) FreeImage_Unload(a);
+		if(b) FreeImage_Unload(b);
+		FreeImage_Unload(dib);
+	}
+	return ok;
+}
+
 /** ordinary light, 0.02 to 0.9, with a square lamp at 2000 over 'ppm' millionths of the pixels */
 static FIBITMAP* createLampScene(unsigned width, unsigned height, unsigned ppm) {
 	FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBF, width, height);
@@ -671,5 +701,8 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testThumbnailMatchesItsImage();
+	assert(bResult);
+
+	bResult = testReinhard05KeyFromLogLuminances();
 	assert(bResult);
 }
