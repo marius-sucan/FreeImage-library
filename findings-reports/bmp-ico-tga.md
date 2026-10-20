@@ -13,12 +13,19 @@ Workspace $J/agents/bmp-ico-tga (tools/, data/, bin/fil_{qpv,main} + ASan). Two 
   data/big/rle4_eol_pad1_30000x9000.bmp: qpv NULL, main loads; data/big/rle8_eol_junk_20000x4000.bmp (8 trailing bytes): qpv NULL, main loads
   data/big/v5rle8_eol_prof_60000x2000.bmp (3048-byte sRGB profile): qpv NULL (main cannot open V5)
 - Fix sketch: when the ratio check fails for RLE, walk the RLE command stream (cheap) and accept if it reaches EOB or the last row; or skip trailing bytes before the EOB test and accept a missing EOB.
+- **Fixed** in 9a29a60: when the ratio check fails, the RLE data is decoded without the image (DecodeRLE8 with no dib, CountRowsRLE4) and the file is refused only when the load would keep no row. The 19 refused files load, with main's pixels where main loads them, the V5 one with its profile.
 
 ## F2 The new size checks assume SEEK_END works; on a stream that refuses it, BMP, uncompressed TGA and DDS images over 64 MB are refused
 - Class: regression-vs-main. Severity: Low (custom FreeImageIO whose seek_proc fails on SEEK_END: pipes, network, archives; file and memory I/O fine). Confidence: high.
 - Where: PluginBMP.cpp:606-609 (PixelDataCanFill, 0fe40ec) + LoadEmbeddedProfile :783 (a57a9d9; profile dropped on such streams); PluginTARGA.cpp:762 and 826-829 (eof feeds PlausibleImageSize, 8fc4ac5); PluginDDS.cpp:612-621 (f33e02a), 778-788 (d590b03). None checks the seek_proc(handle, 0, SEEK_END) result; when it fails, end = current position, data = 0, every raster > 64 MB refused. PluginPNM.cpp:321 does it right (`if(io->seek_proc(handle, 0, SEEK_END) == 0)`). TGA RLE already failed in main without SEEK_END.
 - Evidence (`NO_SEEK_END=1 bin/fil_<build> -o 0 <file>`): data/rleself/u24.bmp qpv NULL "too little data", main 5000x5000; data/rleself/u24.tga qpv NULL "Image data corrupted", main 5000x5000; data/big3/dds_dxt1_8190x8190.dds qpv NULL, main 8188x8188 (main crops DXT); tga_rle24_9000x8000.tga NULL in both (pre-existing).
 - Fix sketch: run the plausibility test only when SEEK_END succeeds and the end lies beyond the pixel-data offset; read the BMP profile without the end bound otherwise.
+- **Fixed** in cf3ba85, not as sketched: PlausibleImageData() and StreamHoldsByte() (Utilities.h) ask whether the stream holds the last byte a bound needs (a seek that lands there, a byte read) instead of seeking to its end, so the bounds keep working on such streams; skipping them let the 192-byte audit DDS reach the crash below. The BMP profile is checked the same way; the RLE TGA cache takes 64 KB where the end is unknown (main failed there too). The helpers fit other-plugins.md OP-2 (RAS, IFF, PCX, WBMP, XBM).
+
+## Found while fixing F1 and F2 (open, pre-existing)
+- DDS LoadRGB: an uncompressed row over 2 GB (32-bit, width over 536870911) overflows `const int fileLine`, and the first short read then memsets with it as a size: a 36 MB file of 536870916 x 1, enough for its size bound, segfaults through any stream (main: the 192-byte .claude/audit/crashes/dds_da39a3ee5e6b.dds).
+- TGA Load neither checks nor clears its 18-byte header: a shorter file loaded as FIF_TARGA decodes uninitialized stack bytes (0-byte files gave "DIB allocation failed" or no message, run to run).
+- TGA RLE read cache: a pixel split by the end of a cut file reads as its bytes plus zeros, or as zeros, depending on the cache size (a refill after a short read zeroes what is left); a memory stream and one without SEEK_END size it differently, so 1 cut file of 5,393 differs in that pixel.
 
 ## Cited (already reported)
 - differential C1 = my D1: main can't read the V5 headers qpv writes (32-bit alpha not all 0xFF/0, or any RGB ICC; a57a9d9, 68437f9); main's CheckBitmapInfoHeader rejects every biSize != 40. Pillow reads all 48 qpv-written BMPs in the matrix (1/4/8/16/24/32-bit, views, RLE8, ICC at 1/8/16/24/32) with matching pixels; qpv round-trips a 21012-byte AdobeRGB1998 profile (full + header-only).
