@@ -218,16 +218,13 @@ ConvertInPlaceYxyToRGBF(FIBITMAP *dib) {
 }
 
 // ----------------------------------------------------------
-// Robust luminance statistics (finite samples, white point of a band, percentile minimum)
+// Robust luminance statistics (finite samples, white and black points of bands of the lit samples)
 // ----------------------------------------------------------
 
 #define TMO_HISTOGRAM_BINS	4096
 
-/** the white point: geometric mean of the brightest 0.1% of the lit samples */
-#define TMO_WHITE_BAND	0.001
-
-/** the darkest 0.1% are outliers */
-#define TMO_MIN_PERCENTILE	0.001
+/** the white and black points average the brightest and the darkest 0.1% of the lit samples */
+#define TMO_BAND	0.001
 
 /** [0..1] float to BYTE, clipped; NaN gives 0 (casting it is UB) */
 static inline BYTE
@@ -240,8 +237,8 @@ ClampFloatToByte(float value) {
 
 /** luminance statistics over the finite samples */
 typedef struct tagLuminanceStats {
-	float whiteLum;		//! geometric mean of the TMO_WHITE_BAND brightest lit samples
-	float minLumRobust;	//! percentile ("robust") minimum luminance
+	float whiteLum;		//! geometric mean of the TMO_BAND brightest lit samples
+	float blackLum;		//! mean of the TMO_BAND darkest lit samples
 	float maxLum;		//! absolute maximum luminance
 	float minLum;		//! absolute minimum luminance
 	float minPosLum;	//! smallest strictly positive luminance
@@ -308,12 +305,12 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	stats->sumLogPosLum = sum_log_pos_lum;
 	stats->positiveCount = positive_count;
 	stats->whiteLum     = max_lum;
-	stats->minLumRobust = min_lum;
+	stats->blackLum     = stats->minPosLum;
 
-	// second pass : white point and robust minimum
+	// second pass : the white and black points
 
 	if((positive_count < 2) || (stats->minPosLum >= max_lum)) {
-		// nothing to reject
+		// one level of light, or none
 		return TRUE;
 	}
 
@@ -324,49 +321,37 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		return TRUE;
 	}
 
-	// log-spaced bins for positive samples, linear ones over [min_lum, 0]
-	unsigned *histogram = (unsigned*)calloc(2 * TMO_HISTOGRAM_BINS, sizeof(unsigned));
+	// log-spaced bins of the lit samples
+	unsigned *histogram = (unsigned*)calloc(TMO_HISTOGRAM_BINS, sizeof(unsigned));
 	if(!histogram) {
-		// out of memory : fall back on the absolute extrema
+		// out of memory : fall back on the extrema
 		return TRUE;
 	}
-	unsigned *neg_histogram = histogram + TMO_HISTOGRAM_BINS;
-	const double neg_range = (min_lum < 0) ? -(double)min_lum : 0;
 
 	bits = (BYTE*)FreeImage_GetBits(dib);
 	for(unsigned y = 0; y < height; y++) {
 		const float *pixel = (float*)bits;
 		for(unsigned x = 0; x < width; x++) {
-			const float raw = pixel[x * stride];
-			if(!IsFiniteValue(raw)) {
+			// NaN fails this test too
+			const float sample = pixel[x * stride];
+			if(!(sample > 0) || !IsFiniteValue(sample)) {
 				continue;
 			}
-			const float sample = (clampNegative && (raw < 0)) ? 0 : raw;
-			if(sample > 0) {
-				int bin = (int)(((log((double)sample) - log_min) / log_range) * (TMO_HISTOGRAM_BINS - 1) + 0.5);
-				if(bin < 0) bin = 0;
-				if(bin > TMO_HISTOGRAM_BINS - 1) bin = TMO_HISTOGRAM_BINS - 1;
-				histogram[bin]++;
-			} else if(neg_range > 0) {
-				// bin 0 holds min_lum, the last bin holds the samples at 0
-				int bin = (int)((((double)sample - (double)min_lum) / neg_range) * (TMO_HISTOGRAM_BINS - 1) + 0.5);
-				if(bin < 0) bin = 0;
-				if(bin > TMO_HISTOGRAM_BINS - 1) bin = TMO_HISTOGRAM_BINS - 1;
-				neg_histogram[bin]++;
-			}
+			int bin = (int)(((log((double)sample) - log_min) / log_range) * (TMO_HISTOGRAM_BINS - 1) + 0.5);
+			if(bin < 0) bin = 0;
+			if(bin > TMO_HISTOGRAM_BINS - 1) bin = TMO_HISTOGRAM_BINS - 1;
+			histogram[bin]++;
 		}
 		// next line
 		bits += pitch;
 	}
 
-	// every non positive sample sorts below every positive one
-	const size_t non_positive = count - positive_count;
+	// lit samples only: black backdrops would widen the bands
+	const double band = MAX(1.0, TMO_BAND * (double)positive_count);
 
 	// walk down from the brightest bin through the band
 
 	{
-		// lit samples only: black backdrops would widen the band
-		const double band = MAX(1.0, TMO_WHITE_BAND * (double)positive_count);
 		double taken = 0, sum_log = 0;
 		for(int bin = TMO_HISTOGRAM_BINS - 1; (bin >= 0) && (taken < band); bin--) {
 			const double n = MIN((double)histogram[bin], band - taken);
@@ -383,50 +368,20 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		stats->whiteLum = white;
 	}
 
-	// and up from the darkest bin
+	// and up from the darkest one: an arithmetic mean, as the darkest samples may be near 0
 
 	{
-		const size_t budget = (size_t)(TMO_MIN_PERCENTILE * (double)count);
-		float robust_min = min_lum;
-
-		if(non_positive > budget) {
-			// the percentile lies among the samples at or below zero
-			if(neg_range > 0) {
-				size_t accumulated = 0;
-				int cut_bin = 0;
-				for(int bin = 0; bin < TMO_HISTOGRAM_BINS; bin++) {
-					accumulated += neg_histogram[bin];
-					cut_bin = bin;
-					if(accumulated > budget) {
-						break;
-					}
-				}
-				robust_min = (float)((double)min_lum + ((double)cut_bin / (double)(TMO_HISTOGRAM_BINS - 1)) * neg_range);
-			} else {
-				// nothing below zero at all, so the dark end is made of zeros
-				robust_min = min_lum;
-			}
-		} else {
-			// it lies among the positive samples
-			size_t accumulated = non_positive;
-			int cut_bin = 0;
-			for(int bin = 0; bin < TMO_HISTOGRAM_BINS; bin++) {
-				accumulated += histogram[bin];
-				cut_bin = bin;
-				if(accumulated > budget) {
-					break;
-				}
-			}
-			// lower edge of the bin that holds the percentile
-			const double cut = exp(log_min + ((double)cut_bin / (double)(TMO_HISTOGRAM_BINS - 1)) * log_range);
-			robust_min = (float)cut;
+		double taken = 0, sum = 0;
+		for(int bin = 0; (bin < TMO_HISTOGRAM_BINS) && (taken < band); bin++) {
+			const double n = MIN((double)histogram[bin], band - taken);
+			sum += n * exp(log_min + ((double)bin / (double)(TMO_HISTOGRAM_BINS - 1)) * log_range);
+			taken += n;
 		}
-
-		if(!IsFiniteValue(robust_min) || (robust_min < min_lum) || (robust_min >= stats->whiteLum)) {
-			// degenerate estimate : keep the absolute minimum
-			robust_min = min_lum;
+		float black = (taken > 0) ? (float)(sum / taken) : stats->minPosLum;
+		if(!IsFiniteValue(black) || (black < stats->minPosLum) || (black >= stats->whiteLum)) {
+			black = stats->minPosLum;
 		}
-		stats->minLumRobust = robust_min;
+		stats->blackLum = black;
 	}
 
 	free(histogram);
@@ -628,7 +583,7 @@ ClampNegativeRGBF(FIBITMAP *dib) {
 }
 
 /**
-Robust range of all RGBF samples: the white point, and the minimum without the darkest outliers
+Robust range of the lit RGBF samples: the means of their brightest and darkest bands
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 BOOL
@@ -643,7 +598,7 @@ RGBFRobustRange(FIBITMAP *dib, float *maxValue, float *minValue) {
 		return FALSE;
 	}
 	*maxValue = stats.whiteLum;
-	*minValue = stats.minLumRobust;
+	*minValue = stats.blackLum;
 
 	return TRUE;
 }

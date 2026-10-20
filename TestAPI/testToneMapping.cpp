@@ -590,8 +590,8 @@ static BOOL testReinhard05KeyFromLogLuminances() {
 	return ok;
 }
 
-/** ordinary light, 0.02 to 0.9, with a square lamp at 2000 over 'ppm' millionths of the pixels */
-static FIBITMAP* createLampScene(unsigned width, unsigned height, unsigned ppm) {
+/** ordinary light, 0.02 to 0.9, with a square of 'level' (a lamp, or black) over 'ppm' millionths of the pixels */
+static FIBITMAP* createLampScene(unsigned width, unsigned height, unsigned ppm, float level = 2000.0F) {
 	FIBITMAP *dib = FreeImage_AllocateT(FIT_RGBF, width, height);
 	if(!dib) return NULL;
 	for(unsigned y = 0; y < height; y++) {
@@ -607,7 +607,7 @@ static FIBITMAP* createLampScene(unsigned width, unsigned height, unsigned ppm) 
 	const unsigned side = (unsigned)ceil(sqrt((double)area));
 	for(unsigned i = 0; i < area; i++) {
 		FIRGBF *pixel = (FIRGBF*)FreeImage_GetScanLine(dib, height / 2 + i / side) + width / 2 + i % side;
-		pixel->red = pixel->green = pixel->blue = 2000.0F;
+		pixel->red = pixel->green = pixel->blue = level;
 	}
 	return dib;
 }
@@ -631,6 +631,20 @@ static BOOL testLampSizeChangesRenderSmoothly(FREE_IMAGE_TMO tmo) {
 	FIBITMAP *a = small ? FreeImage_ToneMapping(small, tmo) : NULL;
 	FIBITMAP *b = large ? FreeImage_ToneMapping(large, tmo) : NULL;
 	const BOOL ok = a && b && (fabs(meanLevel(a) - meanLevel(b)) < 20);
+	if(small) FreeImage_Unload(small);
+	if(large) FreeImage_Unload(large);
+	if(a) FreeImage_Unload(a);
+	if(b) FreeImage_Unload(b);
+	return ok;
+}
+
+static BOOL testBlackAreaChangesRenderSmoothly() {
+	// black over 0.09% and 0.11% of the frame: the rest renders alike
+	FIBITMAP *small = createLampScene(512, 384, 900, 0);
+	FIBITMAP *large = createLampScene(512, 384, 1100, 0);
+	FIBITMAP *a = small ? FreeImage_ToneMapping(small, FITMO_REINHARD05) : NULL;
+	FIBITMAP *b = large ? FreeImage_ToneMapping(large, FITMO_REINHARD05) : NULL;
+	const BOOL ok = a && b && (fabs(meanLevel(a) - meanLevel(b)) < 3);
 	if(small) FreeImage_Unload(small);
 	if(large) FreeImage_Unload(large);
 	if(a) FreeImage_Unload(a);
@@ -704,5 +718,8 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testReinhard05KeyFromLogLuminances();
+	assert(bResult);
+
+	bResult = testBlackAreaChangesRenderSmoothly();
 	assert(bResult);
 }

@@ -60,7 +60,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - the results of the tone mappers carry a profile of the image's colors, for color management;
 - fixed the tone-mapping algorithms misbehaving with extreme values, flat images and large black areas;
 - fixed Fattal02 making photos with small light sources too bright and grainy;
-- fixed Drago03 and Reinhard05 renders jumping in brightness with the size of a small light source, thumbnails included;
+- fixed Drago03 and Reinhard05 renders jumping in brightness with the size of a small light source or a black area, thumbnails included;
 - fixed FreeImage_ConvertToLinear() clipping light above white when the ICC profile's tone curves are tables;
 - fixed Reinhard05 crushing the shadows of many HDR photos;
 
