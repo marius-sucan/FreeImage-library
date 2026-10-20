@@ -659,10 +659,8 @@ FreeImage_TmoFattal02(FIBITMAP *dib, double color_saturation, double attenuation
 		Yout = tmoFattal02(Yin, alpha, beta);
 		if(!Yout) throw(1);
 
-		// clip low and high values and normalize to [0..1]
-		// the percentile variant darkens well-formed images
-		//NormalizeY(Yout, 0.001F, 0.995F);
-		NormalizeY(Yout, 0, 1);
+		// normalize to [0..1] up to the white point: a few bright pixels clip, the rest keeps its brightness
+		NormalizeYToWhitePoint(Yout);
 
 		// compress the dynamic range
 

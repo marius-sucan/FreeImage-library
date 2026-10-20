@@ -707,3 +707,40 @@ NormalizeY(FIBITMAP *Y, float minPrct, float maxPrct) {
 		bits += pitch;
 	}
 }
+
+/**
+Normalize Y between 0 and 1 from its darkest finite sample to its white point, clipped:
+a few very bright pixels clip instead of darkening the rest
+@param Y Input/Output image
+*/
+void
+NormalizeYToWhitePoint(FIBITMAP *Y) {
+	LuminanceStats stats;
+
+	if((FreeImage_GetImageType(Y) != FIT_FLOAT) || !GatherLuminanceStats(Y, FreeImage_GetWidth(Y), 1, FALSE, &stats)) {
+		return;
+	}
+	const float minLum = stats.minLum;
+	const float maxLum = stats.whiteLum;
+	if(!(maxLum > minLum)) {
+		return;
+	}
+
+	const unsigned width  = FreeImage_GetWidth(Y);
+	const unsigned height = FreeImage_GetHeight(Y);
+	const unsigned pitch  = FreeImage_GetPitch(Y);
+	const float divider = maxLum - minLum;
+
+	BYTE *bits = (BYTE*)FreeImage_GetBits(Y);
+	for(unsigned y = 0; y < height; y++) {
+		float *pixel = (float*)bits;
+		for(unsigned x = 0; x < width; x++) {
+			float value = IsFiniteValue(pixel[x]) ? (pixel[x] - minLum) / divider : 0;
+			if(value <= 0) value = EPSILON;
+			if(value > 1) value = 1;
+			pixel[x] = value;
+		}
+		// next line
+		bits += pitch;
+	}
+}

@@ -652,6 +652,20 @@ static BOOL testBlackAreaChangesRenderSmoothly() {
 	return ok;
 }
 
+static BOOL testFattal02LampDoesNotDarkenTheRest() {
+	// a lamp over 0.01% of the frame clips; the rest keeps most of its brightness
+	FIBITMAP *plain = createLampScene(512, 384, 0);
+	FIBITMAP *lamp = createLampScene(512, 384, 100);
+	FIBITMAP *a = plain ? FreeImage_ToneMapping(plain, FITMO_FATTAL02) : NULL;
+	FIBITMAP *b = lamp ? FreeImage_ToneMapping(lamp, FITMO_FATTAL02) : NULL;
+	const BOOL ok = a && b && (meanLevel(b) > 0.7 * meanLevel(a));
+	if(plain) FreeImage_Unload(plain);
+	if(lamp) FreeImage_Unload(lamp);
+	if(a) FreeImage_Unload(a);
+	if(b) FreeImage_Unload(b);
+	return ok;
+}
+
 static BOOL testThumbnailMatchesItsImage() {
 	// MakeThumbnail resamples, then tone maps: lit like the image itself
 	FIBITMAP *dib = createLampScene(1600, 1200, 800);
@@ -721,5 +735,8 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testBlackAreaChangesRenderSmoothly();
+	assert(bResult);
+
+	bResult = testFattal02LampDoesNotDarkenTheRest();
 	assert(bResult);
 }

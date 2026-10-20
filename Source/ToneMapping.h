@@ -37,6 +37,7 @@ BOOL RGBFRobustRange(FIBITMAP *dib, float *maxValue, float *minValue);
 BOOL ClampNegativeRGBF(FIBITMAP *dib);
 
 void NormalizeY(FIBITMAP *Y, float minPrct, float maxPrct);
+void NormalizeYToWhitePoint(FIBITMAP *Y);
 
 FIBITMAP* ClampConvertRGBFTo24(FIBITMAP *src);
 
