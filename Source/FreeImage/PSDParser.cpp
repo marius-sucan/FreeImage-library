@@ -1083,7 +1083,7 @@ BOOL invertColor(FIBITMAP* dib) {
 }
 
 /**
-Invert every channel, Black included (FreeImage_Invert leaves the fourth one alone)
+Invert every channel, Black included (FreeImage_Invert inverts K only on images flagged CMYK)
 */
 static
 void invertCMYK(FIBITMAP* dib) {

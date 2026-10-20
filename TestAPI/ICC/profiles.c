@@ -1709,6 +1709,64 @@ static void profile_kept_layouts(void) {
     free(grey.data);
 }
 
+static unsigned sample_at(FIBITMAP *dib, unsigned x, unsigned y, unsigned k) {
+    const BYTE *p = FreeImage_GetScanLine(dib, y);
+    return (FreeImage_GetBPP(dib) == 64) ? ((const WORD *)p)[4 * x + k] : p[4 * x + k];
+}
+
+/* FreeImage_Invert inverts every ink of CMYK, K too, and the colours of RGBA but not its alpha, in a view too */
+static void invert_inks(const Bytes *press) {
+    static const char *NAMES[4] = { "CMYK", "16-bit CMYK", "32-bit RGBA", "RGBA16" };
+    Bytes adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
+    FIBITMAP *rgb = FreeImage_Allocate(37, 23, 24, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK), *rgb16, *src[4];
+    unsigned x, y, k;
+    int i, v;
+    for (y = 0; y < 23; y++) { BYTE *p = FreeImage_GetScanLine(rgb, y); for (x = 0; x < 37 * 3; x++) p[x] = rnd() & 255; }
+    rgb16 = FreeImage_ConvertToRGB16(rgb);
+    src[0] = FreeImage_ConvertToCMYK(rgb, press->data, press->size, 0);
+    src[1] = FreeImage_ConvertToCMYK(rgb16, press->data, press->size, 0);
+    src[2] = FreeImage_ConvertTo32Bits(rgb);
+    src[3] = FreeImage_ConvertToRGBA16(rgb);
+    for (y = 0; y < 23; y++) {
+        BYTE *p = FreeImage_GetScanLine(src[2], y);
+        FIRGBA16 *q = (FIRGBA16 *)FreeImage_GetScanLine(src[3], y);
+        for (x = 0; x < 37; x++) { p[4 * x + FI_RGBA_ALPHA] = rnd() & 255; q[x].alpha = (WORD)rnd(); }
+    }
+    for (i = 2; i < 4; i++) FreeImage_CreateICCProfile(src[i], adobe.data, adobe.size);
+
+    for (i = 0; i < 4; i++) {
+        const int cmyk = (i < 2);
+        const unsigned max = (i & 1) ? 0xFFFF : 0xFF;
+        /* v 0: the image; v 1: a view of columns 5-29, rows 3-19 */
+        for (v = 0; v < 2; v++) {
+            const char *how = v ? " view" : "";
+            FIBITMAP *d = FreeImage_Clone(src[i]), *view = (d && v) ? FreeImage_CreateView(d, 5, 3, 30, 20) : NULL;
+            unsigned bad[4] = { 0, 0, 0, 0 }, outside = 0;
+            CHECK(d && (view || !v) && FreeImage_Invert(v ? view : d), "%s%s, Invert: failed", NAMES[i], how);
+            if (view) FreeImage_Unload(view);
+            if (!d) continue;
+            for (y = 0; y < 23; y++) {
+                for (x = 0; x < 37; x++) {
+                    const int inside = !v || ((x >= 5) && (x < 30) && (y >= 23 - 20) && (y < 23 - 3));
+                    for (k = 0; k < 4; k++) {
+                        const unsigned was = sample_at(src[i], x, y, k), now = sample_at(d, x, y, k);
+                        if (!inside) outside += (now != was);
+                        else if (now != (((k < 3) || cmyk) ? (max - was) : was)) bad[k]++;
+                    }
+                }
+            }
+            CHECK(!bad[0] && !bad[1] && !bad[2], "%s%s, Invert: %u of the first three samples not inverted", NAMES[i], how, bad[0] + bad[1] + bad[2]);
+            CHECK(!bad[3], cmyk ? "%s%s, Invert: %u K samples not inverted" : "%s%s, Invert: %u alpha samples changed", NAMES[i], how, bad[3]);
+            CHECK(!outside, "%s%s, Invert: %u samples outside the view changed", NAMES[i], how, outside);
+            CHECK(((FreeImage_GetColorType(d) == FIC_CMYK) == cmyk) && same_profile(d, src[i]), "%s%s, Invert: the profile or the CMYK flag changed", NAMES[i], how);
+            FreeImage_Unload(d);
+        }
+    }
+    for (i = 0; i < 4; i++) FreeImage_Unload(src[i]);
+    FreeImage_Unload(rgb16);
+    FreeImage_Unload(rgb);
+}
+
 /* a little-endian Exif APP1 payload: ColorSpace, and an interoperability index when one is given */
 static unsigned make_exif(BYTE *out, WORD color_space, const char *index) {
     BYTE *t = out + 6;
@@ -1824,6 +1882,7 @@ int main(int argc, char **argv) {
     cmyk_save_flags(&press);
     profile_kept(&press);
     profile_kept_layouts();
+    invert_inks(&press);
     free(press.data);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;

@@ -55,6 +55,8 @@ FreeImage_Invert(FIBITMAP *src) {
 	const unsigned bpp = FreeImage_GetBPP(src);
 
 	FREE_IMAGE_TYPE image_type = FreeImage_GetImageType(src);
+	// a CMYK image's fourth sample is K, not alpha
+	const bool cmyk = (FreeImage_GetICCProfile(src)->flags & FIICC_COLOR_IS_CMYK) != 0;
 
 	if(image_type == FIT_BITMAP) {
 		switch(bpp) {
@@ -99,7 +101,7 @@ FreeImage_Invert(FIBITMAP *src) {
 				// Calculate the number of bytes per pixel (3 for 24-bit or 4 for 32-bit)
 				const unsigned bytespp = FreeImage_GetLine(src) / width;
 				// leave alpha alone (FI_RGBA_ALPHA is 3 in both byte orders)
-				const unsigned samples = (bytespp == 4) ? 3 : bytespp;
+				const unsigned samples = ((bytespp == 4) && !cmyk) ? 3 : bytespp;
 
 				for(y = 0; y < height; y++) {
 					BYTE *bits = FreeImage_GetScanLine(src, y);
@@ -121,7 +123,7 @@ FreeImage_Invert(FIBITMAP *src) {
 		// Calculate the number of words per pixel (1 for 16-bit, 3 for 48-bit or 4 for 64-bit)
 		const unsigned wordspp = (FreeImage_GetLine(src) / width) / sizeof(WORD);
 		// leave FIT_RGBA16's alpha alone
-		const unsigned samples = (wordspp == 4) ? 3 : wordspp;
+		const unsigned samples = ((wordspp == 4) && !cmyk) ? 3 : wordspp;
 
 		for(y = 0; y < height; y++) {
 			WORD *bits = (WORD*)FreeImage_GetScanLine(src, y);
