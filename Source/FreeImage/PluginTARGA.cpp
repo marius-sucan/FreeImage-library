@@ -770,11 +770,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		TargaThumbnail thumbnail;
 		if((eof >= 0) && isTARGA20(io, handle)) {
 			TGAFOOTER footer;
+			memset(&footer, 0, sizeof(footer));
 			// the footer ends the stream; its offsets count from the start of the image
 			const INT64 footer_offset = eof - (INT64)sizeof(footer) - start_offset;
 			
-			io->seek_proc(handle, start_offset + footer_offset, SEEK_SET);
-			io->read_proc(&footer, sizeof(tagTGAFOOTER), 1, handle);
+			// a footer that starts before the image or reads short is none
+			if (footer_offset >= 0) {
+				io->seek_proc(handle, start_offset + footer_offset, SEEK_SET);
+				if (io->read_proc(&footer, sizeof(tagTGAFOOTER), 1, handle) != 1) {
+					memset(&footer, 0, sizeof(footer));
+				}
+			}
 			
 #ifdef FREEIMAGE_BIGENDIAN
 			SwapFooter(&footer);
@@ -782,8 +788,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			BOOL hasExtensionArea = footer.extension_offset > 0;
 			if(hasExtensionArea) { 
 				TGAEXTENSIONAREA extensionarea;
+				memset(&extensionarea, 0, sizeof(extensionarea));
 				io->seek_proc(handle, start_offset + (INT64)footer.extension_offset, SEEK_SET);
-				io->read_proc(&extensionarea, sizeof(extensionarea), 1, handle);
+				// an extension area read short is none
+				if (io->read_proc(&extensionarea, sizeof(extensionarea), 1, handle) != 1) {
+					memset(&extensionarea, 0, sizeof(extensionarea));
+				}
 				
 #ifdef FREEIMAGE_BIGENDIAN
 				SwapExtensionArea(&extensionarea);
@@ -804,7 +814,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		TGAHEADER header;
 
 		io->seek_proc(handle, start_offset, SEEK_SET);
-		io->read_proc(&header, sizeof(tagTGAHEADER), 1, handle);
+		if (io->read_proc(&header, sizeof(tagTGAHEADER), 1, handle) != 1) {
+			throw FI_MSG_ERROR_PARSING;
+		}
 
 #ifdef FREEIMAGE_BIGENDIAN
 		SwapHeader(&header);

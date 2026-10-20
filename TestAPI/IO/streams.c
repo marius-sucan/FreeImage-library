@@ -220,6 +220,47 @@ static void test_tga_thumbnail(void) {
     FreeImage_Unload(dib);
 }
 
+/* --- TGA: files cut inside their header or extension area ---------------------- */
+
+static void test_tga_short(void) {
+    static const BYTE header[18] = { 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 1, 0, 24, 0x20 };
+    static const unsigned sizes[3] = { 0, 1, 17 };
+    BYTE file[18 + 12 + 26];
+    FIMEMORY *mem;
+    FIBITMAP *d;
+    int i, full = 1, head = 1;
+
+    printf("TGA files cut inside their header or extension area\n");
+    for (i = 0; i < 3; i++) {
+        mem = FreeImage_OpenMemory((BYTE *)header, sizes[i]);
+        last_message[0] = 0;
+        d = FreeImage_LoadFromMemory(FIF_TARGA, mem, 0);
+        full = full && !d && strstr(last_message, "Parsing error") != NULL;
+        if (d) FreeImage_Unload(d);
+        FreeImage_SeekMemory(mem, 0, SEEK_SET);
+        last_message[0] = 0;
+        d = FreeImage_LoadFromMemory(FIF_TARGA, mem, FIF_LOAD_NOPIXELS);
+        head = head && !d && strstr(last_message, "Parsing error") != NULL;
+        if (d) FreeImage_Unload(d);
+        FreeImage_CloseMemory(mem);
+    }
+    report("0, 1 and 17 bytes of an 18-byte header: refused", full);
+    report("  header-only too", head);
+
+    /* 4 x 1, then a footer whose extension area would start at the footer and run 469 bytes past the end */
+    memcpy(file, header, 18);
+    for (i = 0; i < 12; i++) file[18 + i] = (BYTE)(i * 20 + 5);
+    memset(file + 30, 0, 26);
+    put32(file + 30, 30);
+    memcpy(file + 38, "TRUEVISION-XFILE.", 18);
+    mem = FreeImage_OpenMemory(file, sizeof(file));
+    d = FreeImage_LoadFromMemory(FIF_TARGA, mem, 0);
+    report("an extension area past the end: the pixels load, no thumbnail",
+           d && FreeImage_GetWidth(d) == 4 && FreeImage_GetHeight(d) == 1 && memcmp(FreeImage_GetScanLine(d, 0), file + 18, 12) == 0 && !FreeImage_GetThumbnail(d));
+    if (d) FreeImage_Unload(d);
+    FreeImage_CloseMemory(mem);
+}
+
 /* --- TGA: a thumbnail whose offset does not fit 32 bits is left out ------------ */
 
 /* a memory stream whose positions past SHIFT_FROM read SHIFT more, as if the pixels ended past 4 GB;
@@ -475,6 +516,7 @@ int main(void) {
     test_ico();
     test_gif();
     test_tga_thumbnail();
+    test_tga_short();
     test_tga_past_4gb();
     test_no_seek_end();
     test_multipage_memory();
