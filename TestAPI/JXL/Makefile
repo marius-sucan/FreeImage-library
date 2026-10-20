@@ -30,7 +30,7 @@ conformance:
 	python3 conformance.py ../../Dist/libfreeimage-3.20.0.so conformance
 
 # --- AddressSanitizer -------------------------------------------------------
-# asan-run instruments the plugin, libjxl, highway and brotli
+# asan-run instruments the plugin, libjxl, highway, brotli and the Exif reader
 
 # Makefile.gnu's and Makefile.jxl's compile flags
 LIBINC      := $(shell sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed 's|-I|-I../../|g')
@@ -48,12 +48,14 @@ LIBSRCS := $(addprefix ../../,$(shell grep -oE 'Source/[A-Za-z0-9_./+-]+\.(c|cc|
 JXL_CC   = $(filter ../../Source/LibJXL/%,$(LIBSRCS))
 BROTLI_C = $(filter ../../Source/LibBrotli/%,$(LIBSRCS))
 PLUGIN   = ../../Source/FreeImage/PluginJXL.cpp
+EXIF     = ../../Source/Metadata/Exif.cpp
 
-asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Makefile.jxl ../../Dist/libfreeimage.a $(PLUGIN)
+asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Makefile.jxl ../../Dist/libfreeimage.a $(PLUGIN) $(EXIF)
 	rm -rf asan-obj && mkdir -p asan-obj
 	for f in $(JXL_CC); do echo "g++ -c $(JXL_PRE) $(LIBCXXFLAGS) $(ASAN) $(LIBINC) $(JXL_POST) $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o"; done > asan-obj/commands
 	for f in $(BROTLI_C); do echo "gcc -c $(LIBCFLAGS) $(ASAN) $(LIBINC) $$f -o asan-obj/$$(echo $$f | sed 's#^\.\./\.\./##; s#/#_#g').o"; done >> asan-obj/commands
 	echo "g++ -c $(LIBCXXFLAGS) $(ASAN) $(LIBINC) $(PLUGIN) -o asan-obj/PluginJXL.o" >> asan-obj/commands
+	echo "g++ -c $(LIBCXXFLAGS) $(ASAN) $(LIBINC) $(EXIF) -o asan-obj/Exif.o" >> asan-obj/commands
 	xargs -P $(JOBS) -d '\n' -I{} sh -c '{}' < asan-obj/commands
 	test $$(ls asan-obj/*.o | wc -l) -eq $$(wc -l < asan-obj/commands)
 	touch $@

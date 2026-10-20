@@ -91,6 +91,81 @@ static void maul_lengths(const BYTE *orig, long len) {
     free(copy);
 }
 
+/* ---- EXIF chunks: the reader gets them in the file's buffer, ending where the chunk ends ---- */
+
+static int failures = 0;
+
+static void put16le(BYTE *p, unsigned v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); }
+
+/* an IFD entry holding its value, or the offset of its value */
+static BYTE *ifd_entry(BYTE *p, unsigned tag, unsigned type, unsigned count, unsigned value) {
+    put16le(p, tag); put16le(p + 2, type); put32(p + 4, count); put32(p + 8, value);
+    return p + 12;
+}
+
+/* a 16x16 image saved with 'raw' as its EXIF chunk, loaded back: the tags of a model, -1 if it did not load */
+static int exif_round_trip(const BYTE *raw, unsigned length, FREE_IMAGE_MDMODEL model) {
+    FIBITMAP *dib = FreeImage_Allocate(16, 16, 24, 0, 0, 0);
+    FITAG *tag = FreeImage_CreateTag();
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BYTE *data = NULL;
+    DWORD size = 0;
+    int n = -1;
+    if (dib && tag && mem) {
+        FreeImage_SetTagKey(tag, "ExifRaw");
+        FreeImage_SetTagType(tag, FIDT_BYTE);
+        FreeImage_SetTagCount(tag, length);
+        FreeImage_SetTagLength(tag, length);
+        FreeImage_SetTagValue(tag, raw);
+        FreeImage_SetMetadata(FIMD_EXIF_RAW, dib, "ExifRaw", tag);
+        if (FreeImage_SaveToMemory(FIF_WEBP, dib, mem, WEBP_LOSSLESS) && FreeImage_AcquireMemory(mem, &data, &size)) {
+            /* a copy of its own size: the EXIF chunk ends the file */
+            BYTE *copy = (BYTE *)malloc(size);
+            if (copy) {
+                FIMEMORY *in;
+                FIBITMAP *back;
+                memcpy(copy, data, size);
+                try_load(copy, (long)size);
+                in = FreeImage_OpenMemory(copy, size);
+                back = in ? FreeImage_LoadFromMemory(FIF_WEBP, in, 0) : NULL;
+                if (back) { n = (int)FreeImage_GetMetadataCount(model, back); FreeImage_Unload(back); }
+                if (in) FreeImage_CloseMemory(in);
+                free(copy);
+            }
+        }
+    }
+    if (tag) FreeImage_DeleteTag(tag);
+    if (dib) FreeImage_Unload(dib);
+    if (mem) FreeImage_CloseMemory(mem);
+    return n;
+}
+
+/* an Exif block with Canon camera settings, cut at every length */
+static void exif_chunks(void) {
+    BYTE t[6 + 102], *p;
+    unsigned n;
+    long before = cases;
+    int got;
+
+    memcpy(t, "Exif\0\0II*\0\x08\0\0\0", 14);
+    put16le(t + 14, 2);
+    p = ifd_entry(t + 16, 0x010F, 2, 6, 38);
+    p = ifd_entry(p, 0x927C, 7, 58, 44);
+    put32(p, 0);
+    memcpy(t + 6 + 38, "Canon\0", 6);
+    put16le(t + 6 + 44, 1);
+    p = ifd_entry(t + 6 + 46, 0x0001, 3, 20, 62);
+    put32(p, 0);
+    for (n = 0; n < 40; n++) t[6 + 62 + n] = (BYTE)n;
+
+    got = exif_round_trip(t, sizeof(t), FIMD_EXIF_MAKERNOTE);
+    if (got != 19) { printf("  FAIL Canon camera settings: %d maker note tags, expected 19\n", got); failures++; }
+    for (n = 1; n < sizeof(t); n++) {
+        if (exif_round_trip(t, n, FIMD_EXIF_MAIN) < 0) { printf("  FAIL an EXIF chunk of %u bytes: not loaded\n", n); failures++; }
+    }
+    printf("  %s EXIF chunks                              %ld cases\n", failures ? "FAIL" : "ok", cases - before);
+}
+
 int main(void) {
     int f;
 
@@ -108,6 +183,8 @@ int main(void) {
         for (n = 1; n <= sizeof(tiny); n++) try_load(tiny, (long)n);
         printf("  ok degenerate buffers                     %ld cases\n", cases);
     }
+
+    exif_chunks();
 
     for (f = 0; f < NFILES; f++) {
         long len, i, before = cases;
@@ -150,7 +227,11 @@ int main(void) {
 
     printf("\n%ld damaged inputs: %ld decoded, %ld refused, 0 crashed\n",
            cases, loaded, refused);
-    printf("survived\n");
     FreeImage_DeInitialise();
+    if (failures) {
+        printf("%d failures\n", failures);
+        return 1;
+    }
+    printf("survived\n");
     return 0;
 }

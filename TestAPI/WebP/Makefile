@@ -20,7 +20,7 @@ run: all
 	@for t in $(TESTS); do echo "=== $$t ==="; ./$$t || exit 1; done
 
 # --- AddressSanitizer -------------------------------------------------------
-# asan-run instruments Source/LibWebP and PluginWebP.cpp
+# asan-run instruments Source/LibWebP, PluginWebP.cpp and the Exif reader
 asan: CFLAGS += -fsanitize=address
 asan: clean-bin all
 
@@ -37,7 +37,7 @@ ASAN        = -fsanitize=address -fno-omit-frame-pointer
 LIBSRCS := $(addprefix ../../,$(shell grep -oE 'Source/[A-Za-z0-9_./+-]+\.(c|cc|cpp)' ../../Makefile.srcs))
 
 WEBP_C   = $(filter $(LIBSRCS),$(shell find ../../Source/LibWebP/src ../../Source/LibWebP/sharpyuv -name '*.c'))
-WEBP_CXX = ../../Source/FreeImage/PluginWebP.cpp
+WEBP_CXX = ../../Source/FreeImage/PluginWebP.cpp ../../Source/Metadata/Exif.cpp
 
 asan-obj/.built: Makefile ../../Makefile.gnu ../../Makefile.srcs ../../Dist/libfreeimage.a $(WEBP_C) $(WEBP_CXX)
 	rm -rf asan-obj && mkdir -p asan-obj

@@ -111,6 +111,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - applied the fixes of the [Fedora F39 repository](https://src.fedoraproject.org/rpms/freeimage/tree/f39) for CVE-2020-24292, CVE-2020-24293, CVE-2020-24295, CVE-2021-33367, CVE-2021-40263, CVE-2021-40266, CVE-2023-47995 and CVE-2023-47997, which fix buffer overflows in PluginICO.cpp, PSDParser.cpp and PluginTIFF.cpp;
 - fixed out-of-bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
 - fixed an integer wraparound and a segmentation fault in Exif.cpp;
+- fixed out-of-bounds reads of short or crafted Exif metadata;
 
 ### BMP
 

@@ -106,6 +106,141 @@ static void maul_boxes(const BYTE *orig, long len) {
     free(copy);
 }
 
+/* ---- Exif blocks: the reader gets them in buffers of their own size ---- */
+
+static int failures = 0;
+
+static void put16le(BYTE *p, unsigned v) { p[0] = (BYTE)v; p[1] = (BYTE)(v >> 8); }
+static void put32le(BYTE *p, unsigned v) { put16le(p, v & 0xFFFF); put16le(p + 2, v >> 16); }
+
+/* an IFD entry holding its value, or the offset of its value */
+static BYTE *ifd_entry(BYTE *p, unsigned tag, unsigned type, unsigned count, unsigned value) {
+    put16le(p, tag); put16le(p + 2, type); put32le(p + 4, count); put32le(p + 8, value);
+    return p + 12;
+}
+
+/* a 16x16 image saved with "Exif\0\0" and the TIFF data as its raw Exif */
+static FIMEMORY *saved_with_exif(const BYTE *tiff, unsigned length) {
+    BYTE raw[512];
+    FIBITMAP *dib = FreeImage_Allocate(16, 16, 24, 0, 0, 0);
+    FITAG *tag = FreeImage_CreateTag();
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BOOL ok = dib && tag && mem && (length + 6 <= sizeof(raw));
+    if (ok) {
+        memcpy(raw, "Exif\0\0", 6);
+        memcpy(raw + 6, tiff, length);
+        FreeImage_SetTagKey(tag, "ExifRaw");
+        FreeImage_SetTagType(tag, FIDT_BYTE);
+        FreeImage_SetTagCount(tag, length + 6);
+        FreeImage_SetTagLength(tag, length + 6);
+        FreeImage_SetTagValue(tag, raw);
+        FreeImage_SetMetadata(FIMD_EXIF_RAW, dib, "ExifRaw", tag);
+        ok = FreeImage_SaveToMemory(FIF_JXL, dib, mem, JXL_LOSSLESS | 0x10000);
+    }
+    if (tag) FreeImage_DeleteTag(tag);
+    if (dib) FreeImage_Unload(dib);
+    if (!ok && mem) { FreeImage_CloseMemory(mem); mem = NULL; }
+    return mem;
+}
+
+/* the tags of a model after a load of the saved file, -1 if it did not load */
+static int tags_after_load(FIMEMORY *mem, FREE_IMAGE_MDMODEL model) {
+    BYTE *data = NULL;
+    DWORD size = 0;
+    FIBITMAP *dib;
+    int n = -1;
+    FreeImage_AcquireMemory(mem, &data, &size);
+    try_load(data, (long)size);
+    FreeImage_SeekMemory(mem, 0, SEEK_SET);
+    dib = FreeImage_LoadFromMemory(FIF_JXL, mem, 0);
+    if (dib) { n = (int)FreeImage_GetMetadataCount(model, dib); FreeImage_Unload(dib); }
+    return n;
+}
+
+/* saves, loads, and expects 'want' tags of the model (-1: any) */
+static void expect_tags(const BYTE *tiff, unsigned length, FREE_IMAGE_MDMODEL model, int want, const char *what) {
+    FIMEMORY *mem = saved_with_exif(tiff, length);
+    int got;
+    if (!mem) { printf("  FAIL %s: not saved\n", what); failures++; return; }
+    got = tags_after_load(mem, model);
+    if ((got < 0) || ((want >= 0) && (got != want))) { printf("  FAIL %s: %d tags, expected %d\n", what, got, want); failures++; }
+    FreeImage_CloseMemory(mem);
+}
+
+/* crafted blocks, then one cut at every length and read from every offset */
+static void exif_blocks(void) {
+    static const BYTE head[8] = { 'I', 'I', 42, 0, 8, 0, 0, 0 };
+    BYTE t[256], *p, *data = NULL, *copy;
+    unsigned full, n, at;
+    DWORD size = 0;
+    long before = cases;
+    FIMEMORY *mem;
+
+    memcpy(t, head, 8);
+    expect_tags(t, 8, FIMD_EXIF_MAIN, 0, "a TIFF header alone");
+
+    /* IFD0 of 3 entries: complete without its next-IFD link, then 2 bytes short */
+    put16le(t + 8, 3);
+    p = ifd_entry(t + 10, 0x0112, 3, 1, 1);
+    p = ifd_entry(p, 0x011A, 5, 1, 0);
+    p = ifd_entry(p, 0x0128, 3, 1, 2);
+    expect_tags(t, (unsigned)(p - t), FIMD_EXIF_MAIN, 3, "an IFD without its next-IFD link");
+    expect_tags(t, (unsigned)(p - t) - 2, FIMD_EXIF_MAIN, 0, "an IFD 2 bytes short");
+
+    /* maker notes: 5 bytes ending the block, 4 bytes in their entry, a Fujifilm one too short for its IFD offset */
+    put16le(t + 8, 1);
+    p = ifd_entry(t + 10, 0x927C, 7, 5, 26);
+    put32le(p, 0);
+    memcpy(p + 4, "Nikon", 5);
+    expect_tags(t, 31, FIMD_EXIF_MAIN, -1, "a maker note ending the block");
+    p = ifd_entry(t + 10, 0x927C, 7, 4, 0);
+    memcpy(p - 4, "AGFA", 4);
+    expect_tags(t, (unsigned)(p - t), FIMD_EXIF_MAIN, -1, "a maker note in its entry, ending the block");
+    put16le(t + 8, 2);
+    p = ifd_entry(t + 10, 0x010F, 2, 9, 38);
+    p = ifd_entry(p, 0x927C, 7, 9, 47);
+    put32le(p, 0);
+    memcpy(t + 38, "FUJIFILM\0FUJIFILMx", 18);
+    expect_tags(t, 56, FIMD_EXIF_MAIN, -1, "a Fujifilm maker note of 9 bytes");
+
+    /* Canon camera settings: 40 bytes taken for 20 shorts before; as shorts, split into 19 tags */
+    p = ifd_entry(t + 10, 0x010F, 2, 6, 38);
+    p = ifd_entry(p, 0x927C, 7, 58, 44);
+    put32le(p, 0);
+    memcpy(t + 38, "Canon\0", 6);
+    put16le(t + 44, 1);
+    p = ifd_entry(t + 46, 0x0001, 1, 40, 62);
+    put32le(p, 0);
+    for (n = 0; n < 40; n++) t[62 + n] = (BYTE)n;
+    expect_tags(t, 102, FIMD_EXIF_MAKERNOTE, 1, "Canon camera settings as bytes");
+    ifd_entry(t + 46, 0x0001, 3, 20, 62);
+    expect_tags(t, 102, FIMD_EXIF_MAKERNOTE, 19, "Canon camera settings as shorts");
+    full = 102;
+
+    /* the Canon block cut at every length the writer takes */
+    for (n = 8; n < full; n++) {
+        mem = saved_with_exif(t, n);
+        if (mem) { tags_after_load(mem, FIMD_EXIF_MAIN); FreeImage_CloseMemory(mem); }
+    }
+
+    /* and its box's offset to the TIFF header set to every value: from 1 byte left to past the end */
+    mem = saved_with_exif(t, full);
+    if (mem && FreeImage_AcquireMemory(mem, &data, &size) && (copy = (BYTE *)malloc(size)) != NULL) {
+        for (at = 0; at + 12 <= size; at++) {
+            if ((memcmp(data + at + 4, "Exif", 4) == 0) && (get32be(data + at) == 8 + 4 + full)) break;
+        }
+        if (at + 12 > size) { printf("  FAIL no Exif box in the saved file\n"); failures++; }
+        for (n = 0; (at + 12 <= size) && (n <= full + 1); n++) {
+            memcpy(copy, data, size);
+            put32be(copy + at + 8, n);
+            try_load(copy, (long)size);
+        }
+        free(copy);
+    }
+    if (mem) FreeImage_CloseMemory(mem);
+    printf("  %s Exif blocks                              %ld cases\n", failures ? "FAIL" : "ok", cases - before);
+}
+
 int main(void) {
     int f;
 
@@ -125,6 +260,8 @@ int main(void) {
         for (n = 1; n <= sizeof(bare); n++) try_load(bare, (long)n);
         printf("  ok degenerate buffers                     %ld cases\n", cases);
     }
+
+    exif_blocks();
 
     for (f = 0; f < NFILES; f++) {
         long len, i, before = cases;
@@ -166,7 +303,11 @@ int main(void) {
     }
 
     printf("\n%ld damaged inputs: %ld decoded, %ld refused, 0 crashed\n", cases, loaded, refused);
-    printf("survived\n");
     FreeImage_DeInitialise();
+    if (failures) {
+        printf("%d failures\n", failures);
+        return 1;
+    }
+    printf("survived\n");
     return 0;
 }

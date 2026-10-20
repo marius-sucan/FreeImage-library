@@ -10,14 +10,14 @@ run again at the next one.
 |---|---|
 | `decode` | Loads the six files of `data/` and checks geometry, depth, decoded pixels and attached metadata against a recorded table, plus format detection, a memory stream and a header-only load for each. |
 | `regress` | Round-trips both exportable depths (24 and 32) through a file *and* a memory stream, across `WEBP_LOSSLESS`, the default quality and qualities 1/50/100, on a full-size picture and a 7x3 one. Asserts that lossless comes back bit exact and that the file and the stream agree; that an 8-bit image is refused rather than mangled; that ICC, XMP and EXIF survive both lossy and lossless saves; and that an animation's frames whose profile differs from the first frame's are converted to it - Display P3, untagged (sRGB), sRGB-like, ProPhoto RGB and D65-white frames in an Adobe RGB file, a CMYK page - while sRGB look-alikes keep their pixels and a grey profile on the first frame makes an sRGB file. Encoded sizes are reported, not asserted. |
-| `robust` | Truncated prefixes, junk appended, single-byte corruptions, 64-byte regions wiped, and the RIFF and per-chunk length fields rewritten to nonsense - 6566 damaged inputs across the six files. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
+| `robust` | Truncated prefixes, junk appended, single-byte corruptions, 64-byte regions wiped, and the RIFF and per-chunk length fields rewritten to nonsense - 6566 damaged inputs across the six files, then an EXIF chunk cut at every length, which ends the file. They may load or be refused; they may not crash. Worth running under AddressSanitizer, which is what `make asan-run` is for. |
 
 ## Running
 
 Build the library first (`make -f Makefile.gnu dist` in the repo root), then:
 
     make run            # all three
-    make asan-run       # rebuild the whole of Source/LibWebP and the plugin
+    make asan-run       # rebuild the whole of Source/LibWebP, the plugin and the Exif reader
                         # with AddressSanitizer, and run all three with those
                         # objects linked ahead of the library
 
