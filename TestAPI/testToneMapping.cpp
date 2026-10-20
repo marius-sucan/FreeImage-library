@@ -608,6 +608,18 @@ static BOOL testLampSizeChangesRenderSmoothly(FREE_IMAGE_TMO tmo) {
 	return ok;
 }
 
+static BOOL testThumbnailMatchesItsImage() {
+	// MakeThumbnail resamples, then tone maps: lit like the image itself
+	FIBITMAP *dib = createLampScene(1600, 1200, 800);
+	FIBITMAP *full = dib ? FreeImage_ToneMapping(dib, FITMO_DRAGO03) : NULL;
+	FIBITMAP *thumbnail = dib ? FreeImage_MakeThumbnail(dib, 200, TRUE) : NULL;
+	const BOOL ok = full && thumbnail && (fabs(meanLevel(full) - meanLevel(thumbnail)) < 15);
+	if(dib) FreeImage_Unload(dib);
+	if(full) FreeImage_Unload(full);
+	if(thumbnail) FreeImage_Unload(thumbnail);
+	return ok;
+}
+
 // ----------------------------------------------------------
 
 void testToneMapping() {
@@ -650,5 +662,14 @@ void testToneMapping() {
 	assert(bResult);
 
 	bResult = testLampSizeChangesRenderSmoothly(FITMO_FATTAL02);
+	assert(bResult);
+
+	bResult = testLampSizeChangesRenderSmoothly(FITMO_DRAGO03);
+	assert(bResult);
+
+	bResult = testLampSizeChangesRenderSmoothly(FITMO_REINHARD05);
+	assert(bResult);
+
+	bResult = testThumbnailMatchesItsImage();
 	assert(bResult);
 }

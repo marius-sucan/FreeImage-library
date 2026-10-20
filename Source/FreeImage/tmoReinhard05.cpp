@@ -189,7 +189,7 @@ ToneMappingReinhard05(FIBITMAP *dib, FIBITMAP *Y, float f, float m, float a, flo
 	}
 
 	// normalize intensities
-	// over a percentile range, clipped
+	// over a robust range, clipped
 
 	float max_color = 0, min_color = 0;
 

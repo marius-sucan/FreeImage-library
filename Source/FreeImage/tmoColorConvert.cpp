@@ -218,13 +218,13 @@ ConvertInPlaceYxyToRGBF(FIBITMAP *dib) {
 }
 
 // ----------------------------------------------------------
-// Robust luminance statistics (finite samples, percentile extrema)
+// Robust luminance statistics (finite samples, white point of a band, percentile minimum)
 // ----------------------------------------------------------
 
 #define TMO_HISTOGRAM_BINS	4096
 
-/** the brightest 0.1% are outliers */
-#define TMO_MAX_PERCENTILE	0.999
+/** the white point: geometric mean of the brightest 0.1% of the lit samples */
+#define TMO_WHITE_BAND	0.001
 
 /** the darkest 0.1% are outliers */
 #define TMO_MIN_PERCENTILE	0.001
@@ -240,9 +240,9 @@ ClampFloatToByte(float value) {
 
 /** luminance statistics over the finite samples */
 typedef struct tagLuminanceStats {
-	float maxLum;		//! percentile ("robust") maximum luminance
+	float whiteLum;		//! geometric mean of the TMO_WHITE_BAND brightest lit samples
 	float minLumRobust;	//! percentile ("robust") minimum luminance
-	float trueMaxLum;	//! absolute maximum luminance
+	float maxLum;		//! absolute maximum luminance
 	float minLum;		//! absolute minimum luminance
 	float minPosLum;	//! smallest strictly positive luminance
 	double sumLum;		//! sum of the luminance samples
@@ -299,7 +299,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 		return FALSE;
 	}
 
-	stats->trueMaxLum   = max_lum;
+	stats->maxLum       = max_lum;
 	stats->minLum       = min_lum;
 	stats->minPosLum    = (positive_count > 0) ? min_pos_lum : 0;
 	stats->sumLum       = sum_lum;
@@ -307,10 +307,10 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	stats->count        = count;
 	stats->sumLogPosLum = sum_log_pos_lum;
 	stats->positiveCount = positive_count;
-	stats->maxLum       = max_lum;
+	stats->whiteLum     = max_lum;
 	stats->minLumRobust = min_lum;
 
-	// second pass : percentile estimates
+	// second pass : white point and robust minimum
 
 	if((positive_count < 2) || (stats->minPosLum >= max_lum)) {
 		// nothing to reject
@@ -362,35 +362,25 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 	// every non positive sample sorts below every positive one
 	const size_t non_positive = count - positive_count;
 
-	// walk down from the brightest bin until the outlier budget is spent
+	// walk down from the brightest bin through the band
 
 	{
-		// budget from lit samples only: black backdrops would inflate it
-		const size_t budget = (size_t)((1.0 - TMO_MAX_PERCENTILE) * (double)positive_count);
-		size_t accumulated = 0;
-		int cut_bin = TMO_HISTOGRAM_BINS - 1;
-		BOOL spent = FALSE;
-		for(int bin = TMO_HISTOGRAM_BINS - 1; bin >= 0; bin--) {
-			accumulated += histogram[bin];
-			cut_bin = bin;
-			if(accumulated > budget) {
-				spent = TRUE;
-				break;
-			}
+		// lit samples only: black backdrops would widen the band
+		const double band = MAX(1.0, TMO_WHITE_BAND * (double)positive_count);
+		double taken = 0, sum_log = 0;
+		for(int bin = TMO_HISTOGRAM_BINS - 1; (bin >= 0) && (taken < band); bin--) {
+			const double n = MIN((double)histogram[bin], band - taken);
+			sum_log += n * (log_min + ((double)bin / (double)(TMO_HISTOGRAM_BINS - 1)) * log_range);
+			taken += n;
 		}
-		if(!spent) {
-			// budget not spent: nothing to reject
-			stats->maxLum = max_lum;
-		} else {
-			// upper edge of the bin that holds the percentile
-			const double cut = exp(log_min + ((double)(cut_bin + 1) / (double)(TMO_HISTOGRAM_BINS - 1)) * log_range);
-			float robust_max = (float)((cut < (double)max_lum) ? cut : (double)max_lum);
-			if(!IsFiniteValue(robust_max) || (robust_max <= stats->minPosLum)) {
-				// degenerate estimate : keep the absolute maximum
-				robust_max = max_lum;
-			}
-			stats->maxLum = robust_max;
+		float white = (taken > 0) ? (float)exp(sum_log / taken) : max_lum;
+		if(!IsFiniteValue(white) || (white > max_lum)) {
+			white = max_lum;
 		}
+		if(white < stats->minPosLum) {
+			white = stats->minPosLum;
+		}
+		stats->whiteLum = white;
 	}
 
 	// and up from the darkest bin
@@ -432,7 +422,7 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 			robust_min = (float)cut;
 		}
 
-		if(!IsFiniteValue(robust_min) || (robust_min < min_lum) || (robust_min >= stats->maxLum)) {
+		if(!IsFiniteValue(robust_min) || (robust_min < min_lum) || (robust_min >= stats->whiteLum)) {
 			// degenerate estimate : keep the absolute minimum
 			robust_min = min_lum;
 		}
@@ -445,10 +435,10 @@ GatherLuminanceStats(FIBITMAP *dib, unsigned samplesPerRow, unsigned stride, BOO
 }
 
 /**
-Get the maximum, minimum and average luminance.<br>
+Get the white point, minimum and average luminance.<br>
 On input, pixel->red == Y, pixel->green == x, pixel->blue == y
 @param Yxy Source Yxy image to analyze
-@param maxLum Maximum luminance
+@param maxLum White point: the geometric mean of the brightest lit samples
 @param minLum Minimum luminance
 @param worldLum Average luminance (world adaptation luminance)
 @return Returns TRUE if successful, returns FALSE otherwise
@@ -465,8 +455,8 @@ LuminanceFromYxy(FIBITMAP *Yxy, float *maxLum, float *minLum, float *worldLum) {
 		return FALSE;
 	}
 
-	// maximum luminance
-	*maxLum = stats.maxLum;
+	// white point
+	*maxLum = stats.whiteLum;
 	// minimum luminance
 	*minLum = stats.minLum;
 	// world adaptation luminance
@@ -556,9 +546,9 @@ ConvertRGBFToY(FIBITMAP *src) {
 }
 
 /**
-Get the maximum, minimum, average luminance and log average luminance from a Y image
+Get the white point, minimum, average luminance and log average luminance from a Y image
 @param dib Source Y image to analyze
-@param maxLum Maximum luminance
+@param maxLum White point: the geometric mean of the brightest lit samples
 @param minLum Minimum luminance
 @param Lav Average luminance
 @param Llav Log average luminance (also known as 'world adaptation luminance')
@@ -576,10 +566,10 @@ LuminanceFromY(FIBITMAP *dib, float *maxLum, float *minLum, float *Lav, float *L
 		return FALSE;
 	}
 
-	// maximum luminance
-	*maxLum = stats.maxLum;
+	// white point
+	*maxLum = stats.whiteLum;
 	// minimum positive luminance: callers take its log()
-	*minLum = (stats.minPosLum > 0) ? stats.minPosLum : stats.maxLum;
+	*minLum = (stats.minPosLum > 0) ? stats.minPosLum : stats.whiteLum;
 	// average luminance, black samples included
 	*Lav = (float)(stats.sumLum / (double)stats.count);
 	// average log luminance, a.k.a. world adaptation luminance: over the samples the minimum is taken from
@@ -602,7 +592,7 @@ LuminanceRange(FIBITMAP *Y, float *maxLum, float *minLum) {
 	if(!GatherLuminanceStats(Y, FreeImage_GetWidth(Y), 1, FALSE, &stats)) {
 		return FALSE;
 	}
-	*maxLum = stats.trueMaxLum;
+	*maxLum = stats.maxLum;
 	*minLum = stats.minLum;
 
 	return TRUE;
@@ -638,7 +628,7 @@ ClampNegativeRGBF(FIBITMAP *dib) {
 }
 
 /**
-Robust range of all RGBF samples, outliers excluded
+Robust range of all RGBF samples: the white point, and the minimum without the darkest outliers
 @return Returns TRUE if successful, returns FALSE otherwise
 */
 BOOL
@@ -652,7 +642,7 @@ RGBFRobustRange(FIBITMAP *dib, float *maxValue, float *minValue) {
 	if(!GatherLuminanceStats(dib, FreeImage_GetWidth(dib) * 3, 1, FALSE, &stats)) {
 		return FALSE;
 	}
-	*maxValue = stats.maxLum;
+	*maxValue = stats.whiteLum;
 	*minValue = stats.minLumRobust;
 
 	return TRUE;
