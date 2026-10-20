@@ -611,13 +611,8 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 
 	// uncompressed: a short file cannot claim a huge image
 	{
-		const INT64 pos = io->tell_proc(handle);
-		io->seek_proc(handle, 0, SEEK_END);
-		const INT64 end = io->tell_proc(handle);
-		io->seek_proc(handle, pos, SEEK_SET);
-
 		const UINT64 raster = (((UINT64)desc->dwWidth * ddspf->dwRGBBitCount + 7) / 8) * desc->dwHeight;
-		if (!PlausibleImageSize(raster, (end > pos) ? (UINT64)(end - pos) : 0, 1)) {
+		if (!PlausibleImageData(io, handle, io->tell_proc(handle), raster, 1)) {
 			return NULL;
 		}
 	}
@@ -777,11 +772,7 @@ LoadDXT(int decoder_type, const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle
 
 	{
 		// a short file cannot claim a huge image: a block of 8 (DXT1) or 16 bytes gives 16 pixels
-		const INT64 pos = io->tell_proc(handle);
-		io->seek_proc(handle, 0, SEEK_END);
-		const INT64 end = io->tell_proc(handle);
-		io->seek_proc(handle, pos, SEEK_SET);
-		if (!PlausibleImageSize((UINT64)width * height * 4, (end > pos) ? (UINT64)(end - pos) : 0, (decoder_type == 1) ? 8 : 4)) {
+		if (!PlausibleImageData(io, handle, io->tell_proc(handle), (UINT64)width * height * 4, (decoder_type == 1) ? 8 : 4)) {
 			FreeImage_OutputMessageProc(s_format_id, "The file holds too little data for its size");
 			return NULL;
 		}

@@ -281,6 +281,151 @@ static void test_tga_past_4gb(void) {
     FreeImage_Unload(dib);
 }
 
+/* --- streams that cannot seek to their end ------------------------------------ */
+
+/* a memory stream whose seek refuses SEEK_END; with 'clamp', a seek past the end stops at the end */
+typedef struct { const BYTE *p; INT64 size, pos; int clamp; } noend_io;
+
+static unsigned DLL_CALLCONV n_rd(void *b, unsigned s, unsigned c, fi_handle h) {
+    noend_io *m = (noend_io *)h;
+    const INT64 left = m->size - m->pos;
+    if (!s || !c || left <= 0) return 0;
+    if ((UINT64)left < (UINT64)s * c) {
+        memcpy(b, m->p + m->pos, (size_t)left);
+        m->pos = m->size;
+        return (unsigned)(left / s);
+    }
+    memcpy(b, m->p + m->pos, (size_t)s * c);
+    m->pos += (INT64)s * c;
+    return c;
+}
+static unsigned DLL_CALLCONV n_wr(void *b, unsigned s, unsigned c, fi_handle h) { (void)b; (void)s; (void)c; (void)h; return 0; }
+static int DLL_CALLCONV n_sk(fi_handle h, INT64 off, int origin) {
+    noend_io *m = (noend_io *)h;
+    const INT64 target = (origin == SEEK_SET) ? off : m->pos + off;
+    if ((origin == SEEK_END) || (target < 0)) return -1;
+    m->pos = (m->clamp && target > m->size) ? m->size : target;
+    return 0;
+}
+static INT64 DLL_CALLCONV n_tl(fi_handle h) { return ((noend_io *)h)->pos; }
+
+static long icc_size(FIBITMAP *dib) { return dib ? FreeImage_GetICCProfile(dib)->size : -1; }
+
+/* 'buf' loads through both such streams as through a memory stream: the same pixels and profile, or nothing */
+static void expect_noend(const char *what, FREE_IMAGE_FORMAT fif, const BYTE *buf, size_t n, int loads) {
+    FIMEMORY *mem = FreeImage_OpenMemory((BYTE *)buf, (DWORD)n);
+    FIBITMAP *ref = FreeImage_LoadFromMemory(fif, mem, 0);
+    FreeImageIO io = { n_rd, n_wr, n_sk, n_tl };
+    int clamp, ok = loads ? (ref != NULL) : (ref == NULL);
+    for (clamp = 0; clamp < 2; clamp++) {
+        noend_io m = { buf, (INT64)n, 0, clamp };
+        FIBITMAP *d = FreeImage_LoadFromHandle(fif, &io, (fi_handle)&m, 0);
+        ok = ok && (loads ? (same_pixels(d, ref) && icc_size(d) == icc_size(ref)) : (d == NULL));
+        if (d) FreeImage_Unload(d);
+    }
+    report(what, ok);
+    if (ref) FreeImage_Unload(ref);
+    FreeImage_CloseMemory(mem);
+}
+
+/* a 24-bit BMP or TGA of w x h holding 'data' bytes of pixels: cut when that is less than the image */
+static BYTE *raw_file(FREE_IMAGE_FORMAT fif, unsigned w, unsigned h, size_t data, size_t *n) {
+    const size_t head = (fif == FIF_BMP) ? 54 : 18;
+    BYTE *b = (BYTE *)calloc(head + data, 1);
+    size_t i;
+    for (i = head; i < head + data; i++) b[i] = (BYTE)(i * 7 + i / 4093);
+    if (fif == FIF_BMP) {
+        b[0] = 'B'; b[1] = 'M'; put32(b + 2, (unsigned)(head + data)); put32(b + 10, 54);
+        put32(b + 14, 40); put32(b + 18, w); put32(b + 22, h); b[26] = 1; b[28] = 24;
+    } else {
+        b[2] = 2; b[12] = (BYTE)w; b[13] = (BYTE)(w >> 8); b[14] = (BYTE)h; b[15] = (BYTE)(h >> 8); b[16] = 24; b[17] = 0x20;
+    }
+    *n = head + data;
+    return b;
+}
+
+/* a DDS of w x h, A8R8G8B8 or DXT1, holding 'data' bytes after its header */
+static BYTE *dds_file(int dxt1, unsigned w, unsigned h, size_t data, size_t *n) {
+    BYTE *b = (BYTE *)calloc(128 + data, 1);
+    size_t i;
+    for (i = 128; i < 128 + data; i++) b[i] = (BYTE)(i * 13 + i / 4091);
+    memcpy(b, "DDS ", 4);
+    put32(b + 4, 124); put32(b + 8, 0x1007); put32(b + 12, h); put32(b + 16, w);
+    put32(b + 76, 32);
+    if (dxt1) {
+        put32(b + 80, 0x4); memcpy(b + 84, "DXT1", 4);
+    } else {
+        put32(b + 80, 0x41); put32(b + 88, 32);
+        put32(b + 92, 0x00FF0000); put32(b + 96, 0x0000FF00); put32(b + 100, 0x000000FF); put32(b + 104, 0xFF000000);
+    }
+    put32(b + 108, 0x1000);
+    *n = 128 + data;
+    return b;
+}
+
+/* 'dib' saved to memory, copied out */
+static BYTE *saved(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, size_t *n) {
+    FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+    BYTE *bytes = NULL, *copy = NULL;
+    DWORD size = 0;
+    *n = 0;
+    if (FreeImage_SaveToMemory(fif, dib, mem, flags) && FreeImage_AcquireMemory(mem, &bytes, &size) && (copy = (BYTE *)malloc(size)) != NULL) {
+        memcpy(copy, bytes, size);
+        *n = size;
+    }
+    FreeImage_CloseMemory(mem);
+    return copy;
+}
+
+static void test_no_seek_end(void) {
+    FIBITMAP *small = synth(24, 64, 48, 11);
+    DWORD srgb_n = 0;
+    const void *srgb = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_n);
+    FIMEMORY *mem;
+    FIBITMAP *ref;
+    size_t n;
+    BYTE *b;
+
+    printf("streams that cannot seek to their end (seeks past it allowed, or stopping there): loads as from memory\n");
+    b = raw_file(FIF_BMP, 5000, 5000, 1500000, &n);
+    expect_noend("24-bit BMP, 75 MB, with 2% of its pixels: its rows load", FIF_BMP, b, n, 1);
+    free(b);
+    b = raw_file(FIF_BMP, 5000, 5000, 375000, &n);
+    expect_noend("  with 0.5%: refused", FIF_BMP, b, n, 0);
+    free(b);
+    b = raw_file(FIF_TARGA, 5000, 5000, 1500000, &n);
+    expect_noend("24-bit TGA, 75 MB, with 2% of its pixels: its rows load", FIF_TARGA, b, n, 1);
+    free(b);
+    b = raw_file(FIF_TARGA, 5000, 5000, 4000, &n);
+    expect_noend("  with 4000 bytes: refused", FIF_TARGA, b, n, 0);
+    free(b);
+    b = dds_file(0, 5000, 4000, 2000000, &n);
+    expect_noend("32-bit DDS, 80 MB, with 2.5% of its pixels: its rows load", FIF_DDS, b, n, 1);
+    free(b);
+    b = dds_file(0, 5000, 4000, 500000, &n);
+    expect_noend("  with 0.6%: refused", FIF_DDS, b, n, 0);
+    free(b);
+    b = dds_file(1, 8192, 8192, 1 << 20, &n);
+    expect_noend("DXT1 DDS, 8192 x 8192, with 1 of its 32 MB of blocks: loads", FIF_DDS, b, n, 1);
+    free(b);
+    b = dds_file(1, 8192, 8192, 1 << 18, &n);
+    expect_noend("  with 256 KB: refused", FIF_DDS, b, n, 0);
+    free(b);
+    b = saved(FIF_TARGA, small, TARGA_SAVE_RLE, &n);
+    expect_noend("RLE TGA saved by FreeImage: loads", FIF_TARGA, b, n, 1);
+    free(b);
+    FreeImage_CreateICCProfile(small, (void *)srgb, (long)srgb_n);
+    b = saved(FIF_BMP, small, 0, &n);
+    mem = FreeImage_OpenMemory(b, (DWORD)n);
+    ref = FreeImage_LoadFromMemory(FIF_BMP, mem, 0);
+    report("BMP, ICC profile after the pixels: from memory, with it", ref && icc_size(ref) == (long)srgb_n);
+    expect_noend("  through those streams, with the profile too", FIF_BMP, b, n, 1);
+    if (ref) FreeImage_Unload(ref);
+    FreeImage_CloseMemory(mem);
+    free(b);
+    FreeImage_Unload(small);
+}
+
 /* --- a multi-page memory stream that does not start at byte 0 ------------------ */
 
 static void test_multipage_memory(void) {
@@ -331,6 +476,7 @@ int main(void) {
     test_gif();
     test_tga_thumbnail();
     test_tga_past_4gb();
+    test_no_seek_end();
     test_multipage_memory();
     FreeImage_DeInitialise();
     printf("--- %d failure(s) ---\n", failures);

@@ -14,7 +14,7 @@ LIBINC      = $$(sed -n 's/^INCLUDE *= *//p' ../../Makefile.srcs | head -1 | sed
 GNU_CXXDEFS := $(shell sed -n 's/^CXXFLAGS += \(-D.*\)/\1/p' ../../Makefile.gnu)
 LIBCXXFLAGS = -std=c++0x -O1 -g -fPIC -fexceptions -fvisibility=hidden $(GNU_CXXDEFS) $(OPENMP_CFLAGS)
 # the sources streams exercises
-ASAN_SRCS   = PluginTARGA PluginICO PluginGIF FreeImageIO MultiPage MemoryIO
+ASAN_SRCS   = PluginTARGA PluginICO PluginGIF PluginBMP PluginDDS FreeImageIO MultiPage MemoryIO
 
 default: all
 all: $(TESTS) allocfail

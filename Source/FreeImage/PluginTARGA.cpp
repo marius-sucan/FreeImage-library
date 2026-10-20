@@ -634,13 +634,12 @@ loadRLE(FIBITMAP*& dib, int width, int height, FreeImageIO* io, fi_handle handle
 	// this is used to guard against writing beyond the end of the image (on corrupted rle block)
 	const BYTE* dib_end = FreeImage_GetScanLine(dib, height);//< one-past-end row
 
-	// Compute the rough size of a line...
+	// Compute the rough size of a line, or take 64 KB where the end of the stream is unknown...
 	const INT64 pixels_offset = io->tell_proc(handle);
-	const INT64 remaining_size = (eof - pixels_offset);
-	if (remaining_size <= 0) {
+	if (!StreamHoldsByte(io, handle, pixels_offset)) {
 		throw FI_MSG_ERROR_CORRUPTED;
 	}
-	INT64 sz = (remaining_size / height);
+	INT64 sz = (eof > pixels_offset) ? ((eof - pixels_offset) / height) : ((INT64)1 << 16);
 
 	// ...but at least one pixel: getBytes() assumes that many bytes
 	if (sz < file_pixel_size) {
@@ -758,15 +757,18 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// remember the start offset
 		INT64 start_offset = io->tell_proc(handle);
 
-		// remember end-of-file (used for RLE cache)
+		// remember end-of-file (used for RLE cache); -1 where the stream cannot seek to its end
 		io->seek_proc(handle, 0, SEEK_END);
 		INT64 eof = io->tell_proc(handle);
+		if (eof <= start_offset) {
+			eof = -1;
+		}
 		io->seek_proc(handle, start_offset, SEEK_SET);
 
 		// read and process the bitmap's footer
 
 		TargaThumbnail thumbnail;
-		if(isTARGA20(io, handle)) {
+		if((eof >= 0) && isTARGA20(io, handle)) {
 			TGAFOOTER footer;
 			// the footer ends the stream; its offsets count from the start of the image
 			const INT64 footer_offset = eof - (INT64)sizeof(footer) - start_offset;
@@ -825,8 +827,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			const INT64 data_pos = start_offset + (INT64)sizeof(tagTGAHEADER) + header.id_length
 				+ ((header.color_map_type != 0) ? (INT64)((header.cm_size + 7) / 8) * header.cm_length : 0);
 			const UINT64 raster = (UINT64)header.is_width * header.is_height * ((header.is_pixel_depth + 7) / 8);
-			const UINT64 data = (eof > data_pos) ? (UINT64)(eof - data_pos) : 0;
-			if(!PlausibleImageSize(raster, data, 128)) {
+			if(!PlausibleImageData(io, handle, data_pos, raster, 128)) {
 				throw FI_MSG_ERROR_CORRUPTED;
 			}
 		}

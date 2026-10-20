@@ -659,24 +659,19 @@ static BOOL
 PixelDataCanFill(FreeImageIO *io, fi_handle handle, INT64 bitmap_bits_offset, UINT64 width, UINT64 height, unsigned bit_count, unsigned compression) {
 	const UINT64 pitch = (((width * bit_count) + 7) / 8 + 3) & ~(UINT64)3;
 	const UINT64 raster = (height && (pitch > ~(UINT64)0 / height)) ? ~(UINT64)0 : pitch * height;
-	// under the 64 MB floor the file size is not needed
-	if (PlausibleImageSize(raster, 0, 1)) {
+	// RLE8 expands up to 128 times, RLE4 64 times, except where it skips pixels
+	if (PlausibleImageData(io, handle, bitmap_bits_offset, raster, (compression == BI_RLE8) ? 128 : (compression == BI_RLE4) ? 64 : 1)) {
 		return TRUE;
 	}
-	const INT64 here = io->tell_proc(handle);
-	io->seek_proc(handle, 0, SEEK_END);
-	const INT64 end = io->tell_proc(handle);
-	const UINT64 data = ((end > 0) && ((UINT64)end > (UINT64)bitmap_bits_offset)) ? (UINT64)end - (UINT64)bitmap_bits_offset : 0;
-	// RLE8 expands up to 128 times, RLE4 64 times, except where it skips pixels
-	BOOL plausible = PlausibleImageSize(raster, data, (compression == BI_RLE8) ? 128 : (compression == BI_RLE4) ? 64 : 1) ? TRUE : FALSE;
-	if (!plausible && ((compression == BI_RLE8) || (compression == BI_RLE4)) && (width <= INT_MAX) && (height <= INT_MAX)) {
-		// skipped pixels take no bytes: the stream is read as the load reads it, without the image
-		io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
-		const int rows = (compression == BI_RLE8) ? LoadPixelDataRLE8(io, handle, (int)width, (int)height, NULL) : CountRowsRLE4(io, handle, (int)width, (int)height);
-		plausible = (rows > 0) ? TRUE : FALSE;
+	if (((compression != BI_RLE8) && (compression != BI_RLE4)) || (width > INT_MAX) || (height > INT_MAX)) {
+		return FALSE;
 	}
+	// skipped pixels take no bytes: the stream is read as the load reads it, without the image
+	const INT64 here = io->tell_proc(handle);
+	io->seek_proc(handle, bitmap_bits_offset, SEEK_SET);
+	const int rows = (compression == BI_RLE8) ? LoadPixelDataRLE8(io, handle, (int)width, (int)height, NULL) : CountRowsRLE4(io, handle, (int)width, (int)height);
 	io->seek_proc(handle, here, SEEK_SET);
-	return plausible;
+	return (rows > 0) ? TRUE : FALSE;
 }
 
 // one channel of a BI_BITFIELDS layout
@@ -837,10 +832,8 @@ LoadEmbeddedProfile(FreeImageIO *io, fi_handle handle, INT64 header_start, FIBIT
 	if (!ReadDWORD(io, handle, &offset) || !ReadDWORD(io, handle, &size)) {
 		return;
 	}
-	io->seek_proc(handle, 0, SEEK_END);
-	const INT64 end = io->tell_proc(handle);
 	const INT64 start = header_start + (INT64)offset;
-	if ((offset < BMP_V5_HEADER_SIZE) || (start + (INT64)size > end)) {
+	if ((offset < BMP_V5_HEADER_SIZE) || !StreamHoldsByte(io, handle, start + (INT64)size - 1)) {
 		FreeImage_OutputMessageProc(s_format_id, "The embedded ICC profile lies outside the file: ignored");
 		return;
 	}

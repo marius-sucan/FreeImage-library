@@ -759,4 +759,33 @@ PlausibleImageSize(unsigned long long raster_bytes, unsigned long long data_byte
 	return (double)raster_bytes <= (double)data_bytes * (double)max_expansion * 64.0;
 }
 
+/// the stream holds a byte at pos: a seek lands there and the byte reads; the position is kept
+inline bool
+StreamHoldsByte(FreeImageIO *io, fi_handle handle, INT64 pos) {
+	if (pos < 0) {
+		return false;
+	}
+	const INT64 here = io->tell_proc(handle);
+	BYTE byte = 0;
+	// some seek callbacks return the new position instead of 0, some stop at the end: tell says where they went
+	io->seek_proc(handle, pos, SEEK_SET);
+	const bool held = (io->tell_proc(handle) == pos) && (io->read_proc(&byte, 1, 1, handle) == 1);
+	io->seek_proc(handle, here, SEEK_SET);
+	return held;
+}
+
+/// PlausibleImageSize() for the data from data_pos on, found without seeking to the end of the stream
+inline bool
+PlausibleImageData(FreeImageIO *io, fi_handle handle, INT64 data_pos, unsigned long long raster_bytes, unsigned long long max_expansion) {
+	if (PlausibleImageSize(raster_bytes, 0, max_expansion)) {
+		return true;
+	}
+	// the stream must hold the last of the fewest bytes PlausibleImageSize() accepts
+	const unsigned long long needed = (raster_bytes - 1) / (max_expansion * 64) + 1;
+	if ((data_pos < 0) || (needed > (unsigned long long)((std::numeric_limits<INT64>::max)() - data_pos))) {
+		return false;
+	}
+	return StreamHoldsByte(io, handle, data_pos + (INT64)needed - 1);
+}
+
 #endif // FREEIMAGE_UTILITIES_H
