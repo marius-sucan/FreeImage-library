@@ -374,6 +374,54 @@ static void test_tga_rle(void) {
     remove(path);
 }
 
+/* --- a DDS whose row is 2 GB -------------------------------------------------- */
+
+/* a 32-bit DDS of 536870916 x 1 holding 'data' bytes of its 2 GB row, sparse; the first and last pixels set when whole */
+static int write_dds_row(const char *path, INT64 data) {
+    BYTE header[128], first[4] = { 0x11, 0x22, 0x33, 0x44 }, last[4] = { 0x55, 0x66, 0x77, 0x88 };
+    const INT64 row = (INT64)536870916 * 4;
+    FILE *f = fopen(path, "wb");
+    int ok;
+    memset(header, 0, sizeof(header));
+    memcpy(header, "DDS ", 4);
+    put32(header + 4, 124); put32(header + 8, 0x1007); put32(header + 12, 1); put32(header + 16, 536870916u);
+    put32(header + 76, 32); put32(header + 80, 0x41); put32(header + 88, 32);
+    put32(header + 92, 0x00FF0000); put32(header + 96, 0x0000FF00); put32(header + 100, 0x000000FF); put32(header + 104, 0xFF000000u);
+    put32(header + 108, 0x1000);
+    ok = f && fwrite(header, 1, sizeof(header), f) == sizeof(header) && fwrite(first, 1, 4, f) == 4;
+    ok = ok && ((data < row) ? extend_sparse(f, (INT64)sizeof(header) + data)
+                             : (fi_fseek64(f, (INT64)sizeof(header) + row - 4, SEEK_SET) == 0 && fwrite(last, 1, 4, f) == 4));
+    if (f && fclose(f) != 0) ok = 0;
+    return ok;
+}
+
+static void test_dds_2g_row(void) {
+    const char *path = tmppath("fi_io_big.dds");
+    const size_t row = (size_t)((INT64)536870916 * 4);
+    const int wide = sizeof(void *) > 4;
+    FIBITMAP *dib;
+    int ok;
+
+    printf("fi_io_big.dds: a 32-bit DDS of 536870916 x 1, its row 2 GB, sparse (2 GB of RAM)\n");
+    if (!write_dds_row(path, (INT64)536870916 * 4)) { report("write the sparse DDS", 0); remove(path); return; }
+    dib = FreeImage_Load(FIF_DDS, path, 0);
+    if (wide) {
+        const BYTE *p = dib ? FreeImage_GetScanLine(dib, 0) : NULL;
+        ok = p && FreeImage_GetWidth(dib) == 536870916u && FreeImage_GetHeight(dib) == 1 && FreeImage_GetBPP(dib) == 32
+            && p[FI_RGBA_BLUE] == 0x11 && p[FI_RGBA_GREEN] == 0x22 && p[FI_RGBA_RED] == 0x33 && p[FI_RGBA_ALPHA] == 0x44
+            && p[row - 4 + FI_RGBA_BLUE] == 0x55 && p[row - 4 + FI_RGBA_GREEN] == 0x66 && p[row - 4 + FI_RGBA_RED] == 0x77 && p[row - 4 + FI_RGBA_ALPHA] == 0x88;
+        report("FreeImage_Load: its first and last pixels", ok);
+    } else {
+        report("a 32-bit process cannot hold the row: refused", dib == NULL);
+    }
+    if (dib) FreeImage_Unload(dib);
+    if (!write_dds_row(path, (INT64)34 << 20)) { report("write the cut DDS", 0); remove(path); return; }
+    dib = FreeImage_Load(FIF_DDS, path, 0);
+    report("cut 34 MB into the row: refused, no row whole", dib == NULL);
+    if (dib) FreeImage_Unload(dib);
+    remove(path);
+}
+
 /* --- an SGI RLE row 3 GB into the file ---------------------------------------- */
 
 static void put32be(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v; }
@@ -477,6 +525,7 @@ int main(int argc, char **argv) {
     test_psd_2g();
     test_bmp_4g_profile();
     test_tga_rle();
+    test_dds_2g_row();
     test_sgi_rle();
     test_webp_4g();
     FreeImage_DeInitialise();

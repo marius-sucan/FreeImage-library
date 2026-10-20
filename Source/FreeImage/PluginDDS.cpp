@@ -640,11 +640,10 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 	// read the file
 	// -------------------------------------------------------------------------
 
-	// row size in the file; 16-bit rows expand to 24 bits in the dib
-	const int fileLine = CalculateLine(width, bpp);
-	const int line = CalculateLine(width, FreeImage_GetBPP(dib));
-	const int filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (int)desc->dwPitchOrLinearSize : fileLine;
-	const long delta = (long)filePitch - (long)fileLine;
+	// row size in the file, up to 4 GB; 16-bit rows expand to 24 bits in the dib
+	const unsigned fileLine = CalculateLine(width, bpp);
+	const unsigned filePitch = ((desc->dwFlags & DDSD_PITCH) == DDSD_PITCH) ? (unsigned)desc->dwPitchOrLinearSize : fileLine;
+	const INT64 delta = (INT64)filePitch - (INT64)fileLine;
 
 	// a cut file keeps the rows it holds
 	int y = 0;
@@ -655,7 +654,7 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 			for (; y < height; y++) {
 				BYTE *dst_bits = FreeImage_GetScanLine(dib, height - y - 1);
 				// get the 16-bit RGB pixels
-				if (io->read_proc(pixels, 1, fileLine, handle) != (unsigned)fileLine) {
+				if (FreeImage_ReadBytes(io, handle, pixels, fileLine) != fileLine) {
 					break;
 				}
 				io->seek_proc(handle, delta, SEEK_CUR);
@@ -668,7 +667,7 @@ LoadRGB(const DDSURFACEDESC2 *desc, FreeImageIO *io, fi_handle handle) {
 	else {
 		for (; y < height; y++) {
 			BYTE *pixels = FreeImage_GetScanLine(dib, height - y - 1);
-			if (io->read_proc(pixels, 1, fileLine, handle) != (unsigned)fileLine) {
+			if (FreeImage_ReadBytes(io, handle, pixels, fileLine) != fileLine) {
 				memset(pixels, 0, fileLine);
 				break;
 			}
