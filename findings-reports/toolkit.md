@@ -10,6 +10,7 @@ Workspace: $J/agents/toolkit (src/ programs, bin/, out/, data/); progress.md has
   main -> (245,235,225,215); RGBA16 -> (...,61535); file -> 55 155 205 5 (= PIL invert)
   Real file kimageformats__cmyka-8bits.psd with PSD_CMYK: centre pixel qpv 255 255 255 0, main 255 255 255 255.
 - Fix sketch: keep the 4th sample only when not CMYK (check FreeImage_GetICCProfile(src)->flags & FIICC_COLOR_IS_CMYK), same for wordspp.
+- **Fixed** in 7d05ec2, as sketched: an image flagged CMYK gets all four samples inverted, K too (main's and Pillow's result), a view of one too; RGBA keeps its alpha. TestAPI/ICC profiles checks both. FreeImage_AdjustColors(..., TRUE) and FreeImage_AdjustCurve with FICC_RGB still leave K alone on CMYK, as on main.
 
 ## TK-2 In-place lossless JPEG transforms now always delete data appended after the JPEG
 - Class: compat-break (intended change, unintended side effect). Severity: Low (agent's rating). Confidence: high.
