@@ -47,6 +47,8 @@ reproduced it independently. Nothing else below came from that file.
   leadenhall_market_4k.hdr 113.7 -> 95.3 (main 95.3); rogland_clear_night_4k.exr 124.8 -> 77.5, main's render of its
   light as RGBF (main's RGBAF path clips the file to [0..1] and gave 130.7). TestAPI/testToneMapping.cpp: a lamp over
   0.09% and 0.11% of the frame renders alike.
+- 3aca46d then gave Fattal02's output the white point of Drago03 and Reinhard05 (the input stays unclipped), so these
+  renders brighten again, short of the clipped look: StillLife 53.4, CandleGlass 42.7, PrismsLenses 39.7, rogland 131.3.
 
 ### F2 Percentile white point: renders jump when a light source crosses 0.1% of the frame; thumbnails no longer match
 - Class: regression-vs-main (side effect of an intended robustness change)
@@ -86,9 +88,9 @@ reproduced it independently. Nothing else below came from that file.
   from the full render (mean difference 24.1, against 9.4 before and 14.1 now: point lights blur when resampled, so
   no white point makes such thumbnails match). Scene "dim": Drago03 148.5 (main 136.6), 5.1% of channels clipped at
   exposure +2 (8.6% before, main 0.5%). Nine OpenEXR photos: Drago03 within 3.1 and Reinhard05 within 1.8 of before.
-  Still open, found on the way: the bottom of Reinhard05's output range is a hard 0.1th percentile, so the render
-  steps 8 to 11 levels when black pixels cross 0.1% of the samples; a continuous black point would let one black pixel
-  move the render, which testReinhard05IgnoresOneBlackPixel forbids.
+  Found on the way, fixed in 7e55cc6: the bottom of Reinhard05's output range was a hard 0.1th percentile of all the
+  samples, so the render stepped 8 to 11 levels when black pixels crossed 0.1% of them. It is now the mean of the
+  darkest 0.1% of the lit samples (black pixels left out, as in pfstools), which keeps one black pixel out too.
 
 ### F3 ConvertToLinear clips float samples above 1.0 when the ICC tone curve is a sampled 'curv' table
 - Class: new-bug
