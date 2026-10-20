@@ -1,0 +1,54 @@
+# other-plugins agent: findings (JPEG, RAW, J2K/JP2, EXR, legacy loaders), received 2026-10-20
+Workspace W=$J/agents/other-plugins. Tools in W/src: fidump.c (one-line load summary, -x flags, -n header-only cross-check, -m memory stream at offset 7, -r raw dump, -i ICC dump), ioload.c (custom FreeImageIO: -e refuses SEEK_END, -o N offset), genlegacy.py, genpict.py, exrrt.c, exrwrite.cpp, j2ksave.c, greysave.c, cmpraw.py; binaries W/bin/X_{qpv,main}.
+Result: four issues, all Low, none a crash; most behaviour changes in scope are fixes.
+
+## OP-1 RAS: 24- and 32-bit Sun rasters with maptype RMT_EQUAL_RGB are refused
+- Class: regression-vs-main. Severity: Low (valid but uncommon; ImageMagick/GIMP/XV write maptype 0 for true colour). Confidence: high.
+- Where: Source/FreeImage/PluginRAS.cpp:363-366 (`if (NULL == pal) throw "Invalid palette, return null"` in the RMT_EQUAL_RGB case); 793e195 ("Add palette pointer check", Fedora patch 163).
+- What: for depth 24/32 numcolors is 0 and the map would be skipped, but a 24/32-bit dib has no palette, so the NULL check throws first (header-only too). main loads such files when maplength is 0 (Pillow too); with maplength > 0 main segfaults (NULL palette) and qpv refuses.
+- Evidence: `W/bin/fidump_{qpv,main} -n W/data/legacy/ras24_map1_len0.ras` (also ras32_map1_len0.ras, ras24_map1_len0_rle.ras): qpv "Invalid palette, return null", NULL (header-only NULL); main 15x4 bpp 24 (32-bit bpp 32); Pillow RGB (15, 4). ras24_map1_len6.ras: main segfault, qpv refuses.
+- Fix sketch: move the NULL-palette check inside `if (numcolors > 0)`; depth > 8 just skips maplength bytes.
+
+## OP-2 RAS, IFF, PCX, WBMP, XBM: the new size checks refuse large valid images when the stream cannot seek to its end
+- Class: regression-vs-main. Severity: Low (custom FreeImageIO whose seek_proc refuses SEEK_END, rasters > 64 MB only). Confidence: high.
+- Where: PluginRAS.cpp:269-273 (80b1503); PluginIFF.cpp:292-295 (80b1503); PluginPCX.cpp:421-426 (cb0682c); PluginWBMP.cpp:274-277 (80b1503); PluginXBM.cpp:171-174 (4f20f92). Each calls seek_proc(handle, 0, SEEK_END) without checking the result; on failure the data length is 0 and PlausibleImageSize refuses. Same pattern as bmp-ico-tga F2. Fine: SGI:406 (after a short read), XBM:300, CUT, XPM (tell deltas), EXR:272 (checks the return).
+- Evidence: `W/bin/ioload_{qpv,main} -e -f <fif> W/data/legacy/<file>`: ras_rle8_10000.ras qpv "The file holds too little data for its size" NULL, main 10000x10000; iff_pbm8_10000.lbm, iff_ilbm1_30000.iff same; pcx8_10000.pcx, pcx1_30000.pcx qpv "Image is corrupted" NULL, main loads; wbmp_24000.wbmp qpv NULL, main loads. Without -e both load identically. XBM same code (no test file: ~400 MB of text).
+- Fix sketch: check the SEEK_END return (as EXR) and skip PlausibleImageSize when the length is unknown.
+
+## OP-3 JPEG: JPEG_GREYSCALE on an Exif Adobe RGB camera JPEG returns an 8-bit grey bitmap tagged with an RGB profile
+- Class: new-bug (wrong metadata). Severity: Low. Confidence: high.
+- Where: PluginJPEG.cpp:709-710 (IsExifAdobeRGB tests cinfo->jpeg_color_space, not out_color_space), used :781-787; fb401b5.
+- What: with JPEG_GREYSCALE, Exif ColorSpace=2 (or 0xFFFF + InteropIndex "R03") attaches the built-in 624-byte 'RGB ' Adobe RGB profile to an 8-bit grey dib; main attached none (main already keeps an embedded RGB profile on JPEG_GREYSCALE loads, pre-existing). Saving propagates the mismatch (TIFF, JPEG, BMP keep it; PNG drops it with a warning). Detection itself is right (ColorSpace=1, 1+R03, 0xFFFF+R98, 0xFFFF alone: no profile; embedded ICC wins). FIF_LOAD_DISPLAY_ICC handles it sanely (grey moves <= 7 levels).
+- Evidence: `W/bin/fidump_qpv -x 0x10 W/data/jpeg2/cs2.jpg` -> bpp=8 icc=624 (same csffff_r03.jpg); main bpp=8 icc=0; `W/bin/greysave_qpv W/data/jpeg2/cs2.jpg W/out/gs/x` -> tif/jpg/bmp icc=624.
+- Fix sketch: skip the Exif Adobe RGB synthesis when out_color_space == JCS_GRAYSCALE; ideally drop any 'RGB ' profile when the output is grey.
+
+## OP-4 J2K/JP2: ROI codestreams whose shift + code-block bit-planes reaches 31 no longer decode (the rgn31.j2k case)
+- Class: regression-vs-main via the OpenJPEG 2.5.4 upgrade (17d0526); upstream limit, not FreeImage code. Severity: Low. Confidence: high (mechanism, threshold), medium (real-world frequency).
+- Where: Source/LibOpenJPEG/t1.c:2026-2036 (`bpno_plus_one = roishift + cblk->numbps; if (bpno_plus_one >= 31)` fails the code-block). main's 2014 decoder has no guard (t1.c:1379, :513, :1307: signed-shift UB once the shift reaches 31), so it returns an image whose ROI pixels can't be trusted.
+- Threshold (ISO conformance p0_06.j2k, 12-bit, RGN in main and tile-part headers, shift byte patched): shifts 9-24 qpv = main pixel-identical; 26, 28, 31 qpv fails ("unsupported bpno_plus_one = 31..35"), main returns an image, Pillow (OpenJPEG 2.5.4) also fails; unpatched ROI files (p0_06 tile shift 9, p0_13 shift 11) identical in both.
+- Reach: MaxShift needs s >= background bit-planes, sum ~2x bit-planes: ~18-24 for 8-bit (fine), 26-32 for 12-bit (borderline), > 31 for 16-bit ROI (medical/DICOM). rgn31.j2k is shift 31 with numbps 9.
+- Evidence: `W/bin/fidump_{qpv,main} W/data/j2k/p0_06_both{24,26,31}.j2k`.
+- Fix sketch: none in FreeImage short of an OpenJPEG patch; document it or give a clearer message.
+
+## Compatibility notes (intentional; not bugs)
+- J2K/JP2 1-7 / 9-15-bit samples spread to 8/16 bits; J2K_UNSCALED/JP2_UNSCALED restore raw values (e6f4f0b) = differential C5.
+- J2K/JP2 save refuses 1-, 4-, 16-bit FIT_BITMAP (706232c; main over-read rows, garbage). XPM save refuses anything but 8/24-bit (d123545; main wrote skewed output).
+- RAW: monochrome loads as FIT_UINT16 (RAW_DEFAULT; main failed "only 3-color images supported") or 8-bit grey (RAW_DISPLAY; main failed); greyscale bitmap previews as 8-bit (main over-read as 24-bit) (c41b50f, 0ca5064). 16-bit output carries linear sRGB ICC (or linear grey) + CICP (d35fa22); built-in profiles checked (sRGB colorants D50-adapted gamma 1.0; Adobe RGB gamma 2.19922). RAW_DISPLAY carries no profile (main attached the camera profile, wrong; LibRaw's 8-bit curve is BT.709 power 2.222 toe 4.5). Bitmap previews turned by the raw's flip; JPEG previews by their own Exif. Header-only loads follow each path. Auto-WB removal (8646461) changes only one-colour files with a single AsShotNeutral (checked vs LibRaw identify/scale_colors).
+- PCD_BASEDIV4 -> 384x256, PCD_BASEDIV16 -> 192x128 (631e18c; main swapped; main's header-only ignored the flags).
+- JPEG CMYK loaded as RGB drops the CMYK profile (cd91101).
+
+## Pre-existing (same in main)
+- PICT 8-bit pixmaps with rowBytes < 8: Unpack8Bits reads a per-row byte count the spec says is absent; identical wrong pixels in both.
+- RAW datastream gets() (PluginRAW.cpp) does not NUL-terminate a line that fills the buffer (LibRaw's own streams do); reachable via TIFF ASCII tags of >= 64 bytes through fgets(make,64) and similar: intra-struct over-read.
+- RAW loads through a stream that refuses SEEK_END fail in both (datastream constructor).
+- J2K with Psot=0 cut right after SOD: qpv fails on m_sot_length underflow (OpenJPEG 2.5.4) where main returned blank (contrived cut file).
+- IFF with FORM size 0: main loads only through unsigned wraparound; qpv refuses (malformed).
+
+## Checked, no issue found (condensed)
+- JPEG: every TestAPI/JPEG/data and Pillow JPEG/MPO file at flags 0/1/2/4/8/0x10/0x6/0xA/0x14, scaled loads (0x640000, 0x1e0000), combos: pixels identical to main, full and header-only; only fixes differ (header-only JPEG_EXIFROTATE turns; truncated_exif_dpi.jpg crashes main, loads in qpv); orientations 1-8 header-only = full; Exif Adobe RGB detection matrix right; JPEG_MAX_DIMENSION check harmless; RotateExif/ReplaceWithRotated.
+- RAW: 10 DNGs x flags 0/1/2/4/6/8: header-only = full; Leaf scanf fix = leaf_asn variant pixels; buffered datastream read/seek/tell/eof/get_char/scanf_one semantics; LibRaw OpenMP readers serialised by omp critical; loads at stream offset 7 work (main fails).
+- J2K/JP2: 70 of 76 corpus files (openjpeg-data conformance + Pillow) identical to main with J2K_UNSCALED; rest: ICC now attached (file5/7/8), g3/g4_colr fixed, expected_to_read.jp2 refused (deliberately invalid). A tiny valid flat 16384^2 codestream (102 bytes) decodes in both (qpv peaks 1.3 GB vs main 2.7 GB): the "tiny file claims huge image" lead is not a bug. Save matrix (grey8/24/32/UINT16/RGB16/RGBA16 at 1x1, 7x5, 31x17, 300x200, rates 16 and 1): all 96 qpv files load losslessly in main, qpv, Pillow (main could not save small sizes). JP2 restricted-ICC save; ICC in header-only; SampleScale table; no-SEEK_END handles (qpv works, main asserts).
+- EXR: every flag set x FLOAT/RGBF/RGBAF written by both and read by both: identical (main cannot read RGBA LC files; qpv can). Data-window cap: flat-file ratios RLE 63, ZIPS 704, ZIP 890, PIZ 242, PXR24 887, B44A 11, DWAA 10418, DWAB ~22000, all far under 131072; large flat 16384x4096 and 262144x256 load full and header-only in both. All 63 corpus/test files: header-only = full, offset-7 loads match.
+- Legacy loaders: valid > 64 MB RLE RAS (8/24/1-bit), PCX (8/24/1-bit), IFF (PBM 8-bit, ILBM 1 and 24 planes), WBMP load identically to main; plausibility margins (RAS 128 vs real max ~85, PCX 32 vs 31.5, IFF 64 x per_plane, XBM/WBMP 1, all x64 slack) never trip on valid data. Pillow SGI/RAS/PCX/XBM/XPM samples identical incl. offset 7 (main fails SGI RLE and PCX there). 14 spec-built PICT files: qpv exact except the pre-existing 8-bit narrow case (main crashes or garbles 7). CUT exact and identical; KOALA identical except the intended background-nibble mask; RAS 32-bit odd-width pad fix matches Pillow.
+## Outside scope (agent note)
+- qpv's BMP writer stores the 'RGB ' profile in an 8-bit grey BMP (part of OP-3's propagation).
