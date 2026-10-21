@@ -7,6 +7,7 @@ Summary: 12 findings, 4 Medium, 8 Low. Only F1 is a regression vs main; F2-F4 ar
 - Where: PluginMNG.cpp:1242-1245 (BuildPNGStream); f355509. MNG 1.0 §4.2.2: global tRNS inherited only with the global PLTE, only by PNGs with an empty PLTE.
 - Evidence: `python3 -I src/gen_trns.py gen/trns`; `bin/px_{qpv,main} gen/trns/*.mng`: trns_grey qpv transparent=1, 255 -> (255,255,255,0), main opaque; trns_rgb qpv 32-bit white -> alpha 0, main 24-bit opaque; trns_ownplte qpv own colours + global alpha, main opaque with global colours; trns_emptyplte (control) qpv correct, main no alpha.
 - Fix sketch: add the global tRNS only where the global PLTE is used.
+- **Fixed** in e7bee60, as sketched: the global tRNS is spliced only where the global PLTE is (an indexed image with an empty PLTE, or with none, the reader's leniency), and only when the image has no tRNS of its own. trns_grey, trns_rgb and trns_ownplte load opaque as on main, trns_emptyplte keeps the global alpha; the 125 corpus MNGs are unchanged, raw and played. test_global_trns (TestAPI/MNG decode).
 
 ## F2 Saving an animation opened with WEBP_PLAYBACK or MNG_PLAYBACK shifts the frames and grows the canvas
 - Class: new-bug. Severity: Medium (file silently damaged on edit/Save As). Confidence: high.
@@ -14,6 +15,7 @@ Summary: 12 findings, 4 Medium, 8 Low. Only F1 is a regression vs main; F2-F4 ar
 - What: a playback page is the composited canvas but keeps the stored frame's FrameLeft/FrameTop/Disposal/Blend; on save the writer places each canvas-sized page at the stored offset: canvas grows, frames displaced, save returns TRUE. GIF_PLAYBACK pages carry only FrameTime (not affected).
 - Evidence (bin/editpages_qpv, bin/t_saveas_qpv; Pillow decodes): a_lossless_alpha.webp 64x48 flags 0 -> 64x48 maxdiff 0; WEBP_PLAYBACK -> 92x50, warning "The frames need a 92 pixel wide canvas...", frames 1-4 maxdiff 255; d_mixed_minsize.webp 96x64 -> 144x66; a.mng 64x48 MNG_PLAYBACK delete page -> MHDR 92x66, pages at (4,2),(16,10),(28,18); Save As to WebP 104x74; GIF control 64x48.
 - Fix sketch: tag composited pages as full-canvas frames (0,0, blend overwrite, disposal none), or strip PLAYBACK from read_flags in FreeImage_SavePages.
+- **Fixed** in 65fd9d7, by the first sketch, for all four playback flags: a played page of WebP, MNG, APNG (the same bug, see Outside scope) and GIF says FrameLeft and FrameTop 0, BlendMethod 1 (it replaces the canvas), FrameTime and the file's canvas and loop count. It says no DisposalMethod, as GIF_PLAYBACK pages never did: each writer's default fits a page that replaces the canvas (the GIF writer's is "background", the APNG writer's "none", under which it stores a full-canvas frame as the rectangle that changed). GIF_PLAYBACK pages were not unaffected: saved as WebP or MNG they were blended over the page before, so a frame disposed to the background stayed on (sp.gif, transp.gif), and the loop count was lost. The read_flags are kept on purpose: every page of a document opened with a playback flag is then a whole canvas, which deleting or moving pages needs. The animations of the evidence, copied to WebP, MNG and APNG or with a page deleted in place, play as their source on its canvas (MNG with F3). regress of TestAPI/WebP, /MNG and /APNG.
 
 ## F3 The MNG writer changes how converted animations play back
 - Class: new-bug (main has no MNG writer). Severity: Medium. Confidence: high.
@@ -21,17 +23,20 @@ Summary: 12 findings, 4 Medium, 8 Low. Only F1 is a regression vs main; F2-F4 ar
 - What: (a) DisposalMethod 2 becomes FRAM framing mode 3 = background over the whole canvas (§4.3.2), erasing earlier frames (optimised GIFs use disposal 2 constantly); disposal 3 written as "leave". (b) BlendMethod 1 (overwrite) ignored (MNG layers composite over -> trails). (c) page 0's advisory background colour written as mandatory BACK -> transparent areas opaque.
 - Evidence: (a) gen/conv/sp.gif -> sp.mng: frame 2 GIF_PLAYBACK 576 opaque pixels, MNG_PLAYBACK 320 (frame 0 gone); WebP keeps frame 0. (b) Pillow f_kmax1.webp -> MNG: frames 2-5 maxdiff 255 on 255-1064 pixels. (c) transparent GIF -> MNG `BACK 000000 01`: (0,0,0,0) -> (0,0,0,255); 32-bit PNG with bKGD -> opaque white background.
 - Fix sketch: zero-delay clipped background subframe for disposal 2; composited canvases for blend=1/disposal 3; BACK advisory or omitted.
+- **Fixed** in 6a0917e. (a) as sketched: an empty mode-3 subframe clipped to the frame clears it, merged into the next frame's subframe when one rectangle holds the other. (b) blend=1 not by a composited canvas but by framing mode 3 clipped to the frame, so the page stays the page; disposal 3 over nothing is a clear, otherwise the next frame is written as what the canvas shows, followed (in page 0's colors, as MNG_PLAYBACK) from the frame after the first restore, earlier frames decoded again then: other saves cost nothing more. (c) no BACK, except for pages read from a MNG with one: their new MandatoryBackground tag carries BACK's mandatory byte, so a MNG's own background survives a save; without it 34 of the 62 MNGsuite files played differently after their raw pages were saved again, with it the same 8 as before. The reader now follows the spec the writer relies on: FRAM clipping for one subframe or as the default, background layers clipped to it, an empty mode-3 or mode-4 subframe drawing a background layer of its own; no corpus file changes. sp.gif, transp.gif, odd.gif and the Pillow WebPs as MNG play as their source in MNG_PLAYBACK and in a player written from the spec text (ImageMagick draws no clipped background layer, even with a mandatory BACK, so it cannot judge); 3000 random animations agree, again after their raw pages are saved anew, and as APNG. TestAPI/MNG decode test_clipped_backgrounds, regress test_conversion_playback and test_back_kept. Found on the way, fixed in 5bef5f9: MNG_PLAYBACK's compositor wrapped a colour of 256 to 0 for a translucent layer over a translucent one ((0,0,255,128) over itself gave (0,0,0,191)).
 
 ## F4 The WebP animation writer moves frames with odd offsets by one pixel
 - Class: new-bug (rounding intended per a48037f). Severity: Medium for converted animations. Confidence: high.
 - Where: PluginWebP.cpp:704-710 (& ~1); disposal 711-714 (GIF disposal 3 written as none); a48037f.
 - Evidence: odd.gif (frames at (5,3),(17,11),...) -> odd.webp: offsets read back 4,2; WEBP_PLAYBACK vs GIF_PLAYBACK every frame differs (maxdiff 255, 355-920 px); shifting by (1,1) -> identical.
 - Fix sketch: pad odd-offset frames with a transparent column/row and blend over at the even offset.
+- **Fixed** in b6c7dc1, as sketched where that is exact: a padded frame changes nothing blended over the canvas, or drawn in place over nothing. A frame drawn in place over something, the frame after a restore (the disposal 3 of the Where line) and a padded frame cleared where something else shows are written as what the canvas shows, followed from the second frame. odd.gif, transp.gif and bgsprite.gif (both also odd) as WebP play as their GIF in WEBP_PLAYBACK, Pillow and the system libwebp 1.5; 1500 random animations agree, again after their raw pages are saved anew, and as MNG. Even positions write the same bytes as before. odd_positions (TestAPI/WebP regress). It needs F5: the page cache saves each page alone, and a padded one-frame animation would have come back a column wider.
 
 ## F5 FreeImage_Save(FIF_WEBP) of a frame-tagged bitmap writes an animated WebP that still-image decoders refuse
 - Class: compat-break (intended, a48037f "Behaviour change"). Severity: Low. Confidence: high.
 - Where: PluginWebP.cpp:1142 (as_frame), 1076-1118. Any 24/32-bit bitmap with FrameTime written as a 1-frame animation on its LogicalWidth x LogicalHeight canvas; libwebp collapses to a still only if the frame covers the canvas; else WebPDecode* (dwebp, simple API readers) refuse. main wrote a still.
 - Evidence: load d_mixed_minsize.webp (first frame 16x12 on 96x64), FreeImage_Save(FIF_WEBP, WEBP_LOSSLESS): qpv `WebPGetFeatures 96x64 has_animation=1; WebPDecodeRGBA -> FAILED`; main `16x12 has_animation=0; decoded`.
+- **Fixed** in 2514dc1, as asked: when the frames collected end up being one (FreeImage_Save, a one-page document, an animation edited down to one page), the file is a still image of that page as it is, its ICC, Exif and XMP kept; place, delay and canvas have nowhere to go in a still. The evidence now gives `16x12 has_animation=0`, decoded, by the system libwebp 1.5. The page cache stores stills; a page's tags come back from the cache as before. one_frame_still (TestAPI/WebP regress).
 
 ## F6 MNG_PLAYBACK (0x2) reaches the JPEG decoder as JPEG_ACCURATE
 - Class: new-bug. Severity: Low. Confidence: high.
@@ -70,11 +75,16 @@ Summary: 12 findings, 4 Medium, 8 Low. Only F1 is a regression vs main; F2-F4 ar
 ## Pre-existing (same in main)
 - JNG with alpha: header-only reports 24/8-bit, full load 32-bit (mng_ReadChunks skips alpha when header-only); now visible through MNG pages too since MNG advertises SupportsNoPixels.
 ## Outside scope (agent notes)
-- APNG_PLAYBACK pages carry stored offsets like F2 (PluginAPNG.cpp:842-843). MultiPage.cpp:732 keeps playback flags when re-reading pages (F2's second half).
+- APNG_PLAYBACK pages carry stored offsets like F2 (PluginAPNG.cpp:842-843). MultiPage.cpp:732 keeps playback flags when re-reading pages (F2's second half). The APNG part is fixed with F2 (65fd9d7); the flags are kept on purpose.
 - Multi-page closes re-encode every page with the close flags: an edited lossless WebP animation closed with flags 0 becomes lossy q75 (maxdiff 95-232).
 - FreeImage_CloneMetadata skips FIMD_ANIMATION (main BitmapAccess.cpp:1294, upstream): ConvertTo32Bits + CloneMetadata drops frame tags.
 - CloseMultiBitmap returns TRUE when every AppendPage failed.
 - libjpeg UBSan shifts (jdhuff.c, jidctint.c).
+
+## Noticed while fixing F1-F5, not fixed
+- The GIF writer ignores BlendMethod: full-canvas pages with transparency (played pages, AVIF, HEIF and JPEG XL pages) quantized and saved as GIF with their tags copied leave a trail where a pixel turns transparent; GIF has no "replace", so the frame before would need disposal 2.
+- An animated WebP whose frames are all opaque but leave parts of the canvas uncovered gets no VP8X alpha flag (libwebp's mux sets it from the frames); Pillow then reads it as RGB, those parts black, where WebPAnimDecoder gives them transparent. sp.gif as WebP shows it; as it was before.
+- ImageMagick 7.1.2's MNG reader draws no background layer for framing modes 3 and 4 when there is no BACK chunk, nor a clipped one with it, and turns framing modes into GIF disposals: not an oracle for MNG playback.
 
 ## Checked, no issue found (condensed)
 - WebP still loading: 137 files identical to main (dims, bpp, pixels, ICC, dpm, metadata counts); FreeImage_Load of 8 animated WebPs returns main's first raw frame; header-only = full.
