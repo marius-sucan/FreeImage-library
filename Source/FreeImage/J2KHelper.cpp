@@ -169,6 +169,46 @@ opj_freeimage_decode_threads(FreeImageIO *io, fi_handle handle, OPJ_CODEC_FORMAT
 
 // --------------------------------------------------------------------------
 
+static void
+J2KHandleMessage(J2KMessages *messages, const char *kind, const char *msg) {
+	if(std::this_thread::get_id() == messages->caller) {
+		FreeImage_OutputMessageProc(messages->format_id, "%s: %s", kind, msg);
+	} else {
+		messages->from_threads++;
+	}
+}
+
+static void
+J2KErrorHandler(const char *msg, void *client_data) {
+	J2KHandleMessage((J2KMessages*)client_data, "Error", msg);
+}
+
+static void
+J2KWarningHandler(const char *msg, void *client_data) {
+	J2KHandleMessage((J2KMessages*)client_data, "Warning", msg);
+}
+
+void
+J2KSetMessageHandlers(opj_codec_t *codec, J2KMessages *messages) {
+	opj_set_info_handler(codec, NULL, NULL);
+	opj_set_warning_handler(codec, J2KWarningHandler, messages);
+	opj_set_error_handler(codec, J2KErrorHandler, messages);
+}
+
+void
+J2KReportThreadMessages(const J2KMessages *messages, const char *task, BOOL succeeded) {
+	if(!messages->from_threads) {
+		return;
+	}
+	if(succeeded) {
+		FreeImage_OutputMessageProc(messages->format_id, "Warning: problems have occurred %s the image", task);
+	} else {
+		FreeImage_OutputMessageProc(messages->format_id, "Errors have occurred %s the image", task);
+	}
+}
+
+// --------------------------------------------------------------------------
+
 /**
 Divide an integer by a power of 2 and round upwards
 @return Returns a divided by 2^b

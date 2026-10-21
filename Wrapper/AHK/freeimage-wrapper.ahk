@@ -198,7 +198,7 @@ FreeImage_GetCopyrightMessage() {
 }
 
 FreeImage_SetOutputMessageStdCall(pCallback) {
-; pCallback := RegisterCallback("Func", "", 2): Func(fif, pMsg) gets StrGet(pMsg, "CP0"); JPEG 2000 may call it from a worker thread
+; pCallback := RegisterCallback("Func", "", 2): Func(fif, pMsg) gets StrGet(pMsg, "CP0")
    Return DllCall(getFIMfunc("SetOutputMessageStdCall"), "UPtr", pCallback)
 }
 

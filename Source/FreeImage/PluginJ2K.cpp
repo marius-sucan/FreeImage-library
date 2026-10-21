@@ -31,23 +31,6 @@
 static int s_format_id;
 
 // ==========================================================
-// Internal functions
-// ==========================================================
-
-/**
-OpenJPEG Error callback 
-*/
-static void j2k_error_callback(const char *msg, void *client_data) {
-	FreeImage_OutputMessageProc(s_format_id, "Error: %s", msg);
-}
-/**
-OpenJPEG Warning callback 
-*/
-static void j2k_warning_callback(const char *msg, void *client_data) {
-	FreeImage_OutputMessageProc(s_format_id, "Warning: %s", msg);
-}
-
-// ==========================================================
 // Plugin Implementation
 // ==========================================================
 
@@ -132,6 +115,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		opj_codec_t *d_codec = NULL;	// handle to a decompressor
 		opj_dparameters_t parameters;	// decompression parameters
 		opj_image_t *image = NULL;		// decoded image 
+		J2KMessages messages(s_format_id);
 
 		FIBITMAP *dib = NULL;
 
@@ -155,10 +139,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			d_codec = opj_create_decompress(OPJ_CODEC_J2K);
 			
 			// configure the event callbacks
-			// catch events using our callbacks (no local context needed here)
-			opj_set_info_handler(d_codec, NULL, NULL);
-			opj_set_warning_handler(d_codec, j2k_warning_callback, NULL);
-			opj_set_error_handler(d_codec, j2k_error_callback, NULL);
+			J2KSetMessageHandlers(d_codec, &messages);
 
 			// setup the decoder decoding parameters using user parameters
 			if( !opj_setup_decoder(d_codec, &parameters) ) {
@@ -195,6 +176,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			fio->eof = FALSE;
 			const BOOL decoded = opj_decode(d_codec, d_stream, image);
 			const BOOL cut = fio->eof;
+			J2KReportThreadMessages(&messages, "decoding", decoded);
 			if( !decoded || (!opj_end_decompress(d_codec, d_stream) && !cut) ) {
 				throw "Failed to decode image!\n";
 			}
@@ -243,6 +225,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		opj_codec_t *c_codec = NULL;	// handle to a compressor
 		opj_cparameters_t parameters;	// compression parameters
 		opj_image_t *image = NULL;		// image to encode
+		J2KMessages messages(s_format_id);
 
 		// get the OpenJPEG stream
 		opj_stream_t *c_stream = fio->stream;
@@ -279,10 +262,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			c_codec = opj_create_compress(OPJ_CODEC_J2K);
 
 			// configure the event callbacks
-			// catch events using our callbacks (no local context needed here)
-			opj_set_info_handler(c_codec, NULL, NULL);
-			opj_set_warning_handler(c_codec, j2k_warning_callback, NULL);
-			opj_set_error_handler(c_codec, j2k_error_callback, NULL);
+			J2KSetMessageHandlers(c_codec, &messages);
 
 			// setup the encoder parameters using the current image and using user parameters
 			if( !opj_setup_encoder(c_codec, &parameters, image) ) {
@@ -299,6 +279,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 					bSuccess = bSuccess && opj_end_compress(c_codec, c_stream);
 				}
 			}
+			J2KReportThreadMessages(&messages, "encoding", bSuccess);
 			if (!bSuccess) {
 				throw "Failed to encode image";
 			}

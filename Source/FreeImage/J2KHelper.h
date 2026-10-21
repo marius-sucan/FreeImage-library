@@ -1,9 +1,34 @@
 #ifndef FREEIMAGE_J2K_HELPER_H
 #define FREEIMAGE_J2K_HELPER_H
 
+#include <atomic>
+#include <thread>
+
 // ==========================================================
 // Helper functions (see J2KHelper.cpp)
 // ==========================================================
+
+/**
+OpenJPEG messages of a load or save: passed on from the calling thread, only counted from OpenJPEG's threads
+*/
+struct J2KMessages {
+	int format_id;
+	std::thread::id caller;
+	std::atomic<int> from_threads;
+
+	explicit J2KMessages(int id) : format_id(id), caller(std::this_thread::get_id()), from_threads(0) {
+	}
+};
+
+/**
+Sets the codec's message handlers
+*/
+void J2KSetMessageHandlers(opj_codec_t *codec, J2KMessages *messages);
+
+/**
+One message for those OpenJPEG's threads raised while "decoding" or "encoding": an error if that failed
+*/
+void J2KReportThreadMessages(const J2KMessages *messages, const char *task, BOOL succeeded);
 
 /** 
 FreeImageIO wrapper
