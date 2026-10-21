@@ -24,6 +24,7 @@
 ; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
 ; - the J2K_UNSCALED and JP2_UNSCALED load flags
 ; - FreeImage_SetTagValue() writes the value as the tag's type: lists, rationals and strings; or takes a pointer
+; - 16-bit bitmaps get RGB 555 masks: FreeImage_Allocate(), FreeImage_AllocateEx() and ConvertPBITMAPtoFIM()
 
 ; - implemented all the remaining functions, except the ANSI variants
 ; - FreeImage_OpenMultiBitmap() takes Unicode paths
@@ -235,14 +236,17 @@ FreeImage_LookupSVGColor(colorName) {
 
 ; === Bitmap management functions ===
 
-FreeImage_Allocate(width, height, bpp:=32, imageType:=1, red_mask:=0xFF000000, green_mask:=0x00FF0000, blue_mask:=0x0000FF00) {
+FreeImage_Allocate(width, height, bpp:=32, imageType:=1, red_mask:="", green_mask:="", blue_mask:="") {
 ; function useful to create a new / empty bitmap
 ; for imageType see FreeImage_GetImageType()
+; blank masks: RGB 555 for a 16-bit bitmap, none at other depths
+   FIMdefaultMasks(bpp, red_mask, green_mask, blue_mask)
    Return DllCall(getFIMfunc("AllocateT"), "Int", imageType, "Int", width, "Int", height, "Int", bpp, "uint", red_mask, "uint", green_mask, "uint", blue_mask, "UPtr")
 }
 
-FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:=1, red_mask:=0xFF000000, green_mask:=0x00FF0000, blue_mask:=0x0000FF00, hPalette:=0) {
+FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:=1, red_mask:="", green_mask:="", blue_mask:="", hPalette:=0) {
 ; function useful to create a new / empty bitmap
+; blank masks: see FreeImage_Allocate()
 ; options - 0, or these combined with |:
 ; FI_COLOR_IS_RGB_COLOR = 0x00; the color's alpha is ignored: a 32-bit image gets alpha 255; a palettized one gets the nearest palette color
 ; FI_COLOR_IS_RGBA_COLOR = 0x01; 8-bit grey, 24 and 32-bit: the alpha blends the color over black; alpha 0 leaves the new area black (transparent at 32-bit)
@@ -261,6 +265,7 @@ FreeImage_AllocateEx(width, height, bpp:=32, RGBArray:="255,255,255,0", options:
       pColor := &RGBQUAD
    }
 
+   FIMdefaultMasks(bpp, red_mask, green_mask, blue_mask)
    Return DllCall(getFIMfunc("AllocateEx"), "Int", width, "Int", height, "Int", bpp, "UPtr", pColor, "Int", options, "UPtr", hPalette, "uint", red_mask, "uint", green_mask, "uint", blue_mask, "UPtr")
 }
 
@@ -605,6 +610,16 @@ FIMcolorTypeNames(modus, indexu:=0) {
        packedu .= "|" ColorsTypes[A_Index]
 
    Return packedu
+}
+
+FIMdefaultMasks(bpp, ByRef red_mask, ByRef green_mask, ByRef blue_mask) {
+; a blank mask is RGB 555's at 16 bits, the layout FreeImage reads such bitmaps in, and 0 at other depths
+   If (red_mask="")
+      red_mask := (bpp=16) ? 0x7C00 : 0
+   If (green_mask="")
+      green_mask := (bpp=16) ? 0x03E0 : 0
+   If (blue_mask="")
+      blue_mask := (bpp=16) ? 0x001F : 0
 }
 
 FIMcolorPointer(color, ByRef buf) {
@@ -2321,17 +2336,19 @@ ConvertPBITMAPtoFIM(pBitmap, doLowerbits:=0) {
   Gdip_GetImageDimensions(pBitmap, imgW, imgH)
   pixelFormat := (doLowerbits=1) ? "0x21808" : "0x26200A"
   bitsDepth := (doLowerbits=1) ? 24 : 32
+  rMask := redMASK, gMask := greenMASK, bMask := blueMASK
   If (doLowerbits=2)
   {
      pixelFormat := "0x21005"
      bitsDepth := 16
+     rMask := 0x7C00, gMask := 0x03E0, bMask := 0x001F   ; FI16_555 masks
   }
 
   E := Gdip_LockBits(pBitmap, 0, 0, imgW, imgH, Stride, Scan0, BitmapData, 1, pixelFormat)
   ; fnOutputDebug(A_ThisFunc "|" pixelFormat "|" bitsDepth "|" doLowerbits)
   IF !E
   {
-     hFIFimgA := FreeImage_ConvertFromRawBits(Scan0, imgW, imgH, Stride, bitsDepth, redMASK, greenMASK, blueMASK, 1)
+     hFIFimgA := FreeImage_ConvertFromRawBits(Scan0, imgW, imgH, Stride, bitsDepth, rMask, gMask, bMask, 1)
      Gdip_UnlockBits(pBitmap, BitmapData)
      Gdip_BitmapGetDPIresolution(pBitmap, dpiX, dpiY)
      FreeImage_SetDPIresolution(hFIFimgA, dpiX, dpiY)
