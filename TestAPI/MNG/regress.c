@@ -1124,6 +1124,133 @@ static void test_unlock_changed(void) {
 	}
 }
 
+/* 1 when both are the same size and every pixel is the same as 8-bit RGBA */
+static int same_rgba(FIBITMAP *a, FIBITMAP *b) {
+	FIBITMAP *ra = (a && b) ? FreeImage_ConvertTo32Bits(a) : NULL;
+	FIBITMAP *rb = ra ? FreeImage_ConvertTo32Bits(b) : NULL;
+	int same = rb && (FreeImage_GetWidth(ra) == FreeImage_GetWidth(rb)) && (FreeImage_GetHeight(ra) == FreeImage_GetHeight(rb));
+	unsigned y;
+	for (y = 0; same && y < FreeImage_GetHeight(ra); y++) {
+		same = !memcmp(FreeImage_GetScanLine(ra, y), FreeImage_GetScanLine(rb, y), FreeImage_GetWidth(ra) * 4);
+	}
+	if (ra) FreeImage_Unload(ra);
+	if (rb) FreeImage_Unload(rb);
+	return same;
+}
+
+/* the pages of a document as played; returns the page count */
+static int played_pages(const char *path, FIBITMAP **out, int max) {
+	FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	int i, n;
+	if (!mb) {
+		return -1;
+	}
+	n = FreeImage_GetPageCount(mb);
+	for (i = 0; i < n && i < max; i++) {
+		FIBITMAP *page = FreeImage_LockPage(mb, i);
+		out[i] = page ? FreeImage_Clone(page) : NULL;
+		if (page) FreeImage_UnlockPage(mb, page, FALSE);
+	}
+	FreeImage_CloseMultiBitmap(mb, 0);
+	return n;
+}
+
+/* a played page is the whole canvas: copied to a new document or edited in place, the animation plays as before */
+static void test_playback_pages(void) {
+	static const BYTE COLOUR[4][3] = { { 10, 20, 30 }, { 200, 0, 0 }, { 0, 200, 0 }, { 0, 0, 200 } };
+	static const WORD X[4] = { 0, 5, 20, 31 }, Y[4] = { 0, 3, 9, 17 };
+	FIBITMAP *played[4] = { NULL, NULL, NULL, NULL }, *got[4] = { NULL, NULL, NULL, NULL };
+	FIMULTIBITMAP *mb, *out;
+	char src[4096], copy[4096], edit[4096];
+	int i, k, n, bad = 0;
+
+	printf("MNG_PLAYBACK pages saved again\n");
+	snprintf(src, sizeof(src), "%s", scratch("mng_play_src.mng"));
+	snprintf(copy, sizeof(copy), "%s", scratch("mng_play_copy.mng"));
+	snprintf(edit, sizeof(edit), "%s", scratch("mng_play_edit.mng"));
+
+	for (k = 0; k < 2; k++) {
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, k ? edit : src, TRUE, FALSE, FALSE, 0);
+		for (i = 0; mb && i < 4; i++) {
+			FIBITMAP *dib = i ? solid(12, 10, COLOUR[i][0], COLOUR[i][1], COLOUR[i][2])
+							  : solid(48, 32, COLOUR[0][0], COLOUR[0][1], COLOUR[0][2]);
+			set_delay(dib, 100 + 10 * i);
+			set_place(dib, X[i], Y[i]);
+			set_canvas(dib, 48, 32);
+			set_loop(dib, 3);
+			FreeImage_AppendPage(mb, dib);
+			FreeImage_Unload(dib);
+		}
+		if (!mb || !FreeImage_CloseMultiBitmap(mb, 0)) {
+			fail("the animation was not written");
+			return;
+		}
+	}
+
+	if (played_pages(src, played, 4) != 4) {
+		fail("the animation does not play");
+		bad = 1;
+	}
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, src, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	out = FreeImage_OpenMultiBitmap(FIF_MNG, copy, TRUE, FALSE, FALSE, 0);
+	for (i = 0; mb && out && i < 4; i++) {
+		FIBITMAP *page = FreeImage_LockPage(mb, i);
+		if (!page) {
+			bad = 1;
+			continue;
+		}
+		if (anim_tag(page, "FrameLeft", -1) != 0 || anim_tag(page, "FrameTop", -1) != 0 ||
+			anim_tag(page, "BlendMethod", -1) != 1 || anim_tag(page, "DisposalMethod", -1) != -1 ||
+			anim_tag(page, "FrameTime", -1) != 100 + 10 * i || anim_tag(page, "Loop", -1) != 3 ||
+			anim_tag(page, "LogicalWidth", -1) != 48 || anim_tag(page, "LogicalHeight", -1) != 32) {
+			fail("played page %d: at (%ld,%ld), blend %ld, disposal %ld, %ld ms, loop %ld, canvas %ldx%ld", i,
+				 anim_tag(page, "FrameLeft", -1), anim_tag(page, "FrameTop", -1), anim_tag(page, "BlendMethod", -1),
+				 anim_tag(page, "DisposalMethod", -1), anim_tag(page, "FrameTime", -1), anim_tag(page, "Loop", -1),
+				 anim_tag(page, "LogicalWidth", -1), anim_tag(page, "LogicalHeight", -1));
+			bad = 1;
+		}
+		FreeImage_AppendPage(out, page);
+		FreeImage_UnlockPage(mb, page, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	if (!out || !FreeImage_CloseMultiBitmap(out, 0)) {
+		fail("the copy was not written");
+		bad = 1;
+	}
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, edit, FALSE, FALSE, FALSE, MNG_PLAYBACK);
+	if (!mb || !FreeImage_DeletePage(mb, 1) || !FreeImage_CloseMultiBitmap(mb, 0)) {
+		fail("page 1 could not be deleted in place");
+		bad = 1;
+	}
+
+	for (k = 0; k < 2; k++) {
+		static const int KEPT[2][4] = { { 0, 1, 2, 3 }, { 0, 2, 3, -1 } };
+		n = played_pages(k ? edit : copy, got, 4);
+		if (n != (k ? 3 : 4)) {
+			fail("the %s has %d pages", k ? "edited file" : "copy", n);
+			bad = 1;
+		}
+		for (i = 0; i < n && i < 4; i++) {
+			if (!same_rgba(got[i], played[KEPT[k][i]])) {
+				fail("%s page %d is %ux%u and differs from the original played", k ? "edited" : "copied", i,
+					 got[i] ? FreeImage_GetWidth(got[i]) : 0, got[i] ? FreeImage_GetHeight(got[i]) : 0);
+				bad = 1;
+			}
+			if (got[i]) FreeImage_Unload(got[i]);
+			got[i] = NULL;
+		}
+	}
+	if (!bad) {
+		ok("a played page is tagged as the whole canvas; copied or edited in place, the 48x32 animation plays as before");
+	}
+	for (i = 0; i < 4; i++) {
+		if (played[i]) FreeImage_Unload(played[i]);
+	}
+	remove(src);
+	remove(copy);
+	remove(edit);
+}
+
 /* --------------------------------------------------------------------- */
 
 int main(void) {
@@ -1150,6 +1277,7 @@ int main(void) {
 	test_save_flags();
 	test_multibitmap_memory();
 	test_unlock_changed();
+	test_playback_pages();
 	test_empty_document();
 	test_refuses_unsupported();
 

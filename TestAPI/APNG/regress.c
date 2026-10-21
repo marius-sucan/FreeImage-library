@@ -187,6 +187,110 @@ out:
 	remove(path);
 }
 
+/* a played page is the whole canvas: copied to a new document or edited in place, the animation plays as before */
+static void test_playback_pages(void) {
+	static const WORD X[4] = { 0, 5, 20, 31 }, Y[4] = { 0, 3, 9, 17 };
+	static const BYTE DISPOSE[4] = { 1, 2, 1, 1 };
+	const char *path = scratch("apng_play_src.png");
+	const char *copy = scratch("apng_play_copy.png");
+	const char *edit = scratch("apng_play_edit.png");
+	const WORD canvas_w = 48, canvas_h = 32;
+	const LONG loop = 3;
+	const BYTE over = 0;
+	FIBITMAP *frames[4], *played[4] = { NULL, NULL, NULL, NULL };
+	FIMULTIBITMAP *mb, *out;
+	int i, bad = 0;
+
+	printf("\n=== APNG_PLAYBACK pages saved again\n");
+
+	for (i = 0; i < 4; i++) {
+		const LONG ms = 100 + 10 * i;
+		frames[i] = i ? make_frame(12, 10, i, -1, 0, -1) : make_frame(canvas_w, canvas_h, 0, 4, 4, -1);
+		set_tag(frames[i], "FrameLeft", 0x1001, FIDT_SHORT, 2, &X[i]);
+		set_tag(frames[i], "FrameTop", 0x1002, FIDT_SHORT, 2, &Y[i]);
+		set_tag(frames[i], "FrameTime", 0x1005, FIDT_LONG, 4, &ms);
+		set_tag(frames[i], "DisposalMethod", 0x1006, FIDT_BYTE, 1, &DISPOSE[i]);
+		set_tag(frames[i], "BlendMethod", 0x1007, FIDT_BYTE, 1, &over);
+		set_tag(frames[i], "LogicalWidth", 0x0001, FIDT_SHORT, 2, &canvas_w);
+		set_tag(frames[i], "LogicalHeight", 0x0002, FIDT_SHORT, 2, &canvas_h);
+		set_tag(frames[i], "Loop", 0x0004, FIDT_LONG, 4, &loop);
+	}
+	if (!write_animation(path, frames, 4) || !write_animation(edit, frames, 4)) {
+		fail("could not write the animation");
+		goto out;
+	}
+
+	/* the played pages, copied to a new document */
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	out = FreeImage_OpenMultiBitmap(FIF_APNG, copy, TRUE, FALSE, FALSE, 0);
+	if (!mb || !out || FreeImage_GetPageCount(mb) != 4) {
+		fail("cannot open the animation and the copy");
+		if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+		if (out) FreeImage_CloseMultiBitmap(out, 0);
+		goto out;
+	}
+	for (i = 0; i < 4; i++) {
+		FIBITMAP *page = FreeImage_LockPage(mb, i);
+		if (!page) { fail("played page %d did not load", i); bad++; continue; }
+		played[i] = FreeImage_Clone(page);
+		if (tag_long(page, "FrameLeft", -1) != 0 || tag_long(page, "FrameTop", -1) != 0 ||
+			tag_long(page, "BlendMethod", -1) != 1 || tag_long(page, "DisposalMethod", -1) != -1 ||
+			tag_long(page, "FrameTime", -1) != 100 + 10 * i || tag_long(page, "Loop", -1) != loop ||
+			tag_long(page, "LogicalWidth", -1) != canvas_w || tag_long(page, "LogicalHeight", -1) != canvas_h) {
+			fail("played page %d: at (%ld,%ld), blend %ld, disposal %ld, %ld ms, loop %ld, canvas %ldx%ld", i,
+				 tag_long(page, "FrameLeft", -1), tag_long(page, "FrameTop", -1), tag_long(page, "BlendMethod", -1),
+				 tag_long(page, "DisposalMethod", -1), tag_long(page, "FrameTime", -1), tag_long(page, "Loop", -1),
+				 tag_long(page, "LogicalWidth", -1), tag_long(page, "LogicalHeight", -1));
+			bad++;
+		}
+		FreeImage_AppendPage(out, page);
+		FreeImage_UnlockPage(mb, page, FALSE);
+	}
+	FreeImage_CloseMultiBitmap(mb, 0);
+	if (!FreeImage_CloseMultiBitmap(out, 0)) { fail("the copy was not written"); bad++; }
+	if (!bad) ok("a played page is tagged as the whole canvas: at the origin, replacing it, with the file's canvas and loop");
+
+	/* the copy, and the original with page 1 deleted in place, play as the original did */
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, edit, FALSE, FALSE, FALSE, APNG_PLAYBACK);
+	if (!mb || !FreeImage_DeletePage(mb, 1) || !FreeImage_CloseMultiBitmap(mb, 0)) {
+		fail("page 1 could not be deleted in place");
+		bad++;
+	}
+	for (i = 0; i < 2; i++) {
+		static const int KEPT[2][4] = { { 0, 1, 2, 3 }, { 0, 2, 3, -1 } };
+		const int n = i ? 3 : 4;
+		int p;
+		mb = FreeImage_OpenMultiBitmap(FIF_APNG, i ? edit : copy, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+		if (!mb || FreeImage_GetPageCount(mb) != n) {
+			fail("%s: %d pages, expected %d", i ? "edited" : "copy", mb ? FreeImage_GetPageCount(mb) : 0, n);
+			bad++;
+			if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+			continue;
+		}
+		for (p = 0; p < n; p++) {
+			FIBITMAP *page = FreeImage_LockPage(mb, p);
+			const int d = (page && played[KEPT[i][p]]) ? pixel_diff(page, played[KEPT[i][p]]) : -1;
+			if (d != 0) {
+				fail("%s: page %d is %ux%u, %d pixel(s) differ from the played original", i ? "edited" : "copy", p,
+					 page ? FreeImage_GetWidth(page) : 0, page ? FreeImage_GetHeight(page) : 0, d);
+				bad++;
+			}
+			if (page) FreeImage_UnlockPage(mb, page, FALSE);
+		}
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	if (!bad) ok("the played pages copied, and the animation with a page deleted in place, play as the original on its %dx%d canvas", canvas_w, canvas_h);
+
+out:
+	for (i = 0; i < 4; i++) {
+		FreeImage_Unload(frames[i]);
+		if (played[i]) FreeImage_Unload(played[i]);
+	}
+	remove(path);
+	remove(copy);
+	remove(edit);
+}
+
 static void test_difference_region(void) {
 	const char *path = scratch("apng_diff.png");
 	FIBITMAP *frames[3];
@@ -1618,6 +1722,7 @@ int main(void) {
 	printf("FreeImage %s - APNG round-trip tests\n", FreeImage_GetVersion());
 
 	test_roundtrip();
+	test_playback_pages();
 	test_difference_region();
 	test_single_page();
 	test_metadata();

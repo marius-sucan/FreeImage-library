@@ -901,6 +901,73 @@ GifPlaybackReadPageInfo(FreeImageIO *io, fi_handle handle, GIFinfo *info, int pa
 	return PageInfo(disposal_method, left, top, width, height);
 }
 
+// canvas and loop count go on every frame, so deleting page 0 keeps them
+static void
+GifSetCanvasTags(FreeImageIO *io, fi_handle handle, GIFinfo *info, FIBITMAP *dib) {
+	if( !info->canvas_cached ) {
+		BYTE b = 0;
+		WORD w = 0;
+
+		//Logical Screen Descriptor
+		io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET);
+		WORD logicalwidth = 0, logicalheight = 0;
+		io->read_proc(&logicalwidth, 2, 1, handle);
+		io->read_proc(&logicalheight, 2, 1, handle);
+#ifdef FREEIMAGE_BIGENDIAN
+		SwapShort(&logicalwidth);
+		SwapShort(&logicalheight);
+#endif
+
+		//Application Extension
+		LONG loop = 1; //If no AE with a loop count is found, the default must be 1
+		for( size_t idx = 0; idx < info->application_extension_offsets.size(); idx++ ) {
+			io->seek_proc(handle, info->application_extension_offsets[idx], SEEK_SET);
+			io->read_proc(&b, 1, 1, handle);
+			if( b == 11 ) { //All AEs start with an 11 byte sub-block to determine what type of AE it is
+				char buf[11];
+				io->read_proc(buf, 11, 1, handle);
+				if( !memcmp(buf, "NETSCAPE2.0", 11) || !memcmp(buf, "ANIMEXTS1.0", 11) ) { //Not everybody recognizes ANIMEXTS1.0 but it is valid
+					io->read_proc(&b, 1, 1, handle);
+					if( b == 3 ) { //we're supposed to have a 3 byte sub-block now
+						io->read_proc(&b, 1, 1, handle); //this should be 0x01 but isn't really important
+						io->read_proc(&w, 2, 1, handle);
+#ifdef FREEIMAGE_BIGENDIAN
+						SwapShort(&w);
+#endif
+						loop = w;
+						if( loop > 0 ) loop++;
+						break;
+					}
+				}
+			}
+		}
+
+		info->canvas_width = logicalwidth;
+		info->canvas_height = logicalheight;
+		info->loop_count = loop;
+		info->canvas_cached = TRUE;
+	}
+	WORD logicalwidth = info->canvas_width;
+	WORD logicalheight = info->canvas_height;
+	LONG loop = info->loop_count;
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
+}
+
+// a played page replaces the whole canvas: at the origin, not blended
+static void
+GifSetPlaybackTags(FreeImageIO *io, fi_handle handle, GIFinfo *info, FIBITMAP *dib, int delay_time) {
+	LONG frametime = delay_time;
+	WORD origin = 0;
+	BYTE overwrite = 1;
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &frametime);
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &origin);
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &origin);
+	FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &overwrite);
+	GifSetCanvasTags(io, handle, info, dib);
+}
+
 static FIBITMAP * DLL_CALLCONV 
 Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	if( data == NULL ) {
@@ -952,7 +1019,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 #endif
 					delay_time = w * 10; //convert cs to ms
 				}
-				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+				GifSetPlaybackTags(io, handle, info, dib, delay_time);
 				return dib;
 			}
 
@@ -978,7 +1045,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				if( dib == NULL ) {
 					throw FI_MSG_ERROR_DIB_MEMORY;
 				}
-				FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &cache.delay_time);
+				GifSetPlaybackTags(io, handle, info, dib, cache.delay_time);
 				return dib;
 			}
 
@@ -1001,7 +1068,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						GifPlaybackCompositeFrame(canvas, pagedib, thisframe, logicalwidth, logicalheight, &delay_time);
 						FreeImage_Unload(pagedib);
 					}
-					FreeImage_SetMetadataEx(FIMD_ANIMATION, canvas, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+					GifSetPlaybackTags(io, handle, info, canvas, delay_time);
 
 					dib = FreeImage_Clone(canvas);
 					if( dib == NULL ) {
@@ -1119,8 +1186,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 			}
 
-			//setup frame time
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
+			GifSetPlaybackTags(io, handle, info, dib, delay_time);
 
 			//seed the cache; pageinfo[0] describes page end
 			cache.clear();
@@ -1303,55 +1369,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 		}
 
-		// canvas and loop count go on every frame, so deleting page 0 keeps them
-		if( !info->canvas_cached ) {
-			//Logical Screen Descriptor
-			io->seek_proc(handle, info->lsd_offset + 6, SEEK_SET);
-			WORD logicalwidth, logicalheight;
-			io->read_proc(&logicalwidth, 2, 1, handle);
-			io->read_proc(&logicalheight, 2, 1, handle);
-#ifdef FREEIMAGE_BIGENDIAN
-			SwapShort(&logicalwidth);
-			SwapShort(&logicalheight);
-#endif
-
-			//Application Extension
-			LONG loop = 1; //If no AE with a loop count is found, the default must be 1
-			for( size_t idx = 0; idx < info->application_extension_offsets.size(); idx++ ) {
-				io->seek_proc(handle, info->application_extension_offsets[idx], SEEK_SET);
-				io->read_proc(&b, 1, 1, handle);
-				if( b == 11 ) { //All AEs start with an 11 byte sub-block to determine what type of AE it is
-					char buf[11];
-					io->read_proc(buf, 11, 1, handle);
-					if( !memcmp(buf, "NETSCAPE2.0", 11) || !memcmp(buf, "ANIMEXTS1.0", 11) ) { //Not everybody recognizes ANIMEXTS1.0 but it is valid
-						io->read_proc(&b, 1, 1, handle);
-						if( b == 3 ) { //we're supposed to have a 3 byte sub-block now
-							io->read_proc(&b, 1, 1, handle); //this should be 0x01 but isn't really important
-							io->read_proc(&w, 2, 1, handle);
-#ifdef FREEIMAGE_BIGENDIAN
-							SwapShort(&w);
-#endif
-							loop = w;
-							if( loop > 0 ) loop++;
-							break;
-						}
-					}
-				}
-			}
-
-			info->canvas_width = logicalwidth;
-			info->canvas_height = logicalheight;
-			info->loop_count = loop;
-			info->canvas_cached = TRUE;
-		}
-		{
-			WORD logicalwidth = info->canvas_width;
-			WORD logicalheight = info->canvas_height;
-			LONG loop = info->loop_count;
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
-			FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
-		}
+		GifSetCanvasTags(io, handle, info, dib);
 
 		//global palette and comments stay on page 0
 		if( page == 0 ) {

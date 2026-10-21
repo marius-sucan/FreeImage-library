@@ -1787,26 +1787,29 @@ DelayToMilliseconds(const MNGinfo *info, DWORD ticks) {
 	return (LONG)(ms + 0.5);
 }
 
+// a played page replaces the whole canvas
 static void
-SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page) {
+SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page, BOOL playback) {
 	const MNGFrame& frame = info->frames[page];
 
 	LONG duration = DelayToMilliseconds(info, frame.delay_ticks);
-	WORD left = (WORD)MIN(MAX(frame.x, (LONG)0), (LONG)0xFFFF);
-	WORD top = (WORD)MIN(MAX(frame.y, (LONG)0), (LONG)0xFFFF);
+	WORD left = playback ? 0 : (WORD)MIN(MAX(frame.x, (LONG)0), (LONG)0xFFFF);
+	WORD top = playback ? 0 : (WORD)MIN(MAX(frame.y, (LONG)0), (LONG)0xFFFF);
 
 	// a background layer before the next frame = dispose to background
 	BYTE disposal = GIF_DISPOSAL_LEAVE;
 	if((page + 1 < (int)info->frames.size()) && info->frames[page + 1].restore_background) {
 		disposal = GIF_DISPOSAL_BACKGROUND;
 	}
-	// MNG layers always blend over
-	BYTE blend = 0;
+	// MNG layers blend over
+	BYTE blend = playback ? 1 : 0;
 
 	SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
 	SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
 	SetAnimTag(dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &top);
-	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	if(!playback) {
+		SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	}
 	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
 	// file-level tags go on every frame
@@ -2204,7 +2207,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		CopyColorDescription(dib, info->description);
 	}
 
-	SetFrameMetadata(dib, info, page);
+	SetFrameMetadata(dib, info, page, playback);
 
 	// file-level text stays on page 0, as GIF's comments do
 	if(page == 0) {

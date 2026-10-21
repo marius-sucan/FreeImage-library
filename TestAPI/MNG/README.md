@@ -135,6 +135,10 @@ single image, and `FreeImage_OpenMultiBitmap` with `create_new` plus
 - **Editing.** Delete, insert and move, then reopen and check the order - and
   that a page which moved took its own delay with it. `FreeImage_UnlockPage`
   with `changed = TRUE` reaches the file and leaves its neighbours alone.
+- **Played pages saved again.** An `MNG_PLAYBACK` page is the whole canvas and
+  says so: at the origin, replacing what is there, with the file's canvas and
+  loop count. Copied to a new document, or with a page deleted in place, the
+  animation plays as before on the same canvas.
 - **Pages in different colours**, Adobe RGB then P3 and the other way round:
   each page keeps its profile, and the played canvas is page 0's, the other
   page converted to it.

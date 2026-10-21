@@ -825,23 +825,25 @@ GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, FITAG **tag) 
 	return FALSE;
 }
 
-// FrameTime in ms; DisposalMethod in GIF numbering
+// FrameTime in ms; DisposalMethod in GIF numbering; a played page replaces the whole canvas
 static void
-SetFrameMetadata(FIBITMAP *dib, const APNGinfo *info, int page) {
+SetFrameMetadata(FIBITMAP *dib, const APNGinfo *info, int page, BOOL playback) {
 	const APNGFrame& frame = info->frames[page];
 
 	// delay_num/delay_den seconds, rounded to ms
 	LONG duration = (LONG)(((DWORD)frame.delay_num * 1000 + frame.delay_den / 2) / frame.delay_den);
-	WORD left = (WORD)MIN(frame.x_offset, (DWORD)0xFFFF);
-	WORD top = (WORD)MIN(frame.y_offset, (DWORD)0xFFFF);
+	WORD left = playback ? 0 : (WORD)MIN(frame.x_offset, (DWORD)0xFFFF);
+	WORD top = playback ? 0 : (WORD)MIN(frame.y_offset, (DWORD)0xFFFF);
 	BYTE disposal = (frame.dispose_op == APNG_DISPOSE_OP_BACKGROUND) ? GIF_DISPOSAL_BACKGROUND :
 					(frame.dispose_op == APNG_DISPOSE_OP_PREVIOUS) ? GIF_DISPOSAL_PREVIOUS : GIF_DISPOSAL_LEAVE;
-	BYTE blend = (frame.blend_op == APNG_BLEND_OP_SOURCE) ? 1 : 0;
+	BYTE blend = (playback || (frame.blend_op == APNG_BLEND_OP_SOURCE)) ? 1 : 0;
 
 	SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
 	SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
 	SetAnimTag(dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &top);
-	SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	if(!playback) {
+		SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	}
 	SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
 	// canvas and loop count on every frame, so deleting page 0 keeps them
@@ -1533,7 +1535,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		if(info->animated) {
-			SetFrameMetadata(dib, info, page);
+			SetFrameMetadata(dib, info, page, playback);
 		}
 
 		return dib;

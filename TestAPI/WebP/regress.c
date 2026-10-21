@@ -511,6 +511,232 @@ static void mixed_profiles(void) {
     free(white);
 }
 
+/* ------------------------------------------------------------------ played pages saved again */
+
+static void set_anim(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, DWORD value) {
+    FITAG *tag = FreeImage_CreateTag();
+    BYTE b = (BYTE)value;
+    WORD w = (WORD)value;
+    DWORD length = (type == FIDT_BYTE) ? 1 : (type == FIDT_SHORT) ? 2 : 4;
+    if (!tag) return;
+    FreeImage_SetTagKey(tag, key);
+    FreeImage_SetTagType(tag, type);
+    FreeImage_SetTagCount(tag, 1);
+    FreeImage_SetTagLength(tag, length);
+    FreeImage_SetTagValue(tag, (type == FIDT_BYTE) ? (const void *)&b : (type == FIDT_SHORT) ? (const void *)&w : (const void *)&value);
+    FreeImage_SetMetadata(FIMD_ANIMATION, dib, key, tag);
+    FreeImage_DeleteTag(tag);
+}
+
+static long get_anim(FIBITMAP *dib, const char *key) {
+    FITAG *tag = NULL;
+    if (!FreeImage_GetMetadata(FIMD_ANIMATION, dib, key, &tag) || !tag || !FreeImage_GetTagValue(tag)) return -1;
+    switch (FreeImage_GetTagType(tag)) {
+        case FIDT_BYTE: return *(const BYTE *)FreeImage_GetTagValue(tag);
+        case FIDT_SHORT: return *(const WORD *)FreeImage_GetTagValue(tag);
+        case FIDT_LONG: return *(const LONG *)FreeImage_GetTagValue(tag);
+        default: return -1;
+    }
+}
+
+/* the pixels that differ visibly as 8-bit RGBA: alpha, or colour where alpha is not 0; -1 when not comparable */
+static int visible_diff(FIBITMAP *a, FIBITMAP *b) {
+    FIBITMAP *ra = FreeImage_ConvertTo32Bits(a), *rb = FreeImage_ConvertTo32Bits(b);
+    unsigned w, h, x, y;
+    int n = 0;
+    if (!ra || !rb || FreeImage_GetWidth(ra) != FreeImage_GetWidth(rb) || FreeImage_GetHeight(ra) != FreeImage_GetHeight(rb)) {
+        n = -1;
+    } else {
+        w = FreeImage_GetWidth(ra); h = FreeImage_GetHeight(ra);
+        for (y = 0; y < h; y++) {
+            const BYTE *pa = FreeImage_GetScanLine(ra, y), *pb = FreeImage_GetScanLine(rb, y);
+            for (x = 0; x < w; x++, pa += 4, pb += 4) {
+                if (pa[FI_RGBA_ALPHA] != pb[FI_RGBA_ALPHA] || (pa[FI_RGBA_ALPHA] && memcmp(pa, pb, 4))) n++;
+            }
+        }
+    }
+    if (ra) FreeImage_Unload(ra);
+    if (rb) FreeImage_Unload(rb);
+    return n;
+}
+
+/* translucent pixels that depend on (x, y, seed) */
+static FIBITMAP *translucent(unsigned w, unsigned h, int seed) {
+    FIBITMAP *dib = FreeImage_Allocate(w, h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    unsigned x, y;
+    if (!dib) return NULL;
+    for (y = 0; y < h; y++) {
+        BYTE *line = FreeImage_GetScanLine(dib, h - 1 - y);
+        for (x = 0; x < w; x++, line += 4) {
+            line[FI_RGBA_RED] = (BYTE)(x * 9 + seed * 40);
+            line[FI_RGBA_GREEN] = (BYTE)(y * 13 + seed * 70);
+            line[FI_RGBA_BLUE] = (BYTE)(seed * 90 + x * y);
+            line[FI_RGBA_ALPHA] = (BYTE)(((x + y + seed) % 3 == 0) ? 255 : 60 + ((x * 7 + y * 3) % 150));
+        }
+    }
+    return dib;
+}
+
+/* the pages of a document as played, or NULL */
+static int played_pages(const char *path, FREE_IMAGE_FORMAT fif, int flags, FIBITMAP **out, int max) {
+    FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(fif, path, FALSE, TRUE, TRUE, flags);
+    int i, n;
+    if (!mb) return -1;
+    n = FreeImage_GetPageCount(mb);
+    for (i = 0; i < n && i < max; i++) {
+        FIBITMAP *page = FreeImage_LockPage(mb, i);
+        out[i] = page ? FreeImage_Clone(page) : NULL;
+        if (page) FreeImage_UnlockPage(mb, page, FALSE);
+    }
+    FreeImage_CloseMultiBitmap(mb, 0);
+    return n;
+}
+
+/* every played page of src copied to a new WebP, lossless */
+static int copy_played(const char *src, FREE_IMAGE_FORMAT fif, int flags, const char *dst) {
+    FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(fif, src, FALSE, TRUE, TRUE, flags);
+    FIMULTIBITMAP *out = FreeImage_OpenMultiBitmap(FIF_WEBP, dst, TRUE, FALSE, TRUE, 0);
+    int i, done = (mb && out) ? 1 : 0;
+    for (i = 0; done && i < FreeImage_GetPageCount(mb); i++) {
+        FIBITMAP *page = FreeImage_LockPage(mb, i);
+        done = page && FreeImage_AppendPage(out, page);
+        if (page) FreeImage_UnlockPage(mb, page, FALSE);
+    }
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    if (out && !FreeImage_CloseMultiBitmap(out, WEBP_LOSSLESS)) done = 0;
+    return done;
+}
+
+/* a played page is the whole canvas: copied to a new document or edited in place, the animation plays as before */
+static void playback_pages(void) {
+    static const WORD X[4] = { 0, 6, 20, 30 }, Y[4] = { 0, 4, 10, 18 };
+    static const BYTE DISPOSE[4] = { 1, 2, 1, 1 };
+    const char *src = "fi_webp_rt_play_src.webp", *copy = "fi_webp_rt_play_copy.webp", *edit = "fi_webp_rt_play_edit.webp";
+    char src_path[512], copy_path[512], edit_path[512];
+    FIBITMAP *played[4] = { NULL, NULL, NULL, NULL }, *got[4] = { NULL, NULL, NULL, NULL };
+    FIMULTIBITMAP *mb;
+    int i, k, n, bad = 0;
+
+    printf("WEBP_PLAYBACK pages saved again\n");
+    snprintf(src_path, sizeof(src_path), "%s", scratch(src));
+    snprintf(copy_path, sizeof(copy_path), "%s", scratch(copy));
+    snprintf(edit_path, sizeof(edit_path), "%s", scratch(edit));
+
+    for (k = 0; k < 2; k++) {
+        mb = FreeImage_OpenMultiBitmap(FIF_WEBP, k ? edit_path : src_path, TRUE, FALSE, TRUE, 0);
+        for (i = 0; mb && i < 4; i++) {
+            FIBITMAP *frame = i ? translucent(16, 12, i) : translucent(64, 48, 0);
+            set_anim(frame, "FrameLeft", FIDT_SHORT, X[i]);
+            set_anim(frame, "FrameTop", FIDT_SHORT, Y[i]);
+            set_anim(frame, "FrameTime", FIDT_LONG, 100 + 10 * i);
+            set_anim(frame, "DisposalMethod", FIDT_BYTE, DISPOSE[i]);
+            set_anim(frame, "BlendMethod", FIDT_BYTE, 0);
+            set_anim(frame, "LogicalWidth", FIDT_SHORT, 64);
+            set_anim(frame, "LogicalHeight", FIDT_SHORT, 48);
+            set_anim(frame, "Loop", FIDT_LONG, 3);
+            FreeImage_AppendPage(mb, frame);
+            FreeImage_Unload(frame);
+        }
+        if (!mb || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS)) { fail("playback pages: the animation was not written"); return; }
+    }
+
+    if (played_pages(src_path, FIF_WEBP, WEBP_PLAYBACK, played, 4) != 4) { fail("playback pages: the animation does not play"); bad++; }
+    for (i = 0; i < 4 && played[i]; i++) {
+        if (get_anim(played[i], "FrameLeft") != 0 || get_anim(played[i], "FrameTop") != 0 || get_anim(played[i], "BlendMethod") != 1 ||
+            get_anim(played[i], "DisposalMethod") != -1 || get_anim(played[i], "FrameTime") != 100 + 10 * i ||
+            get_anim(played[i], "Loop") != 3 || get_anim(played[i], "LogicalWidth") != 64 || get_anim(played[i], "LogicalHeight") != 48) {
+            fail("playback pages: page %d at (%ld,%ld), blend %ld, disposal %ld, %ld ms, loop %ld, canvas %ldx%ld", i,
+                 get_anim(played[i], "FrameLeft"), get_anim(played[i], "FrameTop"), get_anim(played[i], "BlendMethod"),
+                 get_anim(played[i], "DisposalMethod"), get_anim(played[i], "FrameTime"), get_anim(played[i], "Loop"),
+                 get_anim(played[i], "LogicalWidth"), get_anim(played[i], "LogicalHeight"));
+            bad++;
+        }
+    }
+    if (!copy_played(src_path, FIF_WEBP, WEBP_PLAYBACK, copy_path)) { fail("playback pages: the copy was not written"); bad++; }
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, edit_path, FALSE, FALSE, TRUE, WEBP_PLAYBACK);
+    if (!mb || !FreeImage_DeletePage(mb, 1) || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS)) { fail("playback pages: page 1 could not be deleted in place"); bad++; }
+
+    for (k = 0; k < 2; k++) {
+        static const int KEPT[2][4] = { { 0, 1, 2, 3 }, { 0, 2, 3, -1 } };
+        n = played_pages(k ? edit_path : copy_path, FIF_WEBP, WEBP_PLAYBACK, got, 4);
+        if (n != (k ? 3 : 4)) { fail("playback pages: the %s has %d pages", k ? "edited file" : "copy", n); bad++; }
+        for (i = 0; i < n && i < 4; i++) {
+            const int d = (got[i] && played[KEPT[k][i]]) ? visible_diff(got[i], played[KEPT[k][i]]) : -1;
+            if (d) {
+                fail("playback pages: %s page %d is %ux%u, %d pixel(s) differ from the original played", k ? "edited" : "copied", i,
+                     got[i] ? FreeImage_GetWidth(got[i]) : 0, got[i] ? FreeImage_GetHeight(got[i]) : 0, d);
+                bad++;
+            }
+            if (got[i]) FreeImage_Unload(got[i]);
+            got[i] = NULL;
+        }
+    }
+    if (!bad) printf("  ok %-34s whole-canvas tags; copied or edited in place, the 64x48 animation plays as before\n", "played pages saved again");
+    for (i = 0; i < 4; i++) if (played[i]) FreeImage_Unload(played[i]);
+    remove(src_path);
+    remove(copy_path);
+    remove(edit_path);
+}
+
+/* a GIF played and saved as WebP: a disposed frame leaves no trail, the loop count stays */
+static void gif_playback_pages(void) {
+    char gif_path[512], webp_path[512];
+    FIBITMAP *gif_played[2] = { NULL, NULL }, *webp_played[2] = { NULL, NULL };
+    FIMULTIBITMAP *mb;
+    int i, bad = 0;
+
+    printf("GIF_PLAYBACK pages saved as WebP\n");
+    snprintf(gif_path, sizeof(gif_path), "%s", scratch("fi_webp_rt_play.gif"));
+    snprintf(webp_path, sizeof(webp_path), "%s", scratch("fi_webp_rt_play_gif.webp"));
+
+    mb = FreeImage_OpenMultiBitmap(FIF_GIF, gif_path, TRUE, FALSE, TRUE, 0);
+    for (i = 0; mb && i < 2; i++) {
+        FIBITMAP *frame = FreeImage_Allocate(16, 12, 8, 0, 0, 0);
+        RGBQUAD *pal = FreeImage_GetPalette(frame);
+        unsigned x, y;
+        memset(pal, 0, 256 * sizeof(RGBQUAD));
+        pal[1].rgbRed = 255;
+        pal[2].rgbBlue = 255;
+        for (y = 0; y < 12; y++) for (x = 0; x < 16; x++) FreeImage_GetScanLine(frame, y)[x] = (BYTE)(i + 1);
+        set_anim(frame, "FrameLeft", FIDT_SHORT, i * 16);
+        set_anim(frame, "FrameTop", FIDT_SHORT, i * 12);
+        set_anim(frame, "FrameTime", FIDT_LONG, 100);
+        set_anim(frame, "DisposalMethod", FIDT_BYTE, i ? 1 : 2);
+        set_anim(frame, "LogicalWidth", FIDT_SHORT, 32);
+        set_anim(frame, "LogicalHeight", FIDT_SHORT, 24);
+        set_anim(frame, "Loop", FIDT_LONG, 3);
+        FreeImage_AppendPage(mb, frame);
+        FreeImage_Unload(frame);
+    }
+    if (!mb || !FreeImage_CloseMultiBitmap(mb, 0)) { fail("GIF playback: the GIF was not written"); return; }
+
+    if (played_pages(gif_path, FIF_GIF, GIF_PLAYBACK, gif_played, 2) != 2 || !gif_played[1]) {
+        fail("GIF playback: the GIF does not play");
+        bad++;
+    } else if (get_anim(gif_played[1], "FrameLeft") != 0 || get_anim(gif_played[1], "BlendMethod") != 1 ||
+               get_anim(gif_played[1], "Loop") != 3 || get_anim(gif_played[1], "LogicalWidth") != 32) {
+        fail("GIF playback: page 1 at %ld, blend %ld, loop %ld, canvas width %ld", get_anim(gif_played[1], "FrameLeft"),
+             get_anim(gif_played[1], "BlendMethod"), get_anim(gif_played[1], "Loop"), get_anim(gif_played[1], "LogicalWidth"));
+        bad++;
+    }
+    if (!copy_played(gif_path, FIF_GIF, GIF_PLAYBACK, webp_path) || played_pages(webp_path, FIF_WEBP, WEBP_PLAYBACK, webp_played, 2) != 2) {
+        fail("GIF playback: the WebP was not written or does not play");
+        bad++;
+    }
+    for (i = 0; i < 2; i++) {
+        const int d = (gif_played[i] && webp_played[i]) ? visible_diff(gif_played[i], webp_played[i]) : -1;
+        if (d) { fail("GIF playback: WebP frame %d, %d pixel(s) differ from the GIF's", i, d); bad++; }
+    }
+    if (webp_played[0] && get_anim(webp_played[0], "Loop") != 3) { fail("GIF playback: the WebP loops %ld times, not 3", get_anim(webp_played[0], "Loop")); bad++; }
+    if (!bad) printf("  ok %-34s the disposed frame leaves no trail, the loop count stays\n", "GIF_PLAYBACK pages as WebP");
+    for (i = 0; i < 2; i++) {
+        if (gif_played[i]) FreeImage_Unload(gif_played[i]);
+        if (webp_played[i]) FreeImage_Unload(webp_played[i]);
+    }
+    remove(gif_path);
+    remove(webp_path);
+}
+
 int main(void) {
     FIBITMAP *png, *rgb, *rgba, *holes, *meta, *grey, *tiny, *reloaded;
     BYTE icc[128];
@@ -610,6 +836,8 @@ int main(void) {
 
     unfinished_animation(rgba);
     mixed_profiles();
+    playback_pages();
+    gif_playback_pages();
 
     FreeImage_Unload(rgb); FreeImage_Unload(rgba); FreeImage_Unload(holes);
     FreeImage_Unload(grey); FreeImage_Unload(tiny); FreeImage_Unload(meta);

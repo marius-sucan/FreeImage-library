@@ -624,19 +624,21 @@ DecodeCompositedFrame(WebPPluginData *state, int page) {
 	return dib;
 }
 
-// GIF convention: FrameTime in ms, DisposalMethod 1 = leave, 2 = background
+// GIF convention: FrameTime in ms, DisposalMethod 1 = leave, 2 = background; a played page replaces the whole canvas
 static void
-SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameInfo *webp_frame, int page) {
+SetFrameMetadata(FIBITMAP *dib, const WebPPluginData *state, const WebPMuxFrameInfo *webp_frame, BOOL playback) {
 	LONG duration = (LONG)webp_frame->duration;
-	WORD left = (WORD)webp_frame->x_offset;
-	WORD top = (WORD)webp_frame->y_offset;
+	WORD left = playback ? 0 : (WORD)webp_frame->x_offset;
+	WORD top = playback ? 0 : (WORD)webp_frame->y_offset;
 	BYTE disposal = (webp_frame->dispose_method == WEBP_MUX_DISPOSE_BACKGROUND) ? 2 : 1;
-	BYTE blend = (webp_frame->blend_method == WEBP_MUX_NO_BLEND) ? 1 : 0;
+	BYTE blend = (playback || (webp_frame->blend_method == WEBP_MUX_NO_BLEND)) ? 1 : 0;
 
 	WebP_SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
 	WebP_SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
 	WebP_SetAnimTag(dib, "FrameTop", ANIMTAG_FRAMETOP, FIDT_SHORT, 1, 2, &top);
-	WebP_SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	if(!playback) {
+		WebP_SetAnimTag(dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &disposal);
+	}
 	WebP_SetAnimTag(dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &blend);
 
 	// on every frame, so deleting page 0 keeps the canvas
@@ -775,7 +777,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 
 			if(state->is_animation) {
-				SetFrameMetadata(dib, state, &webp_frame, page);
+				SetFrameMetadata(dib, state, &webp_frame, playback);
 			}
 
 			// get ICC profile
