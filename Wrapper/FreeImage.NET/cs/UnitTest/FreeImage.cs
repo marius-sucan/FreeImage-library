@@ -13945,6 +13945,9 @@ namespace FreeImageAPI.IO
 		/// </summary>
 		public static readonly FreeImageIO io;
 
+		// bytes per Stream call, few enough to stay off the large object heap
+		private const int ChunkSize = 81920;
+
 		/// <summary>
 		/// Initializes a new instances which can be used to
 		/// create a FreeImage compatible <see cref="FreeImageAPI.IO.FreeImageIO"/> structure.
@@ -13963,29 +13966,31 @@ namespace FreeImageAPI.IO
 		static unsafe uint streamRead(IntPtr buffer, uint size, uint count, fi_handle handle)
 		{
 			Stream stream = handle.GetObject() as Stream;
-			if ((stream == null) || (!stream.CanRead))
+			if ((stream == null) || (!stream.CanRead) || (size == 0) || (count == 0))
 			{
 				return 0;
 			}
-			uint readCount = 0;
+			ulong total = (ulong)size * count;
+			byte[] bufferTemp = new byte[(int)Math.Min(total, (ulong)ChunkSize)];
 			byte* ptr = (byte*)buffer;
-			byte[] bufferTemp = new byte[size];
-			int read;
-			while (readCount < count)
+			ulong done = 0;
+			while (done < total)
 			{
-				read = stream.Read(bufferTemp, 0, (int)size);
-				if (read != (int)size)
+				int read = stream.Read(bufferTemp, 0, (int)Math.Min(total - done, (ulong)bufferTemp.Length));
+				if (read <= 0)
 				{
-					stream.Seek(-read, SeekOrigin.Current);
 					break;
 				}
-				for (int i = 0; i < read; i++, ptr++)
-				{
-					*ptr = bufferTemp[i];
-				}
-				readCount++;
+				Marshal.Copy(bufferTemp, 0, new IntPtr(ptr + done), read);
+				done += (ulong)read;
 			}
-			return (uint)readCount;
+			// the bytes of an incomplete item stay in the stream
+			long partial = (long)(done % size);
+			if ((partial != 0) && stream.CanSeek)
+			{
+				stream.Seek(-partial, SeekOrigin.Current);
+			}
+			return (uint)(done / size);
 		}
 
 		/// <summary>
@@ -13994,30 +13999,29 @@ namespace FreeImageAPI.IO
 		static unsafe uint streamWrite(IntPtr buffer, uint size, uint count, fi_handle handle)
 		{
 			Stream stream = handle.GetObject() as Stream;
-			if ((stream == null) || (!stream.CanWrite))
+			if ((stream == null) || (!stream.CanWrite) || (size == 0) || (count == 0))
 			{
 				return 0;
 			}
-			uint writeCount = 0;
-			byte[] bufferTemp = new byte[size];
+			ulong total = (ulong)size * count;
+			byte[] bufferTemp = new byte[(int)Math.Min(total, (ulong)ChunkSize)];
 			byte* ptr = (byte*)buffer;
-			while (writeCount < count)
+			ulong done = 0;
+			while (done < total)
 			{
-				for (int i = 0; i < size; i++, ptr++)
-				{
-					bufferTemp[i] = *ptr;
-				}
+				int chunk = (int)Math.Min(total - done, (ulong)bufferTemp.Length);
+				Marshal.Copy(new IntPtr(ptr + done), bufferTemp, 0, chunk);
 				try
 				{
-					stream.Write(bufferTemp, 0, bufferTemp.Length);
+					stream.Write(bufferTemp, 0, chunk);
 				}
 				catch
 				{
-					return writeCount;
+					break;
 				}
-				writeCount++;
+				done += (ulong)chunk;
 			}
-			return writeCount;
+			return (uint)(done / size);
 		}
 
 		/// <summary>
