@@ -639,7 +639,7 @@ KeptRows(int rows, int height, const char *error) {
 		return FALSE;
 	}
 	if (rows < height) {
-		FreeImage_OutputMessageProc(s_format_id, error);
+		FreeImage_OutputMessageProc(s_format_id, "%s", error);
 		PartialImageWarning(s_format_id, rows, height);
 	}
 	return TRUE;
@@ -1093,7 +1093,7 @@ LoadWindowsBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_o
 			FreeImage_Unload(dib);
 		}
 		if(message) {
-			FreeImage_OutputMessageProc(s_format_id, message);
+			FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		}
 	}
 
@@ -1325,7 +1325,7 @@ LoadOS22XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 		if (dib) {
 			FreeImage_Unload(dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 	}
 
 	return NULL;
@@ -1488,7 +1488,7 @@ LoadOS21XBMP(FreeImageIO *io, fi_handle handle, int flags, INT64 bitmap_bits_off
 		if (dib) {
 			FreeImage_Unload(dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 	}
 
 	return NULL;

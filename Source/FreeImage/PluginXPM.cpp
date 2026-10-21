@@ -382,7 +382,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		return dib;
 	} catch(const char *text) {
-       FreeImage_OutputMessageProc(s_format_id, text);
+       FreeImage_OutputMessageProc(s_format_id, "%s", text);
 
        free(str);
        if( dib != NULL )
@@ -390,7 +390,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
        return NULL;
     } catch(const std::exception& e) {
-       FreeImage_OutputMessageProc(s_format_id, e.what());
+       FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 
        free(str);
        if( dib != NULL )

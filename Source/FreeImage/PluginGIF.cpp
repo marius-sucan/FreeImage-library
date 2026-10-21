@@ -739,11 +739,11 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 				if( info->image_descriptor_offsets.empty() ) {
 					throw cut;
 				}
-				FreeImage_OutputMessageProc(s_format_id, cut);
+				FreeImage_OutputMessageProc(s_format_id, "%s", cut);
 				info->cut = TRUE;
 			}
 		} catch (const char *msg) {
-			FreeImage_OutputMessageProc(s_format_id, msg);
+			FreeImage_OutputMessageProc(s_format_id, "%s", msg);
 			delete info;
 			return NULL;
 		}
@@ -1425,7 +1425,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if( dib != NULL ) {
 			FreeImage_Unload(dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, msg);
+		FreeImage_OutputMessageProc(s_format_id, "%s", msg);
 		return NULL;
 	}
 
@@ -1803,7 +1803,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		delete stringtable;
 
 	} catch (const char *msg) {
-		FreeImage_OutputMessageProc(s_format_id, msg);
+		FreeImage_OutputMessageProc(s_format_id, "%s", msg);
 		return FALSE;
 	}
 

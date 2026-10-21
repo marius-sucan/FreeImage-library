@@ -861,7 +861,7 @@ SetFrameMetadata(FIBITMAP *dib, const APNGinfo *info, int page) {
 
 static void
 error_handler(png_structp png_ptr, const char *error) {
-	FreeImage_OutputMessageProc(s_format_id, error);
+	FreeImage_OutputMessageProc(s_format_id, "%s", error);
 	png_longjmp(png_ptr, 1);
 }
 

@@ -251,7 +251,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			opj_destroy_codec(d_codec);
 			opj_image_destroy(image);
 
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 
 			return NULL;
 		}
@@ -357,7 +357,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		} catch (const char *text) {
 			if(c_codec) opj_destroy_codec(c_codec);
 			if(image) opj_image_destroy(image);
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			return FALSE;
 		}
 	}

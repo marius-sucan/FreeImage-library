@@ -166,7 +166,7 @@ jpeg_output_message (j_common_ptr cinfo) {
 	// create the message
 	error_ptr->pub.format_message(cinfo, buffer);
 	// send it to user's message proc
-	FreeImage_OutputMessageProc(s_format_id, buffer);
+	FreeImage_OutputMessageProc(s_format_id, "%s", buffer);
 }
 
 // ----------------------------------------------------------
@@ -1007,7 +1007,7 @@ jpeg_write_jfxx(j_compress_ptr cinfo, FIBITMAP *dib) {
 		FreeImage_SeekMemory(stream, 0, SEEK_END);
 		const long eof = FreeImage_TellMemory(stream);
 		if(eof > MAX_JFXX_THUMB_SIZE) {
-			FreeImage_OutputMessageProc(s_format_id, "Warning: attached thumbnail is %d bytes larger than maximum supported size - Thumbnail saving aborted", eof - MAX_JFXX_THUMB_SIZE);
+			FreeImage_OutputMessageProc(s_format_id, "Warning: attached thumbnail is %d bytes larger than maximum supported size - Thumbnail saving aborted", (int)(eof - MAX_JFXX_THUMB_SIZE));
 			FreeImage_CloseMemory(stream);
 			return FALSE;
 		}
@@ -1437,7 +1437,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				FreeImage_Unload(dib);
 			}
 			if(NULL != text) {
-				FreeImage_OutputMessageProc(s_format_id, text);
+				FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			}
 		}
 	}
@@ -1752,7 +1752,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 
 		} catch (const char *text) {
 			if(text) {
-				FreeImage_OutputMessageProc(s_format_id, text);
+				FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			}
 			return FALSE;
 		} 

@@ -144,7 +144,7 @@ FreeImage_CloneTag(FITAG *tag) {
 
 	} catch(const char *message) {
 		FreeImage_DeleteTag(clone);
-		FreeImage_OutputMessageProc(FIF_UNKNOWN, message);
+		FreeImage_OutputMessageProc(FIF_UNKNOWN, "%s", message);
 		return NULL;
 	}
 }

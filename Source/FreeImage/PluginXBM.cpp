@@ -376,7 +376,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(error) {
 			// a cut or damaged file keeps its complete rows
 			if(!buffer || rows <= 0) throw (char*)error;
-			FreeImage_OutputMessageProc(s_format_id, error);
+			FreeImage_OutputMessageProc(s_format_id, "%s", error);
 		}
 
 
@@ -425,7 +425,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	} catch(const char *text) {
 		if(buffer)	free(buffer);
 		if(dib)		FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }

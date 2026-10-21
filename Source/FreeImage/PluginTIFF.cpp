@@ -2811,7 +2811,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			FreeImage_Unload(dib);
 		}
 		if(message) {
-			FreeImage_OutputMessageProc(s_format_id, message);
+			FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		}
 		return NULL;
 	}
@@ -3219,7 +3219,7 @@ SaveOneTIFF(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flag
 	} catch(const char *text) {
 		// Save reports a failed write
 		if(text != FI_MSG_ERROR_TIFF_WRITE) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 		return FALSE;
 	}

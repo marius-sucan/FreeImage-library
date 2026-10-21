@@ -602,7 +602,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					}
 				}
 			}
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			PartialImageWarning(s_format_id, (unsigned)y, (unsigned)FreeImage_GetHeight(dib));
 			return dib;
 		}
@@ -613,17 +613,17 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			switch(id_two)  {
 				case '1':
 				case '4':
-					FreeImage_OutputMessageProc(s_format_id, text);
+					FreeImage_OutputMessageProc(s_format_id, "%s", text);
 					break;
 
 				case '2':
 				case '5':
-					FreeImage_OutputMessageProc(s_format_id, text);
+					FreeImage_OutputMessageProc(s_format_id, "%s", text);
 					break;
 
 				case '3':
 				case '6':
-					FreeImage_OutputMessageProc(s_format_id, text);
+					FreeImage_OutputMessageProc(s_format_id, "%s", text);
 					break;
 			}
 		}

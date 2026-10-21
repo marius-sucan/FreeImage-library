@@ -120,6 +120,9 @@ int main(int argc, char *argv[]) {
 	// test a plugin that runs out of memory in a save or a load
 	testPluginOutOfMemory();
 
+	// test file text in messages
+	testMessageFileText();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif

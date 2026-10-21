@@ -228,7 +228,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(y2) free(y2);
 		if(y1) free(y1);
 
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 
 		return NULL;
 	}

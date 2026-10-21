@@ -111,7 +111,7 @@ _FlushProc(png_structp png_ptr) {
 
 static void
 error_handler(png_structp png_ptr, const char *error) {
-	FreeImage_OutputMessageProc(s_format_id, error);
+	FreeImage_OutputMessageProc(s_format_id, "%s", error);
 	png_longjmp(png_ptr, 1);
 }
 
@@ -1032,7 +1032,7 @@ LoadPNG(FreeImageIO *io, fi_handle handle, int flags, INT64 end, BOOL *cut) {
 			if (retry) {
 				*cut = TRUE;
 			} else if (NULL != text) {
-				FreeImage_OutputMessageProc(s_format_id, text);
+				FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			}
 			const BOOL salvage = (!retry && dib && png_ptr && FreeImage_HasPixels(dib) && SalvageImage(png_ptr, info_ptr, dib, narrow)) ? TRUE : FALSE;
 			if (png_ptr) {
@@ -1386,7 +1386,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				}
 				png_destroy_write_struct(&png_ptr, &info_ptr);
 			}
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 	}
 

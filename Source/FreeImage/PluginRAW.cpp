@@ -267,7 +267,7 @@ libraw_ConvertProcessedRawToDib(LibRaw *RawProcessor) {
 
 	} catch(const char *text) {
 		FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }
@@ -358,7 +358,7 @@ libraw_ConvertProcessedImageToDib(libraw_processed_image_t *image, int flip, BOO
 
 	} catch(const char *text) {
 		FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }
@@ -417,7 +417,7 @@ libraw_LoadEmbeddedPreview(LibRaw *RawProcessor, int flags) {
 			RawProcessor->dcraw_clear_mem(thumb_image);
 		}
 		if(text != NULL) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 	}
 
@@ -511,7 +511,7 @@ libraw_LoadRawData(LibRaw *RawProcessor, int bitspersample, BOOL header_only) {
 		return DescribeOutput(dib, bitspersample);
 
 	} catch(const char *text) {
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }
@@ -620,7 +620,7 @@ libraw_LoadUnprocessedData(LibRaw *RawProcessor, BOOL header_only) {
 
 	} catch(const char *text) {
 		FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }
@@ -925,7 +925,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(dib) {
 			FreeImage_Unload(dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 	}
 
 	return NULL;

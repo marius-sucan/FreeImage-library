@@ -326,14 +326,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			if(components > 4) {
 				if(channels.findChannel("R") && channels.findChannel("G") && channels.findChannel("B") && channels.findChannel("A")) {
 					std::string msg = "Warning: converting color model " + exr_color_model + " to RGBA color model";
-					FreeImage_OutputMessageProc(s_format_id, msg.c_str());
+					FreeImage_OutputMessageProc(s_format_id, "%s", msg.c_str());
 					bHandled = true;
 				}
 			}
 			else if(components > 3) {
 				if(channels.findChannel("R") && channels.findChannel("G") && channels.findChannel("B")) {
 					std::string msg = "Warning: converting color model " + exr_color_model + " to RGB color model";
-					FreeImage_OutputMessageProc(s_format_id, msg.c_str());
+					FreeImage_OutputMessageProc(s_format_id, "%s", msg.c_str());
 					bHandled = true;
 				}
 			}
@@ -372,7 +372,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				components = 1;
 			} else {
 				std::string msg = "Warning: loading color model " + exr_color_model + " as Y color model";
-				FreeImage_OutputMessageProc(s_format_id, msg.c_str());
+				FreeImage_OutputMessageProc(s_format_id, "%s", msg.c_str());
 				image_type = FIT_FLOAT;
 				// ignore the other channel
 				components = 1;
@@ -386,14 +386,14 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				if(channels.findChannel("A")) {
 					if(components > 4) {
 						std::string msg = "Warning: converting color model " + exr_color_model + " to RGBA color model";
-						FreeImage_OutputMessageProc(s_format_id, msg.c_str());
+						FreeImage_OutputMessageProc(s_format_id, "%s", msg.c_str());
 					}
 					image_type = FIT_RGBAF;
 					// ignore other layers if there is more than one alpha layer
 					components = 4;
 				} else {
 					std::string msg = "Warning: converting color model " + exr_color_model + " to RGB color model";
-					FreeImage_OutputMessageProc(s_format_id, msg.c_str());
+					FreeImage_OutputMessageProc(s_format_id, "%s", msg.c_str());
 
 					image_type = FIT_RGBF;
 					// ignore other channels
@@ -485,7 +485,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				}
 				catch(Iex::BaseExc & e) {
 					if(lines == (dw.min.y - dataWindow.min.y)) {
-						FreeImage_OutputMessageProc(s_format_id, e.what());
+						FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 					}
 					scanline += (size_t)pitch * rows;
 					dw.min.y += rows;
@@ -563,7 +563,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			}
 			catch(Iex::BaseExc & e) {
 				// a cut or damaged file keeps the blocks it holds
-				FreeImage_OutputMessageProc(s_format_id, e.what());
+				FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 				const int lines = ReadEachBlock(file, dataWindow);
 				if(lines == 0) {
 					FreeImage_Unload(dib);
@@ -582,7 +582,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(dib != NULL) {
 			FreeImage_Unload(dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, e.what());
+		FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 		return NULL;
 	}
 
@@ -694,7 +694,7 @@ SaveAsEXR_LC(C_OStream& ostream, FIBITMAP *dib, Imf::Header& header, int width, 
 
 	} catch(std::exception & e) {
 		// Iex::BaseExc and std::bad_alloc alike: none may leave the plugin
-		FreeImage_OutputMessageProc(s_format_id, e.what());
+		FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 
 		return FALSE;
 	}
@@ -889,7 +889,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			FreeImage_FlipVertical(dib);
 		}
 
-		FreeImage_OutputMessageProc(s_format_id, e.what());
+		FreeImage_OutputMessageProc(s_format_id, "%s", e.what());
 
 		return FALSE;
 	}	

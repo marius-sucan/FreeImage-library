@@ -1300,7 +1300,7 @@ mng_ReadChunks(int format_id, FreeImageIO *io, fi_handle handle, INT64 Offset, i
 		FreeImage_Unload(dib);
 		FreeImage_Unload(dib_alpha);
 		if(text) {
-			FreeImage_OutputMessageProc(format_id, text);
+			FreeImage_OutputMessageProc(format_id, "%s", text);
 		}
 		return NULL;
 	}
@@ -1516,7 +1516,7 @@ mng_WriteJNG(int format_id, FreeImageIO *io, FIBITMAP *dib, fi_handle handle, in
 		}
 		FreeImage_Unload(dib_alpha);
 		if(text) {
-			FreeImage_OutputMessageProc(format_id, text);
+			FreeImage_OutputMessageProc(format_id, "%s", text);
 		}
 		return FALSE;
 	}

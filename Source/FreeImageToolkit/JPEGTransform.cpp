@@ -93,7 +93,7 @@ ls_jpeg_output_message (j_common_ptr cinfo) {
 	// create the message
 	(*cinfo->err->format_message)(cinfo, buffer);
 	// send it to user's message proc
-	FreeImage_OutputMessageProc(FIF_JPEG, buffer);
+	FreeImage_OutputMessageProc(FIF_JPEG, "%s", buffer);
 }
 
 // ----------------------------------------------------------

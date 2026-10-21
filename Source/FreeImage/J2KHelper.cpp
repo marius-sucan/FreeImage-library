@@ -544,7 +544,7 @@ FIBITMAP* J2KImageToFIBITMAP(int format_id, const opj_image_t *image, BOOL heade
 
 	} catch(const char *text) {
 		if(dib) FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(format_id, text);
+		FreeImage_OutputMessageProc(format_id, "%s", text);
 		return NULL;
 	}
 
@@ -743,7 +743,7 @@ opj_image_t* FIBITMAPToJ2KImage(int format_id, FIBITMAP *dib, opj_cparameters_t 
 
 	} catch (const char *text) {
 		if(image) opj_image_destroy(image);
-		FreeImage_OutputMessageProc(format_id, text);
+		FreeImage_OutputMessageProc(format_id, "%s", text);
 		return NULL;
 	}
 }

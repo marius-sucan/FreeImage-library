@@ -1204,7 +1204,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			FreeImage_Unload(dib);
 		}
 
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 
 		return NULL;
 	}

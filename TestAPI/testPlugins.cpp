@@ -23,6 +23,8 @@
 #include "TestSuite.h"
 
 #include <new>
+#include <string>
+#include <string.h>
 #ifdef _WIN32
 #include <io.h>		// _findfirst
 #else
@@ -275,4 +277,104 @@ void testPluginOutOfMemory() {
 
 	// it stays registered: keep it away from other tests
 	FreeImage_SetPluginEnabled(fif, FALSE);
+}
+
+// Text from a file in a message
+// ----------------------------------------------------------
+static const char *s_file_text = "%s%s%s%s%s%s%s%s";
+static BOOL s_file_text_seen = FALSE;
+
+static void DLL_CALLCONV
+FileTextHandler(FREE_IMAGE_FORMAT fif, const char *message) {
+	if (strstr(message, s_file_text) != NULL) {
+		s_file_text_seen = TRUE;
+	}
+}
+
+static void put32(std::string& s, unsigned v) {
+	for (int i = 0; i < 4; i++) {
+		s += (char)((v >> (8 * i)) & 0xFF);
+	}
+}
+
+static void putAttribute(std::string& s, const char *name, const char *type, const std::string& value) {
+	s.append(name, strlen(name) + 1);
+	s.append(type, strlen(type) + 1);
+	put32(s, (unsigned)value.size());
+	s += value;
+}
+
+// a 4 x 1 uncompressed OpenEXR file; type 1 is HALF, 2 is FLOAT; names sorted
+static FIMEMORY* makeEXR(const char *const names[], const int types[], int count) {
+	std::string channels, box, data;
+	for (int i = 0; i < count; i++) {
+		channels.append(names[i], strlen(names[i]) + 1);
+		put32(channels, types[i]);
+		put32(channels, 0);
+		put32(channels, 1);
+		put32(channels, 1);
+		data.append(4 * (types[i] == 1 ? 2 : 4), '\0');
+	}
+	channels += '\0';
+	put32(box, 0); put32(box, 0); put32(box, 3); put32(box, 0);
+
+	std::string exr("\x76\x2f\x31\x01\x02\x00\x00\x00", 8);
+	putAttribute(exr, "channels", "chlist", channels);
+	putAttribute(exr, "compression", "compression", std::string(1, '\0'));
+	putAttribute(exr, "dataWindow", "box2i", box);
+	putAttribute(exr, "displayWindow", "box2i", box);
+	putAttribute(exr, "lineOrder", "lineOrder", std::string(1, '\0'));
+	putAttribute(exr, "pixelAspectRatio", "float", std::string("\x00\x00\x80\x3f", 4));
+	putAttribute(exr, "screenWindowCenter", "v2f", std::string(8, '\0'));
+	putAttribute(exr, "screenWindowWidth", "float", std::string("\x00\x00\x80\x3f", 4));
+	exr += '\0';
+	const unsigned chunk = (unsigned)exr.size() + 8;
+	put32(exr, chunk);
+	put32(exr, 0);
+	put32(exr, 0);
+	put32(exr, (unsigned)data.size());
+	exr += data;
+
+	FIMEMORY *hmem = FreeImage_OpenMemory();
+	FreeImage_WriteMemory(exr.data(), 1, (unsigned)exr.size(), hmem);
+	FreeImage_SeekMemory(hmem, 0, SEEK_SET);
+	return hmem;
+}
+
+// a color or channel name holding "%s" reaches the message as text, not as a format
+void testMessageFileText() {
+	printf("testMessageFileText ...\n");
+
+	FreeImage_SetOutputMessage(FileTextHandler);
+
+	// an unknown XPM color name
+	std::string xpm = "/* XPM */\nstatic char *t[] = {\n\"4 2 2 1\",\n\"  c #FF0000\",\n\". c ";
+	xpm += s_file_text;
+	xpm += "\",\n\"  ..\",\n\".. \"};\n";
+	FIMEMORY *hmem = FreeImage_OpenMemory((BYTE*)&xpm[0], (DWORD)xpm.size());
+	s_file_text_seen = FALSE;
+	FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_XPM, hmem, 0);
+	assert((dib == NULL) && s_file_text_seen);
+	FreeImage_CloseMemory(hmem);
+
+	// a single EXR channel, loaded as Y with a warning naming it
+	const char *one[] = { s_file_text };
+	const int one_type[] = { 2 };
+	hmem = makeEXR(one, one_type, 1);
+	s_file_text_seen = FALSE;
+	dib = FreeImage_LoadFromMemory(FIF_EXR, hmem, 0);
+	assert((dib != NULL) && s_file_text_seen);
+	FreeImage_Unload(dib);
+	FreeImage_CloseMemory(hmem);
+
+	// EXR channels of two types, refused by an OpenEXR exception naming them
+	const char *mixed[] = { s_file_text, "Z" };
+	const int mixed_types[] = { 2, 1 };
+	hmem = makeEXR(mixed, mixed_types, 2);
+	s_file_text_seen = FALSE;
+	dib = FreeImage_LoadFromMemory(FIF_EXR, hmem, 0);
+	assert((dib == NULL) && s_file_text_seen);
+	FreeImage_CloseMemory(hmem);
+
+	FreeImage_SetOutputMessage(FreeImageErrorHandler);
 }

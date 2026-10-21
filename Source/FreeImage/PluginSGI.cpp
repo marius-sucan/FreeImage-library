@@ -447,7 +447,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 	} catch(const char *text) {
 		if(pRowIndex) free(pRowIndex);
 		if(dib) FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return NULL;
 	}
 }

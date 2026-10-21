@@ -881,7 +881,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			FIBITMAP *icon_dib = (FIBITMAP*)vPages[k];
 			FreeImage_Unload(icon_dib);
 		}
-		FreeImage_OutputMessageProc(s_format_id, text);
+		FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		return FALSE;
 	}
 }

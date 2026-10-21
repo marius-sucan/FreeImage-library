@@ -114,6 +114,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed out-of-bounds accesses in PluginBMP, PluginPSD, PluginMNG and PluginPICT;
 - fixed an integer wraparound and a segmentation fault in Exif.cpp;
 - fixed out-of-bounds reads of short or crafted Exif metadata;
+- fixed crashes on crafted files whose text ends up in a warning or error message, such as XPM color names and EXR channel names;
 
 ### BMP
 

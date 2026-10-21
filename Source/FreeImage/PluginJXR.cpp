@@ -2017,7 +2017,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 
 		if(NULL != message) {
-			FreeImage_OutputMessageProc(s_format_id, message);
+			FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		}
 	}
 
@@ -2270,7 +2270,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			assert(pEncoder == NULL);
 		}
 		if(NULL != message) {
-			FreeImage_OutputMessageProc(s_format_id, message);
+			FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		}
 	}
 

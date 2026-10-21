@@ -309,7 +309,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			return dib;
 
 		} catch(const char *text)  {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 
 			return NULL;
 		}
@@ -356,7 +356,7 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			return TRUE;
 
 		} catch (const char* text) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 	}
 

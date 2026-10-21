@@ -147,7 +147,7 @@ ReadFileToWebPData(FreeImageIO *io, fi_handle handle, WebPData * const bitstream
 	  }
 	  memset(bitstream, 0, sizeof(WebPData));
 	  if(NULL != text) {
-		  FreeImage_OutputMessageProc(s_format_id, text);
+		  FreeImage_OutputMessageProc(s_format_id, "%s", text);
 	  }
 	  return FALSE;
   }
@@ -546,7 +546,7 @@ DecodeImage(WebPData *webp_image, int flags) {
 		WebPFreeDecBuffer(output_buffer);
 
 		if(NULL != text) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 
 		return NULL;
@@ -959,7 +959,7 @@ EncodeImage(FIMEMORY *hmem, FIBITMAP *dib, int flags) {
 		}
 
 		if(NULL != text) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 	}
 

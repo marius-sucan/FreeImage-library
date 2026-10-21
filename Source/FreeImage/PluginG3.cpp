@@ -199,7 +199,7 @@ copyFaxFile(FreeImageIO *io, fi_handle handle, TIFF* tifin, uint32_t xsize, int 
 			_TIFFfree(tifin->tif_rawdata);
 			tifin->tif_rawdata = NULL;
 		}
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 
 		return -1;
 	}
@@ -413,7 +413,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		if(memory) FreeImage_CloseMemory(memory);
 		if(faxTIFF) TIFFClose(faxTIFF);
 		if(dib) FreeImage_Unload(dib);
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		return NULL;
 	}
 

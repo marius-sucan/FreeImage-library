@@ -144,7 +144,7 @@ pfm_get_int(FreeImageIO *io, fi_handle handle) {
 		return i;
 	}
 	catch (const char *message) {
-		FreeImage_OutputMessageProc(s_format_id, message);
+		FreeImage_OutputMessageProc(s_format_id, "%s", message);
 		return -1;
 	}
 }
@@ -361,7 +361,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		}
 		// nothing is kept of a huge claim a few bytes long
 		if (dib && (rows > 0) && PlausibleImageSize((UINT64)FreeImage_GetPitch(dib) * FreeImage_GetHeight(dib), (UINT64)(io->tell_proc(handle) - pixels_start), 1)) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 			PartialImageWarning(s_format_id, (unsigned)rows, FreeImage_GetHeight(dib));
 			return dib;
 		}
@@ -369,7 +369,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			FreeImage_Unload(dib);
 		}
 		if(NULL != text) {
-			FreeImage_OutputMessageProc(s_format_id, text);
+			FreeImage_OutputMessageProc(s_format_id, "%s", text);
 		}
 
 		return NULL;

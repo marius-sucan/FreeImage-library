@@ -40,12 +40,14 @@
 // Some useful tools
 // ==========================================================
 FIBITMAP* createZonePlateImage(unsigned width, unsigned height, int scale);
+void FreeImageErrorHandler(FREE_IMAGE_FORMAT fif, const char *message);
 
 // Test plugins capabilities
 // ==========================================================
 void showPlugins();
 void testPluginCloseResult();
 void testPluginOutOfMemory();
+void testMessageFileText();
 
 // Image types test suite
 // ==========================================================
