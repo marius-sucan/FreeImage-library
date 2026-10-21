@@ -737,6 +737,95 @@ static void gif_playback_pages(void) {
     remove(webp_path);
 }
 
+/* 1 when the RIFF holds an ANIM or ANMF chunk or VP8X says it is animated, 0 for a still, -1 unreadable */
+static int webp_animated(const char *path) {
+    long size = 0;
+    unsigned char *b = read_file(path, &size);
+    size_t pos = 12;
+    int animated = 0;
+    if (!b || size < 12 || memcmp(b, "RIFF", 4) || memcmp(b + 8, "WEBP", 4)) { free(b); return -1; }
+    while (pos + 8 <= (size_t)size) {
+        const size_t n = (size_t)b[pos + 4] | ((size_t)b[pos + 5] << 8) | ((size_t)b[pos + 6] << 16) | ((size_t)b[pos + 7] << 24);
+        if (!memcmp(b + pos, "ANIM", 4) || !memcmp(b + pos, "ANMF", 4)) animated = 1;
+        if (!memcmp(b + pos, "VP8X", 4) && n >= 1 && pos + 8 < (size_t)size && (b[pos + 8] & 0x02)) animated = 1;
+        pos += 8 + n + (n & 1);
+    }
+    free(b);
+    return animated;
+}
+
+/* a page placed on a larger canvas, as an animation hands them out */
+static FIBITMAP *placed_page(int seed) {
+    FIBITMAP *page = translucent(16, 12, seed);
+    set_anim(page, "FrameLeft", FIDT_SHORT, 10);
+    set_anim(page, "FrameTop", FIDT_SHORT, 6);
+    set_anim(page, "FrameTime", FIDT_LONG, 70);
+    set_anim(page, "LogicalWidth", FIDT_SHORT, 96);
+    set_anim(page, "LogicalHeight", FIDT_SHORT, 64);
+    set_anim(page, "Loop", FIDT_LONG, 3);
+    return page;
+}
+
+/* the file a still WebP holding exactly this page */
+static int is_still_of(const char *path, FIBITMAP *page) {
+    FIBITMAP *back = FreeImage_Load(FIF_WEBP, path, 0);
+    const int same = back && webp_animated(path) == 0 && visible_diff(back, page) == 0 && get_anim(back, "FrameTime") == -1;
+    if (back) FreeImage_Unload(back);
+    return same;
+}
+
+/* an animation of one frame is saved as a still image, which every WebP decoder reads */
+static void one_frame_still(void) {
+    char path[512];
+    FIBITMAP *page = placed_page(1), *pages[3];
+    FIMULTIBITMAP *mb;
+    int i, bad = 0;
+
+    printf("one frame saved as a still image\n");
+    snprintf(path, sizeof(path), "%s", scratch("fi_webp_rt_one.webp"));
+
+    /* FreeImage_Save of a page */
+    if (!FreeImage_Save(FIF_WEBP, page, path, WEBP_LOSSLESS) || !is_still_of(path, page)) {
+        fail("one frame: FreeImage_Save of a page is not a still image of it (animated %d)", webp_animated(path));
+        bad++;
+    }
+    if (!FreeImage_Save(FIF_WEBP, page, path, 80) || webp_animated(path) != 0) {
+        fail("one frame: a lossy FreeImage_Save of a page is not a still image");
+        bad++;
+    }
+
+    /* a document of one page */
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, TRUE, FALSE, TRUE, 0);
+    if (!mb || !FreeImage_AppendPage(mb, page) || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS) || !is_still_of(path, page)) {
+        fail("one frame: a document of one page is not a still image of it");
+        bad++;
+    }
+
+    /* an animation edited down to one page */
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, TRUE, FALSE, TRUE, 0);
+    for (i = 0; i < 3; i++) {
+        pages[i] = placed_page(i + 2);
+        if (mb) FreeImage_AppendPage(mb, pages[i]);
+    }
+    if (!mb || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS) || webp_animated(path) != 1) {
+        fail("one frame: three pages did not make an animation");
+        bad++;
+    }
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, FALSE, FALSE, TRUE, 0);
+    if (!mb || !FreeImage_DeletePage(mb, 2) || !FreeImage_DeletePage(mb, 0) || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS) ||
+        !is_still_of(path, pages[1])) {
+        fail("one frame: an animation edited down to one page is not a still image of it");
+        bad++;
+    }
+
+    if (!bad) printf("  ok %-34s a page saved alone, a one-page document and one edited down to a page are still images of it\n", "one frame as a still");
+    for (i = 0; i < 3; i++) FreeImage_Unload(pages[i]);
+    FreeImage_Unload(page);
+    remove(path);
+}
+
 int main(void) {
     FIBITMAP *png, *rgb, *rgba, *holes, *meta, *grey, *tiny, *reloaded;
     BYTE icc[128];
@@ -838,6 +927,7 @@ int main(void) {
     mixed_profiles();
     playback_pages();
     gif_playback_pages();
+    one_frame_still();
 
     FreeImage_Unload(rgb); FreeImage_Unload(rgba); FreeImage_Unload(holes);
     FreeImage_Unload(grey); FreeImage_Unload(tiny); FreeImage_Unload(meta);

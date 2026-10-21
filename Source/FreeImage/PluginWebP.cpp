@@ -372,7 +372,7 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 
 	BOOL bResult = TRUE;
 
-	// write a collected animation; a still image was written by Save()
+	// write the collected frames, one as a still image; Save() wrote an untagged image itself
 	if(state->write && !state->written && (state->out_pages > 0) && (io != NULL) && (handle != NULL)) {
 		bResult = WebP_FinishAnimation(state, io, handle);
 	}
@@ -1078,6 +1078,17 @@ static BOOL
 WebP_FinishAnimation(WebPPluginData *state, FreeImageIO *io, fi_handle handle) {
 	int width = state->out_canvas_width;
 	int height = state->out_canvas_height;
+
+	// one frame is a still image, the page as it is: a still has no place, delay or canvas
+	if(state->out_pages == 1) {
+		const WebPMuxError error_status = WebPMuxSetImage(state->mux, &state->pending, 1 /* copy */);
+		WebPDataClear(&state->pending);
+		if(error_status != WEBP_MUX_OK) {
+			FreeImage_OutputMessageProc(s_format_id, "Failed to create webp output file");
+			return FALSE;
+		}
+		return WebP_AssembleAndWrite(state->mux, io, handle);
+	}
 
 	if(!WebP_FlushPending(state)) {
 		return FALSE;

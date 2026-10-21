@@ -27,7 +27,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0, animations included; CMYK images with a CMYK profile are saved as CMYK;
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG, animations included;
   - added the APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
-- added full support for animated WebP files, reading and writing, with an example file;
+- added full support for animated WebP files, reading and writing, with an example file; an animation of one frame is saved as a still image;
 - added full support for MNG animations (FIF_MNG=6), reading and writing;
   - every frame loads as a page, not only the first, header-only too; MNG_PLAYBACK composites the frames as a viewer shows them;
   - frame delays, positions, clipping, hidden images, the background and the loop count are read from the MHDR, FRAM, DEFI, SHOW, BACK, TERM and LOOP chunks; BASI images and solid fills load;
