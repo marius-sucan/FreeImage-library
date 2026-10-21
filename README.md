@@ -32,7 +32,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
   - every frame loads as a page, not only the first, header-only too; MNG_PLAYBACK composites the frames as a viewer shows them;
   - frame delays, positions, clipping, hidden images, the background and the loop count are read from the MHDR, FRAM, DEFI, SHOW, BACK, TERM and LOOP chunks; BASI images and solid fills load;
   - frames inherit the file's global PLTE, tRNS and pHYs chunks and its gAMA, cHRM, sRGB, iCCP or cICP color space, as the spec orders; JNG files and frames keep their ICC profile;
-  - saves write PNG frames with their delays, positions, disposal, loop count, background and ICC profile;
+  - saves write PNG frames with their delays, positions, disposal, blending, loop count, background and ICC profile, and play as the animation they come from;
 
 ### Color management and CMYK
 

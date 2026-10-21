@@ -345,6 +345,9 @@
     <ClInclude Include="Source\Metadata\FreeImageTag.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Source\FreeImage\AnimationCanvas.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Source\FreeImage\J2KHelper.h">
       <Filter>Header Files</Filter>
     </ClInclude>

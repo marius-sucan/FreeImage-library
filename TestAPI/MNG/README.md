@@ -61,6 +61,12 @@ from the plugin:
 - **Placement.** DEFI puts an image on the canvas; a raw page is the rectangle
   the file stores, tagged with where it goes, and `MNG_PLAYBACK` is the canvas a
   viewer would show - composited, 32-bit, on the BACK colour.
+- **Clipped background layers.** "The images, as well as the background, are
+  clipped to the layer clipping boundaries for the subframe": boundaries for
+  one subframe end with it, those made the default stay, a delta adds to the
+  subframe before, and a mode-3 subframe with no image is a background layer of
+  its own. A page drawn on a background just under it says BlendMethod 1, and
+  the page before a background just over that page says DisposalMethod 2.
 - **DEFI's omitted fields.** The spec's defaults fill them only "when an object
   with the same object_id has not been previously defined"; for an id already
   defined, its own attributes stand.
@@ -146,11 +152,19 @@ single image, and `FreeImage_OpenMultiBitmap` with `create_new` plus
 - **What is refused** is refused in `Save()`, where there is still a FALSE to
   return: a type MNG cannot hold, and a bitmap with no pixels.
 
-Three things are deliberately lossy and are *not* asserted, because MNG has
-nowhere to put them: the **last** frame's DisposalMethod (a frame's disposal is
-carried by whether the frame after it starts on a fresh background, and the last
-frame has none), `GIF_DISPOSAL_PREVIOUS` (it needs the stored object buffers of
-full MNG), and BlendMethod (a MNG layer is always composited over).
+- **Converted animations play as their tags say.** A page cleared to the
+  background alone, a page drawn in place of what is there, half transparent
+  too, and a page that restores the canvas: every page played is the canvas a
+  reference player of the tags gives, and so again after the raw pages are
+  saved anew. A page's background colour is advisory and writes no `BACK`.
+- **A MNG's own BACK**, mandatory or advisory, comes back as it was through
+  its raw pages, which say which in their `MandatoryBackground` tag.
+
+Not asserted, because MNG holds it otherwise: the **last** frame's
+DisposalMethod (a frame's disposal is the background layer before the frame
+after it, and the last frame has none), and the tags of a page that restores
+the canvas (it comes back as one that leaves it, the page after it being what
+the canvas showed): the same pictures either way.
 
 ## robust
 

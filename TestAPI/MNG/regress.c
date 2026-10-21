@@ -1251,6 +1251,262 @@ static void test_playback_pages(void) {
 	remove(edit);
 }
 
+/* ---- playing the tags ---- */
+
+#define ANIM_BLENDMETHOD	0x1007
+
+typedef struct {
+	int x, y, w, h;
+	BYTE rgba[4];
+	BYTE disposal;		/* GIF numbering */
+	BYTE blend;			/* 1: in place of what is there */
+} SolidPage;
+
+static FIBITMAP *
+solid_rgba(int width, int height, const BYTE rgba[4]) {
+	FIBITMAP *dib = FreeImage_Allocate(width, height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	int x, y;
+	for (y = 0; dib && y < height; y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, (unsigned)y);
+		for (x = 0; x < width; x++, line += 4) {
+			line[FI_RGBA_RED] = rgba[0];
+			line[FI_RGBA_GREEN] = rgba[1];
+			line[FI_RGBA_BLUE] = rgba[2];
+			line[FI_RGBA_ALPHA] = rgba[3];
+		}
+	}
+	return dib;
+}
+
+/* a 32-bit pixel with its alpha, y counted down from the top */
+static int
+pixel_at32(FIBITMAP *dib, int x, int y, RGBQUAD *out) {
+	return FreeImage_GetPixelColor(dib, (unsigned)x, FreeImage_GetHeight(dib) - 1 - (unsigned)y, out) ? 1 : 0;
+}
+
+/* the canvas after page n, top-down RGBA, by the tags: disposal 2 clears, 3 restores; blend 1 replaces */
+static void
+play_tags(const SolidPage *pages, int n, int cw, int ch, BYTE *canvas) {
+	BYTE *before = (BYTE *)malloc((size_t)cw * ch * 4);
+	int i, x, y;
+	memset(canvas, 0, (size_t)cw * ch * 4);
+	for (i = 0; i <= n; i++) {
+		const SolidPage *p = &pages[i];
+		memcpy(before, canvas, (size_t)cw * ch * 4);
+		for (y = p->y; y < p->y + p->h; y++) {
+			for (x = p->x; x < p->x + p->w; x++) {
+				BYTE *d = canvas + ((size_t)y * cw + x) * 4;
+				const unsigned sa = p->rgba[3], weight = d[3] * (255 - sa), alpha = sa * 255 + weight;
+				int c;
+				if (p->blend || sa == 255) {
+					memcpy(d, p->rgba, 4);
+				} else if (sa) {
+					for (c = 0; c < 3; c++) d[c] = (BYTE)((p->rgba[c] * sa * 255 + d[c] * weight + alpha / 2) / alpha);
+					d[3] = (BYTE)((alpha + 127) / 255);
+				}
+			}
+		}
+		if (i == n) break;
+		if (p->disposal == GIF_DISPOSAL_BACKGROUND) {
+			for (y = p->y; y < p->y + p->h; y++) memset(canvas + ((size_t)y * cw + p->x) * 4, 0, (size_t)p->w * 4);
+		} else if (p->disposal == GIF_DISPOSAL_PREVIOUS) {
+			memcpy(canvas, before, (size_t)cw * ch * 4);
+		}
+	}
+	free(before);
+}
+
+/* the pixels of a 32-bit canvas that differ from want by more than 1, alpha 0 matching alpha 0 */
+static int
+canvas_diff(FIBITMAP *dib, const BYTE *want, int cw, int ch) {
+	int x, y, c, n = 0;
+	if (!dib || (int)FreeImage_GetWidth(dib) != cw || (int)FreeImage_GetHeight(dib) != ch || FreeImage_GetBPP(dib) != 32) {
+		return -1;
+	}
+	for (y = 0; y < ch; y++) {
+		const BYTE *line = FreeImage_GetScanLine(dib, (unsigned)(ch - 1 - y));
+		for (x = 0; x < cw; x++, line += 4) {
+			const BYTE *w = want + ((size_t)y * cw + x) * 4;
+			const BYTE got[4] = { line[FI_RGBA_RED], line[FI_RGBA_GREEN], line[FI_RGBA_BLUE], line[FI_RGBA_ALPHA] };
+			int off = abs(got[3] - w[3]) > 1;
+			for (c = 0; c < 3 && w[3] && got[3]; c++) off |= abs(got[c] - w[c]) > 1;
+			n += off;
+		}
+	}
+	return n;
+}
+
+/* 1 when every page of path, played, is the canvas the tags give */
+static int
+plays_as_tags(const char *what, const char *path, const SolidPage *pages, int n, int cw, int ch) {
+	FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	BYTE *want = (BYTE *)malloc((size_t)cw * ch * 4);
+	int i, good = mb && (FreeImage_GetPageCount(mb) == n);
+	if (mb && !good) {
+		fail("%s: %d pages, expected %d", what, FreeImage_GetPageCount(mb), n);
+	}
+	for (i = 0; good && i < n; i++) {
+		FIBITMAP *dib = FreeImage_LockPage(mb, i);
+		int d;
+		play_tags(pages, i, cw, ch, want);
+		d = canvas_diff(dib, want, cw, ch);
+		if (d) {
+			fail("%s: page %d, %d pixel(s) not as the tags play it", what, i, d);
+			good = 0;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	free(want);
+	return good;
+}
+
+static int
+has_chunk(const char *path, const char *type) {
+	FILE *f = fopen(path, "rb");
+	BYTE head[8];
+	int found = 0;
+	if (!f) return 0;
+	fseek(f, 8, SEEK_SET);
+	while (!found && fread(head, 1, 8, f) == 8) {
+		const long length = ((long)head[0] << 24) | ((long)head[1] << 16) | ((long)head[2] << 8) | head[3];
+		found = !memcmp(head + 4, type, 4);
+		fseek(f, length + 4, SEEK_CUR);
+	}
+	fclose(f);
+	return found;
+}
+
+/* the raw pages of a document copied to a new one */
+static int
+copy_raw_pages(const char *src, const char *dst) {
+	FIMULTIBITMAP *in = FreeImage_OpenMultiBitmap(FIF_MNG, src, FALSE, TRUE, FALSE, 0);
+	FIMULTIBITMAP *out = FreeImage_OpenMultiBitmap(FIF_MNG, dst, TRUE, FALSE, FALSE, 0);
+	int i, done = in && out;
+	for (i = 0; done && i < FreeImage_GetPageCount(in); i++) {
+		FIBITMAP *dib = FreeImage_LockPage(in, i);
+		done = dib && FreeImage_AppendPage(out, dib);
+		if (dib) FreeImage_UnlockPage(in, dib, FALSE);
+	}
+	if (in) FreeImage_CloseMultiBitmap(in, 0);
+	if (out && !FreeImage_CloseMultiBitmap(out, 0)) done = 0;
+	return done;
+}
+
+/* a converted animation plays as its tags say: a frame cleared alone, one drawn in place, one that restores the canvas */
+static void test_conversion_playback(void) {
+	static const SolidPage PAGES[7] = {
+		{ 0, 0, 40, 30, { 0, 0, 200, 255 }, GIF_DISPOSAL_LEAVE, 0 },
+		{ 4, 3, 9, 7, { 0, 0, 0, 0 }, GIF_DISPOSAL_LEAVE, 1 },				/* a transparent hole, in place */
+		{ 5, 13, 10, 8, { 220, 0, 0, 255 }, GIF_DISPOSAL_BACKGROUND, 0 },	/* cleared alone */
+		{ 21, 9, 11, 9, { 0, 180, 0, 255 }, GIF_DISPOSAL_LEAVE, 0 },
+		{ 8, 8, 12, 12, { 255, 255, 0, 128 }, GIF_DISPOSAL_LEAVE, 1 },		/* half transparent, in place */
+		{ 2, 2, 7, 6, { 255, 0, 255, 255 }, GIF_DISPOSAL_PREVIOUS, 0 },		/* restores the canvas */
+		{ 31, 21, 6, 6, { 255, 255, 255, 200 }, GIF_DISPOSAL_LEAVE, 0 },
+	};
+	char path[4096], again[4096];
+	FIMULTIBITMAP *mb;
+	int i, bad = 0;
+
+	printf("converted animations play as their tags say\n");
+	snprintf(path, sizeof(path), "%s", scratch("mng_conv.mng"));
+	snprintf(again, sizeof(again), "%s", scratch("mng_conv_again.mng"));
+
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, TRUE, FALSE, FALSE, 0);
+	for (i = 0; mb && i < 7; i++) {
+		FIBITMAP *dib = solid_rgba(PAGES[i].w, PAGES[i].h, PAGES[i].rgba);
+		set_delay(dib, 50);
+		set_place(dib, (WORD)PAGES[i].x, (WORD)PAGES[i].y);
+		set_disposal(dib, PAGES[i].disposal);
+		set_tag(dib, "BlendMethod", ANIM_BLENDMETHOD, FIDT_BYTE, 1, &PAGES[i].blend);
+		set_canvas(dib, 40, 30);
+		if (i == 0) {
+			/* a GIF's or PNG's background colour is advisory: no opaque BACK */
+			RGBQUAD back = { 30, 60, 90, 0 };
+			FreeImage_SetBackgroundColor(dib, &back);
+		}
+		FreeImage_AppendPage(mb, dib);
+		FreeImage_Unload(dib);
+	}
+	if (!mb || !FreeImage_CloseMultiBitmap(mb, 0)) {
+		fail("the animation was not written");
+		return;
+	}
+	if (has_chunk(path, "BACK")) {
+		fail("a page's background color became a BACK chunk");
+		bad = 1;
+	}
+	bad |= !plays_as_tags("written", path, PAGES, 7, 40, 30);
+	if (!copy_raw_pages(path, again)) {
+		fail("the raw pages could not be saved again");
+		bad = 1;
+	} else {
+		bad |= !plays_as_tags("raw pages saved again", again, PAGES, 7, 40, 30);
+	}
+	if (!bad) {
+		ok("disposal to the background, a page in place, a canvas restored, no BACK: played as the tags say, and so again from the raw pages");
+	}
+	remove(path);
+	remove(again);
+}
+
+/* a MNG's own BACK, mandatory or not, survives its raw pages being saved again */
+static void test_back_kept(void) {
+	static const BYTE MODES[2] = { 1, 0 };
+	int k, bad = 0;
+
+	printf("a MNG's BACK through its raw pages\n");
+	for (k = 0; k < 2; k++) {
+		char src[4096], again[4096];
+		Buf mng;
+		FIBITMAP *page;
+		RGBQUAD colour;
+
+		snprintf(src, sizeof(src), "%s", scratch("mng_back_src.mng"));
+		snprintf(again, sizeof(again), "%s", scratch("mng_back_again.mng"));
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, 16, 16, 100, 2, 1, 0, 11);
+		mng_back(&mng, 0x2020, 0x8080, 0xC0C0, MODES[k]);
+		mng_fram(&mng, 1, 2, 10);
+		mng_defi(&mng, 0, 0, 0, 4, 4);
+		mng_image(&mng, 8, 8, 200, 0, 0, 24);
+		mng_mend(&mng);
+		write_file("mng_back_src.mng", &mng);
+		buf_free(&mng);
+
+		page = FreeImage_Load(FIF_MNG, src, 0);
+		if (!page || anim_tag(page, "MandatoryBackground", -1) != MODES[k]) {
+			fail("BACK %u: a raw page says MandatoryBackground %ld", MODES[k], page ? anim_tag(page, "MandatoryBackground", -1) : -1);
+			bad = 1;
+		}
+		if (page) FreeImage_Unload(page);
+		if (!copy_raw_pages(src, again)) {
+			fail("BACK %u: the raw pages could not be saved again", MODES[k]);
+			bad = 1;
+			continue;
+		}
+		page = FreeImage_Load(FIF_MNG, again, MNG_PLAYBACK);
+		if (!page || !pixel_at32(page, 0, 0, &colour) || colour.rgbRed != 0x20 || colour.rgbGreen != 0x80 ||
+			colour.rgbBlue != 0xC0 || colour.rgbReserved != 255 || anim_tag(page, "MandatoryBackground", -1) != -1) {
+			fail("BACK %u: saved again, the canvas corner is not the opaque background", MODES[k]);
+			bad = 1;
+		}
+		if (page) FreeImage_Unload(page);
+		page = FreeImage_Load(FIF_MNG, again, 0);
+		if (!page || anim_tag(page, "MandatoryBackground", -1) != MODES[k]) {
+			fail("BACK %u: saved again, MandatoryBackground is %ld", MODES[k], page ? anim_tag(page, "MandatoryBackground", -1) : -1);
+			bad = 1;
+		}
+		if (page) FreeImage_Unload(page);
+		remove(src);
+		remove(again);
+	}
+	if (!bad) {
+		ok("a mandatory and an advisory BACK come back as they were, the raw pages saying which");
+	}
+}
+
 /* --------------------------------------------------------------------- */
 
 int main(void) {
@@ -1278,6 +1534,8 @@ int main(void) {
 	test_multibitmap_memory();
 	test_unlock_changed();
 	test_playback_pages();
+	test_conversion_playback();
+	test_back_kept();
 	test_empty_document();
 	test_refuses_unsupported();
 

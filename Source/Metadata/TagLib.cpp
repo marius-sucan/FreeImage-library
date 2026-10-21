@@ -1454,6 +1454,7 @@ static TagInfo
     { 0x0002, (char *) "LogicalHeight", (char *) "Logical height"},
     { 0x0003, (char *) "GlobalPalette", (char *) "Global Palette"},
     { 0x0004, (char *) "Loop", (char *) "loop"},
+    { 0x0005, (char *) "MandatoryBackground", (char *) "MNG BACK: the background color is mandatory (1, 3) or advisory (0, 2)"},
     { 0x1001, (char *) "FrameLeft", (char *) "Frame left"},
     { 0x1002, (char *) "FrameTop", (char *) "Frame top"},
     { 0x1003, (char *) "NoLocalPalette", (char *) "No Local Palette"},

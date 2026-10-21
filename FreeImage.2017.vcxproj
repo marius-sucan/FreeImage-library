@@ -412,6 +412,7 @@ copy Source\FreeImage.h Dist\x64
     <ClInclude Include="Source\FreeImage.h" />
     <ClInclude Include="Source\FreeImageIO.h" />
     <ClInclude Include="Source\Metadata\FreeImageTag.h" />
+    <ClInclude Include="Source\FreeImage\AnimationCanvas.h" />
     <ClInclude Include="Source\FreeImage\J2KHelper.h" />
     <ClInclude Include="Source\Plugin.h" />
     <ClInclude Include="Source\FreeImage\PSDParser.h" />

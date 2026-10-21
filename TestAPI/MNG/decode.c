@@ -2311,6 +2311,166 @@ static void test_global_trns(void) {
 	}
 }
 
+/* FRAM with a delay and layer clipping boundaries: change 1 this subframe, 2 later ones too; delta adds */
+static void mng_fram_clip(Buf *out, BYTE mode, BYTE change_delay, DWORD delay, BYTE change_clip, BYTE delta,
+						  LONG left, LONG right, LONG top, LONG bottom) {
+	Buf body; buf_init(&body);
+	buf_byte(&body, mode);
+	buf_byte(&body, 0);
+	buf_byte(&body, change_delay);
+	buf_byte(&body, 0);
+	buf_byte(&body, change_clip);
+	buf_byte(&body, 0);
+	if (change_delay) buf_u32(&body, delay);
+	if (change_clip) {
+		buf_byte(&body, delta);
+		buf_u32(&body, (DWORD)left);
+		buf_u32(&body, (DWORD)right);
+		buf_u32(&body, (DWORD)top);
+		buf_u32(&body, (DWORD)bottom);
+	}
+	chunk_buf(out, "FRAM", &body);
+}
+
+/* 'B' blue, 'Y' yellow, 'G' green, '.' transparent: the 20x20 canvas of page n in rows of rectangles */
+typedef struct { int left, top, right, bottom; char what; } Patch;
+
+static int canvas_is(FIBITMAP *dib, const Patch *patches, int count) {
+	int x, y, i;
+	if (!dib || FreeImage_GetWidth(dib) != 20 || FreeImage_GetHeight(dib) != 20) return 0;
+	for (y = 0; y < 20; y++) {
+		for (x = 0; x < 20; x++) {
+			RGBQUAD c;
+			char want = 'B', got;
+			for (i = 0; i < count; i++) {
+				if (x >= patches[i].left && x < patches[i].right && y >= patches[i].top && y < patches[i].bottom) want = patches[i].what;
+			}
+			pixel_at(dib, x, y, &c);
+			got = (c.rgbReserved == 0) ? '.' : (c.rgbBlue == 255 && !c.rgbRed) ? 'B' : (c.rgbRed == 255 && c.rgbGreen == 255) ? 'Y' :
+				  (c.rgbGreen == 255 && !c.rgbRed) ? 'G' : '?';
+			if (got != want) return 0;
+		}
+	}
+	return 1;
+}
+
+/** Background layers are clipped to the subframe's layer clipping boundaries, which last one subframe or become the default; an empty subframe in mode 3 is a background layer of its own (4.3.2). */
+static void test_clipped_backgrounds(void) {
+	Buf mng;
+	FIMULTIBITMAP *mb;
+	FIBITMAP *dib;
+	int i, bad = 0;
+
+	printf("clipped background layers\n");
+
+	for (i = 0; i < 4; i++) {
+		/* page 1 then page 2 as they should look */
+		static const Patch ONE[4][2] = {
+			{ { 5, 5, 15, 15, '.' }, { 0, 0, 0, 0, 'B' } },
+			{ { 0, 0, 10, 10, '.' }, { 0, 0, 0, 0, 'B' } },
+			{ { 2, 2, 18, 18, '.' }, { 0, 0, 0, 0, 'B' } },
+			{ { 4, 6, 12, 16, '.' }, { 14, 14, 18, 18, 'Y' } },
+		};
+		static const Patch TWO[4][2] = {
+			{ { 0, 0, 20, 20, 'Y' }, { 0, 0, 0, 0, 'B' } },
+			{ { 0, 0, 10, 10, 'Y' }, { 0, 0, 0, 0, 'B' } },
+			{ { 2, 2, 18, 18, '.' }, { 5, 5, 15, 15, 'G' } },
+			{ { 4, 6, 12, 16, '.' }, { 14, 14, 18, 18, 'Y' } },
+		};
+		static const char *WHAT[4] = { "a clip for one subframe", "a clip that becomes the default", "a delta clip", "an empty mode-3 subframe" };
+
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, 20, 20, 100, 0, 0, 0, 11);
+		mng_fram(&mng, 1, 2, 10);
+		mng_image(&mng, 20, 20, 0, 0, 255, 24);
+		switch (i) {
+			case 0:
+				mng_fram_clip(&mng, 3, 2, 10, 1, 0, 5, 15, 5, 15);
+				mng_image_alpha(&mng, 20, 20, 0, 0, 0, 0);
+				mng_fram(&mng, 1, 2, 10);
+				mng_image(&mng, 20, 20, 255, 255, 0, 24);
+				break;
+			case 1:
+				mng_fram_clip(&mng, 3, 2, 10, 2, 0, 0, 10, 0, 10);
+				mng_image_alpha(&mng, 20, 20, 0, 0, 0, 0);
+				mng_fram(&mng, 1, 2, 10);
+				mng_image(&mng, 20, 20, 255, 255, 0, 24);
+				break;
+			case 2:
+				mng_fram_clip(&mng, 3, 2, 10, 2, 0, 2, 18, 2, 18);
+				mng_image_alpha(&mng, 20, 20, 0, 0, 0, 0);
+				mng_fram_clip(&mng, 1, 2, 10, 1, 1, 3, -3, 3, -3);
+				mng_image(&mng, 20, 20, 0, 255, 0, 24);
+				break;
+			default:
+				mng_fram_clip(&mng, 3, 1, 0, 2, 0, 4, 12, 6, 16);
+				mng_fram_clip(&mng, 1, 2, 10, 2, 0, 0, 20, 0, 20);
+				mng_defi(&mng, 0, 0, 0, 14, 14);
+				mng_image(&mng, 4, 4, 255, 255, 0, 24);
+				break;
+		}
+		mng_mend(&mng);
+		mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_clip.mng", &mng), FALSE, TRUE, FALSE, MNG_PLAYBACK);
+		buf_free(&mng);
+		if (!mb) {
+			fail("%s: the file does not open", WHAT[i]);
+			bad = 1;
+			continue;
+		}
+		dib = FreeImage_LockPage(mb, 1);
+		if (!canvas_is(dib, ONE[i], 2)) {
+			fail("%s: page 1 is not as the spec draws it", WHAT[i]);
+			bad = 1;
+		}
+		if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		if (FreeImage_GetPageCount(mb) > 2) {
+			dib = FreeImage_LockPage(mb, 2);
+			if (!canvas_is(dib, TWO[i], 2)) {
+				fail("%s: page 2 is not as the spec draws it", WHAT[i]);
+				bad = 1;
+			}
+			if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+		}
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+
+	/* the raw pages' tags: a clear of the page before alone disposes of it; a background just under a page replaces */
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, 20, 20, 100, 0, 0, 0, 11);
+	mng_fram(&mng, 1, 2, 10);
+	mng_defi(&mng, 0, 0, 0, 2, 2);
+	mng_image(&mng, 8, 8, 0, 0, 255, 24);
+	mng_fram_clip(&mng, 3, 1, 0, 2, 0, 2, 10, 2, 10);
+	mng_fram_clip(&mng, 3, 2, 10, 2, 0, 12, 18, 12, 18);
+	mng_defi(&mng, 0, 0, 0, 12, 12);
+	mng_image_alpha(&mng, 6, 6, 255, 255, 0, 128);
+	mng_mend(&mng);
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, write_file("mng_clip_tags.mng", &mng), FALSE, TRUE, FALSE, 0);
+	buf_free(&mng);
+	if (!mb || FreeImage_GetPageCount(mb) != 2) {
+		fail("tags: the file does not open as two pages");
+		bad = 1;
+	} else {
+		FIBITMAP *first = FreeImage_LockPage(mb, 0), *second = FreeImage_LockPage(mb, 1);
+		if (!first || !second || anim_tag(first, "DisposalMethod", -1) != 2 || anim_tag(first, "BlendMethod", -1) != 0 ||
+			anim_tag(second, "BlendMethod", -1) != 1) {
+			fail("tags: page 0 disposes %ld blends %ld, page 1 blends %ld; expected 2, 0 and 1",
+				 first ? anim_tag(first, "DisposalMethod", -1) : -1, first ? anim_tag(first, "BlendMethod", -1) : -1,
+				 second ? anim_tag(second, "BlendMethod", -1) : -1);
+			bad = 1;
+		}
+		if (second) FreeImage_UnlockPage(mb, second, FALSE);
+		if (first) FreeImage_UnlockPage(mb, first, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+
+	if (!bad) {
+		ok("background layers are clipped as the subframe's layers, a one-subframe clip ends with it, a delta adds, an empty mode-3 subframe clears; the raw pages' tags say so");
+	}
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -2340,6 +2500,7 @@ int main(void) {
 	test_jng_profiles();
 	test_top_level_text();
 	test_global_trns();
+	test_clipped_backgrounds();
 
 	FreeImage_DeInitialise();
 

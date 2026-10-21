@@ -345,6 +345,7 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <ClInclude Include="..\FreeImageIO.h" />
     <ClInclude Include="..\Metadata\FreeImageTag.h" />
     <ClInclude Include="..\Plugin.h" />
+    <ClInclude Include="..\FreeImage\AnimationCanvas.h" />
     <ClInclude Include="..\FreeImage\PSDParser.h" />
     <ClInclude Include="..\Quantizers.h" />
     <ClInclude Include="..\ToneMapping.h" />

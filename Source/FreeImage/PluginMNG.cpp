@@ -25,6 +25,7 @@
 #include "FreeImage.h"
 #include "Utilities.h"
 #include "Plugin.h"
+#include "AnimationCanvas.h"
 
 #include "../Metadata/FreeImageTag.h"
 
@@ -173,27 +174,31 @@ struct MNGFrame {
 
 	BYTE framing_mode;
 	int subframe;
-	BOOL restore_background; //! background layer drawn before it
+	BOOL restore_background; //! background layer drawn before it, in bg_clip
+	AnimRect bg_clip;
+	std::vector<AnimRect> clears;	//! background layers of empty subframes before it
 
 	size_t globals;			//! index into MNGinfo::globals
 
 	MNGFrame() : offset(0), length(0), is_jng(FALSE), is_basi(FALSE), width(0), height(0),
 		delay_ticks(0), x(0), y(0), do_not_show(FALSE), has_clip(FALSE),
 		clip_left(0), clip_right(0), clip_top(0), clip_bottom(0),
-		framing_mode(1), subframe(0), restore_background(FALSE), globals(0) {
+		framing_mode(1), subframe(0), restore_background(FALSE),
+		bg_clip(0, 0, (std::numeric_limits<int>::max)(), (std::numeric_limits<int>::max)()), globals(0) {
 	}
 };
 
 struct MNGOutFrame {
 	std::vector<BYTE> png;	//! IHDR..IEND, no signature
-	DWORD width, height;
-	LONG x, y;
+	AnimRect rect;			//! where it is drawn
 	DWORD delay_ms;
-	BYTE disposal;			//! GIF numbering
+	BOOL replace;			//! drawn in place of what is there, not over it
+	BOOL clear;				//! clear_rect cleared before the next frame
+	AnimRect clear_rect;
 	BOOL has_alpha;
+	BYTE disposal;			//! the page's, GIF numbering
 
-	MNGOutFrame() : width(0), height(0), x(0), y(0), delay_ms(0),
-		disposal(GIF_DISPOSAL_LEAVE), has_alpha(FALSE) {
+	MNGOutFrame() : delay_ms(0), replace(FALSE), clear(FALSE), has_alpha(FALSE), disposal(GIF_DISPOSAL_LEAVE) {
 	}
 };
 
@@ -209,6 +214,7 @@ struct MNGinfo {
 	LONG loop_count;			//! 1 = once, 0 = forever
 	BOOL has_background;
 	RGBQUAD background;
+	BYTE background_mandatory;	//! BACK's mandatory_background, 0 for a stand-in bKGD
 	std::vector<BYTE> background_iccp;	//! the global iCCP payload the background colour is given in
 	BOOL background_srgb;		//! or the global sRGB chunk
 
@@ -237,21 +243,30 @@ struct MNGinfo {
 	DWORD out_canvas_width;		//! LogicalWidth, grown to fit
 	DWORD out_canvas_height;
 	LONG out_loop;				//! 1 = once, 0 = forever
-	BOOL out_has_background;
-	RGBQUAD out_background;
+	BOOL out_has_back;			//! a BACK, from pages read from a MNG with one
+	RGBQUAD out_back;
+	BYTE out_back_mandatory;
+
+	// what the pages show, from the frame after the first that restores the canvas
+	AnimationCanvas out_shown;
+	BOOL out_following;			//! out_shown is kept
+	BOOL out_tracking;			//! FALSE once out_shown could not follow
+	AnimRect out_dirty;			//! where the file shows other than out_shown
+	std::vector<BYTE> out_profile;	//! page 0's RGB profile, out_shown's colours
+	BOOL out_warned;
 
 	MNGinfo() : read(FALSE), has_mhdr(FALSE), canvas_width(0), canvas_height(0),
 		ticks_per_second(0), nominal_layer_count(0), nominal_frame_count(0),
-		nominal_play_time(0), simplicity(0), loop_count(1), has_background(FALSE),
+		nominal_play_time(0), simplicity(0), loop_count(1), has_background(FALSE), background_mandatory(0),
 		background_srgb(FALSE), complex_features(FALSE), warned(FALSE), canvas(NULL), canvas_page(-1),
 		prepared(FALSE), description(NULL), colour_warned(FALSE),
 		out_flags(0), out_canvas_width(0), out_canvas_height(0), out_loop(1),
-		out_has_background(FALSE) {
+		out_has_back(FALSE), out_back_mandatory(0),
+		out_shown(MNG_MAX_CANVAS_PIXELS), out_following(FALSE), out_tracking(TRUE), out_warned(FALSE) {
 		background.rgbRed = background.rgbGreen = background.rgbBlue = 0;
 		background.rgbReserved = 255;
 		canvas_background = background;
-		out_background.rgbRed = out_background.rgbGreen = out_background.rgbBlue = 0;
-		out_background.rgbReserved = 255;
+		out_back = background;
 	}
 
 	~MNGinfo() {
@@ -356,17 +371,40 @@ struct MNGFramingState {
 	BYTE framing_mode;
 	DWORD default_delay;	//! ticks
 	DWORD current_delay;	//! for the upcoming subframe
-	BOOL has_clip;
+	BOOL has_clip;			//! the subframe's layer clipping boundaries
 	LONG clip_left, clip_right, clip_top, clip_bottom;
+	BOOL has_default_clip;	//! those a subframe starts with
+	LONG default_left, default_right, default_top, default_bottom;
 
 	MNGFramingState() : framing_mode(1), default_delay(1), current_delay(1),
-		has_clip(FALSE), clip_left(0), clip_right(0), clip_top(0), clip_bottom(0) {
+		has_clip(FALSE), clip_left(0), clip_right(0), clip_top(0), clip_bottom(0),
+		has_default_clip(FALSE), default_left(0), default_right(0), default_top(0), default_bottom(0) {
 	}
 };
 
+static LONG
+ClampLONG(INT64 value) {
+	const INT64 low = (std::numeric_limits<LONG>::min)();
+	const INT64 high = (std::numeric_limits<LONG>::max)();
+	return (LONG)((value < low) ? low : (value > high) ? high : value);
+}
+
 // FRAM (MNG 1.0, 4.3.2); optional fields are omitted as a group
 static void
-ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
+ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state, DWORD frame_width, DWORD frame_height) {
+	// a delta counts from the subframe that ends here; one-subframe boundaries end with it
+	const LONG previous[4] = {
+		state->has_clip ? state->clip_left : 0,
+		state->has_clip ? state->clip_right : ClampLONG(frame_width),
+		state->has_clip ? state->clip_top : 0,
+		state->has_clip ? state->clip_bottom : ClampLONG(frame_height)
+	};
+	state->has_clip = state->has_default_clip;
+	state->clip_left = state->default_left;
+	state->clip_right = state->default_right;
+	state->clip_top = state->default_top;
+	state->clip_bottom = state->default_bottom;
+
 	if(length == 0) {
 		// empty FRAM: a subframe delimiter; one-shot values expire
 		state->current_delay = state->default_delay;
@@ -410,25 +448,26 @@ ParseFRAM(const BYTE *payload, DWORD length, MNGFramingState *state) {
 		pos += 4;
 	}
 	if(change_clipping && (pos + 17 <= length)) {
-		const BYTE delta_type = payload[pos];
+		const BOOL delta = (payload[pos] == 1) ? TRUE : FALSE;
 		const LONG left = GetLONG(&payload[pos + 1]);
 		const LONG right = GetLONG(&payload[pos + 5]);
 		const LONG top = GetLONG(&payload[pos + 9]);
 		const LONG bottom = GetLONG(&payload[pos + 13]);
 		pos += 17;
 
-		if(delta_type == 1) {
-			state->clip_left += left;
-			state->clip_right += right;
-			state->clip_top += top;
-			state->clip_bottom += bottom;
-		} else {
-			state->clip_left = left;
-			state->clip_right = right;
-			state->clip_top = top;
-			state->clip_bottom = bottom;
-		}
+		state->clip_left = delta ? ClampLONG((INT64)previous[0] + left) : left;
+		state->clip_right = delta ? ClampLONG((INT64)previous[1] + right) : right;
+		state->clip_top = delta ? ClampLONG((INT64)previous[2] + top) : top;
+		state->clip_bottom = delta ? ClampLONG((INT64)previous[3] + bottom) : bottom;
 		state->has_clip = TRUE;
+		// 1: this subframe only, 2: later ones too
+		if(change_clipping == 2) {
+			state->has_default_clip = TRUE;
+			state->default_left = state->clip_left;
+			state->default_right = state->clip_right;
+			state->default_top = state->clip_top;
+			state->default_bottom = state->clip_bottom;
+		}
 	}
 	(void)change_sync;
 
@@ -473,6 +512,9 @@ struct MNGShowCursor {
 
 #define MNG_MAX_FRAMES	65536
 
+// background layers kept between two images; more are merged
+#define MNG_MAX_CLEARS	256
+
 // DEFI (MNG 1.0, 4.2.1): applies only the fields present
 static void
 ParseDEFI(const BYTE *payload, DWORD length, MNGObjectState *state) {
@@ -508,6 +550,7 @@ ParseBACK(const BYTE *payload, DWORD length, const MNGGlobals& globals, MNGinfo 
 	info->background.rgbBlue = (BYTE)(GetWORD(&payload[4]) >> 8);
 	info->background.rgbReserved = 255;
 	info->has_background = TRUE;
+	info->background_mandatory = (length >= 7) ? payload[6] : 0;
 	info->background_iccp = globals.iccp;
 	info->background_srgb = !globals.srgb.empty();
 }
@@ -583,9 +626,28 @@ ApplyFramingModes(MNGinfo *info) {
 	}
 }
 
+// where the subframe draws, unbounded when its FRAM has not said
+static AnimRect
+SubframeClip(const MNGFramingState& framing) {
+	if(framing.has_clip) {
+		return AnimRect(framing.clip_left, framing.clip_top, framing.clip_right, framing.clip_bottom);
+	}
+	return AnimRect(0, 0, (std::numeric_limits<int>::max)(), (std::numeric_limits<int>::max)());
+}
+
+// what the next layer takes from the stream before it
+struct MNGLayerContext {
+	BOOL first_image;
+	BOOL layer_since_fram;			//! the subframe has a layer
+	std::vector<AnimRect> clears;	//! background layers of empty subframes since the last layer
+
+	MNGLayerContext() : first_image(TRUE), layer_since_fram(FALSE) {
+	}
+};
+
 static BOOL
 AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
-		 int subframe, BOOL *first_image) {
+		 int subframe, MNGLayerContext *context) {
 	if(info->frames.size() >= MNG_MAX_FRAMES) {
 		return FALSE;
 	}
@@ -604,9 +666,9 @@ AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 		frame.clip_bottom = framing.clip_bottom;
 	}
 
-	// a background layer before the first image; modes 3 and 4 add more
+	// a background layer before the first image; modes 3 and 4 add more, clipped as the layers are
 	frame.restore_background = FALSE;
-	if(*first_image) {
+	if(context->first_image) {
 		frame.restore_background = TRUE;
 	} else if(framing.framing_mode == 3) {
 		frame.restore_background = TRUE;
@@ -614,7 +676,10 @@ AddLayer(MNGinfo *info, MNGFrame frame, const MNGFramingState& framing,
 		frame.restore_background = info->frames.empty() ? TRUE :
 			(info->frames.back().subframe != subframe) ? TRUE : FALSE;
 	}
-	*first_image = FALSE;
+	frame.bg_clip = SubframeClip(framing);
+	frame.clears.swap(context->clears);
+	context->first_image = FALSE;
+	context->layer_since_fram = TRUE;
 
 	info->frames.push_back(frame);
 	return TRUE;
@@ -654,7 +719,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 	size_t globals_index = (size_t)-1;
 
 	int subframe = 0;
-	BOOL first_image = TRUE;
+	MNGLayerContext layers;
 	BOOL seen_mend = FALSE;
 
 	// an outer LOOP becomes the loop count; images are not repeated
@@ -763,7 +828,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 
 				// hidden objects become pages only when shown; nonviewable ones never do
 				if(!object.do_not_show && viewable) {
-					if(!AddLayer(info, frame, framing, subframe, &first_image)) {
+					if(!AddLayer(info, frame, framing, subframe, &layers)) {
 						FreeImage_OutputMessageProc(s_format_id,
 							"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
 						break;
@@ -848,8 +913,23 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 		} else if(type == CHUNK_MEND) {
 			seen_mend = TRUE;
 		} else if(type == CHUNK_FRAM) {
+			// an empty subframe in mode 3 or 4 is a background layer of its own (4.3.2)
+			if(((framing.framing_mode == 3) || (framing.framing_mode == 4)) && !layers.layer_since_fram) {
+				const AnimRect clear = SubframeClip(framing);
+				if(layers.clears.size() < MNG_MAX_CLEARS) {
+					layers.clears.push_back(clear);
+				} else {
+					layers.clears.back() = layers.clears.back().Union(clear);
+				}
+				// shown for the subframe's delay in mode 4: the page before it keeps that time
+				if((framing.framing_mode == 4) && !info->frames.empty()) {
+					DWORD& delay = info->frames.back().delay_ticks;
+					delay = (framing.current_delay > 0xFFFFFFFF - delay) ? 0xFFFFFFFF : delay + framing.current_delay;
+				}
+			}
+			layers.layer_since_fram = FALSE;
 			subframe++;
-			ParseFRAM(data, length, &framing);
+			ParseFRAM(data, length, &framing, info->canvas_width, info->canvas_height);
 		} else if(type == CHUNK_DEFI) {
 			// defaults fill omitted fields only for a new id
 			if(length >= 2) {
@@ -931,7 +1011,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 
 					if((show_mode == 6) && objects[range[chosen]].viewable) {
 						if(!AddLayer(info, objects[range[chosen]].frame, framing,
-									 subframe, &first_image)) {
+									 subframe, &layers)) {
 							FreeImage_OutputMessageProc(s_format_id,
 								"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
 							break;
@@ -956,7 +1036,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 						default: break;	// 2 displays without changing the flag
 					}
 					if(displays && !stored.do_not_show && stored.viewable) {
-						if(!AddLayer(info, stored.frame, framing, subframe, &first_image)) {
+						if(!AddLayer(info, stored.frame, framing, subframe, &layers)) {
 							FreeImage_OutputMessageProc(s_format_id,
 								"MNG: the file names more than %d layers", MNG_MAX_FRAMES);
 							break;
@@ -1044,9 +1124,10 @@ ParseStream(FreeImageIO *io, fi_handle handle, INT64 start, MNGinfo *info) {
 			globals.phys.assign(payload.begin(), payload.end());
 			globals_index = (size_t)-1;
 		} else if(type == CHUNK_bKGD) {
-			// a global bKGD stands in for BACK when there is no BACK
+			// a global bKGD stands in for BACK when there is no BACK, as an advisory one
 			if(!info->has_background) {
 				ParseBACK(data, length, globals, info);
+				info->background_mandatory = 0;
 			}
 		} else if(type == CHUNK_tEXt) {
 			ParseTEXt(data, length, info);
@@ -1575,20 +1656,20 @@ PrepareCanvas(FreeImageIO *io, fi_handle handle, MNGinfo *info, int flags) {
 	}
 }
 
-// the background colour, or transparent when there is none
+// the background colour, or transparent when there is none, in rect (y counted down from the top)
 static void
-FillBackground(FIBITMAP *canvas, const MNGinfo *info) {
+FillBackground(FIBITMAP *canvas, const MNGinfo *info, const AnimRect& rect) {
 	RGBQUAD colour;
 	colour.rgbRed = info->has_background ? info->canvas_background.rgbRed : 0;
 	colour.rgbGreen = info->has_background ? info->canvas_background.rgbGreen : 0;
 	colour.rgbBlue = info->has_background ? info->canvas_background.rgbBlue : 0;
 	colour.rgbReserved = info->has_background ? 255 : 0;
 
-	const unsigned width = FreeImage_GetWidth(canvas);
 	const unsigned height = FreeImage_GetHeight(canvas);
-	for(unsigned y = 0; y < height; y++) {
-		BYTE *line = FreeImage_GetScanLine(canvas, y);
-		for(unsigned x = 0; x < width; x++) {
+	const AnimRect r = rect.Intersect(AnimRect(0, 0, (int)FreeImage_GetWidth(canvas), (int)height));
+	for(int y = r.top; y < r.bottom; y++) {
+		BYTE *line = FreeImage_GetScanLine(canvas, height - 1 - (unsigned)y) + (size_t)r.left * 4;
+		for(int x = r.left; x < r.right; x++) {
 			line[FI_RGBA_RED] = colour.rgbRed;
 			line[FI_RGBA_GREEN] = colour.rgbGreen;
 			line[FI_RGBA_BLUE] = colour.rgbBlue;
@@ -1699,7 +1780,7 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 		if(!info->canvas) {
 			return NULL;
 		}
-		FillBackground(info->canvas, info);
+		FillBackground(info->canvas, info, AnimRect(0, 0, (int)width, (int)height));
 	}
 
 	// a layer in other colours than the canvas's is converted to them
@@ -1708,8 +1789,14 @@ RenderFrame(FreeImageIO *io, fi_handle handle, MNGinfo *info, int page, int flag
 	for(int i = start; i <= page; i++) {
 		const MNGFrame& frame = info->frames[i];
 
-		if(frame.restore_background && (i > 0)) {
-			FillBackground(info->canvas, info);
+		// the first layer's background is the fresh canvas
+		if(i > 0) {
+			for(size_t c = 0; c < frame.clears.size(); c++) {
+				FillBackground(info->canvas, info, frame.clears[c]);
+			}
+			if(frame.restore_background) {
+				FillBackground(info->canvas, info, frame.bg_clip);
+			}
 		}
 
 		if(!frame.do_not_show) {
@@ -1784,6 +1871,27 @@ DelayToMilliseconds(const MNGinfo *info, DWORD ticks) {
 	return (LONG)(ms + 0.5);
 }
 
+static AnimRect
+CanvasRect(const MNGinfo *info) {
+	return AnimRect(0, 0, ClampLONG(info->canvas_width), ClampLONG(info->canvas_height));
+}
+
+static AnimRect
+LayerRect(const MNGinfo *info, const MNGFrame& frame) {
+	const AnimRect r(frame.x, frame.y, ClampLONG((INT64)frame.x + frame.width), ClampLONG((INT64)frame.y + frame.height));
+	return r.Intersect(CanvasRect(info));
+}
+
+// a background layer just where the layer goes, not where the one before went: the layer replaces what is there
+static BOOL
+Replaces(const MNGinfo *info, const MNGFrame& frame, const MNGFrame& before) {
+	if(!frame.restore_background) {
+		return FALSE;
+	}
+	const AnimRect background = frame.bg_clip.Intersect(CanvasRect(info));
+	return (background.Equals(LayerRect(info, frame)) && !background.Equals(LayerRect(info, before))) ? TRUE : FALSE;
+}
+
 // a played page replaces the whole canvas
 static void
 SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page, BOOL playback) {
@@ -1793,13 +1901,15 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page, BOOL playback) {
 	WORD left = playback ? 0 : (WORD)MIN(MAX(frame.x, (LONG)0), (LONG)0xFFFF);
 	WORD top = playback ? 0 : (WORD)MIN(MAX(frame.y, (LONG)0), (LONG)0xFFFF);
 
-	// a background layer before the next frame = dispose to background
+	// a background layer before the next frame disposes of this one, unless it is only the next one's own
 	BYTE disposal = GIF_DISPOSAL_LEAVE;
-	if((page + 1 < (int)info->frames.size()) && info->frames[page + 1].restore_background) {
-		disposal = GIF_DISPOSAL_BACKGROUND;
+	if(page + 1 < (int)info->frames.size()) {
+		const MNGFrame& next = info->frames[page + 1];
+		if(!next.clears.empty() || (next.restore_background && !Replaces(info, next, frame))) {
+			disposal = GIF_DISPOSAL_BACKGROUND;
+		}
 	}
-	// MNG layers blend over
-	BYTE blend = playback ? 1 : 0;
+	BYTE blend = (playback || ((page > 0) && Replaces(info, frame, info->frames[page - 1]))) ? 1 : 0;
 
 	SetAnimTag(dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &duration);
 	SetAnimTag(dib, "FrameLeft", ANIMTAG_FRAMELEFT, FIDT_SHORT, 1, 2, &left);
@@ -1817,6 +1927,11 @@ SetFrameMetadata(FIBITMAP *dib, const MNGinfo *info, int page, BOOL playback) {
 		SetAnimTag(dib, "LogicalWidth", ANIMTAG_LOGICALWIDTH, FIDT_SHORT, 1, 2, &logicalwidth);
 		SetAnimTag(dib, "LogicalHeight", ANIMTAG_LOGICALHEIGHT, FIDT_SHORT, 1, 2, &logicalheight);
 		SetAnimTag(dib, "Loop", ANIMTAG_LOOP, FIDT_LONG, 1, 4, &loop);
+		// the page's background color is the file's BACK; a played page has it drawn in
+		if(info->has_background && !playback) {
+			BYTE mandatory = info->background_mandatory;
+			SetAnimTag(dib, "MandatoryBackground", ANIMTAG_MANDATORYBACKGROUND, FIDT_BYTE, 1, 1, &mandatory);
+		}
 	}
 }
 
@@ -1851,6 +1966,94 @@ GetAnimTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, FITAG **tag) 
 		}
 	}
 	return FALSE;
+}
+
+// the page in page 0's colours as 8-bit RGBA, NULL when that cannot be made
+static FIBITMAP *
+ShownFrame(const MNGinfo *info, FIBITMAP *dib) {
+	FIBITMAP *converted = NULL;
+	ConvertToFileProfile(dib, info->out_profile.empty() ? NULL : &info->out_profile[0], (unsigned)info->out_profile.size(), &converted);
+	FIBITMAP *frame = AnimationFrame32(converted ? converted : dib);
+	if(converted) {
+		FreeImage_Unload(converted);
+	}
+	return frame;
+}
+
+static void
+WarnRestore(MNGinfo *info) {
+	if(!info->out_warned) {
+		info->out_warned = TRUE;
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the animation is too large to follow; a frame that restores the canvas is written as one that leaves it");
+	}
+}
+
+// a page on out_shown; for a frame that restores the canvas, what was under it, or that nothing showed there
+static BOOL
+DrawShown(MNGinfo *info, FIBITMAP *dib, const AnimRect& rect, BOOL replace, BYTE disposal, BOOL *was_clear, FIBITMAP **under) {
+	FIBITMAP *frame32 = ShownFrame(info, dib);
+	BOOL done = frame32 && info->out_shown.Grow(MAX(info->out_canvas_width, (DWORD)rect.right), MAX(info->out_canvas_height, (DWORD)rect.bottom));
+	if(done && (disposal == GIF_DISPOSAL_PREVIOUS)) {
+		*was_clear = info->out_shown.IsClear(rect);
+		*under = *was_clear ? NULL : info->out_shown.Copy(rect);
+		done = *was_clear || *under;
+	}
+	if(done) {
+		info->out_shown.Draw(frame32, rect.left, rect.top, replace);
+	}
+	if(frame32) {
+		FreeImage_Unload(frame32);
+	}
+	return done;
+}
+
+// what the page's disposal leaves on out_shown
+static void
+DisposeShown(MNGinfo *info, const AnimRect& rect, BYTE disposal, BOOL was_clear, FIBITMAP *under) {
+	if((disposal == GIF_DISPOSAL_BACKGROUND) || ((disposal == GIF_DISPOSAL_PREVIOUS) && was_clear)) {
+		info->out_shown.Clear(rect);
+	} else if(under) {
+		info->out_shown.Restore(under, rect.left, rect.top);
+	}
+}
+
+// the frames written so far drawn again, the last of them restoring the canvas
+static BOOL
+FollowShown(MNGinfo *info) {
+	const size_t count = info->out_frames.size();
+	for(size_t i = 0; i < count; i++) {
+		MNGOutFrame& frame = info->out_frames[i];
+		std::vector<BYTE> png(g_png_signature, g_png_signature + 8);
+		png.insert(png.end(), frame.png.begin(), frame.png.end());
+		FIMEMORY *hmem = FreeImage_OpenMemory64(&png[0], (UINT64)png.size());
+		FIBITMAP *page = hmem ? FreeImage_LoadFromMemory(FIF_PNG, hmem, 0) : NULL;
+		if(hmem) {
+			FreeImage_CloseMemory(hmem);
+		}
+		BOOL was_clear = FALSE;
+		FIBITMAP *under = NULL;
+		const BOOL drawn = page && DrawShown(info, page, frame.rect, frame.replace, frame.disposal, &was_clear, &under);
+		if(page) {
+			FreeImage_Unload(page);
+		}
+		if(!drawn) {
+			return FALSE;
+		}
+		// it is cleared when nothing showed under it, else the next frame draws what is shown
+		if(i + 1 == count) {
+			if(was_clear) {
+				frame.clear = TRUE;
+				frame.clear_rect = frame.rect;
+			} else {
+				info->out_dirty = frame.rect;
+			}
+		}
+		DisposeShown(info, frame.rect, frame.disposal, was_clear, under);
+		if(under) {
+			FreeImage_Unload(under);
+		}
+	}
+	return TRUE;
 }
 
 // PNG datastream without its 8-byte signature
@@ -1903,7 +2106,71 @@ WriteChunk(FreeImageIO *io, fi_handle handle, DWORD type, const BYTE *data, DWOR
 	return (io->write_proc(crc_bytes, 1, 4, handle) == 4);
 }
 
-// 1000 ticks/s; FRAM mode 3 = dispose to background, mode 1 = leave
+// FRAM with a delay and, when given, new layer clipping boundaries, which later subframes keep
+static BOOL
+WriteFRAM(FreeImageIO *io, fi_handle handle, BYTE framing_mode, BYTE change_delay, DWORD delay, const AnimRect *clip) {
+	BYTE fram[27];
+	fram[0] = framing_mode;
+	fram[1] = 0;						// the subframe is nameless: just the separator
+	fram[2] = change_delay;				// 1: this subframe, 2: the default too
+	fram[3] = 0;						// no change to the timeout
+	fram[4] = clip ? 2 : 0;				// the clipping boundaries, the default too
+	fram[5] = 0;						// no change to the sync id list
+	PutDWORD(&fram[6], delay);
+	if(clip) {
+		fram[10] = 0;					// given, not added
+		PutDWORD(&fram[11], (DWORD)clip->left);
+		PutDWORD(&fram[15], (DWORD)clip->right);
+		PutDWORD(&fram[19], (DWORD)clip->top);
+		PutDWORD(&fram[23], (DWORD)clip->bottom);
+	}
+	return WriteChunk(io, handle, CHUNK_FRAM, fram, clip ? 27 : 10);
+}
+
+// how a frame is drawn: background layers clipped to a rectangle clear it (4.3.2)
+struct MNGFramePlan {
+	BOOL clear_first;		//! an empty mode 3 subframe clears clear_rect first
+	AnimRect clear_rect;
+	BYTE framing_mode;		//! 3: a background layer in clip, then the frame
+	AnimRect clip;
+};
+
+// what the frame before leaves cleared, then the frame over it or in its place
+static MNGFramePlan
+PlanFrame(const MNGinfo *info, size_t i) {
+	const MNGOutFrame& frame = info->out_frames[i];
+	MNGFramePlan plan;
+	plan.clear_first = FALSE;
+	plan.framing_mode = 1;
+
+	// the first frame is drawn on a fresh background
+	if(i == 0) {
+		return plan;
+	}
+	const MNGOutFrame& before = info->out_frames[i - 1];
+	if(before.clear) {
+		if(frame.replace && frame.rect.Contains(before.clear_rect)) {
+			plan.framing_mode = 3;
+			plan.clip = frame.rect;
+		} else if(before.clear_rect.Contains(frame.rect)) {
+			plan.framing_mode = 3;
+			plan.clip = before.clear_rect;
+		} else {
+			plan.clear_first = TRUE;
+			plan.clear_rect = before.clear_rect;
+			if(frame.replace) {
+				plan.framing_mode = 3;
+				plan.clip = frame.rect;
+			}
+		}
+	} else if(frame.replace) {
+		plan.framing_mode = 3;
+		plan.clip = frame.rect;
+	}
+	return plan;
+}
+
+// 1000 ticks/s; frames are cleared and replaced with clipped background layers; BACK only from a MNG's pages
 static BOOL
 WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	const size_t count = info->out_frames.size();
@@ -1916,16 +2183,16 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 	DWORD canvas_height = info->out_canvas_height;
 	BOOL has_alpha = FALSE;
 	DWORD play_time = 0;
+	// background layers: one first, the planned ones
+	DWORD layers = (DWORD)count + 1;
 
 	for(size_t i = 0; i < count; i++) {
 		const MNGOutFrame& frame = info->out_frames[i];
-		const LONG right = frame.x + (LONG)frame.width;
-		const LONG bottom = frame.y + (LONG)frame.height;
-		if((right > 0) && ((DWORD)right > canvas_width)) {
-			canvas_width = (DWORD)right;
+		if((frame.rect.right > 0) && ((DWORD)frame.rect.right > canvas_width)) {
+			canvas_width = (DWORD)frame.rect.right;
 		}
-		if((bottom > 0) && ((DWORD)bottom > canvas_height)) {
-			canvas_height = (DWORD)bottom;
+		if((frame.rect.bottom > 0) && ((DWORD)frame.rect.bottom > canvas_height)) {
+			canvas_height = (DWORD)frame.rect.bottom;
 		}
 		if(frame.has_alpha) {
 			has_alpha = TRUE;
@@ -1933,23 +2200,19 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		// saturate at 2^31-1 (spec cap)
 		play_time = (frame.delay_ms > MNG_INFINITE_ITERATIONS - play_time)
 			? MNG_INFINITE_ITERATIONS : play_time + frame.delay_ms;
+		const MNGFramePlan plan = PlanFrame(info, i);
+		layers += (plan.clear_first ? 1 : 0) + ((plan.framing_mode == 3) ? 1 : 0);
 	}
-	if(!canvas_width || !canvas_height) {
+	const DWORD most = (DWORD)(std::numeric_limits<int>::max)();
+	if(!canvas_width || !canvas_height || (canvas_width > most) || (canvas_height > most)) {
 		return FALSE;
 	}
+	const AnimRect canvas(0, 0, (int)canvas_width, (int)canvas_height);
 
 	// VALID | SIMPLE (+ transparency); never the complex or delta bits
 	DWORD simplicity = MNG_PROFILE_VALID | MNG_PROFILE_SIMPLE;
 	if(has_alpha) {
 		simplicity |= MNG_PROFILE_TRANSPARENCY;
-	}
-
-	// background layers: one first, one per clearing frame
-	DWORD layers = (DWORD)count + 1;
-	for(size_t i = 1; i < count; i++) {
-		if(info->out_frames[i - 1].disposal == GIF_DISPOSAL_BACKGROUND) {
-			layers++;
-		}
 	}
 
 	if(io->write_proc((void*)g_mng_signature, 1, 8, handle) != 8) {
@@ -1983,52 +2246,54 @@ WriteMNG(FreeImageIO *io, fi_handle handle, MNGinfo *info) {
 		}
 	}
 
-	if(info->out_has_background) {
+	if(info->out_has_back) {
 		BYTE back[7];
-		back[0] = info->out_background.rgbRed;   back[1] = info->out_background.rgbRed;
-		back[2] = info->out_background.rgbGreen; back[3] = info->out_background.rgbGreen;
-		back[4] = info->out_background.rgbBlue;  back[5] = info->out_background.rgbBlue;
-		back[6] = 1;						// the colour is mandatory
+		back[0] = info->out_back.rgbRed;   back[1] = info->out_back.rgbRed;
+		back[2] = info->out_back.rgbGreen; back[3] = info->out_back.rgbGreen;
+		back[4] = info->out_back.rgbBlue;  back[5] = info->out_back.rgbBlue;
+		back[6] = info->out_back_mandatory;
 		if(!WriteChunk(io, handle, CHUNK_BACK, back, 7)) {
 			return FALSE;
 		}
 	}
 
-	// DEFI only when the position changes (default: the origin)
+	// DEFI only when the position changes (default: the origin); clipping boundaries only when they change
 	LONG placed_x = 0, placed_y = 0;
+	AnimRect clipped = canvas;
 
 	for(size_t i = 0; i < count; i++) {
 		const MNGOutFrame& frame = info->out_frames[i];
+		const MNGFramePlan plan = PlanFrame(info, i);
 
-		const BYTE framing_mode =
-			((i > 0) && (info->out_frames[i - 1].disposal == GIF_DISPOSAL_BACKGROUND)) ? 3 : 1;
-
-		{
-			BYTE fram[10];
-			fram[0] = framing_mode;
-			fram[1] = 0;					// the subframe is nameless: just the separator
-			fram[2] = 2;					// change the delay, and the default with it
-			fram[3] = 0;					// no change to the timeout
-			fram[4] = 0;					// no change to the clipping boundaries
-			fram[5] = 0;					// no change to the sync id list
-			PutDWORD(&fram[6], frame.delay_ms);
-			if(!WriteChunk(io, handle, CHUNK_FRAM, fram, 10)) {
+		// an empty subframe: its background layer alone, with no delay
+		if(plan.clear_first) {
+			const BOOL new_clip = !plan.clear_rect.Equals(clipped);
+			if(!WriteFRAM(io, handle, 3, 1, 0, new_clip ? &plan.clear_rect : NULL)) {
 				return FALSE;
 			}
+			clipped = plan.clear_rect;
+		}
+		{
+			const AnimRect clip = (plan.framing_mode == 3) ? plan.clip : canvas;
+			const BOOL new_clip = !clip.Equals(clipped);
+			if(!WriteFRAM(io, handle, plan.framing_mode, 2, frame.delay_ms, new_clip ? &clip : NULL)) {
+				return FALSE;
+			}
+			clipped = clip;
 		}
 
-		if((frame.x != placed_x) || (frame.y != placed_y)) {
+		if((frame.rect.left != placed_x) || (frame.rect.top != placed_y)) {
 			BYTE defi[12];
 			PutWORD(&defi[0], 0);			// object 0: not kept after it is drawn
 			defi[2] = 0;					// potentially visible
 			defi[3] = 0;					// abstract: nothing deltas against it
-			PutDWORD(&defi[4], (DWORD)frame.x);
-			PutDWORD(&defi[8], (DWORD)frame.y);
+			PutDWORD(&defi[4], (DWORD)frame.rect.left);
+			PutDWORD(&defi[8], (DWORD)frame.rect.top);
 			if(!WriteChunk(io, handle, CHUNK_DEFI, defi, 12)) {
 				return FALSE;
 			}
-			placed_x = frame.x;
-			placed_y = frame.y;
+			placed_x = frame.rect.left;
+			placed_y = frame.rect.top;
 		}
 
 		const size_t size = frame.png.size();
@@ -2236,52 +2501,21 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 	}
 
+	if(info->out_frames.size() >= MNG_MAX_FRAMES) {
+		FreeImage_OutputMessageProc(s_format_id,
+			"MNG: refusing to write more than %d frames", MNG_MAX_FRAMES);
+		return FALSE;
+	}
+
+	FIBITMAP *under = NULL;		// the canvas a frame that restores it was drawn over
+	FIBITMAP *shown = NULL;		// what the canvas shows, for the frame after that one
+	BOOL bResult = FALSE;
+
 	try {
-		std::vector<BYTE> png;
-
-		if(!EncodeFrame(dib, flags, png)) {
-			FreeImage_OutputMessageProc(s_format_id, "Failed to compress a frame");
-			return FALSE;
-		}
-
-		if(info->out_frames.size() >= MNG_MAX_FRAMES) {
-			FreeImage_OutputMessageProc(s_format_id,
-				"MNG: refusing to write more than %d frames", MNG_MAX_FRAMES);
-			return FALSE;
-		}
-
 		const BOOL is_first = info->out_frames.empty();
-
-		info->out_frames.push_back(MNGOutFrame());
-		MNGOutFrame& frame = info->out_frames.back();
-		frame.png.swap(png);
-
-		frame.width = FreeImage_GetWidth(dib);
-		frame.height = FreeImage_GetHeight(dib);
-		frame.has_alpha = (FreeImage_GetBPP(dib) == 32) || FreeImage_IsTransparent(dib);
-
-		// default for untagged pages, as in PluginAPNG.cpp
-		frame.delay_ms = 100;
-
 		FITAG *tag = NULL;
-		if(GetAnimTag(dib, "FrameTime", FIDT_LONG, &tag)) {
-			const LONG delay = *(LONG*)FreeImage_GetTagValue(tag);
-			frame.delay_ms = (delay > 0) ? (DWORD)delay : 0;
-		}
-		if(GetAnimTag(dib, "FrameLeft", FIDT_SHORT, &tag)) {
-			frame.x = *(WORD*)FreeImage_GetTagValue(tag);
-		}
-		if(GetAnimTag(dib, "FrameTop", FIDT_SHORT, &tag)) {
-			frame.y = *(WORD*)FreeImage_GetTagValue(tag);
-		}
-		if(GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &tag)) {
-			// GIF_DISPOSAL_PREVIOUS is written as LEAVE
-			const BYTE disposal = *(BYTE*)FreeImage_GetTagValue(tag);
-			frame.disposal = (disposal == GIF_DISPOSAL_BACKGROUND) ? GIF_DISPOSAL_BACKGROUND
-																   : GIF_DISPOSAL_LEAVE;
-		}
 
-		// the first page sets canvas and loop count
+		// the first page sets canvas, loop count and the colours of what is shown
 		if(is_first) {
 			info->out_flags = flags;
 
@@ -2295,20 +2529,119 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 				const LONG loop = *(LONG*)FreeImage_GetTagValue(tag);
 				info->out_loop = (loop > 0) ? loop : 0;
 			}
-
-			RGBQUAD background;
-			if(FreeImage_GetBackgroundColor(dib, &background)) {
-				info->out_background = background;
-				info->out_has_background = TRUE;
+			const FIICCPROFILE *icc = FreeImage_GetICCProfile(dib);
+			if(icc->data && PNG_IsEmbeddableProfile((const BYTE*)icc->data, icc->size, TRUE)) {
+				info->out_profile.assign((const BYTE*)icc->data, (const BYTE*)icc->data + icc->size);
+			}
+			// a background color is advisory, a MNG's BACK as its tag says: only that one is a BACK again
+			RGBQUAD back;
+			if(GetAnimTag(dib, "MandatoryBackground", FIDT_BYTE, &tag) && FreeImage_GetBackgroundColor(dib, &back)) {
+				info->out_has_back = TRUE;
+				info->out_back_mandatory = *(BYTE*)FreeImage_GetTagValue(tag);
+				back.rgbReserved = 255;
+				info->out_back = back;
+				info->out_shown.SetBackground(back);
 			}
 		}
 
-		return TRUE;
+		MNGOutFrame frame;
+		// default for untagged pages, as in PluginAPNG.cpp
+		frame.delay_ms = 100;
+		WORD x = 0, y = 0;
+		BYTE disposal = GIF_DISPOSAL_LEAVE;
 
+		if(GetAnimTag(dib, "FrameTime", FIDT_LONG, &tag)) {
+			const LONG delay = *(LONG*)FreeImage_GetTagValue(tag);
+			frame.delay_ms = (delay > 0) ? (DWORD)delay : 0;
+		}
+		if(GetAnimTag(dib, "FrameLeft", FIDT_SHORT, &tag)) {
+			x = *(WORD*)FreeImage_GetTagValue(tag);
+		}
+		if(GetAnimTag(dib, "FrameTop", FIDT_SHORT, &tag)) {
+			y = *(WORD*)FreeImage_GetTagValue(tag);
+		}
+		if(GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &tag)) {
+			disposal = *(BYTE*)FreeImage_GetTagValue(tag);
+		}
+		if(GetAnimTag(dib, "BlendMethod", FIDT_BYTE, &tag)) {
+			frame.replace = (*(BYTE*)FreeImage_GetTagValue(tag) == 1) ? TRUE : FALSE;
+		}
+		frame.disposal = disposal;
+		const AnimRect rect(x, y, ClampLONG((INT64)x + FreeImage_GetWidth(dib)), ClampLONG((INT64)y + FreeImage_GetHeight(dib)));
+		const BOOL restores = (disposal == GIF_DISPOSAL_PREVIOUS) ? TRUE : FALSE;
+
+		// what the pages show, in page 0's colours as MNG_PLAYBACK has them, from after the first frame that restores the canvas
+		if(!info->out_following && info->out_tracking && !info->out_frames.empty() &&
+		   (info->out_frames.back().disposal == GIF_DISPOSAL_PREVIOUS)) {
+			info->out_following = FollowShown(info);
+			if(!info->out_following) {
+				info->out_tracking = FALSE;
+			}
+		}
+		BOOL was_clear = FALSE;
+		if(info->out_following && info->out_tracking && !DrawShown(info, dib, rect, frame.replace, disposal, &was_clear, &under)) {
+			info->out_tracking = FALSE;
+		}
+		const BOOL following = (info->out_following && info->out_tracking) ? TRUE : FALSE;
+
+		// after a frame that restored the canvas over something: what is shown there, in place of what the file has
+		if(following && !info->out_dirty.IsEmpty()) {
+			frame.rect = info->out_dirty.Union(rect).Intersect(info->out_shown.Bounds());
+			shown = info->out_shown.Copy(frame.rect);
+			if(!shown) {
+				throw std::bad_alloc();
+			}
+			if(!info->out_profile.empty()) {
+				FreeImage_CreateICCProfile(shown, &info->out_profile[0], (long)info->out_profile.size());
+			}
+			frame.replace = TRUE;
+			frame.has_alpha = TRUE;
+		} else if(!following && !info->out_frames.empty() && (info->out_frames.back().disposal == GIF_DISPOSAL_PREVIOUS)) {
+			WarnRestore(info);
+		}
+		info->out_dirty = AnimRect();
+		if(!shown) {
+			frame.rect = rect;
+			frame.has_alpha = ((FreeImage_GetBPP(dib) == 32) || (FreeImage_GetImageType(dib) == FIT_RGBA16) || FreeImage_IsTransparent(dib)) ? TRUE : FALSE;
+		}
+
+		if(!EncodeFrame(shown ? shown : dib, flags, frame.png)) {
+			FreeImage_OutputMessageProc(s_format_id, "Failed to compress a frame");
+		} else {
+			// cleared before the next frame, or drawn by it from what is shown; FollowShown() settles a first restore
+			if(frame.rect.Equals(rect) && ((disposal == GIF_DISPOSAL_BACKGROUND) || (following && restores && was_clear))) {
+				frame.clear = TRUE;
+				frame.clear_rect = rect;
+			} else if(following && ((disposal == GIF_DISPOSAL_BACKGROUND) || restores)) {
+				info->out_dirty = rect;
+			}
+			if(following) {
+				DisposeShown(info, rect, disposal, was_clear, under);
+			}
+
+			info->out_frames.push_back(MNGOutFrame());
+			MNGOutFrame& stored = info->out_frames.back();
+			stored.png.swap(frame.png);
+			stored.rect = frame.rect;
+			stored.delay_ms = frame.delay_ms;
+			stored.replace = frame.replace;
+			stored.clear = frame.clear;
+			stored.clear_rect = frame.clear_rect;
+			stored.has_alpha = frame.has_alpha;
+			stored.disposal = frame.disposal;
+			bResult = TRUE;
+		}
 	} catch(std::bad_alloc&) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
-		return FALSE;
 	}
+
+	if(under) {
+		FreeImage_Unload(under);
+	}
+	if(shown) {
+		FreeImage_Unload(shown);
+	}
+	return bResult;
 }
 
 

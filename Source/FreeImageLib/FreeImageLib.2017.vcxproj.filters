@@ -337,6 +337,9 @@
     <ClInclude Include="..\Plugin.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\FreeImage\AnimationCanvas.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\FreeImage\PSDParser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
