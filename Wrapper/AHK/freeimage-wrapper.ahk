@@ -23,6 +23,7 @@
 ; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
 ; - added FreeImage_ConvertToLinear(): an image in linear light, its transfer curve undone, PQ included
 ; - the J2K_UNSCALED and JP2_UNSCALED load flags
+; - FreeImage_SetTagValue() writes the value as the tag's type: lists, rationals and strings; or takes a pointer
 
 ; - implemented all the remaining functions, except the ANSI variants
 ; - FreeImage_OpenMultiBitmap() takes Unicode paths
@@ -1721,9 +1722,48 @@ FreeImage_SetTagLength(fiTag, length) {
    Return DllCall(getFIMfunc("SetTagLength"), "UPtr", fiTag, "Int", length)
 }
 
-FreeImage_SetTagValue(fiTag, value) {
+FreeImage_SetTagValue(fiTag, value, valueIsPointer:=0) {
+; Set the tag's type, count and length first. value holds the tag's values as numbers of its type,
+; separated by commas: "numerator/denominator" for a RATIONAL, and a string for an ASCII tag.
+; valueIsPointer=1: value is the address of the tag's length in bytes, copied as they are.
 ; The function returns TRUE if successful and returns FALSE otherwise.
-   Return DllCall(getFIMfunc("SetTagValue"), "UPtr", fiTag, "uint*", value)
+   Static numTypes := {1: "UChar", 3: "UShort", 4: "UInt", 6: "Char", 7: "UChar", 8: "Short", 9: "Int", 11: "Float", 12: "Double", 13: "UInt", 14: "UInt", 16: "Int64", 17: "Int64", 18: "Int64"}
+        , numSizes := {UChar: 1, Char: 1, UShort: 2, Short: 2, UInt: 4, Int: 4, Float: 4, Double: 8, Int64: 8}
+
+   If valueIsPointer
+      Return DllCall(getFIMfunc("SetTagValue"), "UPtr", fiTag, "UPtr", value)
+
+   type := FreeImage_GetTagType(fiTag)
+   length := FreeImage_GetTagLength(fiTag)
+   If (type=2)   ; FIDT_ASCII: FreeImage copies length bytes and ends them
+   {
+      VarSetCapacity(buf, Max(length, StrPut(value, "CP0")) + 1, 0)
+      StrPut(value, &buf, "CP0")
+   } Else If (type=5 || type=10)   ; FIDT_RATIONAL, FIDT_SRATIONAL
+   {
+      VarSetCapacity(buf, length + 8, 0)
+      Loop, Parse, value, `,
+      {
+         If (A_Index*8 > length)
+            Break
+         fraction := StrSplit(A_LoopField, "/", " `t")
+         NumPut(fraction[1], buf, (A_Index - 1)*8, (type=5) ? "UInt" : "Int")
+         NumPut((fraction.Length()>1) ? fraction[2] : 1, buf, (A_Index - 1)*8 + 4, (type=5) ? "UInt" : "Int")
+      }
+   } Else If numTypes.HasKey(type)
+   {
+      numType := numTypes[type], size := numSizes[numType]
+      VarSetCapacity(buf, length + 8, 0)
+      Loop, Parse, value, `,, %A_Space%%A_Tab%
+      {
+         If (A_Index*size > length)
+            Break
+         NumPut(A_LoopField, buf, (A_Index - 1)*size, numType)
+      }
+   } Else
+      Return 0   ; FIDT_NOTYPE: pass a pointer
+
+   Return DllCall(getFIMfunc("SetTagValue"), "UPtr", fiTag, "UPtr", &buf)
 }
 
 FreeImage_SetMetadata(hImage, fiTag, metaModel, key) {
