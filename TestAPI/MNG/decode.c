@@ -2171,6 +2171,122 @@ static void test_top_level_text(void) {
 	}
 }
 
+/* a one-row 8-bit PNG minus its signature; a length of -1 leaves the chunk out, 0 writes it empty */
+static void row_png(Buf *out, DWORD width, BYTE colour_type, const BYTE *row, DWORD row_bytes,
+					const BYTE *plte, int plte_length, const BYTE *trns, int trns_length) {
+	Buf ihdr, raw;
+	BYTE packed[128];
+	DWORD packed_size;
+
+	buf_init(&ihdr);
+	buf_u32(&ihdr, width);
+	buf_u32(&ihdr, 1);
+	buf_byte(&ihdr, 8);
+	buf_byte(&ihdr, colour_type);
+	buf_byte(&ihdr, 0);
+	buf_byte(&ihdr, 0);
+	buf_byte(&ihdr, 0);
+	chunk_buf(out, "IHDR", &ihdr);
+	if (plte_length >= 0) {
+		chunk(out, "PLTE", plte, (DWORD)plte_length);
+	}
+	if (trns_length >= 0) {
+		chunk(out, "tRNS", trns, (DWORD)trns_length);
+	}
+	buf_init(&raw);
+	buf_byte(&raw, 0);		/* filter type None */
+	buf_add(&raw, row, row_bytes);
+	packed_size = FreeImage_ZLibCompress(packed, sizeof(packed), raw.data, (DWORD)raw.size);
+	buf_free(&raw);
+	chunk(out, "IDAT", packed, packed_size);
+	chunk(out, "IEND", NULL, 0);
+}
+
+/** The global tRNS goes with the global PLTE, only into an indexed image with an empty PLTE (4.2.2). */
+static void test_global_trns(void) {
+	static const BYTE PLTE2[6] = { 255, 0, 0, 0, 0, 255 };		/* red, blue */
+	static const BYTE TRNS2[2] = { 0, 255 };					/* red transparent */
+	static const BYTE PLTE6[18] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18 };
+	static const BYTE TRNS6[6] = { 0, 255, 0, 255, 0, 255 };	/* read as an RGB key, white */
+	static const BYTE OWN_PLTE[6] = { 10, 20, 30, 40, 50, 60 };
+	static const BYTE OWN_TRNS[2] = { 255, 0 };
+	static const BYTE GREY[4] = { 0, 100, 200, 255 };
+	static const BYTE RGB[6] = { 255, 255, 255, 0, 0, 0 };
+	static const BYTE INDEX[4] = { 0, 1, 0, 1 };
+	static const struct {
+		const char *what;
+		const BYTE *gplte, *gtrns;
+		int gplte_length, gtrns_length;
+		DWORD width;
+		BYTE colour_type;
+		const BYTE *row;
+		DWORD row_bytes;
+		const BYTE *plte, *trns;
+		int plte_length, trns_length;
+		BYTE want[4][4];
+	} cases[] = {
+		{ "a grey image", PLTE2, TRNS2, 6, 2, 4, 0, GREY, 4, NULL, NULL, -1, -1,
+		  { { 0, 0, 0, 255 }, { 100, 100, 100, 255 }, { 200, 200, 200, 255 }, { 255, 255, 255, 255 } } },
+		{ "an RGB image", PLTE6, TRNS6, 18, 6, 2, 2, RGB, 6, NULL, NULL, -1, -1,
+		  { { 255, 255, 255, 255 }, { 0, 0, 0, 255 } } },
+		{ "an indexed image with a palette of its own", PLTE2, TRNS2, 6, 2, 4, 3, INDEX, 4, OWN_PLTE, NULL, 6, -1,
+		  { { 10, 20, 30, 255 }, { 40, 50, 60, 255 }, { 10, 20, 30, 255 }, { 40, 50, 60, 255 } } },
+		{ "an indexed image with an empty PLTE", PLTE2, TRNS2, 6, 2, 4, 3, INDEX, 4, OWN_PLTE, NULL, 0, -1,
+		  { { 255, 0, 0, 0 }, { 0, 0, 255, 255 }, { 255, 0, 0, 0 }, { 0, 0, 255, 255 } } },
+		{ "an empty PLTE and a tRNS of its own", PLTE2, TRNS2, 6, 2, 4, 3, INDEX, 4, OWN_PLTE, OWN_TRNS, 0, 2,
+		  { { 255, 0, 0, 255 }, { 0, 0, 255, 0 }, { 255, 0, 0, 255 }, { 0, 0, 255, 0 } } },
+		{ "an indexed image with no PLTE at all", PLTE2, TRNS2, 6, 2, 4, 3, INDEX, 4, NULL, NULL, -1, -1,
+		  { { 255, 0, 0, 0 }, { 0, 0, 255, 255 }, { 255, 0, 0, 0 }, { 0, 0, 255, 255 } } },
+	};
+	size_t i;
+	int bad = 0;
+
+	printf("the global PLTE and tRNS\n");
+
+	for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+		Buf mng;
+		FIBITMAP *dib, *rgba = NULL;
+		DWORD x;
+
+		buf_init(&mng);
+		mng_signature(&mng);
+		mng_mhdr(&mng, cases[i].width, 1, 10, 2, 1, 0, 1);
+		chunk(&mng, "PLTE", cases[i].gplte, (DWORD)cases[i].gplte_length);
+		chunk(&mng, "tRNS", cases[i].gtrns, (DWORD)cases[i].gtrns_length);
+		row_png(&mng, cases[i].width, cases[i].colour_type, cases[i].row, cases[i].row_bytes,
+				cases[i].plte, cases[i].plte_length, cases[i].trns, cases[i].trns_length);
+		mng_mend(&mng);
+		dib = FreeImage_Load(FIF_MNG, write_file("mng_global_trns.mng", &mng), 0);
+		buf_free(&mng);
+
+		if (dib) {
+			rgba = FreeImage_ConvertTo32Bits(dib);
+		}
+		if (!rgba || FreeImage_GetWidth(rgba) != cases[i].width) {
+			fail("%s: the page cannot be read", cases[i].what);
+			bad = 1;
+		} else {
+			const BYTE *line = FreeImage_GetScanLine(rgba, 0);
+			for (x = 0; x < cases[i].width; x++, line += 4) {
+				const BYTE *want = cases[i].want[x];
+				if (line[FI_RGBA_RED] != want[0] || line[FI_RGBA_GREEN] != want[1] ||
+					line[FI_RGBA_BLUE] != want[2] || line[FI_RGBA_ALPHA] != want[3]) {
+					fail("%s: pixel %u is (%u,%u,%u,%u), expected (%u,%u,%u,%u)", cases[i].what, x,
+						 line[FI_RGBA_RED], line[FI_RGBA_GREEN], line[FI_RGBA_BLUE], line[FI_RGBA_ALPHA],
+						 want[0], want[1], want[2], want[3]);
+					bad = 1;
+					break;
+				}
+			}
+		}
+		if (rgba) FreeImage_Unload(rgba);
+		if (dib) FreeImage_Unload(dib);
+	}
+	if (!bad) {
+		ok("the global tRNS reaches only indexed images that take the global palette, unless they have a tRNS of their own");
+	}
+}
+
 int main(void) {
 	FreeImage_Initialise(FALSE);
 	FreeImage_SetOutputMessage(quiet);
@@ -2199,6 +2315,7 @@ int main(void) {
 	test_unconvertible_canvas();
 	test_jng_profiles();
 	test_top_level_text();
+	test_global_trns();
 
 	FreeImage_DeInitialise();
 

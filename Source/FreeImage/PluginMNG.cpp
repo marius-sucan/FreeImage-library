@@ -1212,6 +1212,7 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 	}
 
 	BOOL wrote_plte = FALSE;
+	BOOL global_plte = FALSE;
 	BOOL wrote_trns = FALSE;
 	BOOL wrote_pre_idat = FALSE;
 
@@ -1225,6 +1226,7 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 		if(chunk.type == CHUNK_PLTE) {
 			if((chunk.length == 0) && !globals.plte.empty()) {
 				AppendGlobalChunk(out, CHUNK_PLTE, globals.plte);
+				global_plte = TRUE;
 			} else {
 				out.insert(out.end(), chunk.raw, chunk.raw + chunk.raw_length);
 			}
@@ -1238,8 +1240,10 @@ BuildPNGStream(const MNGinfo *info, const MNGFrame& frame, const std::vector<BYT
 			if(!wrote_plte && !has_local_plte && (colour_type == 3) && !globals.plte.empty()) {
 				AppendGlobalChunk(out, CHUNK_PLTE, globals.plte);
 				wrote_plte = TRUE;
+				global_plte = TRUE;
 			}
-			if(!wrote_trns && !has_local_trns && !globals.trns.empty()) {
+			// the global tRNS comes only with the global palette (4.2.2)
+			if(global_plte && (colour_type == 3) && !wrote_trns && !has_local_trns && !globals.trns.empty()) {
 				AppendGlobalChunk(out, CHUNK_tRNS, globals.trns);
 				wrote_trns = TRUE;
 			}

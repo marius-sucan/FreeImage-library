@@ -88,6 +88,10 @@ from the plugin:
   chunks ... appears in the PNG datastream, none of them is inherited." Each
   page is compared with its image decoded as a PNG of its own, the global iCCP
   added only where the spec gives it.
+- **The global PLTE and tRNS.** The global tRNS comes "along with the global
+  palette" to an indexed image with an empty PLTE, and to nothing else: a grey
+  or RGB image does not take it for a colour key, an image with a palette of
+  its own does not take its alpha, and one with a tRNS of its own keeps that.
 - **Top-level chunks that end others.** "The top-level sRGB chunk nullifies the
   preceding top-level gAMA and cHRM chunks", and either of those nullifies a
   preceding sRGB; an empty chunk nullifies only its own name. Seen through a
