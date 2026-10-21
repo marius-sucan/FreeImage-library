@@ -826,6 +826,141 @@ static void one_frame_still(void) {
     remove(path);
 }
 
+/* ------------------------------------------------------------------ frames WebP cannot hold as they are */
+
+typedef struct {
+    int x, y, w, h;
+    BYTE rgba[4];
+    BYTE disposal;      /* GIF numbering */
+    BYTE blend;         /* 1: in place of what is there */
+} SolidPage;
+
+static FIBITMAP *solid_rgba(int w, int h, const BYTE rgba[4]) {
+    FIBITMAP *dib = FreeImage_Allocate(w, h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    int x, y;
+    for (y = 0; dib && y < h; y++) {
+        BYTE *line = FreeImage_GetScanLine(dib, (unsigned)y);
+        for (x = 0; x < w; x++, line += 4) {
+            line[FI_RGBA_RED] = rgba[0]; line[FI_RGBA_GREEN] = rgba[1]; line[FI_RGBA_BLUE] = rgba[2]; line[FI_RGBA_ALPHA] = rgba[3];
+        }
+    }
+    return dib;
+}
+
+/* the canvas after page n, top-down RGBA, as the tags play it: disposal 2 clears, 3 restores; blend 1 replaces */
+static void play_tags(const SolidPage *pages, int n, int cw, int ch, BYTE *canvas) {
+    BYTE *before = (BYTE *)malloc((size_t)cw * ch * 4);
+    int i, x, y, c;
+    memset(canvas, 0, (size_t)cw * ch * 4);
+    for (i = 0; i <= n; i++) {
+        const SolidPage *p = &pages[i];
+        memcpy(before, canvas, (size_t)cw * ch * 4);
+        for (y = p->y; y < p->y + p->h; y++) {
+            for (x = p->x; x < p->x + p->w; x++) {
+                BYTE *d = canvas + ((size_t)y * cw + x) * 4;
+                const unsigned sa = p->rgba[3], weight = d[3] * (255 - sa), alpha = sa * 255 + weight;
+                if (p->blend || sa == 255) memcpy(d, p->rgba, 4);
+                else if (sa) {
+                    for (c = 0; c < 3; c++) d[c] = (BYTE)((p->rgba[c] * sa * 255 + d[c] * weight + alpha / 2) / alpha);
+                    d[3] = (BYTE)((alpha + 127) / 255);
+                }
+            }
+        }
+        if (i == n) break;
+        if (p->disposal == 2) for (y = p->y; y < p->y + p->h; y++) memset(canvas + ((size_t)y * cw + p->x) * 4, 0, (size_t)p->w * 4);
+        else if (p->disposal == 3) memcpy(canvas, before, (size_t)cw * ch * 4);
+    }
+    free(before);
+}
+
+/* pixels of a played page more than 2 off the canvas the tags give, alpha 0 matching alpha 0; -1 when not comparable */
+static int canvas_diff(FIBITMAP *dib, const BYTE *want, int cw, int ch) {
+    int x, y, c, n = 0;
+    if (!dib || (int)FreeImage_GetWidth(dib) != cw || (int)FreeImage_GetHeight(dib) != ch || FreeImage_GetBPP(dib) != 32) return -1;
+    for (y = 0; y < ch; y++) {
+        const BYTE *line = FreeImage_GetScanLine(dib, (unsigned)(ch - 1 - y));
+        for (x = 0; x < cw; x++, line += 4) {
+            const BYTE *w = want + ((size_t)y * cw + x) * 4;
+            const BYTE got[4] = { line[FI_RGBA_RED], line[FI_RGBA_GREEN], line[FI_RGBA_BLUE], line[FI_RGBA_ALPHA] };
+            int off = abs(got[3] - w[3]) > 2;
+            for (c = 0; c < 3 && w[3] && got[3]; c++) off |= abs(got[c] - w[c]) > 2;
+            n += off;
+        }
+    }
+    return n;
+}
+
+/* every page of a WebP, played, is the canvas the tags give */
+static int plays_as_tags(const char *what, const char *path, const SolidPage *pages, int n, int cw, int ch) {
+    FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, FALSE, TRUE, TRUE, WEBP_PLAYBACK);
+    BYTE *want = (BYTE *)malloc((size_t)cw * ch * 4);
+    int i, good = mb && FreeImage_GetPageCount(mb) == n;
+    if (mb && !good) fail("%s: %d pages, expected %d", what, FreeImage_GetPageCount(mb), n);
+    for (i = 0; good && i < n; i++) {
+        FIBITMAP *dib = FreeImage_LockPage(mb, i);
+        int d;
+        play_tags(pages, i, cw, ch, want);
+        d = canvas_diff(dib, want, cw, ch);
+        if (d) { fail("%s: page %d, %d pixel(s) not as the tags play it", what, i, d); good = 0; }
+        if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+    }
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    free(want);
+    return good;
+}
+
+/* frames at odd positions, drawn in place, cleared, restoring the canvas: the animation plays as its tags say */
+static void odd_positions(void) {
+    static const SolidPage PAGES[7] = {
+        { 0, 0, 40, 30, { 0, 0, 200, 255 }, 1, 0 },
+        { 5, 3, 9, 7, { 0, 0, 0, 0 }, 1, 1 },             /* a transparent hole, in place, at an odd position */
+        { 7, 13, 10, 8, { 220, 0, 0, 255 }, 2, 0 },       /* cleared alone at an odd position */
+        { 21, 9, 11, 9, { 0, 180, 0, 255 }, 1, 0 },
+        { 9, 9, 12, 12, { 255, 255, 0, 128 }, 1, 1 },     /* half transparent, in place over what is drawn */
+        { 3, 1, 7, 6, { 255, 0, 255, 255 }, 3, 0 },       /* restores the canvas */
+        { 31, 21, 6, 6, { 255, 255, 255, 200 }, 1, 0 },
+    };
+    char path[512], again[512];
+    FIMULTIBITMAP *mb, *out;
+    int i, bad = 0;
+
+    printf("frames WebP cannot hold as they are\n");
+    snprintf(path, sizeof(path), "%s", scratch("fi_webp_rt_odd.webp"));
+    snprintf(again, sizeof(again), "%s", scratch("fi_webp_rt_odd_again.webp"));
+    remove(path);
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, TRUE, FALSE, TRUE, 0);
+    for (i = 0; mb && i < 7; i++) {
+        FIBITMAP *dib = solid_rgba(PAGES[i].w, PAGES[i].h, PAGES[i].rgba);
+        set_anim(dib, "FrameLeft", FIDT_SHORT, PAGES[i].x);
+        set_anim(dib, "FrameTop", FIDT_SHORT, PAGES[i].y);
+        set_anim(dib, "FrameTime", FIDT_LONG, 50);
+        set_anim(dib, "DisposalMethod", FIDT_BYTE, PAGES[i].disposal);
+        set_anim(dib, "BlendMethod", FIDT_BYTE, PAGES[i].blend);
+        set_anim(dib, "LogicalWidth", FIDT_SHORT, 40);
+        set_anim(dib, "LogicalHeight", FIDT_SHORT, 30);
+        FreeImage_AppendPage(mb, dib);
+        FreeImage_Unload(dib);
+    }
+    if (!mb || !FreeImage_CloseMultiBitmap(mb, WEBP_LOSSLESS)) { fail("odd positions: the animation was not written"); return; }
+    bad |= !plays_as_tags("odd positions", path, PAGES, 7, 40, 30);
+
+    /* its raw pages, saved again */
+    remove(again);
+    mb = FreeImage_OpenMultiBitmap(FIF_WEBP, path, FALSE, TRUE, TRUE, 0);
+    out = FreeImage_OpenMultiBitmap(FIF_WEBP, again, TRUE, FALSE, TRUE, 0);
+    for (i = 0; mb && out && i < FreeImage_GetPageCount(mb); i++) {
+        FIBITMAP *page = FreeImage_LockPage(mb, i);
+        if (page) { FreeImage_AppendPage(out, page); FreeImage_UnlockPage(mb, page, FALSE); }
+    }
+    if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+    if (!out || !FreeImage_CloseMultiBitmap(out, WEBP_LOSSLESS)) { fail("odd positions: the raw pages were not saved again"); bad = 1; }
+    else bad |= !plays_as_tags("odd positions, raw pages saved again", again, PAGES, 7, 40, 30);
+
+    if (!bad) printf("  ok %-34s odd positions, in place, cleared, restored: played as the tags say, and from the raw pages\n", "frames at odd positions");
+    remove(path);
+    remove(again);
+}
+
 int main(void) {
     FIBITMAP *png, *rgb, *rgba, *holes, *meta, *grey, *tiny, *reloaded;
     BYTE icc[128];
@@ -928,6 +1063,7 @@ int main(void) {
     playback_pages();
     gif_playback_pages();
     one_frame_still();
+    odd_positions();
 
     FreeImage_Unload(rgb); FreeImage_Unload(rgba); FreeImage_Unload(holes);
     FreeImage_Unload(grey); FreeImage_Unload(tiny); FreeImage_Unload(meta);

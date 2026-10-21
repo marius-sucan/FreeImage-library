@@ -22,8 +22,11 @@
 #include "FreeImage.h"
 #include "Utilities.h"
 #include "Plugin.h"
+#include "AnimationCanvas.h"
 
 #include "../Metadata/FreeImageTag.h"
+
+#include <new>
 
 #include "../LibWebP/src/webp/decode.h"
 #include "../LibWebP/src/webp/demux.h"
@@ -39,6 +42,26 @@ static int s_format_id;
 // ----------------------------------------------------------
 //   Plugin state
 // ----------------------------------------------------------
+
+// a page's place, timing and composition, as its tags say (GIF numbering)
+struct WebPFrameTags {
+	int x, y;					//! odd ones too
+	int duration;
+	BYTE disposal;				//! 2 = background, 3 = previous, else leave
+	BOOL replace;				//! BlendMethod 1: drawn in place of what is there
+};
+
+// 1 GiB at 32 bpp, as WebP's largest canvas
+#define WEBP_MAX_FOLLOWED	((UINT64)1 << 28)
+
+// what the pages show, for frames WebP cannot hold as they are: at odd positions, or after a restored canvas
+struct WebPShown {
+	AnimationCanvas canvas;
+	AnimRect dirty;				//! where the file shows other than canvas
+
+	WebPShown() : canvas(WEBP_MAX_FOLLOWED) {
+	}
+};
 
 typedef struct {
 	WebPMux *mux;
@@ -58,8 +81,13 @@ typedef struct {
 	BOOL write;
 	BOOL written;				//! Save() wrote a still image
 	int out_pages;
-	WebPData pending;			//! first page, held until a second arrives
-	WebPMuxFrameInfo pending_info;
+	WebPData pending;			//! first page as it is, held until a second arrives
+	FIBITMAP *pending_frame;	//! its pixels in the file's colors
+	WebPFrameTags pending_tags;
+	int pending_flags;
+	WebPShown *shown;			//! from the second page; NULL when it could not be made
+	BOOL shown_lost;			//! what the pages show could not be followed
+	BOOL out_warned;
 	int out_canvas_width;		//! canvas the pages asked for; 0 = none
 	int out_canvas_height;
 	int out_bound_width;		//! bounding box of the frames
@@ -377,6 +405,10 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 		bResult = WebP_FinishAnimation(state, io, handle);
 	}
 	WebPDataClear(&state->pending);
+	if(state->pending_frame != NULL) {
+		FreeImage_Unload(state->pending_frame);
+	}
+	delete state->shown;
 
 	// both point into bitstream: free them first
 	if(state->anim != NULL) {
@@ -692,30 +724,25 @@ WebP_IsFrame(FIBITMAP *dib) {
 
 // inverse of SetFrameMetadata()
 static void
-WebP_ReadFrameInfo(FIBITMAP *dib, WebPMuxFrameInfo *frame) {
+WebP_ReadFrameTags(FIBITMAP *dib, WebPFrameTags *tags) {
 	LONG value = 0;
 
-	memset(frame, 0, sizeof(*frame));
-	frame->id = WEBP_CHUNK_ANMF;
-	frame->dispose_method = WEBP_MUX_DISPOSE_NONE;
-	frame->blend_method = WEBP_MUX_BLEND;
-
+	memset(tags, 0, sizeof(*tags));
+	tags->disposal = 1;
 	if(WebP_GetAnimTag(dib, "FrameTime", FIDT_LONG, &value)) {
-		frame->duration = (int)value;
+		tags->duration = (int)value;
 	}
-	// WebP offsets are even; the mux rounds down too
 	if(WebP_GetAnimTag(dib, "FrameLeft", FIDT_SHORT, &value)) {
-		frame->x_offset = ((int)value) & ~1;
+		tags->x = (int)value;
 	}
 	if(WebP_GetAnimTag(dib, "FrameTop", FIDT_SHORT, &value)) {
-		frame->y_offset = ((int)value) & ~1;
+		tags->y = (int)value;
 	}
-	// GIF numbering: 2 = background, else leave
 	if(WebP_GetAnimTag(dib, "DisposalMethod", FIDT_BYTE, &value)) {
-		frame->dispose_method = (value == 2) ? WEBP_MUX_DISPOSE_BACKGROUND : WEBP_MUX_DISPOSE_NONE;
+		tags->disposal = (BYTE)value;
 	}
 	if(WebP_GetAnimTag(dib, "BlendMethod", FIDT_BYTE, &value)) {
-		frame->blend_method = (value == 1) ? WEBP_MUX_NO_BLEND : WEBP_MUX_BLEND;
+		tags->replace = (value == 1) ? TRUE : FALSE;
 	}
 }
 
@@ -1051,26 +1078,163 @@ WebP_AssembleAndWrite(WebPMux *mux, FreeImageIO *io, fi_handle handle) {
 	return bResult;
 }
 
-// push the held first frame; no-op once pushed
+#define WEBP_DISPOSAL_BACKGROUND	2
+#define WEBP_DISPOSAL_PREVIOUS		3
+
+static void
+WebP_WarnApproximate(WebPPluginData *state) {
+	if(!state->out_warned) {
+		state->out_warned = TRUE;
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the animation is too large to follow; a frame at an odd position or after a restored canvas is approximated");
+	}
+}
+
+// TRUE when only the background shows in outer around inner
+static BOOL
+WebP_ClearAround(const AnimationCanvas& canvas, const AnimRect& outer, const AnimRect& inner) {
+	return canvas.IsClear(AnimRect(outer.left, outer.top, outer.right, inner.top)) &&
+		canvas.IsClear(AnimRect(outer.left, inner.bottom, outer.right, outer.bottom)) &&
+		canvas.IsClear(AnimRect(outer.left, inner.top, inner.left, inner.bottom)) &&
+		canvas.IsClear(AnimRect(inner.right, inner.top, outer.right, inner.bottom));
+}
+
+// the page at even coordinates: a transparent column or row before it
+static FIBITMAP *
+WebP_PadFrame(FIBITMAP *frame, int pad_x, int pad_y) {
+	FIBITMAP *frame32 = AnimationFrame32(frame);
+	FIBITMAP *padded = frame32 ? FreeImage_Allocate((int)FreeImage_GetWidth(frame32) + pad_x, (int)FreeImage_GetHeight(frame32) + pad_y, 32,
+		FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK) : NULL;
+	if(padded && !FreeImage_Paste(padded, frame32, pad_x, pad_y, 256)) {
+		FreeImage_Unload(padded);
+		padded = NULL;
+	}
+	if(frame32) {
+		FreeImage_Unload(frame32);
+	}
+	return padded;
+}
+
+// pushes a page: as it is at even coordinates, padded where that shows nothing else, or as what the canvas shows;
+// raw, when given, is the page encoded as it is
+static BOOL
+WebP_PlaceFrame(WebPPluginData *state, FIBITMAP *frame, const WebPFrameTags& tags, int flags, const WebPData *raw) {
+	WebPShown *shown = state->shown_lost ? NULL : state->shown;
+	const AnimRect rect(tags.x, tags.y, tags.x + (int)FreeImage_GetWidth(frame), tags.y + (int)FreeImage_GetHeight(frame));
+	const AnimRect even(rect.left & ~1, rect.top & ~1, rect.right, rect.bottom);
+	const BOOL restores = (tags.disposal == WEBP_DISPOSAL_PREVIOUS) ? TRUE : FALSE;
+	BOOL was_clear = FALSE, strip_clear = TRUE;
+	FIBITMAP *under = NULL, *pixels = NULL;
+	WebPData bitstream = { 0 };
+	BOOL bResult = FALSE;
+
+	// what the pages show
+	if(shown) {
+		FIBITMAP *frame32 = AnimationFrame32(frame);
+		BOOL followed = frame32 && shown->canvas.Grow((unsigned)MAX(state->out_canvas_width, rect.right), (unsigned)MAX(state->out_canvas_height, rect.bottom));
+		if(followed) {
+			strip_clear = WebP_ClearAround(shown->canvas, even, rect);
+			if(restores) {
+				was_clear = shown->canvas.IsClear(rect);
+				under = was_clear ? NULL : shown->canvas.Copy(rect);
+				followed = was_clear || under;
+			}
+		}
+		if(followed) {
+			shown->canvas.Draw(frame32, rect.left, rect.top, tags.replace);
+		} else {
+			state->shown_lost = TRUE;
+			shown = NULL;
+		}
+		if(frame32) {
+			FreeImage_Unload(frame32);
+		}
+	}
+	if(!shown && (restores || (!rect.Equals(even) && (tags.replace || (tags.disposal == WEBP_DISPOSAL_BACKGROUND))))) {
+		WebP_WarnApproximate(state);
+	}
+
+	// a transparent strip changes nothing over the canvas, nor in place of nothing; else what the canvas shows
+	AnimRect written = rect;
+	BOOL replace = tags.replace;
+	if(shown && (!shown->dirty.IsEmpty() || (!rect.Equals(even) && tags.replace && !strip_clear))) {
+		written = shown->dirty.Union(even).Intersect(shown->canvas.Bounds());
+		written.left &= ~1;
+		written.top &= ~1;
+		pixels = shown->canvas.Copy(written);
+		replace = TRUE;
+	} else if(!rect.Equals(even)) {
+		written = even;
+		pixels = WebP_PadFrame(frame, rect.left - even.left, rect.top - even.top);
+	}
+	if(shown) {
+		shown->dirty = AnimRect();
+	}
+
+	if((written.Equals(rect) || pixels) &&
+	   ((!pixels && raw && raw->bytes) || WebP_EncodeToData(pixels ? pixels : frame, flags, &bitstream))) {
+		// a page cleared before the next one: its rectangle, or a larger written one where nothing else would go
+		const BOOL clears = ((tags.disposal == WEBP_DISPOSAL_BACKGROUND) || (restores && was_clear)) ? TRUE : FALSE;
+		WebPMuxAnimDispose dispose = WEBP_MUX_DISPOSE_NONE;
+		if(clears && (written.Equals(rect) || !shown || WebP_ClearAround(shown->canvas, written, rect))) {
+			dispose = WEBP_MUX_DISPOSE_BACKGROUND;
+		} else if(shown && (clears || restores)) {
+			shown->dirty = rect;
+		}
+		// the canvas after the page's disposal
+		if(shown) {
+			if(clears) {
+				shown->canvas.Clear(rect);
+			} else if(under) {
+				shown->canvas.Restore(under, rect.left, rect.top);
+			}
+		}
+
+		WebPMuxFrameInfo info;
+		memset(&info, 0, sizeof(info));
+		info.id = WEBP_CHUNK_ANMF;
+		info.bitstream = bitstream.bytes ? bitstream : *raw;
+		info.x_offset = written.left;
+		info.y_offset = written.top;
+		info.duration = tags.duration;
+		info.dispose_method = dispose;
+		info.blend_method = replace ? WEBP_MUX_NO_BLEND : WEBP_MUX_BLEND;
+		if(WebPMuxPushFrame(state->mux, &info, 1 /* copy */) != WEBP_MUX_OK) {
+			FreeImage_OutputMessageProc(s_format_id, "Failed to add a frame to the animation");
+		} else {
+			state->out_bound_width = MAX(state->out_bound_width, written.right);
+			state->out_bound_height = MAX(state->out_bound_height, written.bottom);
+			bResult = TRUE;
+		}
+	} else if(!written.Equals(rect) && !pixels) {
+		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+	}
+
+	WebPDataClear(&bitstream);
+	if(pixels) {
+		FreeImage_Unload(pixels);
+	}
+	if(under) {
+		FreeImage_Unload(under);
+	}
+	return bResult;
+}
+
+// the first page, held while it may be the only one: placed when a second comes, what is shown followed from it
 static BOOL
 WebP_FlushPending(WebPPluginData *state) {
-	WebPMuxError error_status;
-
-	if(state->pending.bytes == NULL) {
+	if(state->pending_frame == NULL) {
 		return TRUE;
 	}
-
-	state->pending_info.bitstream = state->pending;
-	error_status = WebPMuxPushFrame(state->mux, &state->pending_info, 1 /* copy */);
-
-	WebPDataClear(&state->pending);
-	memset(&state->pending_info, 0, sizeof(state->pending_info));
-
-	if(error_status != WEBP_MUX_OK) {
-		FreeImage_OutputMessageProc(s_format_id, "Failed to add a frame to the animation");
-		return FALSE;
+	if((state->shown == NULL) && !state->shown_lost) {
+		state->shown = new(std::nothrow) WebPShown;
+		state->shown_lost = (state->shown == NULL) ? TRUE : FALSE;
 	}
-	return TRUE;
+	const BOOL bResult = WebP_PlaceFrame(state, state->pending_frame, state->pending_tags, state->pending_flags, &state->pending);
+
+	FreeImage_Unload(state->pending_frame);
+	state->pending_frame = NULL;
+	WebPDataClear(&state->pending);
+	return bResult;
 }
 
 // widen the canvas to cover every frame: WebPMuxAssemble refuses overflow
@@ -1194,29 +1358,10 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		if(!ConvertToFileProfile(dib, state->out_profile, state->out_profile_size, &converted)) {
 			FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
 		}
-		const BOOL encoded = WebP_EncodeToData(converted ? converted : dib, flags, &bitstream);
-		if(converted != NULL) {
-			FreeImage_Unload(converted);
-		}
-		if(!encoded) {
-			goto done;
-		}
-	}
+		FIBITMAP *frame = converted ? converted : dib;
 
-	{
-		WebPMuxFrameInfo frame;
-		WebP_ReadFrameInfo(dib, &frame);
-
-		{
-			const int right = frame.x_offset + (int)FreeImage_GetWidth(dib);
-			const int bottom = frame.y_offset + (int)FreeImage_GetHeight(dib);
-			if(right > state->out_bound_width) {
-				state->out_bound_width = right;
-			}
-			if(bottom > state->out_bound_height) {
-				state->out_bound_height = bottom;
-			}
-		}
+		WebPFrameTags tags;
+		WebP_ReadFrameTags(dib, &tags);
 
 		// canvas and loop may come from any page
 		{
@@ -1233,30 +1378,30 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 		}
 
 		if(state->out_pages == 0) {
-			// hold the first frame: alone it is a still image
-			if(!WebP_SetMetadataChunks(state->mux, dib, state->out_profile, state->out_profile_size)) {
-				goto done;
+			// hold the first frame, encoded as it is and in pixels: alone it is a still image
+			if(WebP_EncodeToData(frame, flags, &bitstream) &&
+			   WebP_SetMetadataChunks(state->mux, dib, state->out_profile, state->out_profile_size)) {
+				state->pending_frame = converted ? converted : FreeImage_Clone(dib);
+				converted = NULL;
+				if(state->pending_frame) {
+					state->pending = bitstream;
+					memset(&bitstream, 0, sizeof(bitstream));	// owned by the state
+					state->pending_tags = tags;
+					state->pending_flags = flags;
+					state->out_pages = 1;
+					bResult = TRUE;
+				} else {
+					FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
+				}
 			}
-
-			state->pending = bitstream;
-			state->pending_info = frame;
-			memset(&bitstream, 0, sizeof(bitstream));	// owned by the state
-			state->out_pages = 1;
+		} else if(WebP_FlushPending(state) && WebP_PlaceFrame(state, frame, tags, flags, NULL)) {
+			state->out_pages++;
 			bResult = TRUE;
-			goto done;
 		}
 
-		if(!WebP_FlushPending(state)) {
-			goto done;
+		if(converted) {
+			FreeImage_Unload(converted);
 		}
-
-		frame.bitstream = bitstream;
-		if(WebPMuxPushFrame(state->mux, &frame, 1 /* copy */) != WEBP_MUX_OK) {
-			FreeImage_OutputMessageProc(s_format_id, "Failed to add a frame to the animation");
-			goto done;
-		}
-		state->out_pages++;
-		bResult = TRUE;
 	}
 
 done:
