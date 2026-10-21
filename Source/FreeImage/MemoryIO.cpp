@@ -132,6 +132,8 @@ FreeImage_AcquireMemory(FIMEMORY *stream, BYTE **data, DWORD *size_in_bytes) {
 		FIMEMORYHEADER *mem_header = (FIMEMORYHEADER*)(stream->data);
 
 		if (mem_header->file_length > (INT64)0xFFFFFFFFu) {
+			*data = NULL;
+			*size_in_bytes = 0;
 			FreeImage_OutputMessageProc(FIF_UNKNOWN, "FreeImage_AcquireMemory: the memory stream holds more than 4 GB, use FreeImage_AcquireMemory64()");
 			return FALSE;
 		}
