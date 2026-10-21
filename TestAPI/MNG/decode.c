@@ -751,6 +751,30 @@ static void test_alpha_compositing(void) {
 		FreeImage_UnlockPage(mb, dib, FALSE);
 	}
 	FreeImage_CloseMultiBitmap(mb, 0);
+
+	/* half-transparent blue over itself: alpha 128 + 128 * 127 / 255, the blue stays 255 */
+	buf_init(&mng);
+	mng_signature(&mng);
+	mng_mhdr(&mng, W, H, 100, 2, 2, 0, 0x0B);
+	mng_fram(&mng, 1, 2, 10);
+	mng_image_alpha(&mng, W, H, 0, 0, 255, 128);
+	mng_image_alpha(&mng, W, H, 0, 0, 255, 128);
+	mng_mend(&mng);
+	path = write_file("mng_alpha2.mng", &mng);
+	buf_free(&mng);
+
+	mb = FreeImage_OpenMultiBitmap(FIF_MNG, path, FALSE, TRUE, FALSE, MNG_PLAYBACK);
+	dib = mb ? FreeImage_LockPage(mb, 1) : NULL;
+	if (!dib || !pixel_at(dib, 0, 0, &colour)) {
+		fail("the half-transparent layers do not play");
+	} else if (colour.rgbRed != 0 || colour.rgbGreen != 0 || colour.rgbBlue != 255 || colour.rgbReserved != 192) {
+		fail("half-transparent blue over itself is (%u,%u,%u,%u), expected (0,0,255,192)",
+			 colour.rgbRed, colour.rgbGreen, colour.rgbBlue, colour.rgbReserved);
+	} else {
+		ok("a half-transparent layer over another keeps its colour and adds up the alpha");
+	}
+	if (dib) FreeImage_UnlockPage(mb, dib, FALSE);
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
 }
 
 /* huge MHDR canvas: composing is refused, the pages still read */

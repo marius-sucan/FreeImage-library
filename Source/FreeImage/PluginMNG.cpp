@@ -1640,24 +1640,21 @@ CompositeFrame(FIBITMAP *canvas, FIBITMAP *frame, const MNGFrame& info) {
 			const BYTE *s = src + source_x * 4;
 			BYTE *d = dst + x * 4;
 
-			const unsigned alpha = s[FI_RGBA_ALPHA];
-			if(alpha == 255) {
+			const unsigned sa = s[FI_RGBA_ALPHA];
+			if(sa == 255) {
 				d[FI_RGBA_RED] = s[FI_RGBA_RED];
 				d[FI_RGBA_GREEN] = s[FI_RGBA_GREEN];
 				d[FI_RGBA_BLUE] = s[FI_RGBA_BLUE];
 				d[FI_RGBA_ALPHA] = 255;
-			} else if(alpha > 0) {
-				const unsigned dst_alpha = d[FI_RGBA_ALPHA];
-				const unsigned out_alpha = alpha + dst_alpha * (255 - alpha) / 255;
-				if(out_alpha > 0) {
-					d[FI_RGBA_RED] = (BYTE)((s[FI_RGBA_RED] * alpha +
-						d[FI_RGBA_RED] * dst_alpha * (255 - alpha) / 255) / out_alpha);
-					d[FI_RGBA_GREEN] = (BYTE)((s[FI_RGBA_GREEN] * alpha +
-						d[FI_RGBA_GREEN] * dst_alpha * (255 - alpha) / 255) / out_alpha);
-					d[FI_RGBA_BLUE] = (BYTE)((s[FI_RGBA_BLUE] * alpha +
-						d[FI_RGBA_BLUE] * dst_alpha * (255 - alpha) / 255) / out_alpha);
-				}
-				d[FI_RGBA_ALPHA] = (BYTE)out_alpha;
+			} else if(sa > 0) {
+				// scaled by 255 and rounded: a truncated alpha would push a colour past 255
+				const unsigned weight = d[FI_RGBA_ALPHA] * (255 - sa);
+				const unsigned alpha = sa * 255 + weight;
+				const unsigned half = alpha / 2;
+				d[FI_RGBA_RED] = (BYTE)((s[FI_RGBA_RED] * sa * 255 + d[FI_RGBA_RED] * weight + half) / alpha);
+				d[FI_RGBA_GREEN] = (BYTE)((s[FI_RGBA_GREEN] * sa * 255 + d[FI_RGBA_GREEN] * weight + half) / alpha);
+				d[FI_RGBA_BLUE] = (BYTE)((s[FI_RGBA_BLUE] * sa * 255 + d[FI_RGBA_BLUE] * weight + half) / alpha);
+				d[FI_RGBA_ALPHA] = (BYTE)((alpha + 127) / 255);
 			}
 		}
 	}
