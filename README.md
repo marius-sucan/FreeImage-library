@@ -93,6 +93,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not support, instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - fixed file saves returning TRUE when writing failed;
+- fixed PNG, APNG, BMP, PSD and XPM saves failing when a FreeImageIO write_proc returns the bytes it wrote instead of the items;
 - fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins, and in multi-page documents opened from a handle or memory;
 - fixed TIFF files saved to memory carrying a byte of uninitialized heap memory: a write past the end of a memory stream leaves zeros, as in a file;
 - fixed FreeImage_SaveMultiBitmapToMemory() writing into, and crashing on, a memory stream that wraps the caller's buffer; it returns FALSE, as FreeImage_SaveToMemory() does;

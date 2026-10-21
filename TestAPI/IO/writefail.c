@@ -23,6 +23,9 @@ static void quiet(FREE_IMAGE_FORMAT fif, const char *msg) { (void)fif; (void)msg
 /* a FreeImageIO over memory whose writes stop after 'budget' bytes */
 typedef struct { BYTE *buf; INT64 cap, pos, len, budget; } sink_t;
 
+/* what s_write returns: 0 the items written, 1 the bytes written, 2 an error code */
+static int s_mode = 0;
+
 static unsigned DLL_CALLCONV s_read(void *b, unsigned s, unsigned c, fi_handle h) {
     sink_t *k = (sink_t *)h; INT64 want = (INT64)s * c, have = k->len - k->pos;
     if (want > have) want = (have < 0) ? 0 : have;
@@ -37,7 +40,7 @@ static unsigned DLL_CALLCONV s_write(void *b, unsigned s, unsigned c, fi_handle 
     if (k->pos + want > k->cap) { k->cap = (k->pos + want) * 2; k->buf = (BYTE *)realloc(k->buf, (size_t)k->cap); }
     memcpy(k->buf + k->pos, b, (size_t)want); k->pos += want;
     if (k->pos > k->len) k->len = k->pos;
-    return items;
+    return (s_mode == 1) ? (unsigned)want : (s_mode == 2) ? (unsigned)-1 : items;
 }
 static int DLL_CALLCONV s_seek(fi_handle h, INT64 off, int origin) {
     sink_t *k = (sink_t *)h; INT64 base = (origin == SEEK_SET) ? 0 : (origin == SEEK_CUR) ? k->pos : k->len;
@@ -46,17 +49,24 @@ static int DLL_CALLCONV s_seek(fi_handle h, INT64 off, int origin) {
 }
 static INT64 DLL_CALLCONV s_tell(fi_handle h) { return ((sink_t *)h)->pos; }
 
-/* the size of the save, and whether it succeeded, with writes stopping after 'budget' bytes */
-static INT64 save(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, INT64 budget, BOOL *ok) {
+/* the size of the save, whether it succeeded and a hash of its bytes, with writes stopping after 'budget' bytes */
+static INT64 save_hash(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, INT64 budget, BOOL *ok, unsigned *hash) {
     FreeImageIO io = { s_read, s_write, s_seek, s_tell };
     sink_t k;
+    unsigned h = 2166136261u;
     memset(&k, 0, sizeof(k));
     k.budget = budget;
     k.cap = 1 << 16;
     k.buf = (BYTE *)malloc((size_t)k.cap);
     *ok = FreeImage_SaveToHandle(fif, dib, &io, (fi_handle)&k, flags);
+    for (INT64 i = 0; i < k.len; i++) h = (h ^ k.buf[i]) * 16777619u;
+    if (hash) *hash = h;
     free(k.buf);
     return k.len;
+}
+
+static INT64 save(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, INT64 budget, BOOL *ok) {
+    return save_hash(fif, dib, flags, budget, ok, NULL);
 }
 
 /* a save that never returns fails here instead of hanging the suite */
@@ -118,7 +128,8 @@ int main(void) {
     for (size_t i = 0; i < sizeof(t) / sizeof(t[0]); i++) {
         char what[128];
         BOOL ok;
-        const INT64 full = save(t[i].fif, t[i].dib, t[i].flags, (INT64)1 << 40, &ok);
+        unsigned hash = 0, bytes_hash = 0;
+        const INT64 full = save_hash(t[i].fif, t[i].dib, t[i].flags, (INT64)1 << 40, &ok, &hash);
         snprintf(what, sizeof(what), "%s saves (%lld bytes)", t[i].name, (long long)full);
         report(what, ok && (full > 0));
         save(t[i].fif, t[i].dib, t[i].flags, 100, &ok);
@@ -127,6 +138,16 @@ int main(void) {
         save(t[i].fif, t[i].dib, t[i].flags, full / 2, &ok);
         snprintf(what, sizeof(what), "  writes stop half way -> FALSE");
         report(what, !ok);
+        /* a write_proc that counts bytes instead of items writes the same file */
+        s_mode = 1;
+        const INT64 bytes_full = save_hash(t[i].fif, t[i].dib, t[i].flags, (INT64)1 << 40, &ok, &bytes_hash);
+        report("  write_proc returning bytes -> the same file", ok && (bytes_full == full) && (bytes_hash == hash));
+        save(t[i].fif, t[i].dib, t[i].flags, full / 2, &ok);
+        report("  returning bytes, writes stop half way -> FALSE", !ok);
+        s_mode = 2;
+        save(t[i].fif, t[i].dib, t[i].flags, (INT64)1 << 40, &ok);
+        report("  write_proc returning -1 -> FALSE", !ok);
+        s_mode = 0;
     }
 
     /* a BMP's ICC profile is its last write */

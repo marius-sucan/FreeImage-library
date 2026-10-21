@@ -267,10 +267,16 @@ static unsigned DLL_CALLCONV
 _CheckWriteProc(void *buffer, unsigned size, unsigned count, fi_handle handle) {
 	WriteCheckIO *check = (WriteCheckIO*)handle;
 	const unsigned written = check->base->write_proc(buffer, size, count, check->handle);
-	if (size && count && (written < count)) {
-		check->failed = TRUE;
+	if (!size || !count) {
+		return written;
 	}
-	return written;
+	// a callback may count bytes instead of items; the plugin sees items either way
+	if ((written == count) || ((UINT64)written == (UINT64)size * count)) {
+		return count;
+	}
+	// a short count or an error code: every plugin check reads 0 as a failed write
+	check->failed = TRUE;
+	return 0;
 }
 
 static int DLL_CALLCONV
