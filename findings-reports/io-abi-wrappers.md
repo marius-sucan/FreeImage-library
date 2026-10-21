@@ -25,12 +25,14 @@ Workspace W=$J/agents/io-abi-wrappers (progress.md has a summary; scripts/check_
 - Where: Utilities.h FreeImage_ReadBytes/WriteBytes call read_proc(buf, 1, n); call sites PluginTIFF.cpp:152-160 (main read_proc(buf, size, 1)), PluginJXR.cpp:51/62 (main (cb,1)), PluginG3.cpp:99 (main (n,1)); 7de5c34. Affected: Wrapper/FreeImage.NET/cs/Library/Classes/FreeImageStreamIO.cs:80-133 (loops per item).
 - Evidence (W/items/items_{main,qpv}, sum of count = C# loop iterations): 8.9 MB LZW TIFF load 157 -> 8,930,502; save 1,509 -> 1,342,564; uncompressed TIFF load 6 -> 9,000,140; save 1,509 -> 9,009,250; G3 TIFF load 12 -> 1,070,259; JXR 9.7 MB load 3,793 -> 18,928,996; save 3,824 -> 14,916,128. J2K/MNG/WebP already (1,n) in main; PNM improves. Wall time not measured.
 - Fix sketch: make C# streamRead/streamWrite move size*count bytes in one Stream call, or issue (chunk, 1) from ReadBytes/WriteBytes.
+- **Fixed** in 66daa64, the C# route: each call moves size*count bytes in Stream calls of up to 80 KB; a read goes on until the request is filled or the stream ends, the bytes of an incomplete item are sought back only on a seekable stream, and size or count 0 returns 0 (fread). UnitTest/FreeImage.cs has the same change. LoadFromStream/SaveToStream under .NET 8 against this tree's library, Stream.Read calls: LZW TIFF 8,930,502 -> 157, uncompressed 9,000,140 -> 115, G3 TIFF 1,070,259 -> 22, JXR 18,198,017 -> 4,775; Stream.Write calls 1,342,564 -> 1,509, 9,009,250 -> 1,509, 1,038,061 -> 20, 14,916,128 -> 3,824. Pixels and saved bytes equal FreeImage_Load/FreeImage_Save's before and after; a stream giving one byte per Read and an incomplete item on an unseekable stream no longer fail. Compiles for .NET 3.5/C# 3 and 2.0/C# 2.
 
 ## W-1 AHK FreeImage_SetTagValue passes the value as "uint*": tags longer than 4 bytes get AutoHotkey's scratch memory
 - Where: Wrapper/AHK/freeimage-wrapper.ahk:1724-1727 (unchanged since d989f51). FreeImage_SetTagValue copies tag->length bytes (FreeImageTag.cpp:264-303).
 - What: DllCall "uint*" passes the address of AutoHotkey's per-argument scratch slot (8-byte union + internal fields). RATIONAL gets numerator=value, denominator=0; ASCII/multi-value/> 8-byte tags get internal bytes; strings cannot be passed (become 0).
 - Evidence: W/tag/tag.c emulating the pointer: `RATIONAL XResolution, value 72: length 8, bytes: 48 00 00 00 00 00 00 00 -> "0"`; `ASCII Artist, 12 bytes: 00 x12 -> ""`.
 - Fix sketch: pass "UPtr", pValue (buffer filled with VarSetCapacity/NumPut or StrPut).
+- **Fixed** in 0bcc356, not as sketched: a pointer-only parameter would crash QPV's `FreeImage_SetTagValue(tag, frameTime)`. The value goes into a buffer of the tag's length as its type: comma-separated numbers, "numerator/denominator" for (S)RATIONAL, a string for ASCII (cut at the length); a new third parameter, valueIsPointer, takes an address, and FIDT_NOTYPE needs it. QPV's LONG gets the same four bytes. AHK 1.1.37 under Wine, x64 (QPV's DLL) and x86 (3.18): 18 cases read back byte for byte; the previous wrapper got 11 wrong.
 
 ## IO-2 FI_SeekProc/FI_TellProc take/return INT64
 - Class: compat-break (intentional, 7de5c34; README 2196cb3). Severity: High for 32-bit Windows binaries.
@@ -49,6 +51,7 @@ Workspace W=$J/agents/io-abi-wrappers (progress.md has a summary; scripts/check_
 - Where: MemoryIO.cpp:130-145, :195-198; 6b7462e. On Win64 streams can now exceed 2/4 GB (main refused writes past 0x7FFFFFFF); FreeImage_TellMemory returns -1, FreeImage_AcquireMemory returns FALSE above 4 GB without writing outputs.
 - Evidence: W/abi/memwin_x86_64.exe (real qpv FreeImageIO.cpp + MemoryIO.cpp cross-built, run under wine): "wrap a 5 GB buffer ... AcquireMemory -> 0, data=0000000000001234 size=3735928559 (outputs left as the caller had them)"; "SeekMemory64(3 GB) -> 1; TellMemory -> -1; TellMemory64 -> 3221225472".
 - Fix sketch: set *data = NULL and *size = 0 before returning FALSE.
+- **Fixed** in 040fa46, as sketched for AcquireMemory: a wrapped 5 GB buffer on Linux gives FALSE, NULL and 0 (before: the caller's 0x1234 and 0xDEADBEEF). FreeImage_TellMemory keeps returning -1 when the position does not fit a long, as ftell does; FreeImage_TellMemory64 gives it.
 
 ## API-1 MSVC: typedef long BOOL became typedef int BOOL
 - Class: compat-break (71dbf21). Severity: Low.
@@ -60,6 +63,7 @@ Workspace W=$J/agents/io-abi-wrappers (progress.md has a summary; scripts/check_
 - Where: freeimage-wrapper.ahk:2268-2294 ConvertPBITMAPtoFIM(pBitmap, 2) passes 0x00FF0000/0x0000FF00/0x000000FF for PixelFormat16bppRGB555; :237, :243 FreeImage_Allocate/AllocateEx default masks 0xFF000000/0x00FF0000/0x0000FF00 (ignored at 24/32, stored at 16 bits; BitmapAccess.cpp:324-337).
 - Evidence: W/tag/m16.c (identical on qpv and main): masks stored; FreeImage reads pixel 0 correctly (falls back to 555), but the BMP saver writes the BI_BITFIELDS masks: Pillow "Unsupported BMP bitfields layout".
 - Fix sketch: pass 0x7C00/0x03E0/0x001F on the 555 path; default Allocate masks to 0.
+- **Fixed** in f09e348, not as sketched for the defaults: ConvertPBITMAPtoFIM passes 0x7C00/0x03E0/0x001F at 16 bits, and FreeImage_Allocate/AllocateEx masks default to those at 16 bits and to 0 elsewhere. 0 at 16 bits is no fix: FreeImage reads such a bitmap as 555, but its BMP holds masks of 0, which Pillow refuses ("Unsupported BMP bitfields layout"); the old masks' BMP FreeImage itself reloads as 24-bit with wrong colours. AllocateExT and the AllocateHeader functions keep FreeImage.h's 0. AHK under Wine (x64, x86): both allocations and a GDI+ conversion give 555 masks, and their BMPs open in Pillow with the colours written.
 
 ## Flag-collision table (summary)
 - global: FIF_LOAD_NOPIXELS 0x8000 = TIFF_JPEG/JPEG_SUBSAMPLING_422 (pre-existing); FIF_LOAD_DISPLAY_ICC 0x4000 = TIFF_LZW/JPEG_SUBSAMPLING_420 (only reachable by passing a save flag to a load); DisplayICCLoadFlags strips 0x4000 except TIFF/PSD/JXL/JXR and adds the format's CMYK flag.
