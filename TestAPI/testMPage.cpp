@@ -22,6 +22,7 @@
 
 #include "TestSuite.h"
 
+#include <string.h>
 #ifdef _WIN32
 #include <io.h>		// _wfindfirst
 #endif
@@ -356,6 +357,76 @@ static void testPageResults(const char *lpszPathName) {
 
 // --------------------------------------------------------------------------
 
+static BOOL samePixels(FIBITMAP *a, FIBITMAP *b) {
+	if (!a || !b || (FreeImage_GetWidth(a) != FreeImage_GetWidth(b)) || (FreeImage_GetHeight(a) != FreeImage_GetHeight(b))
+		|| (FreeImage_GetBPP(a) != FreeImage_GetBPP(b))) {
+		return FALSE;
+	}
+	for (unsigned y = 0; y < FreeImage_GetHeight(a); y++) {
+		if (memcmp(FreeImage_GetScanLine(a, y), FreeImage_GetScanLine(b, y), FreeImage_GetLine(a)) != 0) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+// page 0, locked again and after a save, matches the first lock
+static void relockPage(FIMULTIBITMAP *mpage) {
+	assert(mpage != NULL);
+	FIBITMAP *first = FreeImage_LockPage(mpage, 0);
+	assert(first != NULL);
+	FIBITMAP *copy = FreeImage_Clone(first);
+	FreeImage_UnlockPage(mpage, first, FALSE);
+
+	FIBITMAP *dib = FreeImage_LockPage(mpage, 0);
+	assert(samePixels(dib, copy));
+	FreeImage_UnlockPage(mpage, dib, FALSE);
+
+	// the save reads the page through the same stream
+	FIMEMORY *hmem = FreeImage_OpenMemory();
+	BOOL bResult = FreeImage_SaveMultiBitmapToMemory(FIF_TIFF, mpage, hmem, 0);
+	assert(bResult);
+	FreeImage_CloseMemory(hmem);
+	dib = FreeImage_LockPage(mpage, 0);
+	assert(samePixels(dib, copy));
+	FreeImage_UnlockPage(mpage, dib, FALSE);
+
+	FreeImage_Unload(copy);
+	FreeImage_CloseMultiBitmap(mpage, 0);
+}
+
+// J2K, JP2 and JXR decoders read once: each lock of a single image needs its own
+static void testSingleImageRelock(const char *lpszPathName) {
+	printf("testSingleImageRelock ...\n");
+
+	FIBITMAP *src = FreeImage_Load(FreeImage_GetFileType(lpszPathName), lpszPathName, 0);
+	assert(src != NULL);
+	FIBITMAP *image = FreeImage_ConvertTo24Bits(src);
+	assert(image != NULL);
+	FreeImage_Unload(src);
+
+	const struct { FREE_IMAGE_FORMAT fif; const char *filename; } formats[] = {
+		{ FIF_J2K, "relock.j2k" }, { FIF_JP2, "relock.jp2" }, { FIF_JXR, "relock.jxr" }
+	};
+	for (unsigned i = 0; i < sizeof(formats) / sizeof(formats[0]); i++) {
+		BOOL bResult = FreeImage_Save(formats[i].fif, image, formats[i].filename, 0);
+		assert(bResult);
+		relockPage(FreeImage_OpenMultiBitmap(formats[i].fif, formats[i].filename, FALSE, TRUE, TRUE));
+		remove(formats[i].filename);
+
+		FIMEMORY *hmem = FreeImage_OpenMemory();
+		bResult = FreeImage_SaveToMemory(formats[i].fif, image, hmem, 0);
+		assert(bResult);
+		FreeImage_SeekMemory(hmem, 0, SEEK_SET);
+		relockPage(FreeImage_LoadMultiBitmapFromMemory(formats[i].fif, hmem, 0));
+		FreeImage_CloseMemory(hmem);
+	}
+
+	FreeImage_Unload(image);
+}
+
+// --------------------------------------------------------------------------
+
 static void setAnimationTag(FIBITMAP *dib, const char *key, FREE_IMAGE_MDTYPE type, DWORD count, DWORD length, const void *value) {
 	FITAG *tag = FreeImage_CreateTag();
 	FreeImage_SetTagKey(tag, key);
@@ -515,6 +586,9 @@ void testMultiPage(const char *lpszPathName) {
 
 	// test what the page functions and the close report
 	testPageResults(lpszPathName);
+
+	// test single images locked again and after a save
+	testSingleImageRelock(lpszPathName);
 
 	// test GIF frames that take the global color table
 	testGIFGlobalPalette();

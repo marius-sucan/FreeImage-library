@@ -180,6 +180,14 @@ InitThrows(Plugin *plugin, int format_id) {
 	plugin->save_proc = TestSaveThrows;
 }
 
+// one image a file: a page lock opens and closes the plugin itself
+static void DLL_CALLCONV
+InitThrowsSingle(Plugin *plugin, int format_id) {
+	plugin->open_proc = TestOpen;
+	plugin->close_proc = TestClose;
+	plugin->load_proc = TestLoad;
+}
+
 // a file matching the pattern exists
 static BOOL fileMatches(const char *pattern) {
 #ifdef _WIN32
@@ -267,6 +275,15 @@ void testPluginOutOfMemory() {
 	assert(loaded == NULL);
 	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
 	assert(bResult);
+	const FREE_IMAGE_FORMAT fif_single = FreeImage_RegisterLocalPlugin(InitThrowsSingle, "THROWS1", "out of memory test, one image", "throws1", NULL);
+	assert(fif_single != FIF_UNKNOWN);
+	mpage = FreeImage_OpenMultiBitmap(fif_single, "out-of-memory.throws", FALSE, TRUE, TRUE);
+	assert(mpage != NULL);
+	loaded = FreeImage_LockPage(mpage, 0);
+	assert(loaded == NULL);
+	bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+	FreeImage_SetPluginEnabled(fif_single, FALSE);
 	remove("out-of-memory.throws");
 	s_throw_load = FALSE;
 

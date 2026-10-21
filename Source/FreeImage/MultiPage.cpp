@@ -147,7 +147,7 @@ struct MULTIBITMAPHEADER {
 	int load_flags;
 	// FIMD_ANIMATION per cache block; the cache format may drop it
 	std::map<int, FIBITMAP *> page_metadata;
-	// plugin decoder state, from the first LockPage until close
+	// a multi-page plugin's decoder, from the page count until close
 	void *read_data;
 	// handle position where the image starts; a stream need not hold it at 0
 	INT64 start;
@@ -498,11 +498,14 @@ FreeImage_InternalGetPageCount(FIMULTIBITMAP *bitmap) {
 		if (((MULTIBITMAPHEADER *)bitmap->data)->handle) {
 			MULTIBITMAPHEADER *header = FreeImage_GetMultiBitmapHeader(bitmap);
 
+			// a single-image plugin's decoder is opened per lock
+			if (header->node->m_plugin->pagecount_proc == NULL) {
+				return 1;
+			}
+
 			void *data = FreeImage_GetReadData(header);
 
-			int page_count = (header->node->m_plugin->pagecount_proc != NULL) ? header->node->m_plugin->pagecount_proc(&header->io, header->handle, data) : 1;
-
-			return page_count;
+			return header->node->m_plugin->pagecount_proc(&header->io, header->handle, data);
 		}
 	}
 
@@ -1267,11 +1270,14 @@ FreeImage_LockPage(FIMULTIBITMAP *bitmap, int page) {
 			if (header->handle == NULL) {
 				return NULL;
 			}
-			FreeImage_GetReadData(header);
+			if (header->node->m_plugin->pagecount_proc == NULL) {
+				// a fresh decoder from the image start: J2K, JP2 and JXR decoders read once
+				header->io.seek_proc(header->handle, header->start, SEEK_SET);
+				dib = FreeImage_LoadFromHandle(header->fif, &header->io, header->handle, header->load_flags);
+			} else if (header->node->m_plugin->load_proc != NULL) {
+				// NULL read_data is valid: many plugins have no open_proc
+				FreeImage_GetReadData(header);
 
-			// NULL read_data is valid: many plugins have no open_proc
-
-			if (header->node->m_plugin->load_proc != NULL) {
 				dib = header->node->m_plugin->load_proc(&header->io, header->handle, file_page, DisplayICCLoadFlags(header->fif, header->load_flags), header->read_data);
 				AttachCICPProfile(dib);
 				if (dib && ((header->load_flags & FIF_LOAD_DISPLAY_ICC) == FIF_LOAD_DISPLAY_ICC)) {

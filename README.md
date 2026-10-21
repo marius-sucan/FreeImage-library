@@ -108,6 +108,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed multi-page GIF saving with variable frame dimensions: the logical screen is enlarged to fit every frame; fixed a stack buffer overflow in the LZW encoder;
 - fixed GIF frames drawn with the global color table turning grey when the first frame was deleted or moved, or when they were changed or saved on their own;
 - fixed multi-page documents crashing, or refusing every later change, after the disk or the memory ran out while a page was cached;
+- fixed FreeImage_LockPage() returning NULL for a J2K, JP2 or JPEG XR image locked a second time, or first locked after the document was saved;
 
 ### Security
 
