@@ -395,3 +395,96 @@ void testMessageFileText() {
 
 	FreeImage_SetOutputMessage(FreeImageErrorHandler);
 }
+
+// Raw G3 fax
+// ----------------------------------------------------------
+
+// bits MSB first; T.4 codes as { length, code }
+struct G3Bits {
+	std::string bytes;
+	unsigned used;
+	G3Bits() : used(0) {}
+	void put(const unsigned code[2]) {
+		for (int i = (int)code[0] - 1; i >= 0; i--) {
+			if (used == 0) {
+				bytes += '\0';
+			}
+			if ((code[1] >> i) & 1) {
+				bytes[bytes.size() - 1] |= (char)(0x80 >> used);
+			}
+			used = (used + 1) & 7;
+		}
+	}
+};
+
+static const unsigned G3_EOL[2] = { 12, 0x001 };
+static const unsigned G3_W0[2] = { 8, 0x35 }, G3_W32[2] = { 8, 0x1B }, G3_W832[2] = { 9, 0xD2 }, G3_W1728[2] = { 9, 0x9B };
+static const unsigned G3_B0[2] = { 10, 0x37 }, G3_B32[2] = { 12, 0x6A }, G3_B832[2] = { 13, 0x4D }, G3_B1728[2] = { 13, 0x65 };
+
+// rows of 1728 pixels: 'w' white, 'b' black, 'h' white then black halves
+static G3Bits g3Rows(const char *rows, BOOL eol) {
+	G3Bits b;
+	for (const char *r = rows; *r; r++) {
+		if (eol) {
+			b.put(G3_EOL);
+		}
+		if (*r == 'w') {
+			b.put(G3_W1728); b.put(G3_W0);
+		} else if (*r == 'b') {
+			b.put(G3_W0); b.put(G3_B1728); b.put(G3_B0);
+		} else {
+			b.put(G3_W832); b.put(G3_W32); b.put(G3_B832); b.put(G3_B32);
+		}
+	}
+	return b;
+}
+
+// the number of rows a stream loads as: the given rows, then white ones
+static unsigned g3Load(const std::string& data, const char *rows) {
+	FIMEMORY *hmem = FreeImage_OpenMemory((BYTE*)&data[0], (DWORD)data.size());
+	FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_FAXG3, hmem, 0);
+	FreeImage_CloseMemory(hmem);
+	assert(dib != NULL);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const unsigned count = (unsigned)strlen(rows);
+	for (unsigned y = 0; y < height; y++) {
+		const BYTE *line = FreeImage_GetScanLine(dib, height - 1 - y);
+		for (unsigned x = 0; x < 1728; x++) {
+			const int black = (line[x >> 3] >> (7 - (x & 7))) & 1;
+			const int want = (y < count) && ((rows[y] == 'b') || ((rows[y] == 'h') && (x >= 864)));
+			assert(black == want);
+		}
+	}
+	FreeImage_Unload(dib);
+	return height;
+}
+
+// a page ends where its EOLs do, as an RTC or the bytes after the last EOL may have it
+void testFaxG3() {
+	printf("testFaxG3 ...\n");
+
+	const char *rows = "wbhhbw";
+	const std::string page = g3Rows(rows, TRUE).bytes;
+	G3Bits rtc;
+	for (int i = 0; i < 6; i++) {
+		rtc.put(G3_EOL);
+	}
+	const std::string zeros(16, '\0');
+	// the last ten EOLs of libtiff's g3test.g3 and the bytes after them
+	const std::string g3test_end("\x00\x08\x00\x80\x08\x00\x80\x08\x00\x80\x08\x00\x80\x08\x00\x80\x3f\xff\xff\xf8\xff\x00\x00", 23);
+
+	assert(g3Load(page, rows) == 6);
+	assert(g3Load(page + rtc.bytes, rows) == 11);
+	assert(g3Load(page + rtc.bytes + zeros, rows) == 13);
+	assert(g3Load(page + zeros, rows) == 7);
+	assert(g3Load(page + g3test_end.substr(16), rows) == 7);
+	assert(g3Load(page + g3test_end, rows) == 17);
+
+	// rows without EOLs, then a code word the decoder cannot pass
+	G3Bits bare = g3Rows(rows, FALSE);
+	assert(g3Load(bare.bytes, rows) == 6);
+	static const unsigned BAD[2] = { 12, 0x007 }, ONES[2] = { 8, 0xFF };
+	bare.put(BAD);
+	bare.put(ONES);
+	assert(g3Load(bare.bytes, rows) == 8);
+}

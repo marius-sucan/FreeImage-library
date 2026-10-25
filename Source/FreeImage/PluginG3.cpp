@@ -147,11 +147,25 @@ copyFaxFile(FreeImageIO *io, fi_handle handle, TIFF* tifin, uint32_t xsize, int 
 		uint16_t compression_in = COMPRESSION_CCITTFAX3;
 		TIFFGetField(tifin, TIFFTAG_COMPRESSION, &compression_in);
 		tmsize_t lastcc = tifin->tif_rawcc;
+		BOOL stalled = FALSE;
+		// libtiff goes on without EOLs from the row where it finds no EOL left
+		int faxmode = 0;
+		TIFFGetField(tifin, TIFFTAG_FAXMODE, &faxmode);
+		BOOL eol_rows = ((faxmode & FAXMODE_NOEOL) == 0);
 		while (tifin->tif_rawcc > 0) {
 			ok = (*tifin->tif_decoderow)(tifin, rowbuf, linesize, 0);
-			// the decoders return -1, not 0, when a row cannot be decoded
-			if (ok < 1) {
-				if (compression_in == COMPRESSION_CCITTFAX4 || tifin->tif_rawcc == lastcc) {
+			const BOOL moved = (tifin->tif_rawcc != lastcc);
+			// a page coded with EOLs ends at its last EOL: a blank row closes it
+			BOOL page_end = FALSE;
+			if (eol_rows && TIFFGetField(tifin, TIFFTAG_FAXMODE, &faxmode) && (faxmode & FAXMODE_NOEOL)) {
+				eol_rows = FALSE;
+				page_end = (row > 0);
+			}
+			if (page_end) {
+				_TIFFmemset(rowbuf, 0, linesize);
+			} else if (ok < 1) {
+				// the decoders return -1, not 0, when a row cannot be decoded
+				if (compression_in == COMPRESSION_CCITTFAX4 || !moved) {
 					// probably EOFB; and if it is corrupt data we cannot continue anyway 
 					break;
 				}
@@ -159,12 +173,16 @@ copyFaxFile(FreeImageIO *io, fi_handle handle, TIFF* tifin, uint32_t xsize, int 
 				badrun++;
 				// regenerate line from previous good line 
 				_TIFFmemcpy(rowbuf, refbuf, linesize);
+			} else if (!moved && stalled) {
+				// a second row read from no input: the decoder is stuck on a code it cannot pass
+				break;
 			} else {
 				if (badrun > badfaxrun)
 					badfaxrun = badrun;
 				badrun = 0;
 				_TIFFmemcpy(refbuf, rowbuf, linesize);
 			}
+			stalled = !moved;
 			tifin->tif_dir.td_row++;
 			lastcc = tifin->tif_rawcc;
 
@@ -173,6 +191,9 @@ copyFaxFile(FreeImageIO *io, fi_handle handle, TIFF* tifin, uint32_t xsize, int 
 			if (stretch) {
 				FreeImage_WriteMemory(rowbuf, linesize, 1, memory);
 				row++;
+			}
+			if (page_end) {
+				break;
 			}
 		}
 		if (badrun > badfaxrun)

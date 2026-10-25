@@ -123,6 +123,9 @@ int main(int argc, char *argv[]) {
 	// test file text in messages
 	testMessageFileText();
 
+	// test where raw G3 fax pages end
+	testFaxG3();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif

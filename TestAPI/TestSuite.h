@@ -48,6 +48,7 @@ void showPlugins();
 void testPluginCloseResult();
 void testPluginOutOfMemory();
 void testMessageFileText();
+void testFaxG3();
 
 // Image types test suite
 // ==========================================================
