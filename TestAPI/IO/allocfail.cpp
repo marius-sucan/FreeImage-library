@@ -63,14 +63,23 @@ static void *no_memory(void) {
 /* blocks allocated and not freed: a load that fails has to give back what it took */
 static long live = 0;
 
+/* allocations of at least fail_size bytes fail too, of the kinds fail_kinds names: a realloc grows a block or makes one */
+enum { KIND_MALLOC = 1, KIND_CALLOC = 2, KIND_GROW = 4, KIND_FRESH = 8 };
+static size_t fail_size = 0;
+static int fail_kinds = 0;
+
+static int too_big(size_t n, int kind) {
+    return fail_size && (n >= fail_size) && (fail_kinds & kind);
+}
+
 extern "C" {
 void *__real_malloc(size_t n);
 void *__real_calloc(size_t n, size_t s);
 void *__real_realloc(void *p, size_t n);
 void __real_free(void *p);
-void *__wrap_malloc(size_t n) { void *p = should_fail() ? no_memory() : __real_malloc(n); if (p) live++; return p; }
-void *__wrap_calloc(size_t n, size_t s) { void *p = should_fail() ? no_memory() : __real_calloc(n, s); if (p) live++; return p; }
-void *__wrap_realloc(void *p, size_t n) { void *q = should_fail() ? no_memory() : __real_realloc(p, n); if (!p && q) live++; return q; }
+void *__wrap_malloc(size_t n) { void *p = (should_fail() || too_big(n, KIND_MALLOC)) ? no_memory() : __real_malloc(n); if (p) live++; return p; }
+void *__wrap_calloc(size_t n, size_t s) { void *p = (should_fail() || too_big((s && n > (size_t)-1 / s) ? (size_t)-1 : n * s, KIND_CALLOC)) ? no_memory() : __real_calloc(n, s); if (p) live++; return p; }
+void *__wrap_realloc(void *p, size_t n) { void *q = (should_fail() || too_big(n, p ? KIND_GROW : KIND_FRESH)) ? no_memory() : __real_realloc(p, n); if (!p && q) live++; return q; }
 void __wrap_free(void *p) { if (p) live--; __real_free(p); }
 }
 
@@ -1188,6 +1197,166 @@ static int pages_case(void) {
     return ((!doc || (pages == 3)) && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
+/* runs 'run' once in a child: CASE_OK, or a wrong result or a crash */
+static int in_child(int (*run)(void)) {
+    int status = 0;
+    pid_t pid = fork();
+    if (pid == 0) {
+        FreeImage_Initialise(FALSE);
+        FreeImage_SetOutputMessage(quiet);
+        _exit(run());
+    }
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) && (WEXITSTATUS(status) == CASE_OK);
+}
+
+/* a read callback that leaves ENOMEM in errno, as a caller's own code may */
+static unsigned DLL_CALLCONV errno_read(void *buffer, unsigned size, unsigned count, fi_handle handle) {
+    const unsigned n = (unsigned)fread(buffer, size, count, (FILE *)handle);
+    errno = ENOMEM;
+    return n;
+}
+static unsigned DLL_CALLCONV errno_write(void *buffer, unsigned size, unsigned count, fi_handle handle) { return (unsigned)fwrite(buffer, size, count, (FILE *)handle); }
+static int DLL_CALLCONV errno_seek(fi_handle handle, INT64 offset, int origin) { return fseeko((FILE *)handle, (off_t)offset, origin); }
+static INT64 DLL_CALLCONV errno_tell(fi_handle handle) { return (INT64)ftello((FILE *)handle); }
+
+static FIBITMAP *errno_load(const char *path) {
+    FreeImageIO io = { errno_read, errno_write, errno_seek, errno_tell };
+    FILE *f = fopen(path, "rb");
+    FIBITMAP *dib = f ? FreeImage_LoadFromHandle(FIF_TIFF, &io, (fi_handle)f, 0) : NULL;
+    if (f) fclose(f);
+    return dib;
+}
+
+static char s_damaged[512];
+
+/* the LZW file with bytes of its second strip overwritten: a damaged strip, left blank */
+static int write_damaged_tiff(void) {
+    uint64_t *offsets = NULL;
+    long at = 0, i = 0;
+    int c, ok;
+    FILE *f = fopen(s_coded[0], "rb"), *g;
+    TIFF *t = f ? TIFFClientOpen(s_coded[0], "r", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    if (!t) { if (f) fclose(f); return 0; }
+    if (TIFFGetField(t, TIFFTAG_STRIPOFFSETS, &offsets) && (TIFFNumberOfStrips(t) > 1)) at = (long)offsets[1];
+    TIFFClose(t);
+    f = fopen(s_coded[0], "rb");
+    g = fopen(s_damaged, "wb");
+    ok = (at > 0) && f && g;
+    while (ok && (c = fgetc(f)) != EOF) {
+        fputc(((i >= at + 2) && (i < at + 12)) ? 0xFF : c, g);
+        i++;
+    }
+    if (f) fclose(f);
+    if (g) fclose(g);
+    return ok;
+}
+
+/* through that callback: the LZW file whole, a three-page document, and the damaged file salvaged as without it */
+static int errno_io_case(void) {
+    FIBITMAP *ref = FreeImage_Load(FIF_TIFF, s_coded[0], 0), *got = errno_load(s_coded[0]);
+    FIBITMAP *ref_damaged = FreeImage_Load(FIF_TIFF, s_damaged, 0), *got_damaged = errno_load(s_damaged);
+    FreeImageIO io = { errno_read, errno_write, errno_seek, errno_tell };
+    FILE *f = fopen(s_coded[3], "rb");
+    FIMULTIBITMAP *doc = f ? FreeImage_OpenMultiBitmapFromHandle(FIF_TIFF, &io, (fi_handle)f, 0) : NULL;
+    FIBITMAP *page = doc ? FreeImage_LockPage(doc, 2) : NULL;
+    const int ok = same_pixels(ref, got) && same_pixels(ref_damaged, got_damaged) && (FreeImage_GetPageCount(doc) == 3) && page;
+    if (page) FreeImage_UnlockPage(doc, page, FALSE);
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    if (f) fclose(f);
+    FreeImage_Unload(ref);
+    FreeImage_Unload(got);
+    FreeImage_Unload(ref_damaged);
+    FreeImage_Unload(got_damaged);
+    return ok ? CASE_OK : CASE_BROKEN;
+}
+
+/* 16 x 16 grey pages, each with an ICC profile of 'size' bytes (only its bytes count) and, as most files have, another custom tag, by libtiff */
+static int write_icc_tiff(const char *path, size_t size, int pages) {
+    static BYTE row[16];
+    BYTE *icc = (BYTE *)malloc(size);
+    FILE *f = fopen(path, "w+b");
+    TIFF *t = (f && icc) ? TIFFClientOpen(path, "w", (thandle_t)f, t_read, t_write, t_seek, t_close, t_size, t_map, t_unmap) : NULL;
+    int ok = 1;
+    if (!t) { if (f) fclose(f); free(icc); return 0; }
+    for (size_t i = 0; i < size; i++) icc[i] = (BYTE)(i * 7);
+    for (int p = 0; p < pages; p++) {
+        TIFFSetField(t, TIFFTAG_SUBFILETYPE, FILETYPE_PAGE); TIFFSetField(t, TIFFTAG_PAGENUMBER, p, pages);
+        TIFFSetField(t, TIFFTAG_IMAGEWIDTH, 16); TIFFSetField(t, TIFFTAG_IMAGELENGTH, 16);
+        TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, 8); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, 1);
+        TIFFSetField(t, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK); TIFFSetField(t, TIFFTAG_ROWSPERSTRIP, 16);
+        TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)size, icc);
+        TIFFSetField(t, TIFFTAG_SOFTWARE, "allocfail");
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x++) row[x] = (BYTE)(p * 40 + y * 16 + x);
+            ok = ok && (TIFFWriteScanline(t, row, y, 0) >= 0);
+        }
+        ok = ok && TIFFWriteDirectory(t);
+    }
+    TIFFClose(t);
+    free(icc);
+    return ok;
+}
+
+static char s_icc_big[512], s_icc_small[512];
+
+static int icc_tiff_setup(void) {
+    const char *dir = getenv("IO_TEST_TMP");
+    snprintf(s_icc_big, sizeof(s_icc_big), "%s/fi_io_icc20.tif", (dir && *dir) ? dir : ".");
+    snprintf(s_icc_small, sizeof(s_icc_small), "%s/fi_io_icc15.tif", (dir && *dir) ? dir : ".");
+    return write_icc_tiff(s_icc_big, (size_t)20 << 20, 2) && write_icc_tiff(s_icc_small, (size_t)15 << 20, 1);
+}
+
+static int has_icc(FIBITMAP *dib) {
+    return dib && (FreeImage_GetICCProfile(dib)->size > 0);
+}
+
+/* the 20 MB ICC profiles of a two-page TIFF that libtiff cannot read, or reads and cannot copy (kinds), are left out: the pages load,
+   the document opens, without them, and no block is left */
+static int big_tag(int kinds) {
+    FIBITMAP *ref = FreeImage_Load(FIF_TIFF, s_icc_big, 0), *got, *page[2] = { NULL, NULL };
+    FIMULTIBITMAP *doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_icc_big, FALSE, TRUE, TRUE, 0);
+    long before;
+    int ok, i;
+    /* a first document fills what stays allocated */
+    if (!has_icc(ref) || !doc) return CASE_BROKEN;
+    FreeImage_CloseMultiBitmap(doc, 0);
+    before = live;
+    fail_size = (size_t)17 << 20;
+    fail_kinds = kinds;
+    got = FreeImage_Load(FIF_TIFF, s_icc_big, 0);
+    doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_icc_big, FALSE, TRUE, TRUE, 0);
+    for (i = 0; doc && (i < 2); i++) page[i] = FreeImage_LockPage(doc, i);
+    ok = same_pixels(ref, got) && !has_icc(got) && (FreeImage_GetPageCount(doc) == 2) && page[0] && page[1] && !has_icc(page[1]);
+    for (i = 0; i < 2; i++) if (page[i]) FreeImage_UnlockPage(doc, page[i], FALSE);
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    FreeImage_Unload(got);
+    fail_size = 0;
+    ok = ok && (live == before);
+    FreeImage_Unload(ref);
+    return ok ? CASE_OK : CASE_BROKEN;
+}
+
+static int big_tag_case(void) { return big_tag(KIND_GROW | KIND_FRESH); }
+static int big_copy_case(void) { return big_tag(KIND_FRESH); }
+
+/* a 15 MB block that cannot be had is memory running out: no image, no document, no block left */
+static int lost_tag_case(void) {
+    FIBITMAP *dib;
+    FIMULTIBITMAP *doc;
+    long before = live;
+    int ok;
+    fail_size = (size_t)12 << 20;
+    fail_kinds = KIND_GROW | KIND_FRESH;
+    dib = FreeImage_Load(FIF_TIFF, s_icc_small, 0);
+    doc = FreeImage_OpenMultiBitmap(FIF_TIFF, s_icc_small, FALSE, TRUE, TRUE, 0);
+    fail_size = 0;
+    ok = !dib && !doc;
+    FreeImage_Unload(dib);
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    return (ok && (live == before)) ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -1213,10 +1382,22 @@ int main(void) {
     if (coded_setup()) {
         sweep("TIFF loads, LZW strips, deflate tiles, JPEG: NULL or every pixel, no leak", coded_load_case);
         sweep("TIFF document of three pages: all three, or not opened, no leak", pages_case);
+        snprintf(s_damaged, sizeof(s_damaged), "%s.damaged.tif", s_coded[0]);
+        report("TIFF read by a callback leaving ENOMEM: loads as without it", write_damaged_tiff() && in_child(errno_io_case));
+        remove(s_damaged);
     } else {
         report("TIFF: the test files", 0);
     }
     for (int i = 0; i < 4; i++) remove(s_coded[i]);
+    if (icc_tiff_setup()) {
+        report("TIFF, 20 MB ICC profile libtiff cannot read: loads without it", in_child(big_tag_case));
+        report("TIFF, 20 MB ICC profile read but not copied: loads without it", in_child(big_copy_case));
+        report("TIFF, 15 MB ICC profile libtiff cannot read: NULL, no leak", in_child(lost_tag_case));
+    } else {
+        report("TIFF: the ICC test files", 0);
+    }
+    remove(s_icc_big);
+    remove(s_icc_small);
     sweep("PSD load with IPTC: no crash, no tag without its value, no leak", psd_iptc_case);
     if (!icc_setup()) {
         report("color management: the test profiles", 0);

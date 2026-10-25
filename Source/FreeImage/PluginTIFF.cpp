@@ -151,7 +151,11 @@ typedef struct {
 static tmsize_t
 _tiffReadProc(thandle_t handle, void *buf, tmsize_t size) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
-	return (tmsize_t)FreeImage_ReadBytes(fio->io, fio->handle, buf, (size_t)size);
+	// errno tells the loader that an allocation failed: the caller's I/O leaves it as it was
+	const int error = errno;
+	const tmsize_t count = (tmsize_t)FreeImage_ReadBytes(fio->io, fio->handle, buf, (size_t)size);
+	errno = error;
+	return count;
 }
 
 static tmsize_t
@@ -170,6 +174,7 @@ _tiffWriteProc(thandle_t handle, void *buf, tmsize_t size) {
 static toff_t
 _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 	fi_TIFFIO *fio = (fi_TIFFIO*)handle;
+	const int error = errno;
 	if(whence == SEEK_SET) {
 		// a BigTIFF offset from the file may not fit past the start
 		if(off > (toff_t)((std::numeric_limits<INT64>::max)() - fio->start)) {
@@ -182,7 +187,9 @@ _tiffSeekProc(thandle_t handle, toff_t off, int whence) {
 	} else {
 		fio->io->seek_proc(fio->handle, (INT64)off, whence);
 	}
-	return (toff_t)(fio->io->tell_proc(fio->handle) - fio->start);
+	const toff_t pos = (toff_t)(fio->io->tell_proc(fio->handle) - fio->start);
+	errno = error;
+	return pos;
 }
 
 static int
@@ -195,10 +202,12 @@ _tiffCloseProc(thandle_t fd) {
 static toff_t
 _tiffSizeProc(thandle_t handle) {
     fi_TIFFIO *fio = (fi_TIFFIO*)handle;
+    const int error = errno;
     const INT64 currPos = fio->io->tell_proc(fio->handle);
     fio->io->seek_proc(fio->handle, 0, SEEK_END);
     const INT64 fileSize = fio->io->tell_proc(fio->handle);
     fio->io->seek_proc(fio->handle, currPos, SEEK_SET);
+    errno = error;
     return (fileSize > fio->start) ? (toff_t)(fileSize - fio->start) : 0;
 }
 
@@ -241,9 +250,19 @@ TIFFOpen(const char* name, const char* mode) {
 //   TIFF library FreeImage-specific routines.
 // ----------------------------------------------------------
 
+// libtiff reads a tag's data by realloc and leaves the tag out if that fails: past this size no tag holds what the pixels need
+static const tmsize_t TIFF_BIG_TAG = (tmsize_t)16 << 20;
+// the libtiff allocations of this thread that failed: big tag reads, and all others
+static thread_local unsigned s_big_tags_left_out = 0;
+static thread_local unsigned s_failed_allocations = 0;
+
 void*
 _TIFFmalloc(tmsize_t s) {
-	return malloc(s);
+	void *p = malloc(s);
+	if(!p && (s > 0)) {
+		s_failed_allocations++;
+	}
+	return p;
 }
 
 void* 
@@ -251,7 +270,11 @@ _TIFFcalloc(tmsize_t nmemb, tmsize_t siz) {
 	if (nmemb == 0 || siz == 0) {
 		return ((void *)NULL);
 	}
-	return calloc((size_t)nmemb, (size_t)siz);
+	void *p = calloc((size_t)nmemb, (size_t)siz);
+	if(!p) {
+		s_failed_allocations++;
+	}
+	return p;
 }
 
 void
@@ -261,7 +284,39 @@ _TIFFfree(void *p) {
 
 void*
 _TIFFrealloc(void* p, tmsize_t s) {
-	return realloc(p, s);
+	void *q = realloc(p, s);
+	if(!q && (s > 0)) {
+		if(s > TIFF_BIG_TAG) {
+			s_big_tags_left_out++;
+		} else {
+			s_failed_allocations++;
+		}
+	}
+	return q;
+}
+
+// before a directory read: no error yet, and no failed libtiff allocation
+static void
+ClearTIFFMemoryErrors() {
+	errno = 0;
+	s_big_tags_left_out = 0;
+	s_failed_allocations = 0;
+}
+
+// after a directory read: TRUE if memory ran out for more than big tags, which are left out, those libtiff read and could not copy too
+static BOOL
+TIFFDirectoryShortOfMemory(TIFF *tif) {
+	if((s_failed_allocations > 0) || ((errno == ENOMEM) && (s_big_tags_left_out == 0))) {
+		return TRUE;
+	}
+	TIFFDirectory *td = &tif->tif_dir;
+	for(int i = td->td_customValueCount - 1; (i >= 0) && (s_big_tags_left_out > 0); i--) {
+		// libtiff keeps a custom tag whose value it could not copy, without the value
+		if((td->td_customValues[i].count > 0) && !td->td_customValues[i].value) {
+			TIFFUnsetField(tif, td->td_customValues[i].info->field_tag);
+		}
+	}
+	return FALSE;
 }
 
 void
@@ -1134,10 +1189,10 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 		// Save opens it: classic TIFF or BigTIFF depends on the image
 		return fio;
 	}
-	errno = 0;
+	ClearTIFFMemoryErrors();
 	fio->tif = TIFFFdOpen((thandle_t)fio, "", "r");
 	// short of memory, libtiff can also leave out a tag it could not allocate, the JPEG tables of the pixels among them
-	if((fio->tif == NULL) || (errno == ENOMEM)) {
+	if((fio->tif == NULL) || TIFFDirectoryShortOfMemory(fio->tif)) {
 		const BOOL memory = (errno == ENOMEM);
 		if(fio->tif) {
 			TIFFClose(fio->tif);
@@ -1169,10 +1224,10 @@ PageCount(FreeImageIO *io, fi_handle handle, void *data) {
 		TIFF *tif = (TIFF *)fio->tif;
 		int nr_ifd = 0;
 
-		// a directory libtiff could not read short of memory hides the pages after it
-		errno = 0;
+		// a directory libtiff could not read short of memory hides the pages after it; one it read may have left a big tag out
 		do {
 			nr_ifd++;
+			errno = 0;
 		} while (TIFFReadDirectory(tif));
 		if(errno == ENOMEM) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
@@ -1780,8 +1835,8 @@ ReadThumbnail(FreeImageIO *io, fi_handle handle, void *data, TIFF *tiff, FIBITMA
 				// this code can cause unwanted recursion causing an overflow, because of the way TIFFSetSubDirectory work
 				
 				// a directory read short of memory can lack a tag, the JPEG tables of its pixels among them
-				errno = 0;
-				if(TIFFSetSubDirectory(tiff, subIFD_offsets[0]) && (errno != ENOMEM)) {
+				ClearTIFFMemoryErrors();
+				if(TIFFSetSubDirectory(tiff, subIFD_offsets[0]) && !TIFFDirectoryShortOfMemory(tiff)) {
 					// load the thumbnail
 					int page = -1; 
 					int flags = TIFF_DEFAULT;
@@ -1852,12 +1907,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		tif = fio->tif;
 
 		if (page != -1) {
-			errno = 0;
+			ClearTIFFMemoryErrors();
 			if (!tif || !TIFFSetDirectory(tif, (uint16_t)page)) {
 				throw "Error encountered while opening TIFF file";			
 			}
 			// a tag libtiff could not allocate is left out of the directory
-			if (errno == ENOMEM) {
+			if (TIFFDirectoryShortOfMemory(tif)) {
 				throw FI_MSG_ERROR_MEMORY;
 			}
 		}
