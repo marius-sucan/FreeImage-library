@@ -7,6 +7,8 @@
 #include "pattern.h"
 #ifdef JXL_TEST_LIBJXL
 #include <jxl/decode.h>
+#include <jxl/encode.h>
+#include "../../Source/LibLCMS2/include/lcms2.h"
 #endif
 
 static int g_failures = 0;
@@ -722,6 +724,186 @@ static void test_float_signs(void) {
     printf("float samples of both signs: done\n");
 }
 
+/* the profile of a and b: the same bytes, or neither has one */
+static int same_profile(FIBITMAP *a, FIBITMAP *b) {
+    FIICCPROFILE *p = FreeImage_GetICCProfile(a), *q = FreeImage_GetICCProfile(b);
+    return p->size == q->size && (!p->size || !memcmp(p->data, q->data, p->size));
+}
+
+/* the largest difference between a's colours and b's, relative above 1; a grey a against b's first channel */
+static double float_error(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y, c, na, nb, w, h;
+    double worst = 0;
+    if (!a || !b || (w = FreeImage_GetWidth(a)) != FreeImage_GetWidth(b) || (h = FreeImage_GetHeight(a)) != FreeImage_GetHeight(b)) return 1e9;
+    na = FreeImage_GetBPP(a) / 32; nb = FreeImage_GetBPP(b) / 32;
+    for (y = 0; y < h; y++) {
+        const float *pa = (const float *)FreeImage_GetScanLine(a, y), *pb = (const float *)FreeImage_GetScanLine(b, y);
+        for (x = 0; x < w; x++) for (c = 0; c < (na < 3 ? na : 3); c++) {
+            const double u = pa[x * na + c], v = pb[x * nb + c];
+            const double e = fabs(u - v) / (fabs(v) > 1 ? fabs(v) : 1);
+            if (!(e <= worst)) worst = e;
+        }
+    }
+    return worst;
+}
+
+/* the alpha of two RGBAF images, bit for bit */
+static int same_float_alpha(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y;
+    for (y = 0; y < FreeImage_GetHeight(a); y++) {
+        const DWORD *pa = (const DWORD *)FreeImage_GetScanLine(a, y), *pb = (const DWORD *)FreeImage_GetScanLine(b, y);
+        for (x = 0; x < FreeImage_GetWidth(a); x++) if (pa[4 * x + 3] != pb[4 * x + 3]) return 0;
+    }
+    return 1;
+}
+
+/* float images hold linear light: a file on a display curve loads with the curve undone, as FreeImage_ConvertToLinear undoes it */
+static void test_float_linear(void) {
+    /* tolerance: the largest relative difference; lossy files by PSNR */
+    static const struct { FREE_IMAGE_TYPE type; unsigned bpp; BYTE p, t; int flags; double tolerance; const char *name; } T[] = {
+        {FIT_RGBF, 96, 1, 13, JXL_LOSSLESS, 0, "sRGB RGBF"}, {FIT_RGBAF, 128, 1, 13, JXL_LOSSLESS, 0, "sRGB RGBAF"},
+        {FIT_FLOAT, 32, 1, 13, JXL_LOSSLESS, 0, "sRGB FLOAT"}, {FIT_RGBF, 96, 1, 1, JXL_LOSSLESS, 0, "BT.709 RGBF"},
+        {FIT_RGBF, 96, 12, 13, JXL_LOSSLESS, 0, "Display P3 RGBF"}, {FIT_RGBF, 96, 9, 4, JXL_LOSSLESS, 1e-5, "BT.2020 gamma 2.2 RGBF"},
+        {FIT_RGBF, 96, 1, 13, 0, -1, "lossy sRGB RGBF"}, {FIT_RGBAF, 128, 12, 13, 0, -1, "lossy Display P3 RGBAF"},
+    };
+    unsigned i;
+    FIBITMAP *d, *r, *h, *want;
+    for (i = 0; i < sizeof(T) / sizeof(T[0]); i++) {
+        double e;
+        d = pattern(T[i].type, T[i].bpp, 64, 48, 130 + (int)i);
+        /* past both ends of the curve: odd below 0, continued above 1 */
+        ((float *)FreeImage_GetScanLine(d, 3))[0] = -0.5f;
+        ((float *)FreeImage_GetScanLine(d, 4))[0] = -0.02f;
+        ((float *)FreeImage_GetScanLine(d, 5))[0] = 1.5f;
+        set_cicp(d, T[i].p, T[i].t);
+        want = FreeImage_ConvertToLinear(d, 0);
+        r = roundtrip(d, T[i].flags, 0, NULL);
+        h = roundtrip(d, T[i].flags, FIF_LOAD_NOPIXELS, NULL);
+        CHECK(r && FreeImage_GetImageType(r) == T[i].type && cicp_is(r, T[i].p, 8), "%s: not linear light of the same primaries", T[i].name);
+        CHECK(r && want && same_profile(r, want), "%s: not FreeImage_ConvertToLinear's profile", T[i].name);
+        CHECK(h && r && cicp_is(h, T[i].p, 8) && same_profile(h, r), "%s: a header-only load describes it otherwise", T[i].name);
+        e = (T[i].tolerance < 0) ? ((r && want) ? psnr(want, r, T[i].type == FIT_FLOAT ? 1 : 3, 2) : 0) : float_error(r, want);
+        if (T[i].tolerance < 0)
+            CHECK(e > 33, "%s: PSNR %.1f dB against FreeImage_ConvertToLinear's samples", T[i].name, e);
+        else if (T[i].tolerance == 0)
+            CHECK(e == 0, "%s: not FreeImage_ConvertToLinear's samples bit for bit (%.3g)", T[i].name, e);
+        else
+            CHECK(e <= T[i].tolerance, "%s: %.3g from FreeImage_ConvertToLinear's samples", T[i].name, e);
+        if (r && T[i].type == FIT_RGBAF && T[i].flags == JXL_LOSSLESS)
+            CHECK(same_float_alpha(r, d), "%s: the alpha changed", T[i].name);
+        if (getenv("JXL_TEST_VERBOSE")) printf("    %s: %.3g from FreeImage_ConvertToLinear\n", T[i].name, e);
+        if (r) FreeImage_Unload(r);
+        if (h) FreeImage_Unload(h);
+        if (want) FreeImage_Unload(want);
+        FreeImage_Unload(d);
+    }
+
+    /* linear light, and PQ, whose curve FreeImage_ConvertToLinear undoes from the CICP tag, load as they are */
+    d = pattern(FIT_RGBF, 96, 40, 30, 140);
+    r = roundtrip(d, JXL_LOSSLESS, 0, NULL);
+    CHECK(same_pixels(d, r) && cicp_is(r, 1, 8), "linear float: not as it was");
+    if (r) FreeImage_Unload(r);
+    set_cicp(d, 9, 16);
+    r = roundtrip(d, JXL_LOSSLESS, 0, NULL);
+    CHECK(same_pixels(d, r) && cicp_is(r, 9, 16) && FreeImage_MustTonemap(r, FIF_JXL) == FITM_PQ, "PQ float: not as it was");
+    if (r) FreeImage_Unload(r);
+    FreeImage_Unload(d);
+    printf("float linear light: done\n");
+}
+
+#ifdef JXL_TEST_LIBJXL
+/* grey with alpha in an ICC profile libjxl keeps: it renders sRGB, which loads as linear sRGB */
+static void test_float_rendered(void) {
+    enum { W = 64, H = 48 };
+    float px[W * H * 2], *ref = malloc(W * H * 4 * sizeof(float)), t[26];
+    cmsToneCurve *curve;
+    cmsHPROFILE profile;
+    cmsUInt32Number icc_size = 0;
+    BYTE *icc;
+    JxlEncoder *enc = JxlEncoderCreate(NULL);
+    JxlBasicInfo info;
+    JxlExtraChannelInfo ec;
+    JxlEncoderFrameSettings *fs;
+    JxlPixelFormat grey_alpha = { 2, JXL_TYPE_FLOAT, JXL_NATIVE_ENDIAN, 0 }, rgba = { 4, JXL_TYPE_FLOAT, JXL_NATIVE_ENDIAN, 0 };
+    BYTE *data = malloc(1 << 20), *next = data;
+    size_t avail = 1 << 20;
+    FIMEMORY *mem;
+    FIBITMAP *r = NULL;
+    unsigned x, y, i;
+    int ok;
+
+    /* a sampled curve: a profile libjxl cannot name */
+    for (i = 0; i < 26; i++) t[i] = (float)pow(i / 25.0, 2.0);
+    curve = cmsBuildTabulatedToneCurveFloat(NULL, 26, t);
+    profile = cmsCreateGrayProfile(cmsD50_xyY(), curve);
+    cmsSaveProfileToMem(profile, NULL, &icc_size);
+    icc = malloc(icc_size);
+    cmsSaveProfileToMem(profile, icc, &icc_size);
+    cmsCloseProfile(profile);
+    cmsFreeToneCurve(curve);
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+        px[2 * (y * W + x)] = (float)(0.7 * x / (W - 1) + 0.3 * y / (H - 1));
+        px[2 * (y * W + x) + 1] = (float)(0.25 + 0.75 * x / (W - 1));
+    }
+    JxlEncoderInitBasicInfo(&info);
+    info.xsize = W; info.ysize = H;
+    info.bits_per_sample = 32; info.exponent_bits_per_sample = 8;
+    info.num_color_channels = 1;
+    info.alpha_bits = 32; info.alpha_exponent_bits = 8; info.num_extra_channels = 1;
+    info.uses_original_profile = JXL_FALSE;
+    JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_ALPHA, &ec);
+    ec.bits_per_sample = 32; ec.exponent_bits_per_sample = 8;
+    fs = JxlEncoderFrameSettingsCreate(enc, NULL);
+    ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS && JxlEncoderSetExtraChannelInfo(enc, 0, &ec) == JXL_ENC_SUCCESS &&
+         JxlEncoderSetICCProfile(enc, icc, icc_size) == JXL_ENC_SUCCESS && JxlEncoderSetFrameDistance(fs, 0.5f) == JXL_ENC_SUCCESS &&
+         JxlEncoderAddImageFrame(fs, &grey_alpha, px, sizeof(px)) == JXL_ENC_SUCCESS;
+    JxlEncoderCloseInput(enc);
+    ok = ok && JxlEncoderProcessOutput(enc, &next, &avail) == JXL_ENC_SUCCESS;
+    JxlEncoderDestroy(enc);
+    CHECK(ok, "rendered float: libjxl did not write the file");
+
+    /* the reference: libjxl's linear sRGB */
+    if (ok) {
+        JxlDecoder *dec = JxlDecoderCreate(NULL);
+        JxlColorEncoding linear;
+        JxlColorEncodingSetToLinearSRGB(&linear, JXL_TRUE);
+        JxlDecoderSubscribeEvents(dec, JXL_DEC_COLOR_ENCODING | JXL_DEC_FULL_IMAGE);
+        JxlDecoderSetUnpremultiplyAlpha(dec, JXL_TRUE);
+        JxlDecoderSetInput(dec, data, (size_t)(next - data));
+        JxlDecoderCloseInput(dec);
+        ok = 0;
+        for (;;) {
+            JxlDecoderStatus st = JxlDecoderProcessInput(dec);
+            if (st == JXL_DEC_COLOR_ENCODING) JxlDecoderSetPreferredColorProfile(dec, &linear);
+            else if (st == JXL_DEC_NEED_IMAGE_OUT_BUFFER) JxlDecoderSetImageOutBuffer(dec, &rgba, ref, W * H * 4 * sizeof(float));
+            else if (st == JXL_DEC_FULL_IMAGE) ok = 1;
+            else break;
+        }
+        JxlDecoderDestroy(dec);
+        mem = FreeImage_OpenMemory(data, (DWORD)(next - data));
+        r = FreeImage_LoadFromMemory(FIF_JXL, mem, 0);
+        FreeImage_CloseMemory(mem);
+    }
+    CHECK(r && FreeImage_GetImageType(r) == FIT_RGBAF && cicp_is(r, 1, 8) && FreeImage_GetICCProfile(r)->size == 0, "rendered float: not linear sRGB RGBAF");
+    if (r && ok) {
+        double worst = 0;
+        int alpha = 1;
+        for (y = 0; y < H; y++) {
+            const float *p = (const float *)FreeImage_GetScanLine(r, H - 1 - y);
+            for (x = 0; x < W; x++) {
+                const float *q = ref + 4 * (y * W + x);
+                for (i = 0; i < 3; i++) { double e = fabs(p[4 * x + i] - q[i]); if (e > worst) worst = e; }
+                alpha &= memcmp(&p[4 * x + 3], &q[3], sizeof(float)) == 0;
+            }
+        }
+        CHECK(worst < 1e-5 && alpha, "rendered float: %.3g from libjxl's linear sRGB, alpha %s", worst, alpha ? "kept" : "changed");
+    }
+    if (r) FreeImage_Unload(r);
+    free(icc); free(data); free(ref);
+    printf("rendered float: done\n");
+}
+#endif
+
 static void test_refusals(void) {
     static const FREE_IMAGE_TYPE bad[] = { FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE, FIT_COMPLEX };
     unsigned i;
@@ -813,6 +995,10 @@ int main(void) {
     test_cmyk();
     test_pages();
     test_float_signs();
+    test_float_linear();
+#ifdef JXL_TEST_LIBJXL
+    test_float_rendered();
+#endif
     test_refusals();
     test_offset();
     printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "passed", g_failures);

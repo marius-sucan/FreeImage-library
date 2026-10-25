@@ -28,6 +28,7 @@ for name, res, args in [
     ('FreeImage_AllocateT', C.c_void_p, [C.c_int, C.c_int, C.c_int, C.c_int, C.c_uint, C.c_uint, C.c_uint]),
     ('FreeImage_CreateICCProfile', C.c_void_p, [C.c_void_p, C.c_void_p, C.c_long]),
     ('FreeImage_ConvertToICCProfile', C.c_void_p, [C.c_void_p, C.c_void_p, C.c_uint32, C.c_int]),
+    ('FreeImage_ConvertToLinear', C.c_void_p, [C.c_void_p, C.c_int]),
     ('FreeImage_Unload', None, [C.c_void_p]),
 ]:
     f = getattr(lib, name); f.restype = res; f.argtypes = args
@@ -52,15 +53,20 @@ def to_array(dib, bgr=True):
     a = np.ascontiguousarray(raw[:, :w * ch * np.dtype(dt).itemsize]).view(dt).reshape(h, w, ch)
     return a.astype(np.float64) / scale
 
-# the reference's colours in the profile of FreeImage's output, through FreeImage's own conversion
-def to_profile(rgb, src_icc, dst_icc):
+# float samples in a bitmap with a profile
+def float_bitmap(rgb, icc):
     h, w, ch = rgb.shape
     dib = lib.FreeImage_AllocateT({1: 6, 3: 11}[ch], w, h, 32 * ch, 0, 0, 0)
     pitch = lib.FreeImage_GetPitch(dib)
     raw = np.ctypeslib.as_array((C.c_ubyte * (pitch * h)).from_address(lib.FreeImage_GetBits(dib))).reshape(h, pitch)
     raw[:, :w * ch * 4] = np.ascontiguousarray(rgb[::-1].astype(np.float32)).view(np.uint8).reshape(h, w * ch * 4)
-    src = C.create_string_buffer(src_icc, len(src_icc))
-    lib.FreeImage_CreateICCProfile(dib, src, len(src_icc))
+    src = C.create_string_buffer(icc, len(icc))
+    lib.FreeImage_CreateICCProfile(dib, src, len(icc))
+    return dib
+
+# the reference's colours in the profile of FreeImage's output, through FreeImage's own conversion
+def to_profile(rgb, src_icc, dst_icc):
+    dib = float_bitmap(rgb, src_icc)
     conv = lib.FreeImage_ConvertToICCProfile(dib, dst_icc, len(dst_icc), 0)
     lib.FreeImage_Unload(dib)
     if not conv:
@@ -68,6 +74,19 @@ def to_profile(rgb, src_icc, dst_icc):
     out = to_array(conv)
     lib.FreeImage_Unload(conv)
     return out
+
+# the reference as linear light, which FreeImage loads floating point as, and the profile describing it
+def to_linear(rgb, src_icc):
+    dib = float_bitmap(rgb, src_icc)
+    lin = lib.FreeImage_ConvertToLinear(dib, 0)
+    lib.FreeImage_Unload(dib)
+    if not lin:
+        return None, b''
+    icc = lib.FreeImage_GetICCProfile(lin).contents
+    lin_icc = C.string_at(icc.data, icc.size) if icc.size else b''
+    out = to_array(lin)[:, :, :rgb.shape[2]]
+    lib.FreeImage_Unload(lin)
+    return out, lin_icc
 
 failures = 0
 for case in CASES:
@@ -104,8 +123,14 @@ for case in CASES:
         else:
             out = to_array(dib)
             rc = r[:, :, :ncol]
-            if out_icc and out_icc != ref_icc:
-                rc = to_profile(rc, ref_icc, out_icc)
+            ref_profile = ref_icc
+            if t in (6, 11, 12):
+                rc, ref_profile = to_linear(rc, ref_icc)
+                note = ' (reference as linear light)'
+                if rc is None:
+                    status = 'FAILED: the reference cannot be made linear'; lib.FreeImage_UnlockPage(m, dib, 0); break
+            if out_icc and out_icc != ref_profile:
+                rc = to_profile(rc, ref_profile, out_icc)
                 note = ' (reference converted to the output profile)'
                 if rc is None:
                     status = 'FAILED: the reference cannot be converted'; lib.FreeImage_UnlockPage(m, dib, 0); break

@@ -353,6 +353,12 @@ typedef struct tagJXLTransform {
 	cmsHTRANSFORM transform;
 } JXLTransform;
 
+// a display curve undone in float pages
+typedef struct tagJXLCurve {
+	JxlTransferFunction tf;
+	double exponent;			// a gamma curve's decoding exponent
+} JXLCurve;
+
 // state shared with the pixel callback, which runs on libjxl's threads
 typedef struct tagJXLSink {
 	BYTE *bits;				// bottom-up rows
@@ -364,6 +370,8 @@ typedef struct tagJXLSink {
 	BOOL swap_rb;
 	unsigned channels;
 	cmsHTRANSFORM transform;
+	BOOL linearize;			// float colours undo 'curve'
+	JXLCurve curve;
 	std::atomic<unsigned long long> pixels;
 } JXLSink;
 
@@ -787,10 +795,80 @@ PageRoute(const JXLReader *reader, const JXLOutput *out) {
 	return reader->route;
 }
 
+// a float page's display curve, undone: FreeImage takes floating point for linear light; PQ and HLG stay
+static BOOL
+FloatPageCurve(const JXLReader *reader, const JXLOutput *out, JXLRoute route, JXLCurve *curve, unsigned *primaries) {
+	if(out->format.data_type != JXL_TYPE_FLOAT) {
+		return FALSE;
+	}
+	JxlColorEncoding enc;
+	if(route == JXL_ROUTE_TO_SRGB) {
+		JxlColorEncodingSetToSRGB(&enc, (reader->info.num_color_channels == 1) ? JXL_TRUE : JXL_FALSE);
+	} else if((route == JXL_ROUTE_AS_DECODED) && reader->data_encoded) {
+		enc = reader->data_enc;
+	} else {
+		return FALSE;
+	}
+	unsigned transfer = 2;
+	if(!EncodingToCICP(&enc, primaries, &transfer) || (*primaries == 2)) {
+		return FALSE;
+	}
+	curve->tf = enc.transfer_function;
+	curve->exponent = 1;
+	switch(enc.transfer_function) {
+		case JXL_TRANSFER_FUNCTION_SRGB:
+		case JXL_TRANSFER_FUNCTION_709:
+			return TRUE;
+		case JXL_TRANSFER_FUNCTION_DCI:
+			curve->exponent = 2.6;
+			return TRUE;
+		case JXL_TRANSFER_FUNCTION_GAMMA:
+			// JxlColorEncoding holds the encoding exponent
+			if(!(enc.gamma > 0) || (enc.gamma == 1)) {
+				return FALSE;
+			}
+			curve->exponent = 1 / enc.gamma;
+			return TRUE;
+		default:
+			return FALSE;
+	}
+}
+
+// odd, and continued above 1, as FreeImage_ConvertToLinear reads these curves
+static inline float
+LinearLight(const JXLCurve& curve, float sample) {
+	const double signal = sample;
+	const double v = fabs(signal);
+	double light;
+	switch(curve.tf) {
+		case JXL_TRANSFER_FUNCTION_SRGB:
+			light = (v <= 0.04045) ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4);
+			break;
+		case JXL_TRANSFER_FUNCTION_709:
+			light = (v < 0.081) ? v / 4.5 : pow((v + 0.099) / 1.099, 1 / 0.45);
+			break;
+		default:
+			light = pow(v, curve.exponent);
+			break;
+	}
+	return (float)((signal < 0) ? -light : light);
+}
+
 static void
 AttachColor(FIBITMAP *dib, const JXLReader *reader, const JXLOutput *out, JXLRoute route) {
 	unsigned primaries = 2, transfer = 2;
+	JXLCurve curve;
 
+	if(FloatPageCurve(reader, out, route, &curve, &primaries)) {
+		// as FreeImage_ConvertToLinear describes light; sRGB's primaries need no profile
+		SetCICPMetadata(dib, primaries, 8, 0, TRUE);
+		unsigned size = 0;
+		const void *profile = (primaries != 1) ? GetCICPProfile((BYTE)primaries, 8, FALSE, &size) : NULL;
+		if(profile) {
+			FreeImage_CreateICCProfile(dib, (void*)profile, (long)size);
+		}
+		return;
+	}
 	if(route == JXL_ROUTE_TO_SRGB) {
 		SetCICPMetadata(dib, 1, 13, 0, TRUE);
 		return;
@@ -938,6 +1016,16 @@ SinkPixels(void *opaque, size_t x, size_t y, size_t num_pixels, const void *pixe
 	BYTE *dst = sink->bits + (size_t)sink->pitch * (sink->height - 1 - y) + x * sink->dst_pixel;
 	if(sink->transform) {
 		cmsDoTransform(sink->transform, pixels, dst, (cmsUInt32Number)num_pixels);
+	} else if(sink->linearize) {
+		const float *src = (const float*)pixels;
+		float *out = (float*)dst;
+		const unsigned n = sink->channels;
+		const unsigned colors = (n >= 3) ? 3 : 1;
+		for(size_t i = 0; i < num_pixels; i++, src += n, out += n) {
+			for(unsigned c = 0; c < n; c++) {
+				out[c] = (c < colors) ? LinearLight(sink->curve, src[c]) : src[c];
+			}
+		}
 	} else if(sink->swap_rb) {
 		const BYTE *src = (const BYTE*)pixels;
 		const unsigned n = sink->channels;
@@ -1037,6 +1125,8 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 	sink.src_pixel = format.num_channels * SampleBytes(format.data_type);
 	sink.swap_rb = out.swap_rb;
 	sink.transform = transform;
+	unsigned primaries = 2;
+	sink.linearize = FloatPageCurve(reader, &out, route, &sink.curve, &primaries);
 	sink.pixels.store(0);
 
 	BOOL complete = FALSE;
