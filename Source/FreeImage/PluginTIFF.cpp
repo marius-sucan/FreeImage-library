@@ -1375,25 +1375,37 @@ FindAlphaSample(TIFF *tif, uint16_t photometric, uint16_t samplesperpixel, BOOL 
 		default:
 			return -1;
 	}
+	uint16_t count = 0;
+	const uint16_t *types = NULL;
+	// fails without the tag, though libtiff then makes up unspecified extra samples
+	const BOOL tagged = TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &count, &types);
+
+	// the extra samples are the last ones
+	int first = (int)samplesperpixel - (int)count;
+	// inks other than CMYK are all colours; libtiff lists the tag's entries from the first sample past NumberOfInks
+	uint16_t inkset = INKSET_CMYK;
+	const BOOL other_inks = (photometric == PHOTOMETRIC_SEPARATED) && TIFFGetField(tif, TIFFTAG_INKSET, &inkset) && (inkset != INKSET_CMYK);
+	if(other_inks) {
+		uint16_t inks = 0;
+		if(TIFFGetField(tif, TIFFTAG_NUMBEROFINKS, &inks)) {
+			first = MIN((int)inks, (int)samplesperpixel);
+		}
+		colours = MAX(colours, first);
+	}
 	if((int)samplesperpixel <= colours) {
 		return -1;
 	}
 
-	uint16_t count = 0;
-	const uint16_t *types = NULL;
-	// fails without the tag, though libtiff then makes up unspecified extra samples
-	if(!TIFFGetField(tif, TIFFTAG_EXTRASAMPLES, &count, &types)) {
-		// FreeImage 3.18 saves 8-bit and float alphas without the tag
-		return colours;
+	if(!tagged) {
+		// FreeImage 3.18 saves 8-bit and float alphas without the tag, and no inks other than CMYK
+		return other_inks ? -1 : colours;
 	}
 	// libtiff keeps the count of a type list it could not allocate
 	if((count > 0) && !types) {
 		throw FI_MSG_ERROR_MEMORY;
 	}
 
-	// the extra samples are the last ones
-	const int first = (int)samplesperpixel - (int)count;
-	for(int s = MAX(first, colours); s < (int)samplesperpixel; s++) {
+	for(int s = MAX(first, colours); (s < (int)samplesperpixel) && (s - first < (int)count); s++) {
 		const uint16_t type = types[s - first];
 		if((type == EXTRASAMPLE_ASSOCALPHA) || (type == EXTRASAMPLE_UNASSALPHA)) {
 			*associated = (type == EXTRASAMPLE_ASSOCALPHA) ? TRUE : FALSE;
@@ -1900,11 +1912,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
  
 		// ---------------------------------------------------------------------------------
 
-		// inks other than CMYK have no RGB rendering
+		// inks other than CMYK load as CMYK, the first four of them
 		uint16_t inkset = INKSET_CMYK;
-		if((photometric == PHOTOMETRIC_SEPARATED) && TIFFGetField(tif, TIFFTAG_INKSET, &inkset) && (inkset != INKSET_CMYK)) {
-			throw "TIFF images of inks other than CMYK are not supported";
-		}
+		const BOOL other_inks = (photometric == PHOTOMETRIC_SEPARATED) && TIFFGetField(tif, TIFFTAG_INKSET, &inkset) && (inkset != INKSET_CMYK);
 
 		BOOL associated = FALSE;
 		const int alpha_sample = FindAlphaSample(tif, photometric, samplesperpixel, &associated);
@@ -2800,6 +2810,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		ReadThumbnail(io, handle, data, tif, dib);
 
+		if(other_inks && (!asCMYK || display)) {
+			FreeImage_OutputMessageProc(s_format_id, "Warning: the inks are not CMYK; the first four are converted as cyan, magenta, yellow and black");
+		}
 		if(bParseError) {
 			FreeImage_OutputMessageProc(s_format_id, "Warning: parsing error. Image may be incomplete or contain invalid data !");
 		}

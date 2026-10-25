@@ -631,6 +631,10 @@ static void extra_sample_tiffs(const Bytes *press) {
 
 /* a profile write_xs_tiff embeds, when not NULL */
 static const Bytes *xs_icc = NULL;
+/* the NumberOfInks tag write_xs_tiff writes, when not 0, or the InkNames tag, when not NULL: the names and their bytes */
+static int xs_inks = 0;
+static const char *xs_ink_names = NULL;
+static int xs_ink_names_size = 0;
 
 /* sample c of pixel x, y of write_xs_tiff's files: 0 and the maximum often, the rest spread */
 static unsigned xs_sample(int bits, int x, int y, int c) {
@@ -708,6 +712,8 @@ static int write_xs_tiff(const char *path, int photometric, int bits, int spp, i
     TIFFSetField(t, TIFFTAG_BITSPERSAMPLE, (bits == XS_HALF) ? 16 : bits); TIFFSetField(t, TIFFTAG_SAMPLESPERPIXEL, spp);
     TIFFSetField(t, TIFFTAG_PHOTOMETRIC, photometric);
     if (inkset) TIFFSetField(t, TIFFTAG_INKSET, inkset);
+    if (xs_inks) TIFFSetField(t, TIFFTAG_NUMBEROFINKS, xs_inks);
+    if (xs_ink_names) TIFFSetField(t, TIFFTAG_INKNAMES, xs_ink_names_size, xs_ink_names);
     if (xs_icc) TIFFSetField(t, TIFFTAG_ICCPROFILE, (uint32_t)xs_icc->size, xs_icc->data);
     TIFFSetField(t, TIFFTAG_PLANARCONFIG, layout == 1 ? PLANARCONFIG_SEPARATE : PLANARCONFIG_CONTIG);
     if (bits == 32 || bits == XS_HALF) TIFFSetField(t, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
@@ -858,7 +864,7 @@ static int xs_layout(FIBITMAP *d, int photometric, int bits, int alpha, int inks
 
 /* TIFF 6.0: the alpha is the first extra sample (the last samples) typed 1 (premultiplied colours) or 2; 0 is no alpha. Without the
    tag, against the specification, the first extra sample is the alpha: FreeImage 3.18 saves 8-bit and float alphas so. Inks
-   other than CMYK are refused. */
+   other than CMYK load as CMYK, all samples inks but those past NumberOfInks, which the tag describes. */
 static void extra_samples_tag(void) {
     enum { XS_RGB = PHOTOMETRIC_RGB, XS_CMYK = PHOTOMETRIC_SEPARATED, XS_GREY = PHOTOMETRIC_MINISBLACK, XS_WHITE = PHOTOMETRIC_MINISWHITE, XS_PAL = PHOTOMETRIC_PALETTE };
     static const struct { int photometric, bits, spp, layout; const char *types; int alpha, assoc; } XS[] = {
@@ -885,7 +891,7 @@ static void extra_samples_tag(void) {
     static const char *LAYOUT[3] = { "strips", "planes", "tiles" };
     const char *path = scratch("icc_extra_samples_tag.tif");
     unsigned i;
-    int k, spp;
+    int k;
     char what[160];
     for (i = 0; i < sizeof(XS) / sizeof(XS[0]); i++) {
         const int cmyk = XS[i].photometric == XS_CMYK;
@@ -911,15 +917,43 @@ static void extra_samples_tag(void) {
         }
         remove(path);
     }
-    /* inks other than CMYK have no RGB rendering */
-    for (spp = 4; spp <= 6; spp += 2) {
-        if (!write_xs_tiff(path, XS_CMYK, 8, spp, 0, "", INKSET_MULTIINK)) { fail("cannot write %s", path); return; }
-        for (k = 0; k < 4; k++) {
-            FIBITMAP *dib = FreeImage_Load(FIF_TIFF, path, ((k & 1) ? TIFF_CMYK : 0) | ((k & 2) ? FIF_LOAD_NOPIXELS : 0));
-            CHECK(!dib, "%d inks, not CMYK, flags %d: loaded", spp, k);
-            if (dib) FreeImage_Unload(dib);
+    /* inks other than CMYK load as CMYK, the first four, with a warning unless TIFF_CMYK keeps them; NumberOfInks (InkNames too) says
+       which samples are extra ones, without it the tag does; without both there is no alpha */
+    {
+        static const char NAMES5[] = "Cyan\0Magenta\0Yellow\0Black\0Orange";
+        static const struct { int bits, spp, layout, inks, names; const char *types; int alpha, assoc; } INKS[] = {
+            { 8, 4, 0, 0, 0, "", -1, 0 }, { 8, 4, 2, 0, 0, "", -1, 0 }, { 8, 6, 0, 0, 0, "", -1, 0 }, { 8, 6, 1, 0, 0, "", -1, 0 },
+            { 8, 6, 2, 0, 0, "", -1, 0 }, { 8, 6, 0, 4, 0, "", -1, 0 }, { 8, 6, 0, 5, 0, "2", 5, 0 }, { 8, 6, 2, 5, 0, "2", 5, 0 },
+            { 8, 6, 1, 5, 0, "1", 5, 1 }, { 16, 6, 0, 5, 0, "2", 5, 0 }, { 16, 6, 2, 5, 0, "1", 5, 1 }, { 8, 6, 0, 0, 0, "02", 5, 0 },
+            { 8, 6, 0, 4, 0, "02", 5, 0 }, { 8, 5, 0, 0, 1, "", -1, 0 }, { 8, 6, 0, 0, 1, "2", 5, 0 }
+        };
+        for (i = 0; i < sizeof(INKS) / sizeof(INKS[0]); i++) {
+            xs_inks = INKS[i].inks;
+            xs_ink_names = INKS[i].names ? NAMES5 : NULL;
+            xs_ink_names_size = (int)sizeof(NAMES5);
+            if (!write_xs_tiff(path, XS_CMYK, INKS[i].bits, INKS[i].spp, INKS[i].layout, INKS[i].types, INKSET_MULTIINK)) { fail("cannot write %s", path); return; }
+            for (k = 0; k < 2; k++) {
+                const int flags = k ? TIFF_CMYK : TIFF_DEFAULT;
+                FIBITMAP *full;
+                snprintf(what, sizeof(what), "%d-bit TIFF of %d inks, not CMYK, in %s, NumberOfInks %d%s, ExtraSamples %s, flags %d", INKS[i].bits,
+                    INKS[i].spp, LAYOUT[INKS[i].layout], INKS[i].names ? 5 : INKS[i].inks, INKS[i].names ? " by InkNames" : "",
+                    INKS[i].types[0] ? INKS[i].types : "absent", flags);
+                clear_messages();
+                full = FreeImage_Load(FIF_TIFF, path, flags);
+                if (!full) { fail("%s: not loaded", what); continue; }
+                CHECK((strstr(last_message, "inks are not CMYK") != NULL) == !k, "%s: %s", what, k ? "a warning" : "no warning");
+                if (!xs_layout(full, XS_CMYK, INKS[i].bits, k ? -1 : INKS[i].alpha, k)) {
+                    fail("%s: %u-bit type %d", what, FreeImage_GetBPP(full), (int)FreeImage_GetImageType(full));
+                } else {
+                    const unsigned wrong = xs_wrong(full, XS_CMYK, INKS[i].bits, INKS[i].alpha, INKS[i].assoc, k);
+                    CHECK(wrong == 0, "%s: %u values are not the file's", what, wrong);
+                }
+                same_as_full(what, full, FreeImage_Load(FIF_TIFF, path, flags | FIF_LOAD_NOPIXELS));
+            }
+            remove(path);
         }
-        remove(path);
+        xs_inks = 0;
+        xs_ink_names = NULL;
     }
     /* a grey profile stays with a 16-bit or float grey, not with the RGBA16 or RGBAF of a grey and an alpha */
     {
