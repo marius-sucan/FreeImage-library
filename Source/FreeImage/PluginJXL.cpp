@@ -1388,6 +1388,9 @@ typedef struct tagJXLWriter {
 	uint32_t canvas_width;
 	uint32_t canvas_height;
 	BOOL animation;
+	int effort;
+	BOOL lossless;
+	BOOL select_predictor;			// set for lossless float samples libjxl refuses with its own predictors
 	std::vector<BYTE> profile;		// the file's ICC profile, every frame's colours
 	BOOL has_profile;
 	JXLFrames frame_mode;
@@ -1866,6 +1869,44 @@ SetColors(JXLWriter *writer, FIBITMAP *dib, BOOL lossy_animation) {
 	return (JxlEncoderSetColorEncoding(writer->encoder, &enc) == JXL_ENC_SUCCESS) ? TRUE : FALSE;
 }
 
+// libjxl refuses lossless float residuals past 32 bits; its select predictor, from effort 4 on, makes none
+static BOOL
+UseSelectPredictor(JXLWriter *writer) {
+	if(!writer->select_predictor) {
+		if((JxlEncoderFrameSettingsSetOption(writer->settings, JXL_ENC_FRAME_SETTING_EFFORT, (writer->effort < 4) ? 4 : writer->effort) != JXL_ENC_SUCCESS) ||
+			(JxlEncoderFrameSettingsSetOption(writer->settings, JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR, 4) != JXL_ENC_SUCCESS)) {
+			ReportEncoderError(writer->encoder, "Cannot set the encoding options");
+			return FALSE;
+		}
+		writer->select_predictor = TRUE;
+	}
+	return TRUE;
+}
+
+// samples of both signs in a channel make such residuals with libjxl's own predictors
+static BOOL
+PrepareFloatSamples(JXLWriter *writer, const BYTE *samples, size_t pixels) {
+	if(!writer->lossless || (writer->format.data_type != JXL_TYPE_FLOAT) || writer->select_predictor) {
+		return TRUE;
+	}
+	const unsigned channels = writer->format.num_channels;
+	const DWORD *bits = (const DWORD*)samples;
+	DWORD negative = 0, positive = 0;
+	for(size_t i = 0; i < pixels; i++) {
+		for(unsigned c = 0; c < channels; c++) {
+			if(bits[i * channels + c] & 0x80000000) {
+				negative |= 1 << c;
+			} else {
+				positive |= 1 << c;
+			}
+		}
+		if(negative & positive) {
+			return UseSelectPredictor(writer);
+		}
+	}
+	return TRUE;
+}
+
 // the encoder for a still image or an animation, set up from its first frame
 static BOOL
 StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32_t width, uint32_t height, LONG loop) {
@@ -1973,6 +2014,13 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 	writer->canvas_width = width;
 	writer->canvas_height = height;
 	writer->animation = animation;
+	writer->effort = effort;
+	writer->lossless = lossless;
+	writer->select_predictor = FALSE;
+	// effort 3's weighted predictor makes them from samples of one sign too
+	if(lossless && (writer->format.data_type == JXL_TYPE_FLOAT) && (effort == 3)) {
+		return UseSelectPredictor(writer);
+	}
 	return TRUE;
 }
 
@@ -2051,6 +2099,9 @@ AddWholeFrame(JXLWriter *writer, FIBITMAP *frame, uint32_t x0, uint32_t y0, uint
 	JxlFrameHeader header;
 	JxlEncoderInitFrameHeader(&header);
 	header.duration = (frametime > 0) ? (uint32_t)frametime : 1;
+	if(!PrepareFloatSamples(writer, &writer->canvas[0], (size_t)writer->canvas_width * writer->canvas_height)) {
+		throw (int)0;
+	}
 	if((JxlEncoderSetFrameHeader(writer->settings, &header) != JXL_ENC_SUCCESS) ||
 		(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &header.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
 		(JxlEncoderAddImageFrame(writer->settings, &writer->format, &writer->canvas[0], writer->canvas.size()) != JXL_ENC_SUCCESS)) {
@@ -2192,6 +2243,9 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 					samples.assign(writer->format.num_channels * SampleBytes(writer->format.data_type), 0);
 				} else {
 					FrameSamples(frame, writer, width, height, samples, &clamped);
+					if(!PrepareFloatSamples(writer, &samples[0], (size_t)width * height)) {
+						throw (int)0;
+					}
 				}
 				if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
 					ReportEncoderError(writer->encoder, "Cannot encode a frame");
@@ -2214,6 +2268,9 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 			std::vector<BYTE> samples;
 			BOOL clamped = FALSE;
 			FrameSamples(frame, writer, width, height, samples, &clamped);
+			if(!PrepareFloatSamples(writer, &samples[0], (size_t)width * height)) {
+				throw (int)0;
+			}
 			if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
 				ReportEncoderError(writer->encoder, "Cannot encode the image");
 				throw (int)0;

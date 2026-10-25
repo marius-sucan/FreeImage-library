@@ -630,6 +630,98 @@ static void test_pages(void) {
     printf("pages: done\n");
 }
 
+/* the float bits of a's colours in b, a grey a in every colour of b */
+static int same_float_colors(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y, c, na, nb, w, h;
+    if (!a || !b || (w = FreeImage_GetWidth(a)) != FreeImage_GetWidth(b) || (h = FreeImage_GetHeight(a)) != FreeImage_GetHeight(b)) return 0;
+    na = FreeImage_GetBPP(a) / 32; nb = FreeImage_GetBPP(b) / 32;
+    for (y = 0; y < h; y++) {
+        const DWORD *pa = (const DWORD *)FreeImage_GetScanLine(a, y), *pb = (const DWORD *)FreeImage_GetScanLine(b, y);
+        for (x = 0; x < w; x++) for (c = 0; c < (nb < 3 ? nb : 3); c++)
+            if (pa[x * na + (na == 1 ? 0 : c)] != pb[x * nb + c]) return 0;
+    }
+    return 1;
+}
+
+/* float samples of both signs, negative zeros among them: libjxl's lossless coding compares their bits as integers */
+static FIBITMAP *signed_floats(FREE_IMAGE_TYPE type, unsigned bpp, unsigned w, unsigned h, int seed) {
+    FIBITMAP *d = pattern(type, bpp, w, h, seed);
+    unsigned x, y, c, n = bpp / 32;
+    for (y = 0; y < h; y++) {
+        float *p = (float *)FreeImage_GetScanLine(d, y);
+        for (x = 0; x < w; x++) for (c = 0; c < (n == 4 ? 3 : n); c++) {
+            float *v = &p[x * n + c];
+            *v = ((x + y + c) % 7 == 0) ? -0.0f : *v - 0.35f;
+        }
+    }
+    return d;
+}
+
+static void test_float_signs(void) {
+    static const struct { FREE_IMAGE_TYPE type; unsigned bpp, w, h; const char *name; } T[] = {
+        {FIT_FLOAT, 32, 8, 8, "FLOAT"}, {FIT_RGBF, 96, 61, 37, "RGBF"}, {FIT_RGBAF, 128, 47, 29, "RGBAF"},
+    };
+    FIMULTIBITMAP *m;
+    FIBITMAP *d, *r, *edit;
+    unsigned t;
+    int effort;
+
+    /* libjxl #4902: one negative sample beside a positive one */
+    d = FreeImage_AllocateT(FIT_FLOAT, 2, 1, 32, 0, 0, 0);
+    ((float *)FreeImage_GetScanLine(d, 0))[0] = -1e-6f;
+    ((float *)FreeImage_GetScanLine(d, 0))[1] = 0.25f;
+    for (effort = 1; effort <= 10; effort++) {
+        r = roundtrip(d, JXL_LOSSLESS | (effort << 16), 0, NULL);
+        CHECK(same_pixels(d, r), "FLOAT -1e-6, 0.25 lossless at effort %d: not bit exact (%s)", effort, g_last);
+        if (r) FreeImage_Unload(r);
+    }
+    FreeImage_Unload(d);
+
+    /* one sign, 0 beside 3e38: effort 3's weighted predictor overshoots 32 bits */
+    d = FreeImage_AllocateT(FIT_FLOAT, 128, 96, 32, 0, 0, 0);
+    {
+        unsigned x, y, s = 2654435761u;
+        for (y = 0; y < 96; y++) for (x = 0; x < 128; x++) {
+            s = s * 1664525u + 1013904223u;
+            ((float *)FreeImage_GetScanLine(d, y))[x] = ((s >> 8) < (1u << 23)) ? 3e38f : 0.0f;
+        }
+    }
+    r = roundtrip(d, JXL_LOSSLESS | (3 << 16), 0, NULL);
+    CHECK(same_pixels(d, r), "FLOAT of 0 and 3e38 lossless at effort 3: not bit exact (%s)", g_last);
+    if (r) FreeImage_Unload(r);
+    FreeImage_Unload(d);
+
+    for (t = 0; t < sizeof(T) / sizeof(T[0]); t++) {
+        d = signed_floats(T[t].type, T[t].bpp, T[t].w, T[t].h, 110 + (int)t);
+        for (effort = 1; effort <= 10; effort++) {
+            r = roundtrip(d, JXL_LOSSLESS | (effort << 16), 0, NULL);
+            CHECK(same_pixels(d, r), "%s of both signs lossless at effort %d: not bit exact (%s)", T[t].name, effort, g_last);
+            if (r) FreeImage_Unload(r);
+        }
+        /* the page cache stores pages lossless at effort 1; replacing frames keep colours under an alpha of 0 */
+        set_anim(d, 0, 0, 100, 1, 1, (WORD)T[t].w, (WORD)T[t].h, 0);
+        m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_signs.jxl"), TRUE, FALSE, FALSE, 0);
+        CHECK(FreeImage_AppendPage(m, d) && FreeImage_InsertPage(m, 0, d) && FreeImage_GetPageCount(m) == 2, "%s of both signs: the page cache refused the page (%s)", T[t].name, g_last);
+        r = FreeImage_LockPage(m, 1);
+        CHECK(same_pixels(d, r), "%s of both signs: the page cache changed the page", T[t].name);
+        edit = r ? signed_floats(T[t].type, T[t].bpp, T[t].w, T[t].h, 120 + (int)t) : NULL;
+        if (r) {
+            FreeImage_Paste(r, edit, 0, 0, 256);
+            CHECK(FreeImage_UnlockPage(m, r, TRUE), "%s of both signs: the edit was refused (%s)", T[t].name, g_last);
+        }
+        r = FreeImage_LockPage(m, 1);
+        CHECK(same_pixels(edit, r), "%s of both signs: the edit is not in the page cache", T[t].name);
+        if (r) FreeImage_UnlockPage(m, r, FALSE);
+        CHECK(FreeImage_CloseMultiBitmap(m, JXL_LOSSLESS), "%s of both signs: close failed (%s)", T[t].name, g_last);
+        r = FreeImage_Load(FIF_JXL, tmppath("fi_jxl_signs.jxl"), 0);
+        CHECK(same_float_colors(d, r), "%s of both signs: page 0 of the file is not bit exact", T[t].name);
+        if (r) FreeImage_Unload(r);
+        if (edit) FreeImage_Unload(edit);
+        FreeImage_Unload(d);
+    }
+    printf("float samples of both signs: done\n");
+}
+
 static void test_refusals(void) {
     static const FREE_IMAGE_TYPE bad[] = { FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE, FIT_COMPLEX };
     unsigned i;
@@ -720,6 +812,7 @@ int main(void) {
     test_animation_float();
     test_cmyk();
     test_pages();
+    test_float_signs();
     test_refusals();
     test_offset();
     printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "passed", g_failures);
