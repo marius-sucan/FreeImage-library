@@ -256,6 +256,43 @@ int main(int argc, char **argv) {
         FreeImage_Unload(dib);
     }
 
+    /* XMP whose dc:format jxrlib cannot rewrite is saved as it is, with the Exif and GPS written after it */
+    {
+#define XMP_HEAD "<x:xmpmeta xmlns:x='adobe:ns:meta/'><rdf:RDF xmlns:rdf='http://www.w3.org/1999/02/22-rdf-syntax-ns#'><rdf:Description xmlns:dc='http://purl.org/dc/elements/1.1/'>"
+#define XMP_TAIL "</rdf:Description></rdf:RDF></x:xmpmeta>"
+        static const struct { const char *what, *xmp, *back; } FORMATS[] = {
+            { "plain dc:format", XMP_HEAD "<dc:format>image/jpeg</dc:format>" XMP_TAIL, XMP_HEAD "<dc:format>image/vnd.ms-photo</dc:format>" XMP_TAIL },
+            { "dc:format of an rdf:Alt", XMP_HEAD "<dc:format><rdf:Alt><rdf:li>image/jpeg</rdf:li></rdf:Alt></dc:format>" XMP_TAIL, NULL },
+            { "qualified dc:format", XMP_HEAD "<dc:format><rdf:Description><rdf:value>image/jpeg</rdf:value></rdf:Description></dc:format>" XMP_TAIL, NULL },
+            { "dc:format with a comment", XMP_HEAD "<dc:format>image/<!-- c -->jpeg</dc:format>" XMP_TAIL, NULL },
+            { "dc:format without its end tag", XMP_HEAD "<dc:format>image/jpeg" XMP_TAIL, NULL },
+            { "dc:format ending the packet", XMP_HEAD "<dc:format>image/jpeg", NULL },
+        };
+#undef XMP_HEAD
+#undef XMP_TAIL
+        static const WORD ISO = 400;
+        static const BYTE GPS_VERSION[4] = { 2, 2, 0, 0 };
+        for (j = 0; j < (int)(sizeof(FORMATS) / sizeof(FORMATS[0])); j++) {
+            const char *xmp = FORMATS[j].xmp, *expected = FORMATS[j].back ? FORMATS[j].back : FORMATS[j].xmp;
+            FITAG *tag = NULL;
+            dib = picture();
+            put_in(FIMD_XMP, dib, "XMLPacket", 0x02bc, FIDT_ASCII, (DWORD)strlen(xmp) + 1, xmp);
+            put_in(FIMD_EXIF_EXIF, dib, "ISOSpeedRatings", 0x8827, FIDT_SHORT, 1, &ISO);
+            put_in(FIMD_EXIF_GPS, dib, "GPSVersionID", 0x0000, FIDT_BYTE, 4, GPS_VERSION);
+            back = round_trip(dib, FORMATS[j].what);
+            if (back) {
+                CHECK(FreeImage_GetMetadata(FIMD_XMP, back, "XMLPacket", &tag) && tag && FreeImage_GetTagLength(tag) == strlen(expected) &&
+                      !memcmp(FreeImage_GetTagValue(tag), expected, strlen(expected)), "%s: XMP not the expected one back", FORMATS[j].what);
+                CHECK(FreeImage_GetMetadata(FIMD_EXIF_EXIF, back, "ISOSpeedRatings", &tag) && tag && *(const WORD *)FreeImage_GetTagValue(tag) == ISO,
+                      "%s: Exif ISOSpeedRatings not the same back", FORMATS[j].what);
+                CHECK(FreeImage_GetMetadata(FIMD_EXIF_GPS, back, "GPSVersionID", &tag) && tag && !memcmp(FreeImage_GetTagValue(tag), GPS_VERSION, 4),
+                      "%s: GPSVersionID not the same back", FORMATS[j].what);
+            }
+            FreeImage_Unload(back);
+            FreeImage_Unload(dib);
+        }
+    }
+
     /* only the inline ones: the rating, the page number, short strings */
     dib = picture();
     for (i = 0; i < 14; i++) {

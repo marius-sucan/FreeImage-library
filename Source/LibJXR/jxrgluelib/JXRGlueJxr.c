@@ -1126,9 +1126,14 @@ ERR PKImageEncode_SetXMPMetadata_WMP(PKImageEncode *pIE, const U8 *pbXMPMetadata
         const char* pszLessThan;
 
         pszFormatEnd = strstr(pszFormatBegin, "</dc:format>");
-        FailIf(pszFormatEnd == 0, WMP_errFail);
         pszLessThan = strchr(pszFormatBegin + sizeof("<dc:format>") - 1, '<');
-        FailIf(pszLessThan != pszFormatEnd, WMP_errFail);
+        // FreeImage: a dc:format that is not plain text is kept as it is
+        if (pszFormatEnd == 0 || pszLessThan != pszFormatEnd)
+        {
+            pIE->pbXMPMetadata = (U8 *) pbTemp;
+            pIE->cbXMPMetadataByteCount = cbXMPMetadata;
+            return err;
+        }
         pszFormatEnd += sizeof("</dc:format>") - 1;
 
         // photoshop doesn't put a trailing null, so we don't either
