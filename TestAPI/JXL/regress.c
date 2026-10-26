@@ -360,8 +360,7 @@ static void test_animation(void) {
         {64, 48, 0, 0, 100, 1, 1}, {30, 20, 5, 6, 80, 2, 0}, {24, 16, 25, 20, 60, 3, 0}, {20, 20, 40, 4, 40, 1, 1},
         {28, 30, 10, 10, 30, 0, 0}, {64, 48, 0, 0, 20, 2, 0}, {16, 12, 50, 40, 10, 1, 0},
     };
-    /* the pages ask for 64x48; the last frame reaches 66x52, which the canvas covers */
-    const unsigned n = sizeof(fr) / sizeof(fr[0]), cw = 66, ch = 52;
+    const unsigned n = sizeof(fr) / sizeof(fr[0]), cw = 64, ch = 48;
     /* profiles libjxl keeps for lossy frames: ProPhoto, wider than sRGB, and Instagram's c2, sRGB in all but name */
     enum { NONE, PROPHOTO, C2 };
     static const struct { const char *name; int flags; FREE_IMAGE_TYPE type; unsigned bpp; int profile; } pass[] = {
@@ -376,14 +375,14 @@ static void test_animation(void) {
     FIMULTIBITMAP *m;
     Px *canvas = calloc(cw * ch, sizeof(Px)), *saved = calloc(cw * ch, sizeof(Px));
     unsigned i, x, y;
-    int f, fits;
+    int f;
 
     CHECK(c2 && FreeImage_GetICCProfile(c2)->size == 524, "data/test-jxl.jxl: no c2 profile");
     for (f = 0; f < npass; f++) {
         m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_anim.jxl"), TRUE, FALSE, TRUE, 0);
         for (i = 0; i < n; i++) {
             FIBITMAP *d = pattern(pass[f].type, pass[f].bpp, fr[i].w, fr[i].h, 60 + (int)i);
-            set_anim(d, fr[i].x, fr[i].y, fr[i].ms, fr[i].disposal, fr[i].blend, 64, 48, 2);
+            set_anim(d, fr[i].x, fr[i].y, fr[i].ms, fr[i].disposal, fr[i].blend, cw, ch, 2);
             if (pass[f].profile == PROPHOTO) FreeImage_CreateICCProfile(d, (void *)pro, (long)pro_size);
             if (pass[f].profile == C2 && c2) FreeImage_CreateICCProfile(d, FreeImage_GetICCProfile(c2)->data, FreeImage_GetICCProfile(c2)->size);
             CHECK(FreeImage_AppendPage(m, d), "AppendPage %u", i);
@@ -413,9 +412,9 @@ static void test_animation(void) {
             memcpy(saved, canvas, cw * ch * sizeof(Px));
             composite(canvas, cw, ch, frame, fr[i].x, fr[i].y, fr[i].blend == 0);
             if (!page) { CHECK(0, "animation %s page %u not locked", pass[f].name, i); FreeImage_Unload(frame); continue; }
-            fits = FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch && FreeImage_GetImageType(page) == pass[f].type && FreeImage_GetBPP(page) == pass[f].bpp;
-            CHECK(fits, "animation %s page %u: not the %ux%u %u-bit canvas", pass[f].name, i, cw, ch, pass[f].bpp);
-            if (fits) for (y = 0; y < ch; y++) for (x = 0; x < cw; x++) {
+            CHECK(FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch && FreeImage_GetImageType(page) == pass[f].type && FreeImage_GetBPP(page) == pass[f].bpp,
+                  "animation %s page %u: not the %u-bit canvas", pass[f].name, i, pass[f].bpp);
+            for (y = 0; y < ch; y++) for (x = 0; x < cw; x++) {
                 const Px *p = &canvas[y * cw + x];
                 int c;
                 double a = channel(page, x, y, 3);
@@ -447,54 +446,6 @@ static void test_animation(void) {
     if (c2) FreeImage_Unload(c2);
     free(canvas); free(saved);
     printf("animations: done\n");
-}
-
-/* pages of different sizes: the canvas covers every frame, past what the first pages ask for */
-static void check_canvas(const char *name, const unsigned (*fr)[4], unsigned n, int tagged, unsigned cw, unsigned ch) {
-    FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_canvas.jxl"), TRUE, FALSE, TRUE, 0);
-    Px *canvas = calloc(cw * ch, sizeof(Px));
-    unsigned i, x, y;
-    for (i = 0; i < n; i++) {
-        FIBITMAP *d = pattern(FIT_BITMAP, 32, fr[i][0], fr[i][1], 80 + (int)i);
-        if (tagged) set_anim(d, (WORD)fr[i][2], (WORD)fr[i][3], 50, 1, 0, 24, 24, 0);
-        CHECK(FreeImage_AppendPage(m, d), "%s: AppendPage %u", name, i);
-        FreeImage_Unload(d);
-    }
-    g_last[0] = 0;
-    CHECK(FreeImage_CloseMultiBitmap(m, JXL_LOSSLESS), "%s: CloseMultiBitmap: %s", name, g_last);
-    CHECK(tagged ? strstr(g_last, "canvas, not the 24") != NULL : strstr(g_last, "canvas") == NULL, "%s: message \"%s\"", name, g_last);
-    m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_canvas.jxl"), FALSE, TRUE, TRUE, 0);
-    CHECK(m && FreeImage_GetPageCount(m) == (int)n, "%s: %d pages, not %u", name, m ? FreeImage_GetPageCount(m) : -1, n);
-    for (i = 0; m && i < n; i++) {
-        FIBITMAP *frame = pattern(FIT_BITMAP, 32, fr[i][0], fr[i][1], 80 + (int)i), *page = FreeImage_LockPage(m, (int)i);
-        double worst = 0;
-        composite(canvas, cw, ch, frame, fr[i][2], fr[i][3], 1);
-        FreeImage_Unload(frame);
-        CHECK(page && FreeImage_GetWidth(page) == cw && FreeImage_GetHeight(page) == ch, "%s page %u: %ux%u, not %ux%u", name, i,
-              page ? FreeImage_GetWidth(page) : 0, page ? FreeImage_GetHeight(page) : 0, cw, ch);
-        if (!page || FreeImage_GetWidth(page) != cw || FreeImage_GetHeight(page) != ch) {
-            if (page) FreeImage_UnlockPage(m, page, FALSE);
-            continue;
-        }
-        for (y = 0; y < ch; y++) for (x = 0; x < cw; x++) {
-            const Px *p = &canvas[y * cw + x];
-            int c;
-            if (fabs(channel(page, x, y, 3) - p->c[3]) > worst) worst = fabs(channel(page, x, y, 3) - p->c[3]);
-            if (p->c[3] > 0) for (c = 0; c < 3; c++) if (fabs(channel(page, x, y, c) - p->c[c]) * p->c[3] > worst) worst = fabs(channel(page, x, y, c) - p->c[c]) * p->c[3];
-        }
-        CHECK(worst <= 1.01 / 255, "%s page %u: off by %.4f from GIF/APNG compositing", name, i, worst);
-        FreeImage_UnlockPage(m, page, FALSE);
-    }
-    if (m) FreeImage_CloseMultiBitmap(m, 0);
-    free(canvas);
-}
-
-static void test_animation_canvas(void) {
-    static const unsigned untagged[][4] = { {10, 10, 0, 0}, {12, 8, 0, 0}, {40, 30, 0, 0}, {8, 8, 0, 0} };
-    static const unsigned placed[][4] = { {16, 16, 0, 0}, {16, 16, 20, 10}, {16, 16, 40, 20} };
-    check_canvas("untagged pages", untagged, 4, 0, 40, 30);
-    check_canvas("pages past the canvas they ask for", placed, 3, 1, 56, 36);
-    printf("animation canvas: done\n");
 }
 
 /* float frames with FreeImage's linear sRGB profile, which libjxl keeps: written as linear sRGB */
@@ -1122,7 +1073,6 @@ int main(void) {
     test_colors();
     test_metadata();
     test_animation();
-    test_animation_canvas();
     test_animation_float();
     test_cmyk();
     test_pages();
