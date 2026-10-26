@@ -260,8 +260,8 @@ ReadBytes(FreeImageIO *io, fi_handle handle, std::vector<BYTE>& out, DWORD lengt
 // ==========================================================
 
 // TRUE if acTL comes before IDAT; leaves the stream position moved
-BOOL
-APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle) {
+static BOOL
+IsAnimatedStream(FreeImageIO *io, fi_handle handle) {
 	BYTE signature[8];
 
 	if(io->read_proc(signature, 1, 8, handle) != 8) {
@@ -1384,7 +1384,7 @@ MimeType() {
 
 static BOOL DLL_CALLCONV
 Validate(FreeImageIO *io, fi_handle handle) {
-	return APNG_IsAnimatedStream(io, handle);
+	return IsAnimatedStream(io, handle);
 }
 
 static BOOL DLL_CALLCONV

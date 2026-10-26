@@ -1766,6 +1766,37 @@ out:
 	remove(path);
 }
 
+/* an animated PNG is still a PNG; FreeImage_GetFileType names it FIF_APNG while that plugin is enabled */
+static void test_detection(void) {
+	const char *path = scratch("apng_detect.png");
+	FIBITMAP *frames[2], *still;
+	int i;
+
+	printf("\n=== an animated PNG is a PNG\n");
+
+	for (i = 0; i < 2; i++) frames[i] = make_frame(32, 24, i, i * 8, 4, 255);
+	if (!write_animation(path, frames, 2)) { fail("could not write %s", path); goto out; }
+
+	if (FreeImage_GetFileType(path, 0) != FIF_APNG) fail("detected as %d, expected FIF_APNG", (int)FreeImage_GetFileType(path, 0));
+	else if (!FreeImage_Validate(FIF_PNG, path)) fail("FreeImage_Validate(FIF_PNG) refuses an animated PNG");
+	else if (!FreeImage_Validate(FIF_APNG, path)) fail("FreeImage_Validate(FIF_APNG) refuses an animated PNG");
+	else ok("FreeImage_GetFileType says FIF_APNG, and FIF_PNG and FIF_APNG both validate the file");
+
+	still = FreeImage_Load(FIF_PNG, path, 0);
+	if (!still || pixel_diff(still, frames[0]) != 0) fail("FIF_PNG does not read the static image, frame 0");
+	else ok("FIF_PNG reads the static image, frame 0");
+	if (still) FreeImage_Unload(still);
+
+	FreeImage_SetPluginEnabled(FIF_APNG, FALSE);
+	if (FreeImage_GetFileType(path, 0) != FIF_PNG) fail("with FIF_APNG disabled, detected as %d, expected FIF_PNG", (int)FreeImage_GetFileType(path, 0));
+	else ok("with FIF_APNG disabled, the file is detected as FIF_PNG");
+	FreeImage_SetPluginEnabled(FIF_APNG, TRUE);
+
+out:
+	for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+	remove(path);
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -1882,6 +1913,7 @@ int main(void) {
 	test_size();
 	test_gif_frames();
 	test_grey16_frames();
+	test_detection();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);
 	FreeImage_DeInitialise();

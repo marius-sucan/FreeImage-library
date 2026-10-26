@@ -149,9 +149,6 @@ void DLL_CALLCONV InitJXL(Plugin *plugin, int format_id);
 //   Shared between the PNG, APNG, JNG and WebP plugins
 // ==========================================================
 
-// TRUE for an animated PNG (acTL chunk present)
-BOOL APNG_IsAnimatedStream(FreeImageIO *io, fi_handle handle);
-
 // FALSE for a profile libpng's reader refuses in an iCCP chunk: RGB for a colour image, grey for a grey one
 BOOL PNG_IsEmbeddableProfile(const BYTE *profile, DWORD size, BOOL color);
 

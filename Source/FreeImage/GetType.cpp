@@ -53,6 +53,12 @@ FreeImage_GetFileTypeFromHandle(FreeImageIO *io, fi_handle handle, int size) {
 						return FIF_RAW;
 					}
 				}
+				if(fif == FIF_PNG) {
+					// an acTL chunk before IDAT: an animation, which FIF_APNG reads frame by frame
+					if (FreeImage_ValidateFIF(FIF_APNG, io, handle)) {
+						return FIF_APNG;
+					}
+				}
 				return fif;
 			}
 		}

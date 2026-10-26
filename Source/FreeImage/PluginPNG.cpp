@@ -337,23 +337,9 @@ Validate(FreeImageIO *io, fi_handle handle) {
 	BYTE png_signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
 	BYTE signature[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-	const INT64 start = io->tell_proc(handle);
-
 	io->read_proc(&signature, 1, 8, handle);
 
-	if (memcmp(png_signature, signature, 8) != 0) {
-		return FALSE;
-	}
-
-	// animated PNGs are identified as FIF_APNG
-	if (start >= 0) {
-		io->seek_proc(handle, start, SEEK_SET);
-		if (APNG_IsAnimatedStream(io, handle)) {
-			return FALSE;
-		}
-	}
-
-	return TRUE;
+	return (memcmp(png_signature, signature, 8) == 0);
 }
 
 static BOOL DLL_CALLCONV

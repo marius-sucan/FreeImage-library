@@ -26,6 +26,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.5 and libde265 1.1.3, animated HEIF image sequences included;
 - added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0, animations included; CMYK images with a CMYK profile are saved as CMYK;
 - added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG, animations included;
+  - FreeImage_GetFileType() names an animated PNG FIF_APNG; FIF_PNG still validates it and reads its static image;
   - added the APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
 - added full support for animated WebP files, reading and writing, with an example file; an animation of one frame is saved as a still image;
 - added full support for MNG animations (FIF_MNG=6), reading and writing;
