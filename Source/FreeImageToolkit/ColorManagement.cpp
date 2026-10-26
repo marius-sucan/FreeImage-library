@@ -638,19 +638,16 @@ AttachProfile(FIBITMAP *dib, const void *data, DWORD size) {
 // the transforms of one display's loads, which repeat a few profile pairs; shared by threads
 class TransformCache {
 public:
-	TransformCache() : m_context(cmsCreateContext(NULL, NULL)), m_uses(0) {
+	TransformCache() : m_uses(0) {
 	}
 	~TransformCache() {
 		m_entries.clear();
-		if (m_context) {
-			cmsDeleteContext(m_context);
-		}
 	}
 
 	// empty when the profiles cannot be linked; out's bytes have to live as long as the cache
 	std::shared_ptr<void> Get(const Profile &in, const Profile &out, cmsUInt32Number in_format, cmsUInt32Number out_format, cmsUInt32Number intent, cmsUInt32Number flags) {
 		std::shared_ptr<void> transform;
-		if (!m_context || !in.bytes || !out.bytes) {
+		if (!m_context.id || !in.bytes || !out.bytes) {
 			return transform;
 		}
 		{
@@ -665,7 +662,16 @@ public:
 			}
 		}
 		// made outside the lock: a device link takes tens of milliseconds
-		cmsHTRANSFORM created = cmsCreateTransformTHR(m_context, in.handle, in_format, out.handle, out_format, intent, flags);
+		// from profiles opened in this context: a transform keeps the context of every curve and stage it copies
+		cmsHPROFILE in_handle = m_context.Open(in.bytes, in.size);
+		cmsHPROFILE out_handle = m_context.Open(out.bytes, out.size);
+		cmsHTRANSFORM created = (in_handle && out_handle) ? cmsCreateTransformTHR(m_context.id, in_handle, in_format, out_handle, out_format, intent, flags) : NULL;
+		if (out_handle) {
+			cmsCloseProfile(out_handle);
+		}
+		if (in_handle) {
+			cmsCloseProfile(in_handle);
+		}
 		if (!created) {
 			return transform;
 		}
@@ -708,7 +714,7 @@ private:
 	};
 
 	std::mutex m_lock;
-	cmsContext m_context;
+	Context m_context;			// outlives the transforms: a converter using one holds the display state
 	std::vector<Entry> m_entries;
 	unsigned long long m_uses;
 

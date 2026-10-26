@@ -1,6 +1,7 @@
 /* FIF_LOAD_DISPLAY_ICC: every loader returns the image converted to the display's profile */
 /* ./display -x11 tests the X11 detection against xcbstub.c (make x11) */
 #include "common.h"
+#include "../../Source/LibLCMS2/include/lcms2_plugin.h"
 #include "../../Source/LibTIFF4/tiffio.h"
 #include <jxl/encode.h>
 #include <dirent.h>
@@ -1228,6 +1229,46 @@ static void intents(void) {
     free_display(&d);
 }
 
+/* ------------------------------------------------------------------ the cached transforms' context */
+
+static int routed_frees = 0;
+static void *routed_malloc(cmsContext id, cmsUInt32Number size) { (void)id; return malloc(size); }
+static void routed_free(cmsContext id, void *p) { (void)id; routed_frees++; free(p); }
+static void *routed_realloc(cmsContext id, void *p, cmsUInt32Number size) { (void)id; return realloc(p, size); }
+
+/* a dropped display frees its cached transforms through their own context, never through contexts made since */
+static void cached_transform_context(void) {
+    static const char *names[3] = { "24-bit", "RGB16", "UINT16 grey" };
+    static cmsPluginMemHandler plugin;
+    Bytes p3 = builtin(FICMS_PROFILE_DISPLAY_P3), adobe = builtin(FICMS_PROFILE_ADOBE_RGB);
+    cmsContext mine[64];
+    int i, k;
+    memset(&plugin, 0, sizeof(plugin));
+    plugin.base.Magic = cmsPluginMagicNumber;
+    plugin.base.ExpectedVersion = LCMS_VERSION;
+    plugin.base.Type = cmsPluginMemHandlerSig;
+    plugin.MallocPtr = routed_malloc;
+    plugin.FreePtr = routed_free;
+    plugin.ReallocPtr = routed_realloc;
+    for (k = 0; k < 3; k++) {
+        FIBITMAP *dib = (k == 0) ? noise(24) : FreeImage_AllocateT((k == 1) ? FIT_RGB16 : FIT_UINT16, W, H, (k == 1) ? 48 : 16, 0, 0, 0);
+        if (k == 2) FreeImage_CreateICCProfile(dib, grey18.data, (long)grey18.size);
+        else FreeImage_CreateICCProfile(dib, adobe.data, (long)adobe.size);
+        FreeImage_SetDisplayICCProfile(p3.data, p3.size, FLAGS_0x101);
+        CHECK(FreeImage_ApplyDisplayICCProfile(dib), "cached transforms, %s: not converted", names[k]);
+        FreeImage_Unload(dib);
+        for (i = 0; i < 64; i++) mine[i] = cmsCreateContext(&plugin, NULL);
+        routed_frees = 0;
+        /* the display state goes, with its cached transform */
+        FreeImage_SetDisplayICCProfile(NULL, 0, FLAGS_0x101);
+        CHECK(routed_frees == 0, "cached transforms, %s: %d frees through Little CMS contexts made after the conversion", names[k], routed_frees);
+        for (i = 0; i < 64; i++) {
+            if (mine[i]) cmsDeleteContext(mine[i]);
+        }
+    }
+    printf("cached transforms      freed through their own Little CMS context\n");
+}
+
 /* ------------------------------------------------------------------ threads */
 
 typedef struct {
@@ -1445,6 +1486,7 @@ int main(int argc, char **argv) {
     multipage_save();
     multipage_cmyk_alpha();
     intents();
+    cached_transform_context();
     threads();
 
     for (i = 0; i < fixture_count; i++) {
