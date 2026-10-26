@@ -432,15 +432,13 @@ static void survive(const BYTE *data, size_t size) {
 	}
 }
 
-static void test_damage(void) {
+/* a valid 4-frame 48x36 animation, as the writer stores it; NULL on failure */
+static BYTE *sample_animation(long *size) {
 	const char *path = scratch("apng_robust.png");
 	FIBITMAP *frames[4];
 	BYTE *good = NULL;
-	long size = 0;
 	FILE *f;
-	int i, cases = 0;
-
-	printf("\n=== a valid animation, damaged every way a file gets damaged\n");
+	int i;
 
 	for (i = 0; i < 4; i++) {
 		unsigned x, y;
@@ -456,18 +454,145 @@ static void test_damage(void) {
 	}
 	{
 		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
-		if (!mb) { fail("could not write the sample"); return; }
-		for (i = 0; i < 4; i++) FreeImage_AppendPage(mb, frames[i]);
-		FreeImage_CloseMultiBitmap(mb, 0);
+		if (mb) {
+			for (i = 0; i < 4; i++) FreeImage_AppendPage(mb, frames[i]);
+			FreeImage_CloseMultiBitmap(mb, 0);
+		}
 	}
 	for (i = 0; i < 4; i++) FreeImage_Unload(frames[i]);
 
-	if ((f = fopen(path, "rb")) == NULL) { fail("could not reopen the sample"); return; }
-	fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET);
-	good = (BYTE *)malloc(size);
-	if (fread(good, 1, size, f) != (size_t)size) { fail("short read"); fclose(f); return; }
+	if ((f = fopen(path, "rb")) == NULL) return NULL;
+	fseek(f, 0, SEEK_END); *size = ftell(f); fseek(f, 0, SEEK_SET);
+	good = (BYTE *)malloc(*size);
+	if (fread(good, 1, *size, f) != (size_t)*size) { free(good); good = NULL; }
 	fclose(f);
 	remove(path);
+	return good;
+}
+
+/* the pages of a file and how many of them load; refused counts no page */
+static int pages_of(const BYTE *data, size_t size, int flags, int *loaded) {
+	FIMEMORY *hmem = FreeImage_OpenMemory((BYTE *)data, (DWORD)size);
+	FIMULTIBITMAP *mb;
+	int i, n = 0;
+	*loaded = 0;
+	if (!hmem) return -1;
+	mb = FreeImage_LoadMultiBitmapFromMemory(FIF_APNG, hmem, flags);
+	if (mb) {
+		n = FreeImage_GetPageCount(mb);
+		for (i = 0; i < n; i++) {
+			FIBITMAP *page = FreeImage_LockPage(mb, i);
+			if (page) { (*loaded)++; FreeImage_UnlockPage(mb, page, FALSE); }
+		}
+		FreeImage_CloseMultiBitmap(mb, 0);
+	}
+	FreeImage_CloseMemory(hmem);
+	return n;
+}
+
+/* a file cut anywhere: full, header-only and played loads count the same pages, all of which load */
+static void test_cut_pages(void) {
+	long size = 0, n;
+	BYTE *good = sample_animation(&size);
+	int before = 0, bad = 0;
+
+	printf("\n=== a cut file counts the frames it can show\n");
+	if (!good) { fail("could not write the sample"); return; }
+
+	for (n = 0; n <= size; n++) {
+		int full_loaded, header_loaded, played_loaded;
+		const int full = pages_of(good, n, 0, &full_loaded);
+		const int header = pages_of(good, n, FIF_LOAD_NOPIXELS, &header_loaded);
+		const int played = pages_of(good, n, APNG_PLAYBACK, &played_loaded);
+		if (full != header || full != played || full_loaded != full || header_loaded != header || played_loaded != played || full < before) {
+			if (bad++ < 5) {
+				fail("cut at %ld of %ld bytes: %d page(s), %d loaded; header-only %d, %d; played %d, %d; %d before",
+					n, size, full, full_loaded, header, header_loaded, played, played_loaded, before);
+			}
+		}
+		before = full;
+	}
+	if (before != 4) { fail("the whole file has %d page(s), expected 4", before); bad++; }
+	if (!bad) ok("cut at each of %ld lengths, every page counted loads, header-only and played alike", size + 1);
+	free(good);
+}
+
+/* the last frame, one row that changed, is whole but for its zlib trailer: it is a page that loads */
+static void test_cut_last_row(void) {
+	const char *path = scratch("apng_cut_row.png");
+	FIBITMAP *frames[2];
+	BYTE *data = NULL;
+	long size = 0;
+	size_t pos = 8, last = 0, last_len = 0, last_fctl = 0;
+	FILE *f;
+	int i, k, bad = 0;
+
+	printf("\n=== a cut file whose last frame is one row\n");
+
+	frames[0] = FreeImage_Allocate(48, 36, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+	for (i = 0; i < 36; i++) {
+		BYTE *l = FreeImage_GetScanLine(frames[0], i);
+		unsigned x;
+		for (x = 0; x < 48; x++, l += 4) {
+			l[FI_RGBA_RED] = (BYTE)(x * 5); l[FI_RGBA_GREEN] = (BYTE)(i * 7); l[FI_RGBA_BLUE] = (BYTE)(x + i); l[FI_RGBA_ALPHA] = 255;
+		}
+	}
+	/* the writer stores the second frame as the 48x1 rectangle that changed */
+	frames[1] = FreeImage_Clone(frames[0]);
+	memset(FreeImage_GetScanLine(frames[1], 10), 0x80, 48 * 4);
+	{
+		FIMULTIBITMAP *mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
+		if (mb) {
+			for (i = 0; i < 2; i++) FreeImage_AppendPage(mb, frames[i]);
+			FreeImage_CloseMultiBitmap(mb, 0);
+		}
+	}
+	for (i = 0; i < 2; i++) FreeImage_Unload(frames[i]);
+	if ((f = fopen(path, "rb")) != NULL) {
+		fseek(f, 0, SEEK_END); size = ftell(f); fseek(f, 0, SEEK_SET);
+		data = (BYTE *)malloc(size);
+		if (fread(data, 1, size, f) != (size_t)size) { free(data); data = NULL; }
+		fclose(f);
+	}
+	remove(path);
+	if (!data) { fail("could not write the sample"); return; }
+
+	while (pos + 8 <= (size_t)size) {
+		const size_t len = ((size_t)data[pos] << 24) | ((size_t)data[pos + 1] << 16) | ((size_t)data[pos + 2] << 8) | data[pos + 3];
+		if (!memcmp(data + pos + 4, "fcTL", 4)) last_fctl = pos;
+		if (!memcmp(data + pos + 4, "fdAT", 4)) { last = pos; last_len = len; }
+		pos += 12 + len;
+	}
+	/* the fcTL's height */
+	if (!last || !last_fctl || ((data[last_fctl + 16] << 24 | data[last_fctl + 17] << 16 | data[last_fctl + 18] << 8 | data[last_fctl + 19]) != 1)) {
+		fail("the second frame is not stored as one row");
+		bad++;
+	}
+	/* cut 1 to 4 bytes into its Adler-32 */
+	for (k = 1; k <= 4 && !bad; k++) {
+		const size_t n = last + 8 + last_len - k;
+		int full_loaded, header_loaded, played_loaded;
+		const int full = pages_of(data, n, 0, &full_loaded);
+		const int header = pages_of(data, n, FIF_LOAD_NOPIXELS, &header_loaded);
+		const int played = pages_of(data, n, APNG_PLAYBACK, &played_loaded);
+		if (full != 2 || header != 2 || played != 2 || full_loaded != 2 || header_loaded != 2 || played_loaded != 2) {
+			fail("cut %d bytes short: %d page(s), %d loaded; header-only %d; played %d, %d loaded", k, full, full_loaded, header, played, played_loaded);
+			bad++;
+		}
+	}
+	if (!bad) ok("cut 1 to 4 bytes into the last frame's zlib trailer, both frames are pages that load");
+	free(data);
+}
+
+static void test_damage(void) {
+	BYTE *good = NULL;
+	long size = 0;
+	int cases = 0;
+
+	printf("\n=== a valid animation, damaged every way a file gets damaged\n");
+
+	good = sample_animation(&size);
+	if (!good) { fail("could not write the sample"); return; }
 
 	printf("       the sample is %ld bytes\n", size);
 
@@ -541,6 +666,8 @@ int main(void) {
 	printf("FreeImage %s - APNG robustness tests\n", FreeImage_GetVersion());
 
 	test_invalid();
+	test_cut_pages();
+	test_cut_last_row();
 	test_damage();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);

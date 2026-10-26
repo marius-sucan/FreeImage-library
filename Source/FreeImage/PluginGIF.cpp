@@ -550,6 +550,72 @@ GifFillInterlaceGaps(FIBITMAP *dib, int pass, int next) {
 	}
 }
 
+//a frame the stream ends in: true if Load() keeps it at any depth, decoding a row from data plausible for its 8-bit raster
+static bool
+GifCutFrameShows(FreeImageIO *io, fi_handle handle, INT64 descriptor_offset) {
+	WORD width = 0, height = 0;
+	BYTE packed = 0, b = 0;
+	io->seek_proc(handle, descriptor_offset + 4, SEEK_SET);
+	io->read_proc(&width, 2, 1, handle);
+	io->read_proc(&height, 2, 1, handle);
+#ifdef FREEIMAGE_BIGENDIAN
+	SwapShort(&width);
+	SwapShort(&height);
+#endif
+	io->read_proc(&packed, 1, 1, handle);
+	if( packed & GIF_PACKED_ID_HAVELCT ) {
+		io->seek_proc(handle, 3 * (2 << (packed & GIF_PACKED_ID_LCTSIZE)), SEEK_CUR);
+	}
+	//LZW Minimum Code Size
+	io->read_proc(&b, 1, 1, handle);
+	if( (width == 0) || (height == 0) ) {
+		return false;	//no bitmap holds it
+	}
+
+	StringTable *stringtable = new(std::nothrow) StringTable;
+	if( stringtable == NULL ) {
+		return true;	//Load() reports the lack of memory
+	}
+	stringtable->Initialize(b);
+
+	const UINT64 raster = (UINT64)((width + 3) & ~3) * height;
+	UINT64 pixels = 0, data_bytes = 0;
+	bool row = false;
+	BYTE buf[4096];
+	if( io->read_proc(&b, 1, 1, handle) != 1 ) {
+		b = 0;
+	}
+	while( b ) {
+		unsigned got = 0;
+		if( !row ) {
+			BYTE *input = stringtable->FillInputBuffer(b);
+			if( input == NULL ) {
+				delete stringtable;
+				return true;
+			}
+			got = io->read_proc(input, 1, b, handle);
+			if( got < b ) {
+				stringtable->FillInputBuffer((int)got);
+			}
+			int size = sizeof(buf);
+			while( (pixels < width) && stringtable->Decompress(buf, &size) ) {
+				pixels += size;
+				size = sizeof(buf);
+			}
+			row = (pixels >= width);
+		} else {
+			got = io->read_proc(buf, 1, b, handle);
+		}
+		data_bytes += got;
+		if( (row && PlausibleImageSize(raster, data_bytes, 4096)) || (got < b) || (io->read_proc(&b, 1, 1, handle) != 1) ) {
+			break;
+		}
+	}
+	delete stringtable;
+
+	return row && PlausibleImageSize(raster, data_bytes, 4096);
+}
+
 // ==========================================================
 // Plugin Interface
 // ==========================================================
@@ -663,7 +729,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			INT64 gce_offset = 0;
 			BYTE block = 0;
 			const char *cut = NULL;
-			bool data_started = false;
+			bool data_started = false, data_cut = false;
 			while( block != GIF_BLOCK_TRAILER ) {
 				if( io->read_proc(&block, 1, 1, handle) < 1 ) {
 					cut = "EOF reading blocks";
@@ -722,6 +788,7 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 					io->seek_proc(handle, len, SEEK_CUR);
 					if( io->read_proc(&len, 1, 1, handle) < 1 ) {
 						cut = "EOF reading sub-block";
+						data_cut = true;
 						break;
 					}
 				}
@@ -731,8 +798,9 @@ Open(FreeImageIO *io, fi_handle handle, BOOL read) {
 			}
 
 			if( cut ) {
-				// a frame whose image data never starts has nothing to show
-				if( (block == GIF_BLOCK_IMAGE_DESCRIPTOR) && !data_started ) {
+				// a frame whose image data never starts, or ends before a row, has nothing to show
+				if( (block == GIF_BLOCK_IMAGE_DESCRIPTOR) &&
+					(!data_started || (data_cut && !GifCutFrameShows(io, handle, info->image_descriptor_offsets.back()))) ) {
 					info->image_descriptor_offsets.pop_back();
 					info->graphic_control_extension_offsets.pop_back();
 				}

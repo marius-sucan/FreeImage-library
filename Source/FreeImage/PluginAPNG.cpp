@@ -255,9 +255,114 @@ ReadBytes(FreeImageIO *io, fi_handle handle, std::vector<BYTE>& out, DWORD lengt
 	return TRUE;
 }
 
+// a standalone PNG of this size around this image data; FALSE when there is no memory for it
+static BOOL
+AssemblePNG(const BYTE *header, const std::vector<BYTE>& ancillary, const std::vector<BYTE>& trailing,
+			DWORD width, DWORD height, const std::vector<BYTE>& data, std::vector<BYTE>& png) {
+	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
+
+	const size_t idat_count = (data.size() + APNG_MAX_DATA_CHUNK - 1) / APNG_MAX_DATA_CHUNK;
+
+	try {
+		png.reserve(8 + 25 + ancillary.size() + data.size() + 12 * idat_count + trailing.size() + 12);
+	} catch(std::exception&) {
+		return FALSE;
+	}
+	png.insert(png.end(), signature, signature + 8);
+
+	BYTE ihdr[13];
+	memcpy(ihdr, header, 13);
+	PutDWORD(ihdr, width);
+	PutDWORD(ihdr + 4, height);
+	AppendChunk(png, "IHDR", ihdr, 13);
+
+	png.insert(png.end(), ancillary.begin(), ancillary.end());
+
+	// a PNG chunk holds 2^31 - 1 bytes
+	for(size_t done = 0; done < data.size(); ) {
+		const size_t piece = MIN((size_t)APNG_MAX_DATA_CHUNK, data.size() - done);
+		AppendChunk(png, "IDAT", &data[done], piece);
+		done += piece;
+	}
+	png.insert(png.end(), trailing.begin(), trailing.end());
+	AppendChunk(png, "IEND", NULL, 0);
+
+	return TRUE;
+}
+
 // ==========================================================
 // Reading: parsing the container
 // ==========================================================
+
+struct APNGReader {
+	const BYTE *data;
+	size_t size;
+	size_t pos;
+};
+
+static void
+_ReadVectorProc(png_structp png_ptr, png_bytep out, png_size_t length) {
+	APNGReader *reader = (APNGReader*)png_get_io_ptr(png_ptr);
+	if(length > reader->size - reader->pos) {
+		png_error(png_ptr, "Read error");
+	}
+	memcpy(out, reader->data + reader->pos, length);
+	reader->pos += length;
+}
+
+static void
+probe_error_handler(png_structp png_ptr, const char *error) {
+	(char*)error;
+	png_longjmp(png_ptr, 1);
+}
+
+static void
+probe_warning_handler(png_structp png_ptr, const char *warning) {
+	(png_structp)png_ptr;
+	(char*)warning;
+}
+
+// FALSE if FIF_PNG keeps nothing of this image data: libpng, set up as it reads, fails before the first row
+static BOOL
+DecodesFirstRow(const APNGinfo *info, DWORD width, DWORD height, const std::vector<BYTE>& data) {
+	std::vector<BYTE> png;
+	if(data.empty()) {
+		return FALSE;
+	}
+	if(!AssemblePNG(info->ihdr, info->ancillary, info->trailing, width, height, data, png)) {
+		return TRUE;	// the load reports the lack of memory
+	}
+
+	png_structp png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING, (png_voidp)NULL, probe_error_handler, probe_warning_handler);
+	png_infop info_ptr = png_ptr ? png_create_info_struct(png_ptr) : NULL;
+	if(info_ptr == NULL) {
+		png_destroy_read_struct(&png_ptr, NULL, NULL);
+		return TRUE;
+	}
+
+	// only plain values across setjmp: longjmp skips destructors
+	APNGReader reader = { &png[0], png.size(), 0 };
+	png_bytep volatile row = NULL;
+	if(setjmp(png_jmpbuf(png_ptr))) {
+		// as FIF_PNG salvages: kept once libpng is past the first row, a one-row image ending in its zlib trailer too
+		const BOOL kept = ((png_get_current_row_number(png_ptr) > 0) || (png_get_current_pass_number(png_ptr) > 0)) ? TRUE : FALSE;
+		png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+		free(row);
+		return kept;
+	}
+	png_set_read_fn(png_ptr, &reader, _ReadVectorProc);
+	png_read_info(png_ptr, info_ptr);
+	png_set_interlace_handling(png_ptr);
+	png_read_update_info(png_ptr, info_ptr);
+	row = (png_bytep)malloc(png_get_rowbytes(png_ptr, info_ptr));
+	if(row != NULL) {
+		png_set_benign_errors(png_ptr, 1);
+		png_read_row(png_ptr, row, NULL);
+	}
+	png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
+	free(row);
+	return TRUE;
+}
 
 // TRUE if acTL comes before IDAT; leaves the stream position moved
 static BOOL
@@ -498,6 +603,18 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 		}
 	}
 
+	// image data the file ends in before its first row: a frame is no page, the default image no file
+	if(cut) {
+		if(!info->frames.empty()) {
+			const APNGFrame& last = info->frames.back();
+			if(!DecodesFirstRow(info, last.width, last.height, last.data)) {
+				info->frames.pop_back();
+			}
+		} else if(!DecodesFirstRow(info, info->canvas_width, info->canvas_height, default_image)) {
+			return FALSE;
+		}
+	}
+
 	info->animated = (have_actl && !no_frames && !broken && (idat_is_frame || !info->frames.empty())) ? TRUE : FALSE;
 
 	if(cut) {
@@ -531,38 +648,10 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 static FIBITMAP *
 DecodeFrame(APNGinfo *info, int page, int flags) {
 	const APNGFrame& frame = info->frames[page];
-	if(frame.data.empty()) {
-		return NULL;
-	}
-
-	static const BYTE signature[8] = { 137, 80, 78, 71, 13, 10, 26, 10 };
-
-	const size_t idat_count = (frame.data.size() + APNG_MAX_DATA_CHUNK - 1) / APNG_MAX_DATA_CHUNK;
-
 	std::vector<BYTE> png;
-	try {
-		png.reserve(8 + 25 + info->ancillary.size() + frame.data.size() + 12 * idat_count + info->trailing.size() + 12);
-	} catch(std::exception&) {
+	if(frame.data.empty() || !AssemblePNG(info->ihdr, info->ancillary, info->trailing, frame.width, frame.height, frame.data, png)) {
 		return NULL;
 	}
-	png.insert(png.end(), signature, signature + 8);
-
-	BYTE ihdr[13];
-	memcpy(ihdr, info->ihdr, 13);
-	PutDWORD(ihdr, frame.width);
-	PutDWORD(ihdr + 4, frame.height);
-	AppendChunk(png, "IHDR", ihdr, 13);
-
-	png.insert(png.end(), info->ancillary.begin(), info->ancillary.end());
-
-	// a PNG chunk holds 2^31 - 1 bytes
-	for(size_t done = 0; done < frame.data.size(); ) {
-		const size_t piece = MIN((size_t)APNG_MAX_DATA_CHUNK, frame.data.size() - done);
-		AppendChunk(png, "IDAT", &frame.data[done], piece);
-		done += piece;
-	}
-	png.insert(png.end(), info->trailing.begin(), info->trailing.end());
-	AppendChunk(png, "IEND", NULL, 0);
 
 	FIMEMORY *hmem = FreeImage_OpenMemory64(&png[0], (UINT64)png.size());
 	if(hmem == NULL) {

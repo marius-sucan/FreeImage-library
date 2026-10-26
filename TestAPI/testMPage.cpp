@@ -648,6 +648,84 @@ static void testGIFCutComment() {
 	free(data);
 }
 
+// the pages of a GIF in memory, and how many of them load
+static int gifPagesOf(BYTE *data, DWORD size, int flags, int *loaded) {
+	*loaded = 0;
+	int count = 0;
+	FIMEMORY *hmem = FreeImage_OpenMemory(data, size);
+	assert(hmem != NULL);
+	FIMULTIBITMAP *mpage = FreeImage_LoadMultiBitmapFromMemory(FIF_GIF, hmem, flags);
+	if(mpage) {
+		count = FreeImage_GetPageCount(mpage);
+		for(int i = 0; i < count; i++) {
+			FIBITMAP *dib = FreeImage_LockPage(mpage, i);
+			if(dib) {
+				(*loaded)++;
+				FreeImage_UnlockPage(mpage, dib, FALSE);
+			}
+		}
+		FreeImage_CloseMultiBitmap(mpage, 0);
+	}
+	FreeImage_CloseMemory(hmem);
+	return count;
+}
+
+// a GIF cut anywhere: full, header-only and played loads count the same pages, every one of which loads
+static void testGIFCutFrames() {
+	printf("testGIFCutFrames ...\n");
+
+	const char *filename = "cut-frames.gif";
+
+	// two frames of noise, so the image data runs over more than one sub-block
+	FIMULTIBITMAP *mpage = FreeImage_OpenMultiBitmap(FIF_GIF, filename, TRUE, FALSE, TRUE);
+	assert(mpage != NULL);
+	unsigned seed = 12345;
+	for(int frame = 0; frame < 2; frame++) {
+		FIBITMAP *dib = FreeImage_Allocate(24, 16, 8);
+		assert(dib != NULL);
+		for(unsigned y = 0; y < 16; y++) {
+			BYTE *bits = FreeImage_GetScanLine(dib, y);
+			for(unsigned x = 0; x < 24; x++) {
+				seed = seed * 1103515245 + 12345;
+				bits[x] = (BYTE)(seed >> 16);
+			}
+		}
+		BOOL bResult = FreeImage_AppendPage(mpage, dib);
+		assert(bResult);
+		FreeImage_Unload(dib);
+	}
+	BOOL bResult = FreeImage_CloseMultiBitmap(mpage, 0);
+	assert(bResult);
+
+	FILE *file = fopen(filename, "rb");
+	assert(file != NULL);
+	fseek(file, 0, SEEK_END);
+	const long size = ftell(file);
+	fseek(file, 0, SEEK_SET);
+	BYTE *data = (BYTE*)malloc(size);
+	assert(data != NULL);
+	const size_t got = fread(data, 1, size, file);
+	assert(got == (size_t)size);
+	fclose(file);
+	remove(filename);
+
+	int before = 0;
+	for(long n = 0; n <= size; n++) {
+		int full_loaded, header_loaded, played_loaded;
+		const int full = gifPagesOf(data, (DWORD)n, 0, &full_loaded);
+		const int header = gifPagesOf(data, (DWORD)n, FIF_LOAD_NOPIXELS, &header_loaded);
+		const int played = gifPagesOf(data, (DWORD)n, GIF_PLAYBACK, &played_loaded);
+		assert((full == header) && (full == played));
+		assert((full_loaded == full) && (header_loaded == header) && (played_loaded == played));
+		// a longer file never shows fewer frames
+		assert(full >= before);
+		before = full;
+	}
+	assert(before == 2);
+
+	free(data);
+}
+
 // --------------------------------------------------------------------------
 
 void testMultiPage(const char *lpszPathName) {
@@ -681,4 +759,5 @@ void testMultiPage(const char *lpszPathName) {
 
 	// test GIF files cut short
 	testGIFCutComment();
+	testGIFCutFrames();
 }
