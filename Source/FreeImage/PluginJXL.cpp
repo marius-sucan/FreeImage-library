@@ -1485,9 +1485,9 @@ typedef struct tagJXLWriter {
 	BOOL has_profile;
 	JXLFrames frame_mode;
 	std::vector<BYTE> canvas;		// JXL_FRAMES_WHOLE: what the frames drew so far, top-down in the frame layout
-	// a multi-page save: libjxl marks the last frame when it is added, so each page waits for the next
+	// a multi-page save: the canvas covers every frame, so the pages wait for Close()
 	int frames;						// frames given to the encoder
-	FIBITMAP *held;					// the newest page; alone it is a still image
+	std::vector<FIBITMAP*> held;	// the pages; one alone is a still image
 	int held_flags;
 	BOOL written;
 	BOOL failed;
@@ -1510,8 +1510,8 @@ DestroyWriter(JXLWriter *writer) {
 		if(writer->runner) {
 			JxlResizableParallelRunnerDestroy(writer->runner);
 		}
-		if(writer->held) {
-			FreeImage_Unload(writer->held);
+		for(size_t i = 0; i < writer->held.size(); i++) {
+			FreeImage_Unload(writer->held[i]);
 		}
 		delete writer;
 	}
@@ -2403,37 +2403,74 @@ WriteStill(JXLWriter *writer, FreeImageIO *io, fi_handle handle, FIBITMAP *dib, 
 	return FlushOutput(writer, io, handle);
 }
 
-// an animation from its first two pages: the canvas covers both and what they ask for
+// an animation of the held pages: the canvas covers every frame and what the pages ask for
 static BOOL
-StartAnimation(JXLWriter *writer, FIBITMAP *first, FIBITMAP *second, int flags) {
+StartAnimation(JXLWriter *writer, int flags) {
 	uint32_t width = 0, height = 0;
+	uint32_t asked_width = 0, asked_height = 0;
 	LONG value = 0, loop = 0;
-	FIBITMAP *pages[2] = { first, second };
-	for(int i = 0; i < 2; i++) {
+	for(size_t i = 0; i < writer->held.size(); i++) {
+		FIBITMAP *page = writer->held[i];
 		LONG left = 0, top = 0;
-		GetAnimTag(pages[i], "FrameLeft", FIDT_SHORT, &left);
-		GetAnimTag(pages[i], "FrameTop", FIDT_SHORT, &top);
-		const uint32_t right = (uint32_t)left + FreeImage_GetWidth(pages[i]);
-		const uint32_t bottom = (uint32_t)top + FreeImage_GetHeight(pages[i]);
+		GetAnimTag(page, "FrameLeft", FIDT_SHORT, &left);
+		GetAnimTag(page, "FrameTop", FIDT_SHORT, &top);
+		const uint32_t right = (uint32_t)left + FreeImage_GetWidth(page);
+		const uint32_t bottom = (uint32_t)top + FreeImage_GetHeight(page);
 		if(right > width) {
 			width = right;
 		}
 		if(bottom > height) {
 			height = bottom;
 		}
-		if(GetAnimTag(pages[i], "LogicalWidth", FIDT_SHORT, &value) && ((uint32_t)value > width)) {
-			width = (uint32_t)value;
+		if(GetAnimTag(page, "LogicalWidth", FIDT_SHORT, &value) && ((uint32_t)value > asked_width)) {
+			asked_width = (uint32_t)value;
 		}
-		if(GetAnimTag(pages[i], "LogicalHeight", FIDT_SHORT, &value) && ((uint32_t)value > height)) {
-			height = (uint32_t)value;
+		if(GetAnimTag(page, "LogicalHeight", FIDT_SHORT, &value) && ((uint32_t)value > asked_height)) {
+			asked_height = (uint32_t)value;
 		}
 	}
+	if((asked_width > 0) && (width > asked_width)) {
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the frames need a %u pixel wide canvas, not the %u the pages ask for", width, asked_width);
+	}
+	if((asked_height > 0) && (height > asked_height)) {
+		FreeImage_OutputMessageProc(s_format_id, "Warning: the frames need a %u pixel tall canvas, not the %u the pages ask for", height, asked_height);
+	}
+	if(asked_width > width) {
+		width = asked_width;
+	}
+	if(asked_height > height) {
+		height = asked_height;
+	}
+	FIBITMAP *first = writer->held[0];
 	GetAnimTag(first, "Loop", FIDT_LONG, &loop);
 	if(!ChooseLayout(first, TRUE, writer)) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 		return FALSE;
 	}
 	return StartEncoder(writer, first, flags, TRUE, width, height, loop);
+}
+
+// every held page as a frame, each written out before the next is added
+static BOOL
+WriteAnimation(JXLWriter *writer, FreeImageIO *io, fi_handle handle) {
+	if(!StartAnimation(writer, writer->held_flags)) {
+		return FALSE;
+	}
+	for(size_t i = 0; i < writer->held.size(); i++) {
+		if(!AddFrame(writer, writer->held[i])) {
+			return FALSE;
+		}
+		// libjxl marks a frame the last when the input is closed before it is encoded
+		if(i + 1 == writer->held.size()) {
+			JxlEncoderCloseInput(writer->encoder);
+		}
+		if(!FlushOutput(writer, io, handle)) {
+			return FALSE;
+		}
+		FreeImage_Unload(writer->held[i]);
+		writer->held[i] = NULL;
+	}
+	return TRUE;
 }
 
 // ==========================================================
@@ -2521,13 +2558,10 @@ Close(FreeImageIO *io, fi_handle handle, void *data) {
 	JXLWriter *writer = h->writer;
 	if(writer && !writer->failed && (io != NULL) && (handle != NULL)) {
 		try {
-			if(writer->animation) {
-				// the held page is the last frame
-				bResult = writer->held && AddFrame(writer, writer->held);
-				JxlEncoderCloseInput(writer->encoder);
-				bResult = FlushOutput(writer, io, handle) && bResult;
-			} else if(writer->held) {
-				bResult = WriteStill(writer, io, handle, writer->held, writer->held_flags);
+			if(writer->held.size() > 1) {
+				bResult = WriteAnimation(writer, io, handle);
+			} else if(writer->held.size() == 1) {
+				bResult = WriteStill(writer, io, handle, writer->held[0], writer->held_flags);
 			}
 		} catch(std::bad_alloc&) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
@@ -2659,24 +2693,20 @@ Save(FreeImageIO *io, FIBITMAP *dib, fi_handle handle, int page, int flags, void
 			writer->written = TRUE;
 			bResult = WriteStill(writer, io, handle, dib, flags);
 		} else {
-			bResult = TRUE;
-			if(writer->held) {
-				// a page follows: the held one is not the last frame
-				if(!writer->animation) {
-					bResult = StartAnimation(writer, writer->held, dib, writer->held_flags);
-				}
-				bResult = bResult && AddFrame(writer, writer->held) && FlushOutput(writer, io, handle);
-				FreeImage_Unload(writer->held);
-				writer->held = NULL;
-			} else {
+			if(writer->held.empty()) {
 				writer->held_flags = flags;
 			}
-			if(bResult) {
-				writer->held = FreeImage_Clone(dib);
-				if(!writer->held) {
-					FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
-					bResult = FALSE;
+			FIBITMAP *copy = FreeImage_Clone(dib);
+			if(copy) {
+				try {
+					writer->held.push_back(copy);
+				} catch(std::bad_alloc&) {
+					FreeImage_Unload(copy);
+					throw;
 				}
+				bResult = TRUE;
+			} else {
+				FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 			}
 		}
 	} catch(std::bad_alloc&) {
