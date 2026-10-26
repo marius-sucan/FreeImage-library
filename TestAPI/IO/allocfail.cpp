@@ -503,8 +503,8 @@ static int loadmem_case(void) {
 
 static const void *s_adobe = NULL, *s_p3 = NULL, *s_prophoto = NULL;
 static DWORD s_adobe_size = 0, s_p3_size = 0, s_prophoto_size = 0;
-static BYTE *s_press = NULL, *s_lut = NULL, *s_png = NULL;
-static DWORD s_press_size = 0, s_lut_size = 0, s_png_size = 0;
+static BYTE *s_press = NULL, *s_lut = NULL, *s_png = NULL, *s_cmyk_tif = NULL;
+static DWORD s_press_size = 0, s_lut_size = 0, s_png_size = 0, s_cmyk_tif_size = 0;
 
 /* a CMYK press profile built with Little CMS: the naive inks to Lab, and back */
 static cmsInt32Number press_forward(const cmsUInt16Number in[], cmsUInt16Number out[], void *cargo) {
@@ -596,7 +596,25 @@ static int icc_setup(void) {
     }
     if (mem) FreeImage_CloseMemory(mem);
     FreeImage_Unload(dib);
-    return s_adobe && s_p3 && s_prophoto && s_press && s_png && FreeImage_SetDisplayICCProfile(s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+    /* a CMYK TIFF in the press profile, which a FIF_LOAD_DISPLAY_ICC load replaces with an RGB image */
+    dib = pattern(FIT_BITMAP, 40, 24, 32);
+    mem = FreeImage_OpenMemory(NULL, 0);
+    if (dib && mem && s_press) {
+        FreeImage_CreateICCProfile(dib, s_press, (long)s_press_size);
+        FreeImage_GetICCProfile(dib)->flags |= FIICC_COLOR_IS_CMYK;
+        if (FreeImage_SaveToMemory(FIF_TIFF, dib, mem, TIFF_CMYK | TIFF_NONE) && FreeImage_AcquireMemory(mem, &data, &size) && (s_cmyk_tif = (BYTE *)malloc(size)) != NULL) {
+            memcpy(s_cmyk_tif, data, size);
+            s_cmyk_tif_size = size;
+        }
+    }
+    if (mem) FreeImage_CloseMemory(mem);
+    FreeImage_Unload(dib);
+    return s_adobe && s_p3 && s_prophoto && s_press && s_png && s_cmyk_tif && FreeImage_SetDisplayICCProfile(s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
+}
+
+/* a new Display P3 state: as many blocks as the one the cases start from, no transform cached */
+static void fresh_display(void) {
+    FreeImage_SetDisplayICCProfile(s_p3, s_p3_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
 }
 
 static FIBITMAP *tagged(FREE_IMAGE_TYPE type, int bpp, const void *profile, DWORD size) {
@@ -698,11 +716,13 @@ static int icc_lut_case(void) {
     return whole ? CASE_OK : CASE_BROKEN;
 }
 
-/* the display becomes Adobe RGB, or stays Display P3 */
+/* the display becomes Adobe RGB, or stays Display P3; nothing is left allocated */
 static int icc_display_set_case(void) {
     BYTE now[4096];
     DWORD n;
     BOOL done;
+    long before = live;
+    int whole;
 
     armed = 1; fail_new = 1;
     done = FreeImage_SetDisplayICCProfile(s_adobe, s_adobe_size, FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION);
@@ -710,26 +730,47 @@ static int icc_display_set_case(void) {
 
     n = FreeImage_GetDisplayICCProfile(now, sizeof(now));
     if (seen < fail_at) return NOT_REACHED;
-    if (done) return ((n == s_adobe_size) && !memcmp(now, s_adobe, n)) ? CASE_OK : CASE_BROKEN;
-    return ((n == s_p3_size) && !memcmp(now, s_p3, n)) ? CASE_OK : CASE_BROKEN;
+    if (done) whole = (n == s_adobe_size) && !memcmp(now, s_adobe, n);
+    else whole = (n == s_p3_size) && !memcmp(now, s_p3, n);
+    fresh_display();
+    return (whole && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
-/* FIF_LOAD_DISPLAY_ICC: an Adobe RGB PNG comes in the display's colors, as it was, or not at all */
-static int icc_display_load_case(void) {
-    FIMEMORY *mem = FreeImage_OpenMemory(s_png, s_png_size);
+/* FIF_LOAD_DISPLAY_ICC: the image in the display's colors, as it was loaded when own names its profile, or not at all;
+   with the display made new before and after, which empties its transform cache, nothing is left allocated */
+static int display_load_case(FREE_IMAGE_FORMAT fif, BYTE *file, DWORD size, const void *own, DWORD own_size) {
+    FIMEMORY *mem = FreeImage_OpenMemory(file, size);
     FIBITMAP *dib;
+    long before;
     int whole;
     if (!mem) return CASE_BROKEN;
+    /* a first load fills what stays allocated */
+    FreeImage_Unload(FreeImage_LoadFromMemory(fif, mem, FIF_LOAD_DISPLAY_ICC));
+    FreeImage_SeekMemory(mem, 0, SEEK_SET);
+    fresh_display();
+    before = live;
 
     armed = 1; fail_new = 1;
-    dib = FreeImage_LoadFromMemory(FIF_PNG, mem, FIF_LOAD_DISPLAY_ICC);
+    dib = FreeImage_LoadFromMemory(fif, mem, FIF_LOAD_DISPLAY_ICC);
     armed = 0; fail_new = 0;
 
-    whole = !dib || converted_ok(dib, s_p3, s_p3_size) || converted_ok(dib, s_adobe, s_adobe_size);
+    whole = !dib || converted_ok(dib, s_p3, s_p3_size) || (own && converted_ok(dib, own, own_size));
     FreeImage_Unload(dib);
+    fresh_display();
+    whole = whole && (live == before);
     FreeImage_CloseMemory(mem);
     if (seen < fail_at) return NOT_REACHED;
     return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* an Adobe RGB PNG, converted in place */
+static int icc_display_load_case(void) {
+    return display_load_case(FIF_PNG, s_png, s_png_size, s_adobe, s_adobe_size);
+}
+
+/* a CMYK TIFF, replaced with RGB */
+static int icc_display_cmyk_case(void) {
+    return display_load_case(FIF_TIFF, s_cmyk_tif, s_cmyk_tif_size, NULL, 0);
 }
 
 /* an Adobe RGB frame, then a Display P3 one converted to it: a save that says TRUE loads with every page appended */
@@ -1503,8 +1544,9 @@ int main(void) {
         sweep("ICC CMYK and back, black point compensation: NULL or tagged", icc_cmyk_case);
         sweep("ICC soft proof with a gamut check: NULL or tagged", icc_proof_case);
         if (s_lut) sweep("ICC LUT profile, Lab connection space: NULL or sRGB", icc_lut_case);
-        sweep("display profile set: the new one or the old one", icc_display_set_case);
-        sweep("FIF_LOAD_DISPLAY_ICC load: converted, as loaded or NULL", icc_display_load_case);
+        sweep("display profile set: the new one or the old one, no leak", icc_display_set_case);
+        sweep("FIF_LOAD_DISPLAY_ICC load: converted, as loaded or NULL, no leak", icc_display_load_case);
+        sweep("FIF_LOAD_DISPLAY_ICC CMYK load: replaced with RGB or NULL, no leak", icc_display_cmyk_case);
         sweep("APNG save, frames in different profiles: TRUE only for a file that loads", apng_case);
         sweep("WebP animation, frames in different profiles: TRUE only for a file that loads", webp_anim_case);
         if (!cmyka_setup()) {

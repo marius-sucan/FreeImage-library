@@ -23,6 +23,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // windows.h has to precede FreeImage.h
@@ -607,6 +608,43 @@ private:
 	Profile(const Profile &);
 	Profile &operator=(const Profile &);
 };
+
+// owners of Little CMS objects, malloc() blocks and bitmaps: freed however a function ends, by an exception too
+struct ProfileCloser {
+	void operator()(cmsHPROFILE profile) const {
+		cmsCloseProfile(profile);
+	}
+};
+
+struct TransformDeleter {
+	void operator()(cmsHTRANSFORM transform) const {
+		cmsDeleteTransform(transform);
+	}
+};
+
+struct CurveDeleter {
+	void operator()(cmsToneCurve *curve) const {
+		cmsFreeToneCurve(curve);
+	}
+};
+
+struct BlockFreer {
+	void operator()(void *block) const {
+		free(block);
+	}
+};
+
+struct BitmapUnloader {
+	void operator()(FIBITMAP *dib) const {
+		FreeImage_Unload(dib);
+	}
+};
+
+typedef std::unique_ptr<void, ProfileCloser> ProfilePtr;
+typedef std::unique_ptr<void, TransformDeleter> TransformPtr;
+typedef std::unique_ptr<cmsToneCurve, CurveDeleter> CurvePtr;
+typedef std::unique_ptr<BYTE, BlockFreer> BlockPtr;
+typedef std::unique_ptr<FIBITMAP, BitmapUnloader> BitmapPtr;
 
 // the image's profile, even when the caller passes the image's own profile; false, the image untagged, when out of memory
 static bool
@@ -1325,27 +1363,25 @@ Convert() {
 	}
 	if (out == m_px.layout) {
 		// the same pixel format: a copy converted in place
-		FIBITMAP *dst = FreeImage_Clone(m_dib);
+		BitmapPtr dst(FreeImage_Clone(m_dib));
 		if (!dst) {
 			return NULL;
 		}
-		if (!IsIdentity() && !Run(dst, out, true)) {
-			FreeImage_Unload(dst);
+		if (!IsIdentity() && !Run(dst.get(), out, true)) {
 			return NULL;
 		}
-		return Tagged(dst);
+		return Tagged(dst.release());
 	}
-	FIBITMAP *dst = AllocateLayout(out, m_width, m_height);
+	BitmapPtr dst(AllocateLayout(out, m_width, m_height));
 	if (!dst) {
 		FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_DIB_MEMORY);
 		return NULL;
 	}
-	FreeImage_CloneMetadata(dst, m_dib);
-	if (!Run(dst, out, false)) {
-		FreeImage_Unload(dst);
+	FreeImage_CloneMetadata(dst.get(), m_dib);
+	if (!Run(dst.get(), out, false)) {
 		return NULL;
 	}
-	return Tagged(dst);
+	return Tagged(dst.release());
 }
 
 BOOL ColorConverter::
@@ -1359,20 +1395,19 @@ Apply() {
 		return FALSE;
 	}
 	// copied before the pixels change: they cannot be left without it
-	void *copy = NULL;
+	BlockPtr copy;
 	if (m_destination.tag) {
-		copy = malloc(m_destination.size);
+		copy.reset((BYTE*)malloc(m_destination.size));
 		if (!copy) {
 			FreeImage_OutputMessageProc(FIF_UNKNOWN, "ICC: %s", FI_MSG_ERROR_MEMORY);
 			return FALSE;
 		}
-		memcpy(copy, m_destination.bytes, m_destination.size);
+		memcpy(copy.get(), m_destination.bytes, m_destination.size);
 	}
 	if (!Run(m_dib, out, true)) {
-		free(copy);
 		return FALSE;
 	}
-	Tag(m_dib, copy);
+	Tag(m_dib, copy.release());
 	return TRUE;
 }
 
@@ -1498,6 +1533,19 @@ GetDisplayAPI() {
 	return api;
 }
 
+struct DCDeleter {
+	DeleteDCProc delete_dc;
+	void operator()(HDC dc) const {
+		delete_dc(dc);
+	}
+};
+
+struct FileCloser {
+	void operator()(FILE *file) const {
+		fclose(file);
+	}
+};
+
 // HDR or Auto Color Management: Windows itself converts what applications draw from sRGB
 static bool
 AdvancedColorActive(const DisplayAPI &api, const WCHAR *device) {
@@ -1569,19 +1617,20 @@ QuerySystem(DisplayQuery &query) {
 		Append(query.key, ADVANCED, sizeof(ADVANCED));
 		return;
 	}
-	HDC ic = api.create_ic(info.szDevice, NULL, NULL, NULL);
+	const DCDeleter deleter = { api.delete_dc };
+	std::unique_ptr<std::remove_pointer<HDC>::type, DCDeleter> ic(api.create_ic(info.szDevice, NULL, NULL, NULL), deleter);
 	if (!ic) {
 		return;
 	}
 	std::vector<WCHAR> path(MAX_PATH + 1, 0);
 	DWORD length = (DWORD)path.size();
-	BOOL found = api.get_icm_profile(ic, &length, &path[0]);
+	BOOL found = api.get_icm_profile(ic.get(), &length, &path[0]);
 	if (!found && (GetLastError() == ERROR_INSUFFICIENT_BUFFER) && (length > path.size()) && (length < 32768)) {
 		path.assign(length + 1, 0);
 		length = (DWORD)path.size();
-		found = api.get_icm_profile(ic, &length, &path[0]);
+		found = api.get_icm_profile(ic.get(), &length, &path[0]);
 	}
-	api.delete_dc(ic);
+	ic.reset();
 	path.back() = 0;
 	WIN32_FILE_ATTRIBUTE_DATA data;
 	if (!found || !GetFileAttributesExW(&path[0], GetFileExInfoStandard, &data)) {
@@ -1599,20 +1648,19 @@ ReadSystem(DisplayQuery &query) {
 	if (query.path.empty()) {
 		return;
 	}
-	FILE *file = _wfopen(query.path.c_str(), L"rb");
+	std::unique_ptr<FILE, FileCloser> file(_wfopen(query.path.c_str(), L"rb"));
 	if (!file) {
 		return;
 	}
-	if (fseek(file, 0, SEEK_END) == 0) {
-		const long size = ftell(file);
-		if ((size >= 128) && (size <= ICC_DISPLAY_MAX_SIZE) && (fseek(file, 0, SEEK_SET) == 0)) {
+	if (fseek(file.get(), 0, SEEK_END) == 0) {
+		const long size = ftell(file.get());
+		if ((size >= 128) && (size <= ICC_DISPLAY_MAX_SIZE) && (fseek(file.get(), 0, SEEK_SET) == 0)) {
 			query.bytes.resize((size_t)size);
-			if (fread(&query.bytes[0], 1, (size_t)size, file) != (size_t)size) {
+			if (fread(&query.bytes[0], 1, (size_t)size, file.get()) != (size_t)size) {
 				query.bytes.clear();
 			}
 		}
 	}
-	fclose(file);
 }
 
 #elif defined(__linux__)
@@ -1700,6 +1748,13 @@ GetXcbAPI() {
 	return api;
 }
 
+struct XcbDisconnector {
+	void (*disconnect)(XcbConnection*);
+	void operator()(XcbConnection *connection) const {
+		disconnect(connection);
+	}
+};
+
 // _ICC_PROFILE on the root window of $DISPLAY's screen (ICC Profiles in X)
 static void
 QuerySystem(DisplayQuery &query) {
@@ -1712,37 +1767,36 @@ QuerySystem(DisplayQuery &query) {
 		return;
 	}
 	int screen = 0;
-	XcbConnection *connection = api.connect(NULL, &screen);
+	const XcbDisconnector disconnector = { api.disconnect };
+	std::unique_ptr<XcbConnection, XcbDisconnector> connection(api.connect(NULL, &screen), disconnector);
 	if (!connection) {
 		return;
 	}
-	if (!api.has_error(connection)) {
-		XcbScreenIterator roots = api.roots(api.get_setup(connection));
+	if (!api.has_error(connection.get())) {
+		XcbScreenIterator roots = api.roots(api.get_setup(connection.get()));
 		for (int i = 0; (i < screen) && (roots.rem > 0); i++) {
 			api.next_screen(&roots);
 		}
 		if ((roots.rem > 0) && roots.data) {
 			static const char NAME[] = "_ICC_PROFILE";
 			void *error = NULL;
-			XcbAtomReply *atom = api.intern_atom_reply(connection, api.intern_atom(connection, 1, (uint16_t)(sizeof(NAME) - 1), NAME), &error);
+			std::unique_ptr<XcbAtomReply, BlockFreer> atom(api.intern_atom_reply(connection.get(), api.intern_atom(connection.get(), 1, (uint16_t)(sizeof(NAME) - 1), NAME), &error));
 			free(error);
 			if (atom && atom->atom) {
 				error = NULL;
-				XcbPropertyReply *property = api.get_property_reply(connection,
-					api.get_property(connection, 0, roots.data->root, atom->atom, 0, 0, ICC_DISPLAY_MAX_SIZE / 4), &error);
+				std::unique_ptr<XcbPropertyReply, BlockFreer> property(api.get_property_reply(connection.get(),
+					api.get_property(connection.get(), 0, roots.data->root, atom->atom, 0, 0, ICC_DISPLAY_MAX_SIZE / 4), &error));
 				free(error);
 				if (property && (property->format == 8) && !property->bytes_after) {
-					const int length = api.value_length(property);
+					const int length = api.value_length(property.get());
 					if (length > 0) {
-						Append(query.bytes, api.value(property), (size_t)length);
+						Append(query.bytes, api.value(property.get()), (size_t)length);
 					}
 				}
-				free(property);
 			}
-			free(atom);
 		}
 	}
-	api.disconnect(connection);
+	connection.reset();
 	query.key = query.bytes;
 }
 
@@ -1776,7 +1830,7 @@ BuiltInBytes(int which, std::vector<BYTE> &to) {
 static bool
 Equivalent(const Context &context, cmsHPROFILE builtin, cmsHPROFILE profile, bool grey) {
 	const cmsUInt32Number format = grey ? TYPE_GRAY_16 : TYPE_RGB_16;
-	cmsHTRANSFORM transform = cmsCreateTransformTHR(context.id, builtin, format, profile, format, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE);
+	TransformPtr transform(cmsCreateTransformTHR(context.id, builtin, format, profile, format, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE));
 	if (!transform) {
 		return false;
 	}
@@ -1792,8 +1846,8 @@ Equivalent(const Context &context, cmsHPROFILE builtin, cmsHPROFILE profile, boo
 			in[3 * i + 2] = (WORD)((i % N) * 65535 / (N - 1));
 		}
 	}
-	cmsDoTransform(transform, &in[0], &out[0], count);
-	cmsDeleteTransform(transform);
+	cmsDoTransform(transform.get(), &in[0], &out[0], count);
+	transform.reset();
 	for (size_t i = 0; i < in.size(); i++) {
 		if (abs((int)in[i] - (int)out[i]) > 2 * 257) {
 			return false;
@@ -1845,20 +1899,14 @@ private:
 	static bool Check(const void *bytes, DWORD size) {
 		Context context;
 		context.mute = true;
-		cmsHPROFILE profile = context.Open(bytes, size);
-		const Model model = profile ? ModelOf(profile) : MODEL_NONE;
+		ProfilePtr profile(context.Open(bytes, size));
+		const Model model = profile ? ModelOf(profile.get()) : MODEL_NONE;
 		bool twin = false;
 		if ((model == MODEL_RGB) || (model == MODEL_GRAY)) {
 			DWORD builtin_size = 0;
 			const void *builtin_data = FreeImage_GetBuiltInICCProfile((model == MODEL_GRAY) ? FICMS_PROFILE_GRAY : FICMS_PROFILE_SRGB, &builtin_size);
-			cmsHPROFILE builtin = context.Open(builtin_data, builtin_size);
-			twin = builtin && Equivalent(context, builtin, profile, (model == MODEL_GRAY));
-			if (builtin) {
-				cmsCloseProfile(builtin);
-			}
-		}
-		if (profile) {
-			cmsCloseProfile(profile);
+			ProfilePtr builtin(context.Open(builtin_data, builtin_size));
+			twin = builtin && Equivalent(context, builtin.get(), profile.get(), (model == MODEL_GRAY));
 		}
 		return twin;
 	}
@@ -1921,36 +1969,34 @@ MakeCICPProfile(BYTE primaries, BYTE transfer, bool grey, std::vector<BYTE> &byt
 	}
 	Context context;
 	context.mute = true;
-	cmsToneCurve *curve = context.id ? cmsBuildParametricToneCurve(context.id, type, params) : NULL;
+	CurvePtr curve(context.id ? cmsBuildParametricToneCurve(context.id, type, params) : NULL);
 	if (!curve) {
 		return;
 	}
-	cmsHPROFILE profile = NULL;
+	ProfilePtr profile;
 	std::string name;
 	if (grey) {
-		profile = cmsCreateGrayProfileTHR(context.id, cmsD50_xyY(), curve);
+		profile.reset(cmsCreateGrayProfileTHR(context.id, cmsD50_xyY(), curve.get()));
 		name = std::string("Gray, ") + TransferName(transfer) + " tone curve (FreeImage)";
 	} else {
 		const cmsCIExyY white = { xy[6], xy[7], 1.0 };
 		const cmsCIExyYTRIPLE rgb = { { xy[0], xy[1], 1.0 }, { xy[2], xy[3], 1.0 }, { xy[4], xy[5], 1.0 } };
-		cmsToneCurve *curves[3] = { curve, curve, curve };
-		profile = cmsCreateRGBProfileTHR(context.id, &white, &rgb, curves);
+		cmsToneCurve *curves[3] = { curve.get(), curve.get(), curve.get() };
+		profile.reset(cmsCreateRGBProfileTHR(context.id, &white, &rgb, curves));
 		name = std::string(PrimariesName(primaries)) + " primaries, " + TransferName(transfer) + " tone curve (FreeImage)";
 	}
-	cmsFreeToneCurve(curve);
+	curve.reset();
 	if (!profile) {
 		return;
 	}
 	cmsVideoSignalType cicp = { primaries, transfer, 0, 1 };
-	if (SetDescription(profile, name.c_str()) && (grey || cmsWriteTag(profile, cmsSigcicpTag, &cicp))) {
+	if (SetDescription(profile.get(), name.c_str()) && (grey || cmsWriteTag(profile.get(), cmsSigcicpTag, &cicp))) {
 		DWORD size = 0;
-		BYTE *data = SaveBuiltInProfile(profile, &size);
+		BlockPtr data(SaveBuiltInProfile(profile.get(), &size));
 		if (data) {
-			bytes.assign(data, data + size);
-			free(data);
+			bytes.assign(data.get(), data.get() + size);
 		}
 	}
-	cmsCloseProfile(profile);
 }
 
 // each profile of code points is made once
@@ -1984,11 +2030,9 @@ GetCICPProfiles() {
 static bool
 DisplayGrey(const Context &context, cmsHPROFILE display, std::vector<BYTE> &grey) {
 	const unsigned N = 4096;
-	cmsHPROFILE xyz = cmsCreateXYZProfileTHR(context.id);
-	cmsHTRANSFORM transform = xyz ? cmsCreateTransformTHR(context.id, display, TYPE_RGB_16, xyz, TYPE_XYZ_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE) : NULL;
-	if (xyz) {
-		cmsCloseProfile(xyz);
-	}
+	ProfilePtr xyz(cmsCreateXYZProfileTHR(context.id));
+	TransformPtr transform(xyz ? cmsCreateTransformTHR(context.id, display, TYPE_RGB_16, xyz.get(), TYPE_XYZ_DBL, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE) : NULL);
+	xyz.reset();
 	if (!transform) {
 		return false;
 	}
@@ -1997,8 +2041,8 @@ DisplayGrey(const Context &context, cmsHPROFILE display, std::vector<BYTE> &grey
 	for (unsigned i = 0; i < N; i++) {
 		rgb[3 * i] = rgb[3 * i + 1] = rgb[3 * i + 2] = (WORD)((i * 65535 + (N - 1) / 2) / (N - 1));
 	}
-	cmsDoTransform(transform, &rgb[0], &out[0], N);
-	cmsDeleteTransform(transform);
+	cmsDoTransform(transform.get(), &rgb[0], &out[0], N);
+	transform.reset();
 	const double white = out[N - 1].Y;
 	if (!(white > 0)) {
 		return false;
@@ -2012,23 +2056,17 @@ DisplayGrey(const Context &context, cmsHPROFILE display, std::vector<BYTE> &grey
 		previous = y;
 		curve[i] = (WORD)(y * 65535 + 0.5);
 	}
-	cmsToneCurve *tone = cmsBuildTabulatedToneCurve16(context.id, N, &curve[0]);
-	cmsHPROFILE profile = tone ? cmsCreateGrayProfileTHR(context.id, cmsD50_xyY(), tone) : NULL;
-	if (tone) {
-		cmsFreeToneCurve(tone);
-	}
-	bool done = profile && SetDescription(profile, "Display grey (FreeImage)");
+	CurvePtr tone(cmsBuildTabulatedToneCurve16(context.id, N, &curve[0]));
+	ProfilePtr profile(tone ? cmsCreateGrayProfileTHR(context.id, cmsD50_xyY(), tone.get()) : NULL);
+	tone.reset();
+	bool done = profile && SetDescription(profile.get(), "Display grey (FreeImage)");
 	if (done) {
 		DWORD size = 0;
-		BYTE *data = SaveBuiltInProfile(profile, &size);
-		done = (data != NULL);
+		BlockPtr data(SaveBuiltInProfile(profile.get(), &size));
+		done = (data.get() != NULL);
 		if (data) {
-			grey.assign(data, data + size);
-			free(data);
+			grey.assign(data.get(), data.get() + size);
 		}
-	}
-	if (profile) {
-		cmsCloseProfile(profile);
 	}
 	return done;
 }
@@ -2044,28 +2082,22 @@ BuildDisplayState(const std::vector<BYTE> &bytes, int flags, bool *usable) {
 		context.mute = true;
 		DWORD srgb_size = 0;
 		const void *srgb_data = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_SRGB, &srgb_size);
-		cmsHPROFILE srgb = context.Open(srgb_data, srgb_size);
-		cmsHPROFILE profile = context.Open(&bytes[0], (DWORD)bytes.size());
-		if (srgb && profile && (ModelOf(profile) == MODEL_RGB)) {
+		ProfilePtr srgb(context.Open(srgb_data, srgb_size));
+		ProfilePtr profile(context.Open(&bytes[0], (DWORD)bytes.size()));
+		if (srgb && profile && (ModelOf(profile.get()) == MODEL_RGB)) {
 			const cmsUInt32Number bpc = (flags & FICMS_BLACKPOINT_COMPENSATION) ? cmsFLAGS_BLACKPOINTCOMPENSATION : 0;
-			cmsHTRANSFORM transform = cmsCreateTransformTHR(context.id, srgb, TYPE_RGB_8, profile, TYPE_RGB_8, (cmsUInt32Number)(flags & 0xFF), bpc);
+			cmsHTRANSFORM transform = cmsCreateTransformTHR(context.id, srgb.get(), TYPE_RGB_8, profile.get(), TYPE_RGB_8, (cmsUInt32Number)(flags & 0xFF), bpc);
 			if (transform) {
 				cmsDeleteTransform(transform);
 				linked = true;
-				if (!Equivalent(context, srgb, profile, false)) {
+				if (!Equivalent(context, srgb.get(), profile.get(), false)) {
 					state->rgb = bytes;
 					state->srgb = false;
-					if (!DisplayGrey(context, profile, state->grey)) {
+					if (!DisplayGrey(context, profile.get(), state->grey)) {
 						BuiltInBytes(FICMS_PROFILE_GRAY, state->grey);
 					}
 				}
 			}
-		}
-		if (profile) {
-			cmsCloseProfile(profile);
-		}
-		if (srgb) {
-			cmsCloseProfile(srgb);
 		}
 	}
 	if (state->srgb) {
