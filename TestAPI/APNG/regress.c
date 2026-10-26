@@ -1797,6 +1797,102 @@ out:
 	remove(path);
 }
 
+/* the chunk count before a chunk type's first occurrence; -1 if there is none */
+static int chunk_index(const char *path, const char *type) {
+	FILE *f = fopen(path, "rb");
+	BYTE head[8];
+	int index = -1, n = 0;
+	if (!f) return -1;
+	if (fseek(f, 8, SEEK_SET) == 0) {
+		while (fread(head, 1, 8, f) == 8) {
+			const unsigned long length = ((unsigned long)head[0] << 24) | ((unsigned long)head[1] << 16) | ((unsigned long)head[2] << 8) | head[3];
+			if (!memcmp(head + 4, type, 4)) { index = n; break; }
+			if (!memcmp(head + 4, "IEND", 4) || fseek(f, (long)length + 4, SEEK_CUR) != 0) break;
+			n++;
+		}
+	}
+	fclose(f);
+	return index;
+}
+
+/* a 32-bit frame copied onto a canvas at (x, y), counted from the top */
+static void put_frame(FIBITMAP *canvas, FIBITMAP *frame, unsigned x, unsigned y) {
+	const unsigned ch = FreeImage_GetHeight(canvas), w = FreeImage_GetWidth(frame), h = FreeImage_GetHeight(frame);
+	unsigned row;
+	for (row = 0; row < h; row++) {
+		memcpy(FreeImage_GetScanLine(canvas, ch - 1 - (y + row)) + 4 * x, FreeImage_GetScanLine(frame, h - 1 - row), 4 * w);
+	}
+}
+
+/* a first frame smaller than the canvas is padded into the static image; a frame saved alone keeps its rectangle */
+static void test_padded_first_frame(void) {
+	static const WORD X[2] = { 10, 20 }, Y[2] = { 5, 15 };
+	const WORD canvas_w = 60, canvas_h = 40;
+	const char *path = scratch("apng_padded.png");
+	const char *one = scratch("apng_padded_one.png");
+	FIBITMAP *frames[2], *expect[2], *still, *back;
+	FIMULTIBITMAP *mb;
+	int i, bad = 0;
+
+	printf("\n=== a first frame smaller than the canvas is the static image, padded\n");
+
+	for (i = 0; i < 2; i++) {
+		frames[i] = make_frame(30, 20, i + 1, -1, 0, 255);
+		set_tag(frames[i], "FrameLeft", 0x1001, FIDT_SHORT, 2, &X[i]);
+		set_tag(frames[i], "FrameTop", 0x1002, FIDT_SHORT, 2, &Y[i]);
+		set_tag(frames[i], "LogicalWidth", 0x0001, FIDT_SHORT, 2, &canvas_w);
+		set_tag(frames[i], "LogicalHeight", 0x0002, FIDT_SHORT, 2, &canvas_h);
+		expect[i] = FreeImage_Allocate(canvas_w, canvas_h, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+		if (i) FreeImage_Paste(expect[i], expect[0], 0, 0, 256);
+		put_frame(expect[i], frames[i], X[i], Y[i]);
+	}
+	if (!write_animation(path, frames, 2)) { fail("could not write %s", path); goto out; }
+
+	if (chunk_index(path, "fcTL") < 0 || chunk_index(path, "fcTL") > chunk_index(path, "IDAT"))
+		fail("frame 0 is not the static image: its fcTL does not precede IDAT");
+	else
+		ok("frame 0 is the static image: its fcTL precedes IDAT");
+
+	still = FreeImage_Load(FIF_PNG, path, 0);
+	if (!still || FreeImage_GetWidth(still) != canvas_w || FreeImage_GetHeight(still) != canvas_h || pixel_diff(still, expect[0]) != 0)
+		fail("the static image is not frame 0 on the transparent %ux%u canvas", canvas_w, canvas_h);
+	else
+		ok("the static image is frame 0 at (%u,%u) on the transparent %ux%u canvas", X[0], Y[0], canvas_w, canvas_h);
+	if (still) FreeImage_Unload(still);
+
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	for (i = 0; i < 2; i++) {
+		FIBITMAP *page = mb ? FreeImage_LockPage(mb, i) : NULL;
+		const int d = page ? pixel_diff(page, expect[i]) : -1;
+		if (d != 0) { fail("frame %d: %d pixel(s) differ", i, d); bad++; }
+		if (page) FreeImage_UnlockPage(mb, page, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	if (!bad) ok("both frames play as placed");
+
+	/* one frame alone: the page cache reloads it as the rectangle it was */
+	if (!FreeImage_Save(FIF_APNG, frames[1], one, 0)) {
+		fail("could not write %s", one);
+	} else {
+		back = FreeImage_Load(FIF_APNG, one, 0);
+		if (!back || FreeImage_GetWidth(back) != 30 || FreeImage_GetHeight(back) != 20 ||
+			tag_long(back, "FrameLeft", -1) != X[1] || tag_long(back, "FrameTop", -1) != Y[1] || pixel_diff(back, frames[1]) != 0)
+			fail("a frame saved alone came back as %ux%u at (%ld,%ld)", back ? FreeImage_GetWidth(back) : 0, back ? FreeImage_GetHeight(back) : 0,
+				back ? tag_long(back, "FrameLeft", -1) : -1, back ? tag_long(back, "FrameTop", -1) : -1);
+		else
+			ok("a frame saved alone comes back as its 30x20 rectangle at (%u,%u)", X[1], Y[1]);
+		if (back) FreeImage_Unload(back);
+	}
+
+out:
+	for (i = 0; i < 2; i++) {
+		FreeImage_Unload(frames[i]);
+		if (expect[i]) FreeImage_Unload(expect[i]);
+	}
+	remove(path);
+	remove(one);
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -1914,6 +2010,7 @@ int main(void) {
 	test_gif_frames();
 	test_grey16_frames();
 	test_detection();
+	test_padded_first_frame();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);
 	FreeImage_DeInitialise();

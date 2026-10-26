@@ -1366,6 +1366,50 @@ CompressBackdrop(DWORD width, DWORD height, int flags, std::vector<BYTE>& data) 
 }
 
 /**
+Frame 0 on the whole canvas, transparent around it: the static image PNG 3 asks for (4.9.1).
+@return Returns FALSE when frame 0 is left as it was
+*/
+static BOOL
+PadFirstFrame(APNGinfo *info, int flags) {
+	APNGFrame& first = info->out_frames[0];
+
+	// read back as it was compressed: 8-bit RGBA, no chunk that changes the samples
+	BYTE header[13] = { 0, 0, 0, 0, 0, 0, 0, 0, 8, PNG_COLOR_TYPE_RGBA, PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE, PNG_INTERLACE_NONE };
+	const std::vector<BYTE> none;
+	std::vector<BYTE> png;
+	if(!AssemblePNG(header, none, none, first.width, first.height, first.data, png)) {
+		return FALSE;
+	}
+	FIMEMORY *hmem = FreeImage_OpenMemory64(&png[0], (UINT64)png.size());
+	FIBITMAP *frame = hmem ? FreeImage_LoadFromMemory(FIF_PNG, hmem, 0) : NULL;
+	if(hmem) {
+		FreeImage_CloseMemory(hmem);
+	}
+	FIBITMAP *canvas = frame ? FreeImage_Allocate(info->out_width, info->out_height, 32, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK) : NULL;
+
+	BOOL bResult = FALSE;
+	if(canvas && (FreeImage_GetBPP(frame) == 32) && (FreeImage_GetWidth(frame) == first.width) && (FreeImage_GetHeight(frame) == first.height)) {
+		CompositeFrame(canvas, frame, first.x_offset, first.y_offset, APNG_BLEND_OP_SOURCE, NULL);
+		std::vector<BYTE> padded, data;
+		if(CompressFrame(canvas, flags, FALSE, FALSE, padded) && SplitPNG(padded, NULL, data)) {
+			first.data.swap(data);
+			first.x_offset = 0;
+			first.y_offset = 0;
+			first.width = info->out_width;
+			first.height = info->out_height;
+			bResult = TRUE;
+		}
+	}
+	if(canvas) {
+		FreeImage_Unload(canvas);
+	}
+	if(frame) {
+		FreeImage_Unload(frame);
+	}
+	return bResult;
+}
+
+/**
 Write the file; frame 0 goes in IDAT only if it covers the canvas.
 @return Returns TRUE if successful, returns FALSE otherwise
 */
@@ -1404,6 +1448,11 @@ WriteAnimation(FreeImageIO *io, fi_handle handle, APNGinfo *info, int flags) {
 	}
 
 	const APNGFrame& first = info->out_frames[0];
+	// frame 0 padded is the static image; a frame alone keeps its rectangle, which the page cache reloads
+	if(((first.x_offset != 0) || (first.y_offset != 0) || (first.width != info->out_width) || (first.height != info->out_height)) &&
+	   (info->out_frames.size() > 1)) {
+		PadFirstFrame(info, flags);
+	}
 	const BOOL first_is_default = (first.x_offset == 0) && (first.y_offset == 0) &&
 		(first.width == info->out_width) && (first.height == info->out_height);
 
