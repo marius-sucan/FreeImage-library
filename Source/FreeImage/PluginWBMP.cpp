@@ -270,11 +270,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 			{
 				// a short file cannot claim a huge image
 				const UINT64 raster = ((((UINT64)width + 7) / 8 + 3) & ~(UINT64)3) * height;
-				const INT64 pos = io->tell_proc(handle);
-				io->seek_proc(handle, 0, SEEK_END);
-				const INT64 end = io->tell_proc(handle);
-				io->seek_proc(handle, pos, SEEK_SET);
-				if (!PlausibleImageSize(raster, (end > pos) ? (UINT64)(end - pos) : 0, 1)) {
+				if (!PlausibleImageData(io, handle, io->tell_proc(handle), raster, 1)) {
 					throw "The file holds too little data for its size";
 				}
 			}

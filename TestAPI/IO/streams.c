@@ -404,6 +404,76 @@ static BYTE *dds_file(int dxt1, unsigned w, unsigned h, size_t data, size_t *n) 
     return b;
 }
 
+static void put_be16(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 8); p[1] = (BYTE)v; }
+static void put_be32(BYTE *p, unsigned v) { p[0] = (BYTE)(v >> 24); p[1] = (BYTE)(v >> 16); p[2] = (BYTE)(v >> 8); p[3] = (BYTE)v; }
+
+/* a 10000 x 10000 8-bit byte-encoded Sun raster holding 'runs' runs of 256 pixels */
+static BYTE *ras_file(size_t runs, size_t *n) {
+    BYTE *b = (BYTE *)calloc(32 + 3 * runs, 1);
+    size_t i;
+    put_be32(b, 0x59A66A95); put_be32(b + 4, 10000); put_be32(b + 8, 10000); put_be32(b + 12, 8); put_be32(b + 20, 2);
+    for (i = 0; i < runs; i++) { b[32 + 3 * i] = 0x80; b[33 + 3 * i] = 0xFF; b[34 + 3 * i] = (BYTE)(i * 7); }
+    *n = 32 + 3 * runs;
+    return b;
+}
+
+/* a 10000 x 10000 8-bit IFF PBM whose ByteRun1 body holds 'rows' of its rows */
+static BYTE *iff_file(unsigned rows, size_t *n) {
+    const unsigned row = 79 * 2;
+    BYTE *b = (BYTE *)calloc(48 + (size_t)rows * row, 1);
+    unsigned y, k;
+    memcpy(b, "FORM", 4); put_be32(b + 4, 40 + 10000 * row); memcpy(b + 8, "PBM ", 4);
+    memcpy(b + 12, "BMHD", 4); put_be32(b + 16, 20);
+    put_be16(b + 20, 10000); put_be16(b + 22, 10000); b[28] = 8; b[30] = 1; b[34] = 1; b[35] = 1; put_be16(b + 36, 10000); put_be16(b + 38, 10000);
+    memcpy(b + 40, "BODY", 4); put_be32(b + 44, 10000 * row);
+    /* 78 runs of 128 and one of 16 */
+    for (y = 0; y < rows; y++) {
+        BYTE *p = b + 48 + (size_t)y * row;
+        for (k = 0; k < 79; k++) { p[2 * k] = (k < 78) ? 0x81 : 0xF1; p[2 * k + 1] = (BYTE)(y * 3 + k); }
+    }
+    *n = 48 + (size_t)rows * row;
+    return b;
+}
+
+/* a 30000 x 30000 1-bit RLE PCX holding 'rows' of its rows */
+static BYTE *pcx_file(unsigned rows, size_t *n) {
+    const unsigned row = 60 * 2;
+    BYTE *b = (BYTE *)calloc(128 + (size_t)rows * row, 1);
+    unsigned y, k;
+    b[0] = 0x0A; b[1] = 5; b[2] = 1; b[3] = 1;
+    b[8] = 0x2F; b[9] = 0x75; b[10] = 0x2F; b[11] = 0x75; b[12] = 72; b[14] = 72;
+    b[65] = 1; b[66] = 0xA6; b[67] = 0x0E; b[68] = 1;
+    /* 59 runs of 63 bytes and one of 33 */
+    for (y = 0; y < rows; y++) {
+        BYTE *p = b + 128 + (size_t)y * row;
+        for (k = 0; k < 60; k++) { p[2 * k] = (k < 59) ? 0xFF : 0xE1; p[2 * k + 1] = (BYTE)(y + k * 5); }
+    }
+    *n = 128 + (size_t)rows * row;
+    return b;
+}
+
+/* a 24000 x 24000 WBMP holding 'data' bytes of pixels */
+static BYTE *wbmp_file(size_t data, size_t *n) {
+    static const BYTE head[8] = { 0, 0, 0x81, 0xBB, 0x40, 0x81, 0xBB, 0x40 };
+    BYTE *b = (BYTE *)calloc(8 + data, 1);
+    size_t i;
+    memcpy(b, head, 8);
+    for (i = 0; i < data; i++) b[8 + i] = (BYTE)(i * 7 + i / 3001);
+    *n = 8 + data;
+    return b;
+}
+
+/* a 24000 x 24000 XBM holding 'text' bytes of its data */
+static BYTE *xbm_file(size_t text, size_t *n) {
+    static const char head[] = "#define t_width 24000\n#define t_height 24000\nstatic char t_bits[] = {\n";
+    BYTE *b = (BYTE *)malloc(sizeof(head) - 1 + text);
+    size_t i;
+    memcpy(b, head, sizeof(head) - 1);
+    for (i = 0; i < text; i++) b[sizeof(head) - 1 + i] = (BYTE)" 0x5a, 0xc3,"[i % 12];
+    *n = sizeof(head) - 1 + text;
+    return b;
+}
+
 /* 'dib' saved to memory, copied out */
 static BYTE *saved(FREE_IMAGE_FORMAT fif, FIBITMAP *dib, int flags, size_t *n) {
     FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
@@ -451,6 +521,36 @@ static void test_no_seek_end(void) {
     free(b);
     b = dds_file(1, 8192, 8192, 1 << 18, &n);
     expect_noend("  with 256 KB: refused", FIF_DDS, b, n, 0);
+    free(b);
+    b = ras_file(8000, &n);
+    expect_noend("RLE RAS, 100 MB, with 2% of its pixels: its rows load", FIF_RAS, b, n, 1);
+    free(b);
+    b = ras_file(2000, &n);
+    expect_noend("  with 0.5%: refused", FIF_RAS, b, n, 0);
+    free(b);
+    b = iff_file(200, &n);
+    expect_noend("ByteRun1 IFF, 100 MB, with 2% of its rows: they load", FIF_IFF, b, n, 1);
+    free(b);
+    b = iff_file(50, &n);
+    expect_noend("  with 0.5%: refused", FIF_IFF, b, n, 0);
+    free(b);
+    b = pcx_file(600, &n);
+    expect_noend("1-bit RLE PCX, 112 MB, with 2% of its rows: they load", FIF_PCX, b, n, 1);
+    free(b);
+    b = pcx_file(150, &n);
+    expect_noend("  with 0.5%: refused", FIF_PCX, b, n, 0);
+    free(b);
+    b = wbmp_file(1440000, &n);
+    expect_noend("WBMP, 72 MB, with 2% of its pixels: its rows load", FIF_WBMP, b, n, 1);
+    free(b);
+    b = wbmp_file(360000, &n);
+    expect_noend("  with 0.5%: refused", FIF_WBMP, b, n, 0);
+    free(b);
+    b = xbm_file(1500000, &n);
+    expect_noend("XBM, 72 MB, with 1.5 MB of its text: its rows load", FIF_XBM, b, n, 1);
+    free(b);
+    b = xbm_file(500000, &n);
+    expect_noend("  with 500 KB: refused", FIF_XBM, b, n, 0);
     free(b);
     b = saved(FIF_TARGA, small, TARGA_SAVE_RLE, &n);
     expect_noend("RLE TGA saved by FreeImage: loads", FIF_TARGA, b, n, 1);

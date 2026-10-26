@@ -417,13 +417,8 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		if(!header_only) {
 			// a 2-byte run yields at most 63 bytes, so a short file cannot claim a huge raster
-			const INT64 data_pos = start_pos + (INT64)sizeof(PCXHEADER);
-			io->seek_proc(handle, 0, SEEK_END);
-			const INT64 data_end = io->tell_proc(handle);
-			io->seek_proc(handle, data_pos, SEEK_SET);
 			const UINT64 raster = (UINT64)header.bytes_per_line * header.planes * height;
-			const UINT64 data = (data_end > data_pos) ? (UINT64)(data_end - data_pos) : 0;
-			if(!PlausibleImageSize(raster, data, 32)) {
+			if(!PlausibleImageData(io, handle, start_pos + (INT64)sizeof(PCXHEADER), raster, 32)) {
 				throw FI_MSG_ERROR_CORRUPTED_IMAGE;
 			}
 		}

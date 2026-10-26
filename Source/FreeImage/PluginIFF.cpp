@@ -288,11 +288,7 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					// a short file cannot claim a huge image: ByteRun1 expands 64 times, a bit plane byte gives 8 pixels
 					const UINT64 raster = ((((UINT64)width * depth + 7) / 8 + 3) & ~(UINT64)3) * height;
 					const UINT64 per_plane = ((type == ID_ILBM) && (planes > 0)) ? (depth + planes - 1) / planes : 1;
-					const INT64 pos = io->tell_proc(handle);
-					io->seek_proc(handle, 0, SEEK_END);
-					const INT64 end = io->tell_proc(handle);
-					io->seek_proc(handle, pos, SEEK_SET);
-					if (!PlausibleImageSize(raster, (end > pos) ? (UINT64)(end - pos) : 0, (comp ? 64 : 1) * per_plane)) {
+					if (!PlausibleImageData(io, handle, io->tell_proc(handle), raster, (comp ? 64 : 1) * per_plane)) {
 						FreeImage_OutputMessageProc(s_format_id, "The file holds too little data for its size");
 						return NULL;
 					}

@@ -167,11 +167,7 @@ readXBMFile(FreeImageIO *io, fi_handle handle, int *widthP, int *heightP, char *
 		const INT64 raster = (INT64)bytes_per_line * *heightP;
 		if( raster > INT_MAX )
 			return( ERR_XBM_MEMORY );
-		const INT64 pos = io->tell_proc(handle);
-		io->seek_proc(handle, 0, SEEK_END);
-		const INT64 end = io->tell_proc(handle);
-		io->seek_proc(handle, pos, SEEK_SET);
-		if( !PlausibleImageSize((UINT64)raster, (end > pos) ? (UINT64)(end - pos) : 0, 1) )
+		if( !PlausibleImageData(io, handle, io->tell_proc(handle), (UINT64)raster, 1) )
 			return( ERR_XBM_SHORT );
 		raster_length = (int)raster;
 	}
