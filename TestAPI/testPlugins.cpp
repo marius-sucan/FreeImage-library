@@ -504,7 +504,7 @@ static std::string rasFile(unsigned depth, unsigned type, unsigned maptype, unsi
 	for (unsigned i = 0; i < maplength; i++) {
 		s += (char)(i * 7);
 	}
-	const unsigned line = 5 * depth / 8;
+	const unsigned line = (5 * depth + 7) / 8;
 	for (unsigned y = 0; y < 3; y++) {
 		for (unsigned x = 0; x < line; x++) {
 			s += (char)((x * 13 + y * 31 + 1) & 0x7F);
@@ -523,27 +523,35 @@ static FIBITMAP* rasLoad(const std::string& data, int flags) {
 	return dib;
 }
 
-// 24- and 32-bit rasters skip a colormap: maptype 1 loads as maptype 0
+// maps that give no colors are skipped: 24/32-bit maptype 1 and undefined maptypes load as maptype 0
 void testSunRaster() {
 	printf("testSunRaster ...\n");
 
-	const unsigned depths[2] = { 24, 32 };
+	const unsigned depths[4] = { 1, 8, 24, 32 };
+	const unsigned maptypes[3] = { 1, 3, 0xFFFFFFFF };
 	const unsigned maplengths[3] = { 0, 6, 768 };
-	for (int d = 0; d < 2; d++) {
+	for (int d = 0; d < 4; d++) {
 		FIBITMAP *ref = rasLoad(rasFile(depths[d], 1, 0, 0), 0);
 		assert(ref != NULL);
-		for (int m = 0; m < 3; m++) {
-			for (unsigned type = 1; type <= 2; type++) {
-				const std::string file = rasFile(depths[d], type, 1, maplengths[m]);
-				FIBITMAP *dib = rasLoad(file, 0);
-				assert(dib != NULL && FreeImage_GetBPP(dib) == depths[d]);
-				for (unsigned y = 0; y < 3; y++) {
-					assert(memcmp(FreeImage_GetScanLine(dib, y), FreeImage_GetScanLine(ref, y), FreeImage_GetLine(ref)) == 0);
+		const unsigned colors = FreeImage_GetColorsUsed(ref);
+		// a maptype 1 map colors 1- and 8-bit rasters
+		for (int t = (depths[d] < 24) ? 1 : 0; t < 3; t++) {
+			for (int m = 0; m < 3; m++) {
+				for (unsigned type = 1; type <= 2; type++) {
+					const std::string file = rasFile(depths[d], type, maptypes[t], maplengths[m]);
+					FIBITMAP *dib = rasLoad(file, 0);
+					assert(dib != NULL && FreeImage_GetBPP(dib) == depths[d]);
+					for (unsigned y = 0; y < 3; y++) {
+						assert(memcmp(FreeImage_GetScanLine(dib, y), FreeImage_GetScanLine(ref, y), FreeImage_GetLine(ref)) == 0);
+					}
+					assert(FreeImage_GetColorsUsed(dib) == colors);
+					assert(colors == 0 || memcmp(FreeImage_GetPalette(dib), FreeImage_GetPalette(ref), colors * sizeof(RGBQUAD)) == 0);
+					FreeImage_Unload(dib);
+					FIBITMAP *header = rasLoad(file, FIF_LOAD_NOPIXELS);
+					assert(header != NULL && !FreeImage_HasPixels(header) && FreeImage_GetBPP(header) == depths[d] && FreeImage_GetWidth(header) == 5);
+					assert(colors == 0 || memcmp(FreeImage_GetPalette(header), FreeImage_GetPalette(ref), colors * sizeof(RGBQUAD)) == 0);
+					FreeImage_Unload(header);
 				}
-				FreeImage_Unload(dib);
-				FIBITMAP *header = rasLoad(file, FIF_LOAD_NOPIXELS);
-				assert(header != NULL && !FreeImage_HasPixels(header) && FreeImage_GetBPP(header) == depths[d] && FreeImage_GetWidth(header) == 5);
-				FreeImage_Unload(header);
 			}
 		}
 		FreeImage_Unload(ref);

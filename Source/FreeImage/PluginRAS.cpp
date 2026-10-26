@@ -321,6 +321,13 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		// set up the colormap if needed
 
 		switch(header.maptype) {
+			default:
+				// a map of an undefined type is skipped: the raster loads as if it had none
+				if (!SkipBytes(io, handle, header.maplength)) {
+					throw "Invalid colormap";
+				}
+				// (fall through)
+
 			case RMT_NONE :
 			{				
 				if (header.depth < 24) {
