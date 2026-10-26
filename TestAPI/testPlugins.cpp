@@ -523,20 +523,23 @@ static FIBITMAP* rasLoad(const std::string& data, int flags) {
 	return dib;
 }
 
-// maps that give no colors are skipped: 24/32-bit maptype 1, maptype 0 and undefined maptypes load as maptype 0 without a map
+// maps that give no colors are skipped: the raster loads as maptype 0 without a map
 void testSunRaster() {
 	printf("testSunRaster ...\n");
 
 	const unsigned depths[4] = { 1, 8, 24, 32 };
-	const unsigned maptypes[4] = { 1, 0, 3, 0xFFFFFFFF };
+	const unsigned maptypes[5] = { 1, 0, 2, 3, 0xFFFFFFFF };
 	const unsigned maplengths[3] = { 0, 6, 768 };
 	for (int d = 0; d < 4; d++) {
 		FIBITMAP *ref = rasLoad(rasFile(depths[d], 1, 0, 0), 0);
 		assert(ref != NULL);
 		const unsigned colors = FreeImage_GetColorsUsed(ref);
-		// a maptype 1 map colors 1- and 8-bit rasters
-		for (int t = (depths[d] < 24) ? 1 : 0; t < 4; t++) {
+		for (int t = 0; t < 5; t++) {
 			for (int m = 0; m < 3; m++) {
+				// a maptype 1 map colors 1- and 8-bit rasters
+				if ((maptypes[t] == 1) && (depths[d] < 24) && (maplengths[m] > 0)) {
+					continue;
+				}
 				for (unsigned type = 1; type <= 2; type++) {
 					const std::string file = rasFile(depths[d], type, maptypes[t], maplengths[m]);
 					FIBITMAP *dib = rasLoad(file, 0);
@@ -556,4 +559,12 @@ void testSunRaster() {
 		}
 		FreeImage_Unload(ref);
 	}
+
+	// a 1-bit map of one color leaves entry 1 to the grey ramp
+	FIBITMAP *mono = rasLoad(rasFile(1, 1, 1, 3), 0);
+	assert(mono != NULL);
+	const RGBQUAD *pal = FreeImage_GetPalette(mono);
+	assert(pal[0].rgbRed == 0 && pal[0].rgbGreen == 7 && pal[0].rgbBlue == 14);
+	assert(pal[1].rgbRed == 255 && pal[1].rgbGreen == 255 && pal[1].rgbBlue == 255);
+	FreeImage_Unload(mono);
 }

@@ -320,35 +320,24 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 
 		// set up the colormap if needed
 
-		switch(header.maptype) {
-			default:
-			case RMT_NONE :
-			{				
-				// a map is skipped: maptype 0 expects none, and one of an undefined type gives no colors
-				if (header.maplength && !SkipBytes(io, handle, header.maplength)) {
-					throw "Invalid colormap";
-				}
+		if (header.depth < 24) {
+			// Create linear color ramp; a map overwrites the entries it holds
 
-				if (header.depth < 24) {
-					// Create linear color ramp
-
-					RGBQUAD *pal = FreeImage_GetPalette(dib);
-					if (NULL == pal) {
-						throw "Invalid palette, return null";
-					}
-
-					int numcolors = 1 << header.depth;
-
-					for (int i = 0; i < numcolors; i++) {
-						pal[i].rgbRed	= (BYTE)((255 * i) / (numcolors - 1));
-						pal[i].rgbGreen = (BYTE)((255 * i) / (numcolors - 1));
-						pal[i].rgbBlue	= (BYTE)((255 * i) / (numcolors - 1));
-					}
-				}
-
-				break;
+			RGBQUAD *pal = FreeImage_GetPalette(dib);
+			if (NULL == pal) {
+				throw "Invalid palette, return null";
 			}
 
+			int numcolors = 1 << header.depth;
+
+			for (int i = 0; i < numcolors; i++) {
+				pal[i].rgbRed	= (BYTE)((255 * i) / (numcolors - 1));
+				pal[i].rgbGreen = (BYTE)((255 * i) / (numcolors - 1));
+				pal[i].rgbBlue	= (BYTE)((255 * i) / (numcolors - 1));
+			}
+		}
+
+		switch(header.maptype) {
 			case RMT_EQUAL_RGB:
 			{
 				BYTE *r, *g, *b;
@@ -393,16 +382,15 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				break;
 			}
 
+			case RMT_NONE :
 			case RMT_RAW:
-			{
-				// Skip the SUN raster colormap.
-
-				if (!SkipBytes(io, handle, header.maplength)) {
+			default:
+				// a map is skipped: maptype 0 expects none, and a raw one or one of an undefined type gives no colors
+				if (header.maplength && !SkipBytes(io, handle, header.maplength)) {
 					throw "Invalid colormap";
 				}
 
 				break;
-			}
 		}
 
 		if(header_only) {
