@@ -707,7 +707,8 @@ Exif's Adobe RGB, which cameras write instead of a profile: ColorSpace 2, or unc
 */
 static BOOL
 IsExifAdobeRGB(j_decompress_ptr cinfo, FIBITMAP *dib) {
-	if((cinfo->jpeg_color_space != JCS_YCbCr) && (cinfo->jpeg_color_space != JCS_RGB)) {
+	// JPEG_GREYSCALE output is grey: no RGB profile
+	if(((cinfo->jpeg_color_space != JCS_YCbCr) && (cinfo->jpeg_color_space != JCS_RGB)) || (cinfo->out_color_space == JCS_GRAYSCALE)) {
 		return FALSE;
 	}
 	FITAG *tag = NULL;

@@ -1850,15 +1850,16 @@ static void exif_adobe_rgb(const Bytes *press) {
         FreeImage_SetMetadata(FIMD_EXIF_RAW, cmyk, "ExifRaw", tag);
         FreeImage_DeleteTag(tag);
         if (!FreeImage_Save(FIF_JPEG, rgb, path, JPEG_QUALITYGOOD)) { fail("Exif %s: not saved", cases[i].what); continue; }
-        /* the full load, header-only, and as grey, like a profile in APP2 */
-        for (k = 0; k < 3; k++) {
-            const int flags[3] = { 0, FIF_LOAD_NOPIXELS, JPEG_GREYSCALE };
+        /* the full load and header-only; loaded as grey, the pixels take no RGB profile */
+        for (k = 0; k < 4; k++) {
+            const int flags[4] = { 0, FIF_LOAD_NOPIXELS, JPEG_GREYSCALE, JPEG_GREYSCALE | FIF_LOAD_NOPIXELS };
+            const int want = cases[i].adobe && !(flags[k] & JPEG_GREYSCALE);
             FIBITMAP *back = FreeImage_Load(FIF_JPEG, path, flags[k]);
             FITAG *t = NULL;
             FIICCPROFILE *icc = back ? FreeImage_GetICCProfile(back) : NULL;
             CHECK(back && FreeImage_GetMetadata(FIMD_EXIF_EXIF, back, "ColorSpace", &t), "Exif %s: no Exif read back", cases[i].what);
-            CHECK(icc && (cases[i].adobe ? (icc->data && icc->size == adobe.size && !memcmp(icc->data, adobe.data, adobe.size)) : !icc->data),
-                "Exif %s, flags 0x%x: a %u-byte profile, want %s", cases[i].what, flags[k], icc ? (unsigned)icc->size : 0, cases[i].adobe ? "Adobe RGB" : "none");
+            CHECK(icc && (want ? (icc->data && icc->size == adobe.size && !memcmp(icc->data, adobe.data, adobe.size)) : !icc->data),
+                "Exif %s, flags 0x%x: a %u-byte profile, want %s", cases[i].what, flags[k], icc ? (unsigned)icc->size : 0, want ? "Adobe RGB" : "none");
             if (back) FreeImage_Unload(back);
         }
         if (!cases[i].adobe) continue;
