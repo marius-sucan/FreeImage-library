@@ -66,6 +66,21 @@ Workspace: /home/marius/.claude/jobs/d912fdd7/tmp/agents/colormgmt (src/ test so
   profiles from their bytes with cmsOpenProfileFromMemTHR(m_context, ...) inside TransformCache::Get before
   cmsCreateTransformTHR, or give the ColorConverter used for cached conversions the cache's context. Delete that
   context only after its last transform.
+- **Fixed** in 5c6d01e, by the first sketch: TransformCache::Get opens both profiles again from their bytes in the
+  cache's own context, which the cache deletes after its transforms (a converter using one holds the display state).
+  - The trigger was wider than written: Little CMS's 8-bit matrix-shaper optimisation keeps cmsStageDup copies of the
+    profiles' curves too, so every display conversion but 8-bit CMYK was exposed. After one conversion, 64 contexts
+    made with a counting memory plugin took 42 frees (24/32-bit RGB, RGB16, RGBA16, palettes, untagged), 21 (grey)
+    or 58 (CMYK16) meant for the deleted context; none now, in all 11 layouts.
+  - ThreadSanitizer, eviction stress (4 threads x 400 loads of 16-bit PNGs in 16 colord profiles): 5 to 18 races per
+    run in 4 runs before, none in 6 runs now. Display switching, 4 threads x 20 loads (60 did not finish under TSan in
+    25 minutes): 1 race before, none now, every load matching the single-threaded one. That run needs
+    OMP_NUM_THREADS=1, or libgomp, which is not instrumented, floods it with false positives.
+  - TestAPI/ICC display checks those frees for 24-bit, RGB16 and grey images (it fails before; under asan-run it
+    cannot fail, since ASan's quarantine keeps the blocks from being reused).
+  - The cache's context reports Little CMS's messages as the converters' do: the tag errors read while linking stay
+    reported, and a display conversion that cannot be linked also gives "Couldn't link the profiles", as
+    FreeImage_ConvertToICCProfile does.
 
 ### CM-2 The near-sRGB shortcut takes profiles 9-10 8-bit steps away from sRGB as sRGB, and ignores the display's intent and black-point compensation
 - Class: new-bug
@@ -131,6 +146,26 @@ Workspace: /home/marius/.claude/jobs/d912fdd7/tmp/agents/colormgmt (src/ test so
 - Fix sketch: hold Little CMS handles and malloc'ed buffers in RAII guards (unique_ptr with cmsCloseProfile,
   cmsDeleteTransform or free as deleter) in these functions. In Apply, allocate `copy` after the transform exists, or
   guard it.
+- **Fixed** in 0ecfb4d, by the sketch: unique_ptr owners (deleter structs) hold every profile, transform, tone curve,
+  malloc() block and bitmap of these functions, and each is freed before the Context it was made in. Apply's `copy`
+  is guarded, still made before the pixels change.
+  - Two more sites of the kind, both reproduced: ColorConverter::Convert left the whole new image of a CMYK or
+    555/565 display load when the transform cache's bookkeeping threw, and the X11 query left libxcb's two replies
+    and its connection when the copy of the profile threw.
+  - The Windows query got the same owners for its information context (across two vector allocations) and the
+    profile file (across its read buffer, up to 16 MB). Compiled with MSVC 14.29 x64 at /W4 without warnings, and
+    with zig for x86 and x64 MinGW with HEAD's 4 warnings; not run.
+  - Sweeps failing every allocation in turn, one child each, LeakSanitizer asked for unreachable blocks: setting
+    the display (Adobe RGB, colord's sRGB twin), FreeImage_ApplyDisplayICCProfile (RGB16, 24-bit, grey, untagged),
+    FIF_LOAD_DISPLAY_ICC loads of a PNG, a CMYK TIFF and a CMYK PSD, two CICP profiles and the X11 query (xcbstub):
+    2 to 8 leaking allocation points in each of the 12 before, none now, no crash.
+  - TestAPI/IO allocfail counts blocks for the display setter and the display loads now, a CMYK TIFF load added;
+    all three sweeps fail before.
+  - Left, out of memory but no leak, a failure that outlasts it: a CICP profile that cannot be made is cached empty,
+    so its code points get no profile until the process ends; a display state whose TransformCache got no context
+    converts nothing (RGB stays as loaded, CMYK and 555/565 loads give NULL), a pinned one until the next
+    FreeImage_SetDisplayICCProfile; a system display profile that cannot be opened for want of memory gives an sRGB
+    state, kept until the system reports another profile.
 
 ### CM-4 Converting an image with alpha to a grey profile silently drops the alpha
 - Class: new-bug (documented behaviour not met)
