@@ -1626,6 +1626,102 @@ static void test_mixed_profiles(void) {
 	}
 }
 
+/* an 8-bit GIF frame of one colour index; index 0, white, is transparent and fills the columns left of tx */
+static FIBITMAP *gif_frame(unsigned w, unsigned h, BYTE index, unsigned tx) {
+	FIBITMAP *dib = FreeImage_Allocate(w, h, 8, 0, 0, 0);
+	RGBQUAD *pal;
+	BYTE table[256];
+	unsigned x, y;
+	if (!dib) return NULL;
+	pal = FreeImage_GetPalette(dib);
+	pal[0].rgbRed = 255; pal[0].rgbGreen = 255; pal[0].rgbBlue = 255;
+	pal[1].rgbRed = 255; pal[1].rgbGreen = 0; pal[1].rgbBlue = 0;
+	pal[2].rgbRed = 0; pal[2].rgbGreen = 160; pal[2].rgbBlue = 0;
+	pal[3].rgbRed = 0; pal[3].rgbGreen = 0; pal[3].rgbBlue = 200;
+	for (y = 0; y < h; y++) {
+		BYTE *line = FreeImage_GetScanLine(dib, y);
+		for (x = 0; x < w; x++) line[x] = (x < tx) ? 0 : index;
+	}
+	memset(table, 0xFF, sizeof(table));
+	table[0] = 0;
+	FreeImage_SetTransparencyTable(dib, table, 256);
+	return dib;
+}
+
+/* a GIF's frames, copied page by page, play as the GIF does: their transparent pixels keep what is under them */
+static void test_gif_frames(void) {
+	static const WORD X[3] = { 0, 5, 0 }, Y[3] = { 0, 5, 0 };
+	const char *gif = scratch("apng_from.gif");
+	const char *path = scratch("apng_from_gif.png");
+	const WORD canvas_w = 40, canvas_h = 30;
+	const LONG ms = 100;
+	const BYTE leave = 1;
+	FIMULTIBITMAP *src, *dst;
+	int i, bad = 0;
+
+	printf("\n=== GIF frames copied to an APNG play as the GIF\n");
+
+	/* a red background, a frame whose left half is transparent, a whole-canvas frame transparent but for a blue strip */
+	src = FreeImage_OpenMultiBitmap(FIF_GIF, gif, TRUE, FALSE, FALSE, 0);
+	if (!src) { fail("could not create %s", gif); return; }
+	for (i = 0; i < 3; i++) {
+		FIBITMAP *frame = (i == 0) ? gif_frame(40, 30, 1, 0) : (i == 1) ? gif_frame(20, 10, 2, 10) : gif_frame(40, 30, 3, 34);
+		if (!frame) continue;
+		set_tag(frame, "FrameLeft", 0x1001, FIDT_SHORT, 2, &X[i]);
+		set_tag(frame, "FrameTop", 0x1002, FIDT_SHORT, 2, &Y[i]);
+		set_tag(frame, "FrameTime", 0x1005, FIDT_LONG, 4, &ms);
+		set_tag(frame, "DisposalMethod", 0x1006, FIDT_BYTE, 1, &leave);
+		set_tag(frame, "LogicalWidth", 0x0001, FIDT_SHORT, 2, &canvas_w);
+		set_tag(frame, "LogicalHeight", 0x0002, FIDT_SHORT, 2, &canvas_h);
+		FreeImage_AppendPage(src, frame);
+		FreeImage_Unload(frame);
+	}
+	if (!FreeImage_CloseMultiBitmap(src, 0)) { fail("could not write %s", gif); goto out; }
+
+	src = FreeImage_OpenMultiBitmap(FIF_GIF, gif, FALSE, TRUE, FALSE, 0);
+	dst = FreeImage_OpenMultiBitmap(FIF_APNG, path, TRUE, FALSE, FALSE, 0);
+	if (!src || !dst || FreeImage_GetPageCount(src) != 3) {
+		fail("cannot copy the GIF's pages");
+		if (src) FreeImage_CloseMultiBitmap(src, 0);
+		if (dst) FreeImage_CloseMultiBitmap(dst, 0);
+		goto out;
+	}
+	for (i = 0; i < 3; i++) {
+		FIBITMAP *page = FreeImage_LockPage(src, i);
+		if (!page) { fail("GIF page %d did not load", i); bad++; continue; }
+		if (tag_long(page, "BlendMethod", -1) != 0) {
+			fail("GIF page %d: BlendMethod %ld, expected 0 (blended)", i, tag_long(page, "BlendMethod", -1));
+			bad++;
+		}
+		FreeImage_AppendPage(dst, page);
+		FreeImage_UnlockPage(src, page, FALSE);
+	}
+	FreeImage_CloseMultiBitmap(src, 0);
+	if (!FreeImage_CloseMultiBitmap(dst, 0)) { fail("the APNG was not written"); goto out; }
+
+	src = FreeImage_OpenMultiBitmap(FIF_GIF, gif, FALSE, TRUE, FALSE, GIF_PLAYBACK);
+	dst = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	if (!src || !dst || FreeImage_GetPageCount(dst) != 3) {
+		fail("cannot play the GIF and the APNG");
+		bad++;
+	} else {
+		for (i = 0; i < 3; i++) {
+			FIBITMAP *a = FreeImage_LockPage(src, i), *b = FreeImage_LockPage(dst, i);
+			const int d = (a && b) ? pixel_diff(a, b) : -1;
+			if (d != 0) { fail("frame %d: %d pixel(s) differ from the GIF's", i, d); bad++; }
+			if (a) FreeImage_UnlockPage(src, a, FALSE);
+			if (b) FreeImage_UnlockPage(dst, b, FALSE);
+		}
+	}
+	if (src) FreeImage_CloseMultiBitmap(src, 0);
+	if (dst) FreeImage_CloseMultiBitmap(dst, 0);
+	if (!bad) ok("GIF frames say BlendMethod 0, and copied to an APNG, every frame plays as in the GIF");
+
+out:
+	remove(gif);
+	remove(path);
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -1740,6 +1836,7 @@ int main(void) {
 	test_mixed_profiles();
 	test_refusals();
 	test_size();
+	test_gif_frames();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);
 	FreeImage_DeInitialise();

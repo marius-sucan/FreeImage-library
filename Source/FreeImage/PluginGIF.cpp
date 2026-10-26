@@ -1438,6 +1438,9 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "FrameTime", ANIMTAG_FRAMETIME, FIDT_LONG, 1, 4, &delay_time);
 		b = (BYTE)disposal_method;
 		FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "DisposalMethod", ANIMTAG_DISPOSALMETHOD, FIDT_BYTE, 1, 1, &b);
+		//a frame's transparent pixels show what is under it
+		b = 0;
+		FreeImage_SetMetadataEx(FIMD_ANIMATION, dib, "BlendMethod", ANIMTAG_BLENDMETHOD, FIDT_BYTE, 1, 1, &b);
 
 	} catch (const char *msg) {
 		if( dib != NULL ) {
