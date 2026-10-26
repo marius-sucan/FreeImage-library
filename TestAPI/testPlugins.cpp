@@ -488,3 +488,64 @@ void testFaxG3() {
 	bare.put(ONES);
 	assert(g3Load(bare.bytes, rows) == 8);
 }
+
+// Sun raster
+// ----------------------------------------------------------
+
+// a 5 x 3 Sun raster; pixel bytes under 0x80 read the same byte-encoded (type 2)
+static std::string rasFile(unsigned depth, unsigned type, unsigned maptype, unsigned maplength) {
+	const unsigned header[8] = { 0x59A66A95, 5, 3, depth, 0, type, maptype, maplength };
+	std::string s;
+	for (int i = 0; i < 8; i++) {
+		for (int k = 3; k >= 0; k--) {
+			s += (char)((header[i] >> (8 * k)) & 0xFF);
+		}
+	}
+	for (unsigned i = 0; i < maplength; i++) {
+		s += (char)(i * 7);
+	}
+	const unsigned line = 5 * depth / 8;
+	for (unsigned y = 0; y < 3; y++) {
+		for (unsigned x = 0; x < line; x++) {
+			s += (char)((x * 13 + y * 31 + 1) & 0x7F);
+		}
+		if (line & 1) {
+			s += '\0';
+		}
+	}
+	return s;
+}
+
+static FIBITMAP* rasLoad(const std::string& data, int flags) {
+	FIMEMORY *hmem = FreeImage_OpenMemory((BYTE*)&data[0], (DWORD)data.size());
+	FIBITMAP *dib = FreeImage_LoadFromMemory(FIF_RAS, hmem, flags);
+	FreeImage_CloseMemory(hmem);
+	return dib;
+}
+
+// 24- and 32-bit rasters skip a colormap: maptype 1 loads as maptype 0
+void testSunRaster() {
+	printf("testSunRaster ...\n");
+
+	const unsigned depths[2] = { 24, 32 };
+	const unsigned maplengths[3] = { 0, 6, 768 };
+	for (int d = 0; d < 2; d++) {
+		FIBITMAP *ref = rasLoad(rasFile(depths[d], 1, 0, 0), 0);
+		assert(ref != NULL);
+		for (int m = 0; m < 3; m++) {
+			for (unsigned type = 1; type <= 2; type++) {
+				const std::string file = rasFile(depths[d], type, 1, maplengths[m]);
+				FIBITMAP *dib = rasLoad(file, 0);
+				assert(dib != NULL && FreeImage_GetBPP(dib) == depths[d]);
+				for (unsigned y = 0; y < 3; y++) {
+					assert(memcmp(FreeImage_GetScanLine(dib, y), FreeImage_GetScanLine(ref, y), FreeImage_GetLine(ref)) == 0);
+				}
+				FreeImage_Unload(dib);
+				FIBITMAP *header = rasLoad(file, FIF_LOAD_NOPIXELS);
+				assert(header != NULL && !FreeImage_HasPixels(header) && FreeImage_GetBPP(header) == depths[d] && FreeImage_GetWidth(header) == 5);
+				FreeImage_Unload(header);
+			}
+		}
+		FreeImage_Unload(ref);
+	}
+}

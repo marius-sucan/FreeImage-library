@@ -49,6 +49,7 @@ void testPluginCloseResult();
 void testPluginOutOfMemory();
 void testMessageFileText();
 void testFaxG3();
+void testSunRaster();
 
 // Image types test suite
 // ==========================================================

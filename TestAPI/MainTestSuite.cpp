@@ -126,6 +126,9 @@ int main(int argc, char *argv[]) {
 	// test where raw G3 fax pages end
 	testFaxG3();
 
+	// test Sun rasters with colormaps
+	testSunRaster();
+
 #if defined(FREEIMAGE_LIB) || !defined(WIN32)
 	FreeImage_DeInitialise();
 #endif

@@ -360,12 +360,12 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 					numcolors = header.maplength / 3;
 				}
 
-				RGBQUAD *pal = FreeImage_GetPalette(dib);
-				if (NULL == pal) {
-					throw "Invalid palette, return null";
-				}
-
 				if (numcolors > 0) {
+					RGBQUAD *pal = FreeImage_GetPalette(dib);
+					if (NULL == pal) {
+						throw "Invalid palette, return null";
+					}
+
 					r = (BYTE*)malloc(3 * numcolors * sizeof(BYTE));
 					if (NULL == r) {
 						throw FI_MSG_ERROR_MEMORY;
