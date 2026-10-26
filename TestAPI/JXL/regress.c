@@ -787,6 +787,56 @@ static void test_float_signs(void) {
     printf("float samples of both signs: done\n");
 }
 
+/* two saves of an image: 1 the same bytes, 0 different ones, -1 a save failed */
+static int compare_saves(FIBITMAP *d, int flags_a, int flags_b) {
+    FIMEMORY *a = FreeImage_OpenMemory(NULL, 0), *b = FreeImage_OpenMemory(NULL, 0);
+    BYTE *da = NULL, *db = NULL;
+    DWORD na = 0, nb = 0;
+    int result = -1;
+    if (FreeImage_SaveToMemory(FIF_JXL, d, a, flags_a) && FreeImage_SaveToMemory(FIF_JXL, d, b, flags_b) &&
+        FreeImage_AcquireMemory(a, &da, &na) && FreeImage_AcquireMemory(b, &db, &nb))
+        result = (na == nb && !memcmp(da, db, na)) ? 1 : 0;
+    FreeImage_CloseMemory(a);
+    FreeImage_CloseMemory(b);
+    return result;
+}
+
+/* libjxl's effort 10 writes lossless float images it cannot decode, as this crop of test-jxl.jxl's 13th frame in
+   linear light: lossless floats are written at effort 9, other images at 10 */
+static void test_float_effort(void) {
+    static const struct { FREE_IMAGE_TYPE type; unsigned bpp; const char *name; } T[] = {
+        {FIT_FLOAT, 32, "FLOAT"}, {FIT_RGBF, 96, "RGBF"}, {FIT_RGBAF, 128, "RGBAF"},
+    };
+    FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, "data/test-jxl.jxl", FALSE, TRUE, TRUE, JXL_PLAYBACK);
+    FIBITMAP *page = m ? FreeImage_LockPage(m, 12) : NULL, *crop = NULL, *rgb, *d, *r;
+    unsigned t;
+
+    if (page) {
+        crop = FreeImage_Copy(page, 457, 631, 457 + 256, 631 + 192);
+        FreeImage_UnlockPage(m, page, FALSE);
+    }
+    if (m) FreeImage_CloseMultiBitmap(m, 0);
+    CHECK(crop != NULL, "data/test-jxl.jxl: no 13th frame");
+    if (crop) {
+        rgb = FreeImage_ConvertTo24Bits(crop);
+        FreeImage_DestroyICCProfile(rgb);
+        d = FreeImage_ConvertToLinear(rgb, FI_LINEAR_SRGB_PRIMARIES);
+        r = roundtrip(d, JXL_LOSSLESS | (10 << 16), 0, NULL);
+        CHECK(same_pixels(d, r), "the crop as RGBF lossless at effort 10: not bit exact (%s)", g_last);
+        if (r) FreeImage_Unload(r);
+        CHECK(compare_saves(rgb, JXL_LOSSLESS | (10 << 16), JXL_LOSSLESS | (9 << 16)) == 0, "the crop as 24-bit lossless: effort 10 written as effort 9");
+        FreeImage_Unload(d);
+        FreeImage_Unload(rgb);
+        FreeImage_Unload(crop);
+    }
+    for (t = 0; t < sizeof(T) / sizeof(T[0]); t++) {
+        d = pattern(T[t].type, T[t].bpp, 40, 30, 130 + (int)t);
+        CHECK(compare_saves(d, JXL_LOSSLESS | (10 << 16), JXL_LOSSLESS | (9 << 16)) == 1, "%s lossless: effort 10 not written as effort 9", T[t].name);
+        FreeImage_Unload(d);
+    }
+    printf("float effort 10: done\n");
+}
+
 /* the profile of a and b: the same bytes, or neither has one */
 static int same_profile(FIBITMAP *a, FIBITMAP *b) {
     FIICCPROFILE *p = FreeImage_GetICCProfile(a), *q = FreeImage_GetICCProfile(b);
@@ -1141,6 +1191,7 @@ int main(void) {
     test_cmyk();
     test_pages();
     test_float_signs();
+    test_float_effort();
     test_float_linear();
 #ifdef JXL_TEST_LIBJXL
     test_float_rendered();

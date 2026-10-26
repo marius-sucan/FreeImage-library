@@ -2038,6 +2038,10 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 	if((effort < 1) || (effort > 10)) {
 		effort = 7;
 	}
+	// libjxl's effort 10 writes lossless float images it cannot decode
+	if(lossless && (writer->format.data_type == JXL_TYPE_FLOAT) && (effort > 9)) {
+		effort = 9;
+	}
 
 	writer->encoder = JxlEncoderCreate(NULL);
 	if(!writer->encoder) {
