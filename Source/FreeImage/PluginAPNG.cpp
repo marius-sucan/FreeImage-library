@@ -345,6 +345,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 	APNGFrame default_frame;
 	BOOL have_ihdr = FALSE;
 	BOOL have_actl = FALSE;
+	BOOL no_frames = FALSE;				//! acTL counts no frames: no animation
 	BOOL seen_idat = FALSE;
 	BOOL idat_is_frame = FALSE;
 	BOOL broken = FALSE;				//! animation chunks inconsistent
@@ -396,8 +397,9 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 				if(have_actl) {
 					broken = TRUE;
 				} else if(!seen_idat) {
-					// num_frames is advisory; the fcTL chunks decide
+					// the fcTL chunks decide the frames; num_frames 0 is invalid and ignored, as browsers do
 					info->num_plays = GetDWORD(payload + 4);
+					no_frames = (GetDWORD(payload) == 0) ? TRUE : FALSE;
 					have_actl = TRUE;
 				}
 			}
@@ -491,7 +493,7 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 		}
 	}
 
-	info->animated = (have_actl && !broken && (idat_is_frame || !info->frames.empty())) ? TRUE : FALSE;
+	info->animated = (have_actl && !no_frames && !broken && (idat_is_frame || !info->frames.empty())) ? TRUE : FALSE;
 
 	if(cut) {
 		FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short; the frames it holds are kept");

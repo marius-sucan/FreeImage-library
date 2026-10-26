@@ -227,7 +227,7 @@ static void build(buf_t *b, const BYTE *ihdr, const BYTE *idat, size_t idat_size
 		return;
 	}
 
-	actl(a, 3, 0);
+	actl(a, (variant == 15) ? 0 : 3, 0);	/* 15 = an acTL counting no frames */
 	chunk(b, "acTL", a, 8, (size_t)-1);
 	if (variant == 9) chunk(b, "acTL", a, 8, (size_t)-1);		/* repeated acTL */
 
@@ -348,6 +348,10 @@ static void test_invalid(void) {
 
 	build(&b, ihdr, idat, idat_size, small, small_size, 14);
 	expect("a critical chunk nobody knows", &b, WANT_REFUSED, 0); free(b.data);
+
+	/* 0 is not a valid frame count: no animation, as browsers read it */
+	build(&b, ihdr, idat, idat_size, small, small_size, 15);
+	expect("an acTL counting no frames", &b, WANT_STATIC, 0); free(b.data);
 
 	memset(&b, 0, sizeof(b));
 	put(&b, SIGNATURE, 8);
