@@ -44,6 +44,7 @@
 
 #include <jxl/cms.h>
 #include <jxl/decode.h>
+#include <jxl/decode_cxx.h>
 #include <jxl/encode.h>
 #include <jxl/resizable_parallel_runner.h>
 
@@ -500,7 +501,9 @@ ReadColorEncoding(JXLReader *reader, JxlDecoder *dec) {
 
 static BOOL
 ParseHeaders(JXLReader *reader) {
-	JxlDecoder *dec = JxlDecoderCreate(NULL);
+	// destroyed on every way out, a std::bad_alloc included
+	JxlDecoderPtr owner = JxlDecoderMake(NULL);
+	JxlDecoder *dec = owner.get();
 	if(!dec) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 		return FALSE;
@@ -513,7 +516,6 @@ ParseHeaders(JXLReader *reader) {
 	if((JxlDecoderSubscribeEvents(dec, JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING | JXL_DEC_FRAME | JXL_DEC_BOX | JXL_DEC_BOX_COMPLETE) != JXL_DEC_SUCCESS) ||
 		(JxlDecoderSetDecompressBoxes(dec, JXL_TRUE) != JXL_DEC_SUCCESS) ||
 		(JxlDecoderSetInput(dec, &reader->data[0], reader->data.size()) != JXL_DEC_SUCCESS)) {
-		JxlDecoderDestroy(dec);
 		return FALSE;
 	}
 	JxlDecoderCloseInput(dec);
@@ -635,7 +637,6 @@ ParseHeaders(JXLReader *reader) {
 		}
 	}
 
-	JxlDecoderDestroy(dec);
 	return reader->have_info;
 }
 
