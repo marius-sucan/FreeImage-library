@@ -1471,7 +1471,7 @@ static FIBITMAP *in_colors(FIBITMAP *frame, const void *profile, DWORD size) {
 	FIBITMAP *src = frame, *standard = NULL, *converted, *out = NULL;
 	if (FreeImage_GetImageType(frame) == FIT_UINT16) {
 		FIICCPROFILE *icc = FreeImage_GetICCProfile(frame);
-		standard = FreeImage_ConvertToStandardType(frame, TRUE);
+		standard = FreeImage_ConvertTo8Bits(frame);
 		if (!standard) return NULL;
 		if (icc->data) FreeImage_CreateICCProfile(standard, icc->data, (long)icc->size);
 		src = standard;
@@ -1722,6 +1722,50 @@ out:
 	remove(path);
 }
 
+/* 16-bit grey frames are written by their high byte, as they are read */
+static void test_grey16_frames(void) {
+	const char *path = scratch("apng_grey16_frames.png");
+	FIBITMAP *frames[2];
+	FIMULTIBITMAP *mb;
+	int i, page, bad = 0;
+
+	printf("\n=== 16-bit grey frames keep their high byte\n");
+
+	for (i = 0; i < 2; i++) {
+		unsigned x, y;
+		frames[i] = FreeImage_AllocateT(FIT_UINT16, 64, 4, 16, 0, 0, 0);
+		if (!frames[i]) { fail("could not build the frames"); return; }
+		for (y = 0; y < 4; y++) {
+			WORD *line = (WORD *)FreeImage_GetScanLine(frames[i], y);
+			for (x = 0; x < 64; x++) line[x] = i ? 30000 : (WORD)(1000 + 16 * x);
+		}
+	}
+	if (!write_animation(path, frames, 2)) { fail("could not write %s", path); goto out; }
+
+	mb = FreeImage_OpenMultiBitmap(FIF_APNG, path, FALSE, TRUE, FALSE, APNG_PLAYBACK);
+	for (page = 0; page < 2; page++) {
+		FIBITMAP *dib = mb ? FreeImage_LockPage(mb, page) : NULL;
+		unsigned x;
+		if (!dib) { fail("frame %d did not load", page); bad++; continue; }
+		for (x = 0; x < 64; x++) {
+			const BYTE want = (BYTE)(((const WORD *)FreeImage_GetScanLine(frames[page], 0))[x] >> 8);
+			const BYTE *p = FreeImage_GetScanLine(dib, 0) + 4 * x;
+			if (p[FI_RGBA_RED] != want || p[FI_RGBA_GREEN] != want || p[FI_RGBA_BLUE] != want || p[FI_RGBA_ALPHA] != 255) {
+				fail("frame %d at x=%u: (%u,%u,%u,%u), want grey %u", page, x, p[FI_RGBA_RED], p[FI_RGBA_GREEN], p[FI_RGBA_BLUE], p[FI_RGBA_ALPHA], want);
+				bad++;
+				break;
+			}
+		}
+		FreeImage_UnlockPage(mb, dib, FALSE);
+	}
+	if (mb) FreeImage_CloseMultiBitmap(mb, 0);
+	if (!bad) ok("a 1000-2008 gradient and a flat 30000 frame come back as 3-7 and 117, not stretched");
+
+out:
+	for (i = 0; i < 2; i++) if (frames[i]) FreeImage_Unload(frames[i]);
+	remove(path);
+}
+
 static void test_size(void) {
 	const char *path = scratch("apng_size.png");
 	const char *one = scratch("apng_size_one.png");
@@ -1837,6 +1881,7 @@ int main(void) {
 	test_refusals();
 	test_size();
 	test_gif_frames();
+	test_grey16_frames();
 
 	printf("\n%d check(s) passed, %d failure(s)\n", checks, failures);
 	FreeImage_DeInitialise();

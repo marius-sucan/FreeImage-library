@@ -1121,10 +1121,10 @@ AddFrame(APNGinfo *info, FIBITMAP *dib, int flags, BOOL is_first) {
 	const void *profile = info->out_profile.empty() ? NULL : &info->out_profile[0];
 	const DWORD profile_size = (DWORD)info->out_profile.size();
 
-	// ConvertTo32Bits() cannot take UINT16: 8-bit grey first, with the page's profile
+	// ConvertTo32Bits() cannot take UINT16: its high byte first, as the reader takes it, with the page's profile
 	FIBITMAP *standard = NULL;
 	if(FreeImage_GetImageType(dib) == FIT_UINT16) {
-		standard = FreeImage_ConvertToStandardType(dib, TRUE);
+		standard = FreeImage_ConvertTo8Bits(dib);
 		if(standard == NULL) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_UNSUPPORTED_FORMAT);
 			return FALSE;
