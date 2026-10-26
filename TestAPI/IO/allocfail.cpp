@@ -1197,6 +1197,77 @@ static int pages_case(void) {
     return ((!doc || (pages == 3)) && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
+/* --------------------------------------------------------------- JPEG XL: libjxl short of memory */
+
+/* two Adobe RGB pages of 257 x 16, lossy: a page decodes in two groups, two tasks of one parallel run, both on the calling
+   thread */
+static char s_jxl[512];
+static FIBITMAP *s_jxl_page[2];
+
+static int write_jxl_pages(const char *path, int flags) {
+    FIMULTIBITMAP *doc;
+    int i, ok = 1;
+    remove(path);
+    doc = FreeImage_OpenMultiBitmap(FIF_JXL, path, TRUE, FALSE, TRUE, 0);
+    if (!doc) return 0;
+    for (i = 0; i < 2; i++) {
+        FIBITMAP *page = pattern(FIT_BITMAP, 257, 16, 24);
+        unsigned k;
+        if (!page) {
+            ok = 0;
+            continue;
+        }
+        for (k = 0; k < FreeImage_GetPitch(page) * 16; k++) FreeImage_GetBits(page)[k] ^= (BYTE)(i * 0x55);
+        FreeImage_CreateICCProfile(page, (void *)s_adobe, (long)s_adobe_size);
+        frame_time(page);
+        ok = FreeImage_AppendPage(doc, page) && ok;
+        FreeImage_Unload(page);
+    }
+    return FreeImage_CloseMultiBitmap(doc, flags) && ok;
+}
+
+static int jxl_setup(void) {
+    const char *dir = getenv("IO_TEST_TMP");
+    FIMULTIBITMAP *doc;
+    int i, ok;
+    snprintf(s_jxl, sizeof(s_jxl), "%s/fi_io_groups.jxl", (dir && *dir) ? dir : ".");
+    ok = write_jxl_pages(s_jxl, 0);
+    doc = ok ? FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl, FALSE, TRUE, TRUE, 0) : NULL;
+    ok = doc && (FreeImage_GetPageCount(doc) == 2);
+    for (i = 0; ok && (i < 2); i++) {
+        FIBITMAP *page = FreeImage_LockPage(doc, i);
+        s_jxl_page[i] = page ? FreeImage_Clone(page) : NULL;
+        if (page) FreeImage_UnlockPage(doc, page, FALSE);
+        ok = s_jxl_page[i] != NULL;
+    }
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    return ok;
+}
+
+/* a page locked short of memory, libjxl's tasks throwing too: every page locks after it as without failures (an exception
+   out of a task left libjxl's runner counting it, and the next page waited for it: the alarm) */
+static int jxl_lock_case(void) {
+    FIMULTIBITMAP *doc = FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl, FALSE, TRUE, TRUE, 0);
+    FIBITMAP *page;
+    int i, whole = 1;
+    if (!doc) return cannot_start();
+    alarm(10);
+
+    armed = 1; fail_new = 1;
+    page = FreeImage_LockPage(doc, 0);
+    armed = 0; fail_new = 0;
+
+    if (page) FreeImage_UnlockPage(doc, page, FALSE);
+    for (i = 0; i < 2; i++) {
+        page = FreeImage_LockPage(doc, i);
+        if (!same_pixels(s_jxl_page[i], page)) whole = 0;
+        if (page) FreeImage_UnlockPage(doc, page, FALSE);
+    }
+    FreeImage_CloseMultiBitmap(doc, 0);
+    if (seen < fail_at) return NOT_REACHED;
+    return whole ? CASE_OK : CASE_BROKEN;
+}
+
 /* runs 'run' once in a child: CASE_OK, or a wrong result or a crash */
 static int in_child(int (*run)(void)) {
     int status = 0;
@@ -1431,6 +1502,13 @@ int main(void) {
             if (s_cmyka[i].fif != FIF_JXR) remove(s_cmyka[i].path);
         }
         remove(s_jxr_indexed);
+        if (!jxl_setup()) {
+            report("JPEG XL: the test file", 0);
+        } else {
+            sweep("JPEG XL page locked short of memory: every page after it", jxl_lock_case);
+        }
+        remove(s_jxl);
+        for (int i = 0; i < 2; i++) FreeImage_Unload(s_jxl_page[i]);
     }
 #endif
     printf("--- %d failure(s) ---\n", failures);

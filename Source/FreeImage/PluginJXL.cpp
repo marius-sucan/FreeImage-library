@@ -84,19 +84,111 @@ GetProcessorCount() {
 	return count;
 }
 
-// a runner sized for the image; NULL runs libjxl single-threaded
-static void *
-CreateRunner(size_t xsize, size_t ysize) {
-	void *runner = JxlResizableParallelRunnerCreate(NULL);
-	if(runner) {
-		size_t threads = (size_t)GetProcessorCount();
-		const size_t suggested = JxlResizableParallelRunnerSuggestThreads((uint64_t)xsize, (uint64_t)ysize);
-		if(suggested < threads) {
-			threads = suggested;
-		}
-		JxlResizableParallelRunnerSetThreads(runner, (threads > 0) ? threads : 1);
+// libjxl's parallel work; libjxl is not written for exceptions, so none may leave a task
+typedef struct tagJXLRunner {
+	void *pool;						// libjxl's resizable runner; NULL runs every task on the calling thread
+	std::atomic<bool> no_memory;	// a task ran out of memory
+} JXLRunner;
+
+// one parallel call of libjxl's
+typedef struct tagJXLRun {
+	void *opaque;
+	JxlParallelRunInit init;
+	JxlParallelRunFunction func;
+	std::atomic<bool> failed;
+	std::atomic<bool> no_memory;
+} JXLRun;
+
+static JxlParallelRetCode
+RunInit(void *opaque, size_t threads) {
+	JXLRun *run = (JXLRun*)opaque;
+	try {
+		return run->init(run->opaque, threads);
+	} catch(std::bad_alloc&) {
+		run->no_memory = true;
+	} catch(...) {
 	}
-	return runner;
+	run->failed = true;
+	return JXL_PARALLEL_RET_RUNNER_ERROR;
+}
+
+static void
+RunTask(void *opaque, uint32_t value, size_t thread) {
+	JXLRun *run = (JXLRun*)opaque;
+	if(run->failed) {
+		return;
+	}
+	try {
+		run->func(run->opaque, value, thread);
+	} catch(std::bad_alloc&) {
+		run->no_memory = true;
+		run->failed = true;
+	} catch(...) {
+		run->failed = true;
+	}
+}
+
+// libjxl's runner callback: a task that throws fails the call, which libjxl takes as an error
+static JxlParallelRetCode
+RunGuarded(void *runner_opaque, void *jpegxl_opaque, JxlParallelRunInit init, JxlParallelRunFunction func, uint32_t start_range, uint32_t end_range) {
+	JXLRunner *runner = (JXLRunner*)runner_opaque;
+	JXLRun run;
+	run.opaque = jpegxl_opaque;
+	run.init = init;
+	run.func = func;
+	run.failed = false;
+	run.no_memory = false;
+	JxlParallelRetCode ret = JXL_PARALLEL_RET_SUCCESS;
+	if(runner->pool) {
+		ret = JxlResizableParallelRunner(runner->pool, &run, RunInit, RunTask, start_range, end_range);
+	} else {
+		ret = RunInit(&run, 1);
+		for(uint32_t i = start_range; (ret == JXL_PARALLEL_RET_SUCCESS) && !run.failed && (i < end_range); i++) {
+			RunTask(&run, i, 0);
+		}
+	}
+	if(run.no_memory) {
+		runner->no_memory = true;
+	}
+	return run.failed ? JXL_PARALLEL_RET_RUNNER_ERROR : ret;
+}
+
+static void
+StopRunner(JXLRunner *runner) {
+	if(runner->pool) {
+		JxlResizableParallelRunnerDestroy(runner->pool);
+		runner->pool = NULL;
+	}
+}
+
+// a pool sized for the image; without one the calling thread runs every task
+static void
+StartRunner(JXLRunner *runner, size_t xsize, size_t ysize) {
+	if(runner->pool) {
+		return;
+	}
+	try {
+		runner->pool = JxlResizableParallelRunnerCreate(NULL);
+		if(runner->pool) {
+			size_t threads = (size_t)GetProcessorCount();
+			const size_t suggested = JxlResizableParallelRunnerSuggestThreads((uint64_t)xsize, (uint64_t)ysize);
+			if(suggested < threads) {
+				threads = suggested;
+			}
+			JxlResizableParallelRunnerSetThreads(runner->pool, (threads > 0) ? threads : 1);
+		}
+	} catch(...) {
+		// the threads already started are joined
+		StopRunner(runner);
+	}
+}
+
+// a task out of memory failed the libjxl call it ran in: so does the load or save
+static void
+CheckRunner(JXLRunner *runner) {
+	if(runner->no_memory.exchange(false)) {
+		throw std::bad_alloc();
+	}
 }
 
 // ----------------------------------------------------------
@@ -399,7 +491,7 @@ typedef struct tagJXLReader {
 	std::vector<uint32_t> durations;
 	// decoding state, kept for the next page
 	JxlDecoder *decoder;
-	void *runner;
+	JXLRunner runner;
 	int next_page;
 } JXLReader;
 
@@ -424,9 +516,7 @@ static void
 DestroyReader(JXLReader *reader) {
 	if(reader) {
 		CloseDecoder(reader);
-		if(reader->runner) {
-			JxlResizableParallelRunnerDestroy(reader->runner);
-		}
+		StopRunner(&reader->runner);
 		DestroyTransforms(reader);
 		delete reader;
 	}
@@ -1111,10 +1201,8 @@ PrepareDecoder(JXLReader *reader, int page) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 			return FALSE;
 		}
-		if(!reader->runner) {
-			reader->runner = CreateRunner(reader->info.xsize, reader->info.ysize);
-		}
-		if((reader->runner && (JxlDecoderSetParallelRunner(reader->decoder, JxlResizableParallelRunner, reader->runner) != JXL_DEC_SUCCESS)) ||
+		StartRunner(&reader->runner, reader->info.xsize, reader->info.ysize);
+		if((JxlDecoderSetParallelRunner(reader->decoder, RunGuarded, &reader->runner) != JXL_DEC_SUCCESS) ||
 			(JxlDecoderSubscribeEvents(reader->decoder, JXL_DEC_COLOR_ENCODING | JXL_DEC_FRAME | JXL_DEC_FRAME_PROGRESSION | JXL_DEC_FULL_IMAGE) != JXL_DEC_SUCCESS) ||
 			(JxlDecoderSetUnpremultiplyAlpha(reader->decoder, JXL_TRUE) != JXL_DEC_SUCCESS)) {
 			CloseDecoder(reader);
@@ -1177,6 +1265,7 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 	try {
 		for(;;) {
 			const JxlDecoderStatus status = JxlDecoderProcessInput(dec);
+			CheckRunner(&reader->runner);
 			if(status == JXL_DEC_COLOR_ENCODING) {
 				if(route == JXL_ROUTE_TO_SRGB) {
 					JxlColorEncoding srgb;
@@ -1220,6 +1309,7 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 					// past a whole pass the rest shows at its resolution; an image decoded whole shows only when flushed
 					if(progressed || (sink.pixels.load() == 0)) {
 						flushed = (JxlDecoderFlushImage(dec) == JXL_DEC_SUCCESS) ? TRUE : FALSE;
+						CheckRunner(&reader->runner);
 						if(!flushed && !progressed) {
 							sink.pixels.store(0);
 						}
@@ -1389,6 +1479,7 @@ LoadCMYK(JXLReader *reader, int page, BOOL header_only, BOOL keep_cmyk, BOOL kee
 			JxlDecoder *dec = reader->decoder;
 			for(;;) {
 				const JxlDecoderStatus status = JxlDecoderProcessInput(dec);
+				CheckRunner(&reader->runner);
 				if((status == JXL_DEC_COLOR_ENCODING) || (status == JXL_DEC_FRAME) || (status == JXL_DEC_FRAME_PROGRESSION)) {
 					continue;
 				}
@@ -1514,7 +1605,7 @@ typedef enum {
 typedef struct tagJXLWriter {
 	JxlEncoder *encoder;
 	JxlEncoderFrameSettings *settings;
-	void *runner;
+	JXLRunner runner;
 	// the layout of every frame
 	FREE_IMAGE_TYPE type;
 	unsigned bpp;
@@ -1554,9 +1645,7 @@ DestroyWriter(JXLWriter *writer) {
 		if(writer->encoder) {
 			JxlEncoderDestroy(writer->encoder);
 		}
-		if(writer->runner) {
-			JxlResizableParallelRunnerDestroy(writer->runner);
-		}
+		StopRunner(&writer->runner);
 		if(writer->held) {
 			FreeImage_Unload(writer->held);
 		}
@@ -1608,6 +1697,7 @@ FlushOutput(JXLWriter *writer, FreeImageIO *io, fi_handle handle) {
 			return TRUE;
 		}
 		if(status != JXL_ENC_NEED_MORE_OUTPUT) {
+			CheckRunner(&writer->runner);
 			ReportEncoderError(writer->encoder, "Cannot encode the image");
 			return FALSE;
 		}
@@ -2049,8 +2139,8 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 		return FALSE;
 	}
-	writer->runner = CreateRunner(width, height);
-	if(writer->runner && (JxlEncoderSetParallelRunner(writer->encoder, JxlResizableParallelRunner, writer->runner) != JXL_ENC_SUCCESS)) {
+	StartRunner(&writer->runner, width, height);
+	if(JxlEncoderSetParallelRunner(writer->encoder, RunGuarded, &writer->runner) != JXL_ENC_SUCCESS) {
 		return FALSE;
 	}
 
@@ -2232,6 +2322,7 @@ AddWholeFrame(JXLWriter *writer, FIBITMAP *frame, uint32_t x0, uint32_t y0, uint
 	if((JxlEncoderSetFrameHeader(writer->settings, &header) != JXL_ENC_SUCCESS) ||
 		(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &header.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
 		(JxlEncoderAddImageFrame(writer->settings, &writer->format, &writer->canvas[0], writer->canvas.size()) != JXL_ENC_SUCCESS)) {
+		CheckRunner(&writer->runner);
 		ReportEncoderError(writer->encoder, "Cannot encode a frame");
 		throw (int)0;
 	}
@@ -2346,6 +2437,7 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 					if((JxlEncoderSetFrameHeader(writer->settings, &clear) != JXL_ENC_SUCCESS) ||
 						(JxlEncoderSetExtraChannelBlendInfo(writer->settings, 0, &clear.layer_info.blend_info) != JXL_ENC_SUCCESS) ||
 						(JxlEncoderAddImageFrame(writer->settings, &writer->format, &blank[0], blank.size()) != JXL_ENC_SUCCESS)) {
+						CheckRunner(&writer->runner);
 						ReportEncoderError(writer->encoder, "Cannot encode a frame");
 						throw (int)0;
 					}
@@ -2386,6 +2478,7 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 					}
 				}
 				if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
+					CheckRunner(&writer->runner);
 					ReportEncoderError(writer->encoder, "Cannot encode a frame");
 					throw (int)0;
 				}
@@ -2399,6 +2492,7 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 			const JxlPixelFormat plane = { 1, writer->format.data_type, writer->format.endianness, 0 };
 			if((JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) ||
 				(JxlEncoderSetExtraChannelBuffer(writer->settings, &plane, &black[0], black.size(), 0) != JXL_ENC_SUCCESS)) {
+				CheckRunner(&writer->runner);
 				ReportEncoderError(writer->encoder, "Cannot encode the image");
 				throw (int)0;
 			}
@@ -2410,6 +2504,7 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 				throw (int)0;
 			}
 			if(JxlEncoderAddImageFrame(writer->settings, &writer->format, &samples[0], samples.size()) != JXL_ENC_SUCCESS) {
+				CheckRunner(&writer->runner);
 				ReportEncoderError(writer->encoder, "Cannot encode the image");
 				throw (int)0;
 			}
