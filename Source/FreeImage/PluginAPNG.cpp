@@ -409,8 +409,11 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 			if(!have_ihdr) {
 				return FALSE;
 			}
-			if((length != 26) || (io->read_proc(payload, 1, 26, handle) != 26)) {
+			if(length != 26) {
 				broken = TRUE;
+			} else if(io->read_proc(payload, 1, 26, handle) != 26) {
+				// the file ends here: the frames before are kept
+				break;
 			} else {
 				consumed = 26;
 				APNGFrame frame;
@@ -437,8 +440,10 @@ ParseStream(FreeImageIO *io, fi_handle handle, APNGinfo *info) {
 
 		} else if(memcmp(type, "fdAT", 4) == 0) {
 			BYTE sequence[4];
-			if((length < 4) || (current < 0) || (io->read_proc(sequence, 1, 4, handle) != 4)) {
+			if((length < 4) || (current < 0)) {
 				broken = TRUE;
+			} else if(io->read_proc(sequence, 1, 4, handle) != 4) {
+				break;
 			} else {
 				consumed = 4;
 				if(GetDWORD(sequence) != expected_seq) {

@@ -353,6 +353,25 @@ static void test_invalid(void) {
 	build(&b, ihdr, idat, idat_size, small, small_size, 15);
 	expect("an acTL counting no frames", &b, WANT_STATIC, 0); free(b.data);
 
+	/* the file ends inside the last frame's fcTL, or its fdAT's sequence number: the frames before it stay */
+	{
+		static const char *types[2] = { "fcTL", "fdAT" };
+		static const size_t into[2] = { 8 + 13, 8 + 2 };
+		int t;
+		for (t = 0; t < 2; t++) {
+			size_t pos = 8, last = 0;
+			build(&b, ihdr, idat, idat_size, small, small_size, 0);
+			while (pos + 8 <= b.size) {
+				const size_t len = ((size_t)b.data[pos] << 24) | ((size_t)b.data[pos + 1] << 16) | ((size_t)b.data[pos + 2] << 8) | b.data[pos + 3];
+				if (!memcmp(b.data + pos + 4, types[t], 4)) last = pos;
+				pos += 12 + len;
+			}
+			b.size = last + into[t];
+			expect(t ? "a file ending inside an fdAT's sequence number" : "a file ending inside an fcTL", &b, WANT_ANIMATED, 2);
+			free(b.data);
+		}
+	}
+
 	memset(&b, 0, sizeof(b));
 	put(&b, SIGNATURE, 8);
 	chunk(&b, "IHDR", ihdr, 13, (size_t)-1);
