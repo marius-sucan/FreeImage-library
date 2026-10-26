@@ -1722,20 +1722,10 @@ ConvertToLayout(FIBITMAP *dib, const JXLWriter *writer, FIBITMAP **converted) {
 	if(writer->cmyk) {
 		return TRUE;
 	}
-	FIBITMAP *rgb = NULL;
-	if(FreeImage_GetColorType(dib) == FIC_CMYK) {
-		// CMYK written as RGB: the colours go through the profile
-		rgb = FreeImage_ConvertCMYKToRGB(dib, NULL, 0, 0);
-		if(!rgb) {
-			return FALSE;
-		}
-		dib = rgb;
-	}
 	const FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
 	FIBITMAP *result = NULL;
 	if(writer->type == FIT_BITMAP) {
 		if((type == FIT_BITMAP) && (FreeImage_GetBPP(dib) == writer->bpp) && ((writer->bpp != 8) || (FreeImage_GetColorType(dib) == FIC_MINISBLACK))) {
-			*converted = rgb;
 			return TRUE;
 		}
 		switch(writer->bpp) {
@@ -1751,7 +1741,6 @@ ConvertToLayout(FIBITMAP *dib, const JXLWriter *writer, FIBITMAP **converted) {
 		}
 	} else {
 		if(type == writer->type) {
-			*converted = rgb;
 			return TRUE;
 		}
 		switch(writer->type) {
@@ -1765,9 +1754,6 @@ ConvertToLayout(FIBITMAP *dib, const JXLWriter *writer, FIBITMAP **converted) {
 				result = FreeImage_ConvertToType(dib, writer->type, TRUE);
 				break;
 		}
-	}
-	if(rgb) {
-		FreeImage_Unload(rgb);
 	}
 	if(!result) {
 		return FALSE;
@@ -2262,23 +2248,34 @@ AddWholeFrame(JXLWriter *writer, FIBITMAP *frame, uint32_t x0, uint32_t y0, uint
 // a frame placed on the canvas; for a still image the whole canvas
 static BOOL
 AddFrame(JXLWriter *writer, FIBITMAP *dib) {
+	// CMYK written as RGB: the colours go through the profile
+	FIBITMAP *rendered = NULL;
+	if(!writer->cmyk && (FreeImage_GetColorType(dib) == FIC_CMYK)) {
+		rendered = FreeImage_ConvertCMYKToRGB(dib, NULL, 0, 0);
+		if(!rendered) {
+			FreeImage_OutputMessageProc(s_format_id, "Cannot convert a frame to the file's pixel format");
+			return FALSE;
+		}
+	}
+	FIBITMAP *page = rendered ? rendered : dib;
+
+	// later frames are converted to the first frame's profile (to sRGB, every frame) while they still carry their own
+	FIBITMAP *recolored = NULL;
+	if(writer->animation && ((writer->frames > 0) || (writer->frame_mode == JXL_FRAMES_SRGB))) {
+		if(!ConvertToFileProfile(page, writer->has_profile ? &writer->profile[0] : NULL, writer->has_profile ? (DWORD)writer->profile.size() : 0, &recolored)) {
+			FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
+		}
+	}
+	FIBITMAP *source = recolored ? recolored : page;
+
 	FIBITMAP *converted = NULL;
-	if(!ConvertToLayout(dib, writer, &converted)) {
+	if(!ConvertToLayout(source, writer, &converted)) {
+		FreeImage_Unload(recolored);
+		FreeImage_Unload(rendered);
 		FreeImage_OutputMessageProc(s_format_id, "Cannot convert a frame to the file's pixel format");
 		return FALSE;
 	}
-	FIBITMAP *frame = converted ? converted : dib;
-
-	// later frames are converted to the first frame's profile; to sRGB, every frame
-	FIBITMAP *recolored = NULL;
-	if(writer->animation && ((writer->frames > 0) || (writer->frame_mode == JXL_FRAMES_SRGB))) {
-		if(!ConvertToFileProfile(frame, writer->has_profile ? &writer->profile[0] : NULL, writer->has_profile ? (DWORD)writer->profile.size() : 0, &recolored)) {
-			FreeImage_OutputMessageProc(s_format_id, "Warning: a frame's colors could not be converted to the file's ICC profile");
-		}
-		if(recolored) {
-			frame = recolored;
-		}
-	}
+	FIBITMAP *frame = converted ? converted : source;
 
 	BOOL ok = FALSE;
 	try {
@@ -2429,6 +2426,9 @@ AddFrame(JXLWriter *writer, FIBITMAP *dib) {
 	}
 	if(converted) {
 		FreeImage_Unload(converted);
+	}
+	if(rendered) {
+		FreeImage_Unload(rendered);
 	}
 	return ok;
 }

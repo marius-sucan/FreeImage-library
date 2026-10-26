@@ -72,6 +72,16 @@ static int has_alpha(FIBITMAP *d) {
     return t == FIT_RGBA16 || t == FIT_RGBAF || (t == FIT_BITMAP && FreeImage_GetBPP(d) == 32);
 }
 
+/* the same colour samples in any layout: a 24-bit page and its 32-bit frame, RGBF and RGBAF */
+static int same_rgb(FIBITMAP *a, FIBITMAP *b) {
+    unsigned x, y, w, h;
+    int c;
+    if (!a || !b || (w = FreeImage_GetWidth(a)) != FreeImage_GetWidth(b) || (h = FreeImage_GetHeight(a)) != FreeImage_GetHeight(b)) return 0;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) for (c = 0; c < 3; c++)
+        if (channel(a, x, y, c) != channel(b, x, y, c)) return 0;
+    return 1;
+}
+
 /* the colour under an alpha of 0 is the encoder's to choose */
 static double psnr(FIBITMAP *a, FIBITMAP *b, int channels, double range) {
     unsigned x, y, w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a);
@@ -480,6 +490,51 @@ static void test_animation_float(void) {
     printf("float animation: done\n");
 }
 
+/* identical pages the file's layout converts, with a profile or a CICP tag: every frame comes back as the first */
+static void test_animation_profiles(void) {
+    static const char *names[] = { "24-bit Display P3", "RGB16 Adobe RGB", "RGBF linear Display P3", "24-bit BT.709 curve (CICP tag)" };
+    DWORD p3_size, adobe_size;
+    const void *p3 = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_DISPLAY_P3, &p3_size);
+    const void *adobe = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_ADOBE_RGB, &adobe_size);
+    FIBITMAP *pages[4], *srgb;
+    int i, k, lossy;
+
+    pages[0] = pattern(FIT_BITMAP, 24, 64, 48, 80);
+    FreeImage_CreateICCProfile(pages[0], (void *)p3, (long)p3_size);
+    pages[1] = pattern(FIT_RGB16, 48, 64, 48, 81);
+    FreeImage_CreateICCProfile(pages[1], (void *)adobe, (long)adobe_size);
+    srgb = pattern(FIT_BITMAP, 24, 64, 48, 82);
+    set_cicp(srgb, 12, 13);
+    pages[2] = FreeImage_ConvertToLinear(srgb, 0);
+    FreeImage_Unload(srgb);
+    /* the page cache gives it libjxl's profile of its colours */
+    pages[3] = pattern(FIT_BITMAP, 24, 64, 48, 83);
+    set_cicp(pages[3], 1, 1);
+    CHECK(pages[2] && FreeImage_GetImageType(pages[2]) == FIT_RGBF && FreeImage_GetICCProfile(pages[2])->size > 0, "no linear Display P3 page");
+    for (i = 0; i < 4; i++) for (lossy = 0; lossy < 2; lossy++) {
+        FIMULTIBITMAP *m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_animp.jxl"), TRUE, FALSE, TRUE, 0);
+        FIBITMAP *first = NULL;
+        for (k = 0; k < 3; k++) FreeImage_AppendPage(m, pages[i]);
+        CHECK(FreeImage_CloseMultiBitmap(m, lossy ? 0 : JXL_LOSSLESS), "%s animation: CloseMultiBitmap: %s", names[i], g_last);
+        m = FreeImage_OpenMultiBitmap(FIF_JXL, tmppath("fi_jxl_animp.jxl"), FALSE, TRUE, TRUE, 0);
+        CHECK(m && FreeImage_GetPageCount(m) == 3, "%s animation: %d pages, not 3", names[i], m ? FreeImage_GetPageCount(m) : -1);
+        for (k = 0; m && k < 3; k++) {
+            FIBITMAP *page = FreeImage_LockPage(m, k);
+            if (k == 0) {
+                first = page ? FreeImage_Clone(page) : NULL;
+                if (!lossy) CHECK(same_rgb(pages[i], page), "lossless %s animation: page 0 is not the page", names[i]);
+            } else {
+                CHECK(same_pixels(first, page), "%s %s animation: page %d is not page 0", lossy ? "lossy" : "lossless", names[i], k);
+            }
+            if (page) FreeImage_UnlockPage(m, page, FALSE);
+        }
+        if (first) FreeImage_Unload(first);
+        if (m) FreeImage_CloseMultiBitmap(m, 0);
+    }
+    for (i = 0; i < 4; i++) FreeImage_Unload(pages[i]);
+    printf("animation profiles: done\n");
+}
+
 /* the inks of a CMYK bitmap, bytes or words 0-3 */
 static double ink(FIBITMAP *d, unsigned x, unsigned y, int c) {
     const BYTE *row = FreeImage_GetScanLine(d, FreeImage_GetHeight(d) - 1 - y);
@@ -577,7 +632,15 @@ static void test_cmyk(void) {
     r = m ? FreeImage_LockPage(m, 1) : NULL;
     p = r ? psnr(want, r, 3, 1) : 0;
     CHECK(m && FreeImage_GetPageCount(m) == 2 && r && FreeImage_GetColorType(r) != FIC_CMYK && p > 50, "CMYK animation: page 1 is not the RGB rendering (%.1f dB)", p);
-    if (r) FreeImage_UnlockPage(m, r, FALSE);
+    /* every frame rendered alike, the first too */
+    {
+        const int alike = same_rgb(want, r);
+        FIBITMAP *r0;
+        if (r) FreeImage_UnlockPage(m, r, FALSE);
+        r0 = m ? FreeImage_LockPage(m, 0) : NULL;
+        CHECK(alike && same_rgb(want, r0), "CMYK animation: the frames are not the same rendering of the profile");
+        if (r0) FreeImage_UnlockPage(m, r0, FALSE);
+    }
     if (m) FreeImage_CloseMultiBitmap(m, 0);
     FreeImage_Unload(want);
     FreeImage_Unload(d);
@@ -1074,6 +1137,7 @@ int main(void) {
     test_metadata();
     test_animation();
     test_animation_float();
+    test_animation_profiles();
     test_cmyk();
     test_pages();
     test_float_signs();
