@@ -1043,6 +1043,43 @@ SinkPixels(void *opaque, size_t x, size_t y, size_t num_pixels, const void *pixe
 	sink->pixels.fetch_add(num_pixels, std::memory_order_relaxed);
 }
 
+// TRUE when every pixel is transparent, or all are one colour
+static BOOL
+IsBlank(FIBITMAP *dib) {
+	const FREE_IMAGE_TYPE type = FreeImage_GetImageType(dib);
+	const unsigned width = FreeImage_GetWidth(dib);
+	const unsigned height = FreeImage_GetHeight(dib);
+	const unsigned bytes = FreeImage_GetBPP(dib) / 8;
+	BOOL transparent = ((type == FIT_RGBAF) || (type == FIT_RGBA16) || ((type == FIT_BITMAP) && (bytes == 4))) ? TRUE : FALSE;
+	BOOL uniform = TRUE;
+	const BYTE *first = FreeImage_GetScanLine(dib, 0);
+	for(unsigned y = 0; y < height; y++) {
+		const BYTE *pixel = FreeImage_GetScanLine(dib, y);
+		for(unsigned x = 0; x < width; x++, pixel += bytes) {
+			if(uniform && memcmp(pixel, first, bytes)) {
+				uniform = FALSE;
+			}
+			if(transparent) {
+				switch(type) {
+					case FIT_RGBAF:
+						transparent = (((const FIRGBAF*)pixel)->alpha == 0) ? TRUE : FALSE;
+						break;
+					case FIT_RGBA16:
+						transparent = (((const FIRGBA16*)pixel)->alpha == 0) ? TRUE : FALSE;
+						break;
+					default:
+						transparent = (pixel[FI_RGBA_ALPHA] == 0) ? TRUE : FALSE;
+						break;
+				}
+			}
+			if(!uniform && !transparent) {
+				return FALSE;
+			}
+		}
+	}
+	return TRUE;
+}
+
 static FIBITMAP *
 LoadHeader(const JXLReader *reader, BOOL playback) {
 	JXLOutput out;
@@ -1179,9 +1216,12 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 			if(status == JXL_DEC_NEED_MORE_INPUT) {
 				cut = TRUE;
 				if(output_set) {
-					// past a whole pass, the rest is shown at its resolution; else only whole groups
-					if(progressed && (JxlDecoderFlushImage(dec) == JXL_DEC_SUCCESS)) {
-						flushed = TRUE;
+					// past a whole pass the rest shows at its resolution; an image decoded whole shows only when flushed
+					if(progressed || (sink.pixels.load() == 0)) {
+						flushed = (JxlDecoderFlushImage(dec) == JXL_DEC_SUCCESS) ? TRUE : FALSE;
+						if(!flushed && !progressed) {
+							sink.pixels.store(0);
+						}
 					}
 					salvaged = TRUE;
 				}
@@ -1202,6 +1242,10 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 			reader->next_page = page + 1;
 		} else {
 			CloseDecoder(reader);
+			// a flush that drew one colour, or nothing visible, decoded no group
+			if(flushed && !progressed && IsBlank(dib)) {
+				sink.pixels.store(0);
+			}
 			if(!salvaged || (sink.pixels.load() == 0)) {
 				if(missing) {
 					FreeImage_OutputMessageProc(s_format_id, "Page %d does not exist", page);
@@ -1211,8 +1255,10 @@ LoadPixels(JXLReader *reader, int page, BOOL playback) {
 				FreeImage_Unload(dib);
 				return NULL;
 			}
-			if(flushed) {
+			if(flushed && progressed) {
 				FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short; what was not decoded in full is shown at a lower resolution");
+			} else if(flushed) {
+				FreeImage_OutputMessageProc(s_format_id, "Warning: the file is cut short; what could not be decoded is filled in by the decoder");
 			} else {
 				DamagedImageWarning(s_format_id);
 			}

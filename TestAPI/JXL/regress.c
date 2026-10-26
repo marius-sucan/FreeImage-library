@@ -1031,6 +1031,88 @@ static void test_offset(void) {
     printf("stream offset: done\n");
 }
 
+/* few colours in blocks: libjxl codes them with a palette and decodes the image as a whole */
+static FIBITMAP *blocks(unsigned w, unsigned h, unsigned bpp, int colours) {
+    FIBITMAP *d = FreeImage_Allocate(w, h, bpp, FI_RGBA_RED_MASK, FI_RGBA_GREEN_MASK, FI_RGBA_BLUE_MASK);
+    unsigned x, y;
+    for (y = 0; y < h; y++) {
+        BYTE *row = FreeImage_GetScanLine(d, h - 1 - y);
+        for (x = 0; x < w; x++) {
+            int k = (int)(((x / 37) * 7 + (y / 23) * 3 + ((x + y) / 11) % 2) % colours);
+            BYTE *p = row + x * (bpp / 8);
+            p[FI_RGBA_RED] = (BYTE)(40 + k * 13); p[FI_RGBA_GREEN] = (BYTE)(200 - k * 9); p[FI_RGBA_BLUE] = (BYTE)((k * 71) & 0xFF);
+            if (bpp == 32) p[FI_RGBA_ALPHA] = (BYTE)((k % 3) ? 255 : 128);
+        }
+    }
+    return d;
+}
+
+/* a 128x128 block of b, aligned from the top left as groups are, equal to a */
+static int some_block_equal(FIBITMAP *a, FIBITMAP *b) {
+    unsigned w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a), px = FreeImage_GetBPP(a) / 8, bx, by, y;
+    for (by = 0; by + 128 <= h; by += 128) for (bx = 0; bx + 128 <= w; bx += 128) {
+        for (y = by; y < by + 128; y++)
+            if (memcmp(FreeImage_GetScanLine(a, h - 1 - y) + bx * px, FreeImage_GetScanLine(b, h - 1 - y) + bx * px, 128 * px)) break;
+        if (y == by + 128) return 1;
+    }
+    return 0;
+}
+
+/* every pixel of b equal to a, or zero */
+static int equal_or_zero(FIBITMAP *a, FIBITMAP *b) {
+    unsigned w = FreeImage_GetWidth(a), h = FreeImage_GetHeight(a), px = FreeImage_GetBPP(a) / 8, x, y, k;
+    for (y = 0; y < h; y++) {
+        const BYTE *p = FreeImage_GetScanLine(a, y), *q = FreeImage_GetScanLine(b, y);
+        for (x = 0; x < w; x++, p += px, q += px) {
+            if (!memcmp(p, q, px)) continue;
+            for (k = 0; k < px; k++) if (q[k]) return 0;
+        }
+    }
+    return 1;
+}
+
+static int one_colour(FIBITMAP *d) {
+    unsigned w = FreeImage_GetWidth(d), h = FreeImage_GetHeight(d), px = FreeImage_GetBPP(d) / 8, x, y;
+    const BYTE *first = FreeImage_GetScanLine(d, 0);
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) if (memcmp(FreeImage_GetScanLine(d, y) + x * px, first, px)) return 0;
+    return 1;
+}
+
+/* lossless files cut short keep what libjxl decoded: decoded as a whole, the rest is libjxl's fill, never one colour;
+   group by group, the rest is blank */
+static void test_cut(void) {
+    static const char *name[] = { "palette RGB", "palette RGBA", "photo RGB" };
+    int c, s;
+    for (c = 0; c < 3; c++) {
+        FIBITMAP *d = (c == 0) ? blocks(768, 512, 24, 16) : (c == 1) ? blocks(768, 512, 32, 12) : pattern(FIT_BITMAP, 24, 768, 512, 3);
+        FIMEMORY *mem = FreeImage_OpenMemory(NULL, 0);
+        BYTE *data; DWORD n = 0;
+        int late = 0;
+        CHECK(FreeImage_SaveToMemory(FIF_JXL, d, mem, JXL_LOSSLESS), "%s: not saved", name[c]);
+        FreeImage_AcquireMemory(mem, &data, &n);
+        for (s = 1; n && s < 48; s++) {
+            DWORD cut = (DWORD)((double)n * s / 48);
+            FIMEMORY *view = FreeImage_OpenMemory(data, cut);
+            FIBITMAP *r = FreeImage_LoadFromMemory(FIF_JXL, view, 0);
+            FreeImage_CloseMemory(view);
+            if (!r) continue;
+            late += (s >= 43) ? 1 : 0;
+            if (FreeImage_GetWidth(r) != 768 || FreeImage_GetHeight(r) != 512 || FreeImage_GetBPP(r) != FreeImage_GetBPP(d)) {
+                CHECK(0, "%s cut to %u of %u bytes: %ux%u, %u bits", name[c], cut, n, FreeImage_GetWidth(r), FreeImage_GetHeight(r), FreeImage_GetBPP(r));
+            } else {
+                CHECK(some_block_equal(d, r) && !one_colour(r), "%s cut to %u of %u bytes: nothing decoded", name[c], cut, n);
+                if (c < 2) CHECK(strstr(g_last, "filled in by the decoder") != NULL, "%s cut to %u of %u bytes: message \"%s\"", name[c], cut, n, g_last);
+                else CHECK(equal_or_zero(d, r) && strstr(g_last, "is blank") != NULL, "%s cut to %u of %u bytes: not blank past what was decoded", name[c], cut, n);
+            }
+            FreeImage_Unload(r);
+        }
+        CHECK(late == 5, "%s: %d of the 5 cuts past 89%% load", name[c], late);
+        FreeImage_CloseMemory(mem);
+        FreeImage_Unload(d);
+    }
+    printf("cut lossless files: done\n");
+}
+
 int main(void) {
     FreeImage_Initialise(FALSE);
     FreeImage_SetOutputMessage(message);
@@ -1051,6 +1133,7 @@ int main(void) {
 #endif
     test_refusals();
     test_offset();
+    test_cut();
     printf("%s: %d failure(s)\n", g_failures ? "FAILED" : "passed", g_failures);
     return g_failures ? 1 : 0;
 }
