@@ -1203,6 +1203,8 @@ static int pages_case(void) {
    thread */
 static char s_jxl[512];
 static FIBITMAP *s_jxl_page[2];
+/* the same pages lossless: libjxl reads the ICC profile in the header pass */
+static char s_jxl_icc[512];
 
 static int write_jxl_pages(const char *path, int flags) {
     FIMULTIBITMAP *doc;
@@ -1231,7 +1233,8 @@ static int jxl_setup(void) {
     FIMULTIBITMAP *doc;
     int i, ok;
     snprintf(s_jxl, sizeof(s_jxl), "%s/fi_io_groups.jxl", (dir && *dir) ? dir : ".");
-    ok = write_jxl_pages(s_jxl, 0);
+    snprintf(s_jxl_icc, sizeof(s_jxl_icc), "%s/fi_io_icc.jxl", (dir && *dir) ? dir : ".");
+    ok = write_jxl_pages(s_jxl, 0) && write_jxl_pages(s_jxl_icc, JXL_LOSSLESS);
     doc = ok ? FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl, FALSE, TRUE, TRUE, 0) : NULL;
     ok = doc && (FreeImage_GetPageCount(doc) == 2);
     for (i = 0; ok && (i < 2); i++) {
@@ -1244,8 +1247,8 @@ static int jxl_setup(void) {
     return ok;
 }
 
-/* a page locked short of memory, libjxl's tasks throwing too: every page locks after it as without failures (an exception
-   out of a task left libjxl's runner counting it, and the next page waited for it: the alarm) */
+/* a page locked short of memory, libjxl's tasks throwing too: NULL or the page, and every page locks after it as without
+   failures (an exception out of a task left libjxl's runner counting it, and the next page waited for it: the alarm) */
 static int jxl_lock_case(void) {
     FIMULTIBITMAP *doc = FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl, FALSE, TRUE, TRUE, 0);
     FIBITMAP *page;
@@ -1257,6 +1260,7 @@ static int jxl_lock_case(void) {
     page = FreeImage_LockPage(doc, 0);
     armed = 0; fail_new = 0;
 
+    if (page && !same_pixels(s_jxl_page[0], page)) whole = 0;
     if (page) FreeImage_UnlockPage(doc, page, FALSE);
     for (i = 0; i < 2; i++) {
         page = FreeImage_LockPage(doc, i);
@@ -1266,6 +1270,28 @@ static int jxl_lock_case(void) {
     FreeImage_CloseMultiBitmap(doc, 0);
     if (seen < fail_at) return NOT_REACHED;
     return whole ? CASE_OK : CASE_BROKEN;
+}
+
+/* the lossless document opened short of memory: both pages, or no document, and nothing left allocated (an ICC profile
+   libjxl could not decode passed for a cut file: one page, and a save of the document dropped the other) */
+static int jxl_open_case(void) {
+    FIMULTIBITMAP *doc;
+    int pages = 0;
+    long before;
+    /* a first open fills what stays allocated */
+    doc = FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl_icc, FALSE, TRUE, TRUE, 0);
+    if (!doc) return cannot_start();
+    FreeImage_CloseMultiBitmap(doc, 0);
+    before = live;
+
+    armed = 1;
+    doc = FreeImage_OpenMultiBitmap(FIF_JXL, s_jxl_icc, FALSE, TRUE, TRUE, 0);
+    if (doc) pages = FreeImage_GetPageCount(doc);
+    armed = 0;
+
+    if (doc) FreeImage_CloseMultiBitmap(doc, 0);
+    if (seen < fail_at) return NOT_REACHED;
+    return ((!doc || (pages == 2)) && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
 /* runs 'run' once in a child: CASE_OK, or a wrong result or a crash */
@@ -1505,9 +1531,11 @@ int main(void) {
         if (!jxl_setup()) {
             report("JPEG XL: the test file", 0);
         } else {
-            sweep("JPEG XL page locked short of memory: every page after it", jxl_lock_case);
+            sweep("JPEG XL page locked short of memory: NULL or it, every page after", jxl_lock_case);
+            sweep("JPEG XL document opened short of memory: both pages or none, no leak", jxl_open_case);
         }
         remove(s_jxl);
+        remove(s_jxl_icc);
         for (int i = 0; i < 2; i++) FreeImage_Unload(s_jxl_page[i]);
     }
 #endif

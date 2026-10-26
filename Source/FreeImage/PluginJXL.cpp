@@ -87,7 +87,7 @@ GetProcessorCount() {
 // libjxl's parallel work; libjxl is not written for exceptions, so none may leave a task
 typedef struct tagJXLRunner {
 	void *pool;						// libjxl's resizable runner; NULL runs every task on the calling thread
-	std::atomic<bool> no_memory;	// a task ran out of memory
+	std::atomic<bool> no_memory;	// a task, or an allocation of libjxl's, ran out of memory
 } JXLRunner;
 
 // one parallel call of libjxl's
@@ -189,6 +189,30 @@ CheckRunner(JXLRunner *runner) {
 	if(runner->no_memory.exchange(false)) {
 		throw std::bad_alloc();
 	}
+}
+
+// libjxl's own allocations: one that fails is out of memory, not damage
+static void *
+AllocateForLibJXL(void *opaque, size_t size) {
+	void *block = malloc(size);
+	if(!block) {
+		((JXLRunner*)opaque)->no_memory = true;
+	}
+	return block;
+}
+
+static void
+FreeForLibJXL(void *, void *address) {
+	free(address);
+}
+
+static JxlMemoryManager
+MemoryManager(JXLRunner *runner) {
+	JxlMemoryManager manager;
+	manager.opaque = runner;
+	manager.alloc = AllocateForLibJXL;
+	manager.free = FreeForLibJXL;
+	return manager;
 }
 
 // ----------------------------------------------------------
@@ -592,7 +616,8 @@ ReadColorEncoding(JXLReader *reader, JxlDecoder *dec) {
 static BOOL
 ParseHeaders(JXLReader *reader) {
 	// destroyed on every way out, a std::bad_alloc included
-	JxlDecoderPtr owner = JxlDecoderMake(NULL);
+	const JxlMemoryManager manager = MemoryManager(&reader->runner);
+	JxlDecoderPtr owner = JxlDecoderMake(&manager);
 	JxlDecoder *dec = owner.get();
 	if(!dec) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
@@ -612,6 +637,8 @@ ParseHeaders(JXLReader *reader) {
 
 	while(!done) {
 		const JxlDecoderStatus status = JxlDecoderProcessInput(dec);
+		// out of memory, not a cut file: pages left uncounted are lost on save
+		CheckRunner(&reader->runner);
 		switch(status) {
 			case JXL_DEC_BASIC_INFO:
 				if(JxlDecoderGetBasicInfo(dec, &reader->info) == JXL_DEC_SUCCESS) {
@@ -1185,6 +1212,8 @@ LoadHeader(const JXLReader *reader, BOOL playback) {
 // a decoder positioned before 'page'
 static BOOL
 PrepareDecoder(JXLReader *reader, int page) {
+	// an earlier page's failed allocation is not this page's
+	reader->runner.no_memory = false;
 	if(reader->decoder && (page >= reader->next_page)) {
 		if(page > reader->next_page) {
 			JxlDecoderSkipFrames(reader->decoder, (size_t)(page - reader->next_page));
@@ -1196,7 +1225,8 @@ PrepareDecoder(JXLReader *reader, int page) {
 		// going back: start again from the first byte
 		JxlDecoderRewind(reader->decoder);
 	} else {
-		reader->decoder = JxlDecoderCreate(NULL);
+		const JxlMemoryManager manager = MemoryManager(&reader->runner);
+		reader->decoder = JxlDecoderCreate(&manager);
 		if(!reader->decoder) {
 			FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 			return FALSE;
@@ -2134,7 +2164,8 @@ StartEncoder(JXLWriter *writer, FIBITMAP *dib, int flags, BOOL animation, uint32
 		effort = 9;
 	}
 
-	writer->encoder = JxlEncoderCreate(NULL);
+	const JxlMemoryManager manager = MemoryManager(&writer->runner);
+	writer->encoder = JxlEncoderCreate(&manager);
 	if(!writer->encoder) {
 		FreeImage_OutputMessageProc(s_format_id, FI_MSG_ERROR_MEMORY);
 		return FALSE;
