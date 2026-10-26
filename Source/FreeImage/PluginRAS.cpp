@@ -340,16 +340,19 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 		switch(header.maptype) {
 			case RMT_EQUAL_RGB:
 			{
-				BYTE *r, *g, *b;
-
 				// Read SUN raster colormap
 
+				// the red, green and blue planes hold maplength / 3 entries each
+				const DWORD plane = header.maplength / 3;
+
 				// colormaps exist only for depths <= 8
-				int numcolors = (header.depth <= 8) ? (1 << header.depth) : 0;
-				if((DWORD)(3 * numcolors) > header.maplength) {
+				DWORD numcolors = (header.depth <= 8) ? (1 << header.depth) : 0;
+				if (numcolors > plane) {
 					// some RAS may have less colors than the full palette
-					numcolors = header.maplength / 3;
+					numcolors = plane;
 				}
+
+				DWORD rest = header.maplength;
 
 				if (numcolors > 0) {
 					RGBQUAD *pal = FreeImage_GetPalette(dib);
@@ -357,26 +360,25 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 						throw "Invalid palette, return null";
 					}
 
-					r = (BYTE*)malloc(3 * numcolors * sizeof(BYTE));
-					if (NULL == r) {
-						throw FI_MSG_ERROR_MEMORY;
+					// the first entries of each plane; what a cut file does not hold is 0
+					BYTE rgb[3][256] = { { 0 } };
+					for (int c = 0; c < 3; c++) {
+						io->read_proc(rgb[c], 1, numcolors, handle);
+						if (plane > numcolors) {
+							SkipBytes(io, handle, plane - numcolors);
+						}
 					}
-					g = r + numcolors;
-					b = g + numcolors;
+					rest -= 3 * plane;
 
-					io->read_proc(r, 3 * numcolors, 1, handle);
-
-					for (int i = 0; i < numcolors; i++) {
-						pal[i].rgbRed	= r[i];
-						pal[i].rgbGreen = g[i];
-						pal[i].rgbBlue	= b[i];
+					for (DWORD i = 0; i < numcolors; i++) {
+						pal[i].rgbRed	= rgb[0][i];
+						pal[i].rgbGreen = rgb[1][i];
+						pal[i].rgbBlue	= rgb[2][i];
 					}
-
-					free(r);
 				}
 
-				if(header.maplength > (DWORD)(3 * numcolors)) {
-					SkipBytes(io, handle, header.maplength - 3 * numcolors);
+				if (rest) {
+					SkipBytes(io, handle, rest);
 				}
 
 				break;

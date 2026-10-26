@@ -567,4 +567,26 @@ void testSunRaster() {
 	assert(pal[0].rgbRed == 0 && pal[0].rgbGreen == 7 && pal[0].rgbBlue == 14);
 	assert(pal[1].rgbRed == 255 && pal[1].rgbGreen == 255 && pal[1].rgbBlue == 255);
 	FreeImage_Unload(mono);
+
+	// the red, green and blue planes of a maptype 1 map hold maplength / 3 entries each
+	const unsigned planes[5][2] = { { 1, 10 }, { 1, 768 }, { 8, 48 }, { 8, 770 }, { 8, 771 } };
+	for (int p = 0; p < 5; p++) {
+		const unsigned depth = planes[p][0], plane = planes[p][1] / 3;
+		FIBITMAP *ref = rasLoad(rasFile(depth, 1, 0, 0), 0);
+		const std::string file = rasFile(depth, 1, 1, planes[p][1]);
+		FIBITMAP *dib = rasLoad(file, 0);
+		FIBITMAP *header = rasLoad(file, FIF_LOAD_NOPIXELS);
+		assert(ref != NULL && dib != NULL && header != NULL);
+		for (unsigned y = 0; y < 3; y++) {
+			assert(memcmp(FreeImage_GetScanLine(dib, y), FreeImage_GetScanLine(ref, y), FreeImage_GetLine(ref)) == 0);
+		}
+		const RGBQUAD *colors = FreeImage_GetPalette(dib);
+		for (unsigned i = 0; (i < (1U << depth)) && (i < plane); i++) {
+			assert(colors[i].rgbRed == (BYTE)(i * 7) && colors[i].rgbGreen == (BYTE)((plane + i) * 7) && colors[i].rgbBlue == (BYTE)((2 * plane + i) * 7));
+		}
+		assert(memcmp(FreeImage_GetPalette(header), colors, FreeImage_GetColorsUsed(dib) * sizeof(RGBQUAD)) == 0);
+		FreeImage_Unload(header);
+		FreeImage_Unload(dib);
+		FreeImage_Unload(ref);
+	}
 }
