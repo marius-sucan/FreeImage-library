@@ -562,6 +562,92 @@ static void testGIFGlobalPalette() {
 	remove(filename);
 }
 
+// a byte buffer read through FreeImageIO; a loader that keeps reading past its end fails the test
+struct CountedStream {
+	const BYTE *data;
+	INT64 size, pos;
+	long reads;
+};
+
+static unsigned DLL_CALLCONV countedRead(void *buffer, unsigned size, unsigned count, fi_handle handle) {
+	CountedStream *s = (CountedStream*)handle;
+	assert(++s->reads < 100000);
+	const INT64 bytes = (INT64)size * count;
+	const INT64 left = (s->pos < s->size) ? (s->size - s->pos) : 0;
+	const INT64 n = (bytes < left) ? bytes : left;
+	memcpy(buffer, s->data + s->pos, (size_t)n);
+	s->pos += n;
+	return size ? (unsigned)(n / size) : 0;
+}
+
+static unsigned DLL_CALLCONV countedWrite(void *buffer, unsigned size, unsigned count, fi_handle handle) {
+	return 0;
+}
+
+static int DLL_CALLCONV countedSeek(fi_handle handle, INT64 offset, int origin) {
+	CountedStream *s = (CountedStream*)handle;
+	const INT64 base = (origin == SEEK_SET) ? 0 : (origin == SEEK_CUR) ? s->pos : s->size;
+	if(base + offset < 0) {
+		return -1;
+	}
+	s->pos = base + offset;
+	return 0;
+}
+
+static INT64 DLL_CALLCONV countedTell(fi_handle handle) {
+	return ((CountedStream*)handle)->pos;
+}
+
+// a GIF cut inside a comment after its frame loads, with the comment as far as the file holds it
+static void testGIFCutComment() {
+	printf("testGIFCutComment ...\n");
+
+	// one frame, then a comment between it and the trailer
+	FIBITMAP *dib = FreeImage_Allocate(8, 6, 8);
+	assert(dib != NULL);
+	FIMEMORY *hmem = FreeImage_OpenMemory();
+	BOOL bResult = FreeImage_SaveToMemory(FIF_GIF, dib, hmem, 0);
+	assert(bResult);
+	FreeImage_Unload(dib);
+	BYTE *gif = NULL;
+	DWORD gif_size = 0;
+	FreeImage_AcquireMemory(hmem, &gif, &gif_size);
+	assert((gif_size > 1) && (gif[gif_size - 1] == 0x3B));
+	static const BYTE comment[] = { 0x21, 0xFE, 5, 'h', 'e', 'l', 'l', 'o', 0, 0x3B };
+	const DWORD start = gif_size - 1;
+	const DWORD size = start + sizeof(comment);
+	BYTE *data = (BYTE*)malloc(size);
+	assert(data != NULL);
+	memcpy(data, gif, start);
+	memcpy(data + start, comment, sizeof(comment));
+	FreeImage_CloseMemory(hmem);
+
+	FreeImageIO io;
+	io.read_proc = countedRead;
+	io.write_proc = countedWrite;
+	io.seek_proc = countedSeek;
+	io.tell_proc = countedTell;
+	for(DWORD n = start; n <= size; n++) {
+		for(int header_only = 0; header_only < 2; header_only++) {
+			CountedStream stream = { data, (INT64)n, 0, 0 };
+			FIBITMAP *page = FreeImage_LoadFromHandle(FIF_GIF, &io, (fi_handle)&stream, header_only ? FIF_LOAD_NOPIXELS : 0);
+			assert(page != NULL);
+			// the comment's bytes in the file, at most "hello"
+			const DWORD held = (n > start + 3) ? ((n - start - 3 < 5) ? n - start - 3 : 5) : 0;
+			FITAG *tag = NULL;
+			if(FreeImage_GetMetadata(FIMD_COMMENTS, page, "Comment0", &tag)) {
+				assert(strlen((const char*)FreeImage_GetTagValue(tag)) == held);
+				assert(strncmp((const char*)FreeImage_GetTagValue(tag), "hello", held) == 0);
+			} else {
+				assert(n < start + 2);
+			}
+			FreeImage_Unload(page);
+		}
+	}
+
+	free(data);
+}
+
 // --------------------------------------------------------------------------
 
 void testMultiPage(const char *lpszPathName) {
@@ -592,4 +678,7 @@ void testMultiPage(const char *lpszPathName) {
 
 	// test GIF frames that take the global color table
 	testGIFGlobalPalette();
+
+	// test GIF files cut short
+	testGIFCutComment();
 }

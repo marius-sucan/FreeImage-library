@@ -1399,11 +1399,16 @@ Load(FreeImageIO *io, fi_handle handle, int page, int flags, void *data) {
 				io->seek_proc(handle, info->comment_extension_offsets[idx], SEEK_SET);
 				std::string comment;
 				char buf[255];
-				io->read_proc(&b, 1, 1, handle);
+				if( io->read_proc(&b, 1, 1, handle) != 1 ) {
+					b = 0;
+				}
 				while( b ) {
-					io->read_proc(buf, b, 1, handle);
-					comment.append(buf, b);
-					io->read_proc(&b, 1, 1, handle);
+					//a comment the file ends in keeps what it holds
+					const unsigned got = io->read_proc(buf, 1, b, handle);
+					comment.append(buf, got);
+					if( (got < b) || (io->read_proc(&b, 1, 1, handle) != 1) ) {
+						break;
+					}
 				}
 				comment.append(1, '\0');
 				sprintf(buf, "Comment%zd", idx);
