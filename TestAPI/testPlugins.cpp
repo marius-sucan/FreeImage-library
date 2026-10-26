@@ -523,19 +523,19 @@ static FIBITMAP* rasLoad(const std::string& data, int flags) {
 	return dib;
 }
 
-// maps that give no colors are skipped: 24/32-bit maptype 1 and undefined maptypes load as maptype 0
+// maps that give no colors are skipped: 24/32-bit maptype 1, maptype 0 and undefined maptypes load as maptype 0 without a map
 void testSunRaster() {
 	printf("testSunRaster ...\n");
 
 	const unsigned depths[4] = { 1, 8, 24, 32 };
-	const unsigned maptypes[3] = { 1, 3, 0xFFFFFFFF };
+	const unsigned maptypes[4] = { 1, 0, 3, 0xFFFFFFFF };
 	const unsigned maplengths[3] = { 0, 6, 768 };
 	for (int d = 0; d < 4; d++) {
 		FIBITMAP *ref = rasLoad(rasFile(depths[d], 1, 0, 0), 0);
 		assert(ref != NULL);
 		const unsigned colors = FreeImage_GetColorsUsed(ref);
 		// a maptype 1 map colors 1- and 8-bit rasters
-		for (int t = (depths[d] < 24) ? 1 : 0; t < 3; t++) {
+		for (int t = (depths[d] < 24) ? 1 : 0; t < 4; t++) {
 			for (int m = 0; m < 3; m++) {
 				for (unsigned type = 1; type <= 2; type++) {
 					const std::string file = rasFile(depths[d], type, maptypes[t], maplengths[m]);
