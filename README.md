@@ -18,37 +18,37 @@ FreeImage is currently sporadically maintained by Hervé Drolon on SourceForge. 
 
 This branch of the repository is used to compile the FreeImage.DLL used in Quick Picto Viewer. It brings the following changes:
 
+## Bundled libraries
+
+| Formats | Library | Bundled version | Upgraded from (r1910) |
+|---|---|---|---|
+| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 | 1.6.39 (zlib 1.2.13) |
+| JPEG | [libjpeg (IJG)](http://ijg.org/) | 10 (January 2026) | 9d |
+| TIFF | [libtiff](http://www.libtiff.org/) | 4.7.2 | 4.6.0 |
+| JPEG 2000 (J2K/JP2) | [OpenJPEG](https://github.com/uclouvain/openjpeg) | 2.5.4 | 2.0.0 |
+| OpenEXR (HDR) | [OpenEXR](https://openexr.com/) + [libdeflate](https://github.com/ebiggers/libdeflate) (v1.18) | 3.3.14 | 2.2.1 |
+| WebP | [libwebp](https://developers.google.com/speed/webp) | 1.6.0 | 1.2.1 |
+| Camera RAW | [LibRaw](https://www.libraw.org/) | 0.22.2 | 0.21.1 |
+| JPEG-XR | [jxrlib](https://github.com/4creators/jxrlib) | 1.2 (FreeImage fork) | 1.2 (fork further developed) |
+| AVIF | [libavif](https://github.com/AOMediaCodec/libavif) + libdav1d (v1.5.4) | 1.4.2 | not included |
+| HEIF | [libheif](https://github.com/strukturag/libheif) + libde265 (v1.1.3) | 1.23.5 | not included |
+| JPEG XL | [libjxl](https://github.com/libjxl/libjxl) + highway (v1.2.0), brotli (v1.2.0) | 0.12.0 | not included |
+| ICC profiles | [LittleCMS](https://github.com/mm2/Little-CMS) | 2.19.1 | not included |
+
 ## Changes and fixes
 
 ### New formats and animations
 
-- added AVIF loading (FIF_AVIF=37) with the bundled libavif 1.4.2 and dav1d 1.5.4;
-- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif 1.23.5 and libde265 1.1.3, animated HEIF image sequences included;
-- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl 0.12.0, animations included; CMYK images with a CMYK profile are saved as CMYK;
-- added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG, animations included;
-  - FreeImage_GetFileType() names an animated PNG FIF_APNG; FIF_PNG still validates it and reads its static image;
+- added AVIF loading (FIF_AVIF=37) with the bundled libavif library;
+- added HEIC/HEIF loading (FIF_HEIF=38, extensions heic/heif/hif) with the bundled libheif library, with support for animated HEIF image sequences as well;
+- added JPEG XL reading and writing (FIF_JXL=40) with the bundled libjxl library, with support for animations and CMYK images as well;
+- added APNG reading and writing (FIF_APNG=39, extensions apng/png) on top of LibPNG;
   - added the APNG_LINEAR_BLEND load flag: with APNG_PLAYBACK, translucent APNG frames blend in linear light;
-- added full support for animated WebP files, reading and writing, with an example file; an animation of one frame is saved as a still image;
+- added full support for animated WebP files, reading and writing;
 - added full support for MNG animations (FIF_MNG=6), reading and writing;
-  - every frame loads as a page, not only the first, header-only too; MNG_PLAYBACK composites the frames as a viewer shows them;
+  - MNG_PLAYBACK load flag composites the frames as a viewer shows them;
   - frame delays, positions, clipping, hidden images, the background and the loop count are read from the MHDR, FRAM, DEFI, SHOW, BACK, TERM and LOOP chunks; BASI images and solid fills load;
   - frames inherit the file's global PLTE, tRNS and pHYs chunks and its gAMA, cHRM, sRGB, iCCP or cICP color space, as the spec orders; JNG files and frames keep their ICC profile;
-  - saves write PNG frames with their delays, positions, disposal, blending, loop count, background and ICC profile, and play as the animation they come from;
-
-### Color management and CMYK
-
-- added color management by bundling Little CMS 2.19.1, with several new exported functions: see [Color management API](#color-management-api);
-- added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
-- AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors;
-  - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
-  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them;
-  - narrow-range PNG and JPEG XR files load expanded to the full range;
-- the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the file's ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag) as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values;
-  - the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
-  - a color conversion that changes the pixels removes the tag;
-- fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
-- fixed CMYK pages added to or changed in multi-page files being stored as RGB;
-- fixed bugs related to CMYK support in TIFF, JPEG and PSD files;
 
 ### HDR and tone mapping
 
@@ -63,17 +63,16 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed Fattal02 making photos with small light sources too bright and grainy;
 - fixed Fattal02 letting a few bright pixels, such as stars or lamps, darken the whole picture;
 - fixed Drago03 and Reinhard05 renders jumping in brightness with the size of a small light source or a black area, thumbnails included;
-- fixed FreeImage_ConvertToLinear() clipping light above white when the ICC profile's tone curves are tables;
 - fixed Reinhard05 crushing the shadows of many HDR photos;
 
 ### Resizing and rotation
 
+- added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbor resampling, the fastest filter;
 - FreeImage_Rescale() is faster for 8-bit greyscale, 24-bit and 32-bit images and has a lower peak memory usage; its kernels use SSE2 and AVX2 instructions when available;
 - the image resizer and rotation are multi-threaded with OpenMP, which the makefiles now enable too; build with `make OPENMP=0` for a single-threaded library, see README.linux;
-- added FILTER_NEAREST (-1) to FreeImage_Rescale(): nearest-neighbor resampling, the fastest filter;
 - FreeImage_Rescale() can now resample FIT_INT16, FIT_UINT32, FIT_INT32, FIT_DOUBLE and FIT_COMPLEX images with every filter;
-- added FreeImage_RescaleRawBits();
 - fixed FreeImage_Rescale() and FreeImage_Rotate() dropping the ICC profile and returning CMYK images as RGBA;
+- added FreeImage_RescaleRawBits();
 
 ### Large images and files
 
@@ -91,9 +90,9 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ### Loading and saving
 
-- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank; a warning message, mirrored to DebugView, says what was kept;
+- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not support, instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
-- fixed file saves returning TRUE when writing failed;
+- fixed file saves returning TRUE when writing failed in some cases;
 - fixed PNG, APNG, BMP, PSD and XPM saves failing when a FreeImageIO write_proc returns the bytes it wrote instead of the items;
 - fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins, and in multi-page documents opened from a handle or memory;
 - fixed TIFF files saved to memory carrying a byte of uninitialized heap memory: a write past the end of a memory stream leaves zeros, as in a file;
@@ -128,7 +127,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed 32-bit BMPs loading fully transparent, and 16- and 32-bit BMPs with uncommon color masks loading with wrong colors or without their alpha channel;
 - fixed RLE8 BMPs failing to load, FreeImage's own BMP_SAVE_RLE saves among them, also when a run passes the row end;
 - fixed 16-, 24- and 32-bit OS/2 1.x BMPs reading their pixels from the wrong offset;
-- fixed BMPs saved with transparency showing opaque in Windows, web browsers and other programs;
+- fixed BMPs saved with transparency showing opaque in some programs;
 - fixed saved BMPs stating wrong sizes in their headers, and carrying a view's parent pixels in their row padding;
 
 ### TIFF
@@ -187,24 +186,22 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ...and many other fixes.
 
-## Bundled libraries
-
-| Formats | Library | Bundled version | Upgraded from (r1910) |
-|---|---|---|---|
-| PNG | [libpng](http://www.libpng.org/pub/png/libpng.html) + zlib (v1.3.2) | 1.6.58 | 1.6.39 (zlib 1.2.13) |
-| JPEG | [libjpeg (IJG)](http://ijg.org/) | 10 (January 2026) | 9d |
-| TIFF | [libtiff](http://www.libtiff.org/) | 4.7.2 | 4.6.0 |
-| JPEG 2000 (J2K/JP2) | [OpenJPEG](https://github.com/uclouvain/openjpeg) | 2.5.4 | 2.0.0 |
-| OpenEXR (HDR) | [OpenEXR](https://openexr.com/) + [libdeflate](https://github.com/ebiggers/libdeflate) (v1.18) | 3.3.14 | 2.2.1 |
-| WebP | [libwebp](https://developers.google.com/speed/webp) | 1.6.0 | 1.2.1 |
-| Camera RAW | [LibRaw](https://www.libraw.org/) | 0.22.2 | 0.21.1 |
-| JPEG-XR | [jxrlib](https://github.com/4creators/jxrlib) | 1.2 (FreeImage fork) | 1.2 |
-| AVIF | [libavif](https://github.com/AOMediaCodec/libavif) + libdav1d (v1.5.4) | 1.4.2 | not included |
-| HEIF | [libheif](https://github.com/strukturag/libheif) + libde265 (v1.1.3) | 1.23.5 | not included |
-| JPEG XL | [libjxl](https://github.com/libjxl/libjxl) + highway (v1.2.0), brotli (v1.2.0) | 0.12.0 | not included |
-| ICC profiles | [LittleCMS](https://github.com/mm2/Little-CMS) | 2.19.1 | not included |
-
 ## Color management API
+
+### Image display and CMYK
+
+- added color management by bundling Little CMS, with several new exported functions;
+- added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
+- AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors;
+  - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
+  - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them;
+  - narrow-range PNG and JPEG XR files load expanded to the full range;
+- the PNG, APNG, AVIF, HEIF, JPEG XL and JPEG XR loaders attach the file's ITU-T H.273 code points (color primaries, transfer characteristics, matrix coefficients, full range flag) as the FIMD_CUSTOM tag "CICP" of 4 FIDT_BYTE values;
+  - the RAW loader describes its 16-bit output the same way: sRGB primaries, linear transfer;
+  - a color conversion that changes the pixels removes the tag;
+- fixed the shadows of 8-bit grey images in color conversions, FIF_LOAD_DISPLAY_ICC included;
+- fixed CMYK pages added to or changed in multi-page files being stored as RGB;
+- fixed bugs related to CMYK support in TIFF, JPEG and PSD files;
 
 ### Functions
 
