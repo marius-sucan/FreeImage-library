@@ -1203,6 +1203,7 @@ FreeImage_DestroyICCProfile(hImage) {
 
 FreeImage_ConvertToICCProfile(hImage, pProfile:=0, profileSize:=0, flags:=0) {
 ; returns a new image in the color model of the profile (RGB, grey or CMYK), tagged with it
+; an image with alpha converted to a grey profile stays RGBA, red, green and blue its grey
 ; flags - one rendering intent, and the options combined with |:
 ; FICMS_INTENT_PERCEPTUAL = 0x00; perceptual rendering intent, the default
 ; FICMS_INTENT_RELATIVE_COLORIMETRIC = 0x01; media-relative colorimetric rendering intent

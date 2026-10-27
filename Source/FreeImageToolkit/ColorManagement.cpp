@@ -232,8 +232,9 @@ OutputLayout(const Pixels &px, Model model) {
 			if (px.depth == 16) return px.alpha ? LAYOUT_RGBA16 : LAYOUT_RGB16;
 			return px.alpha ? LAYOUT_RGBAF : LAYOUT_RGBF;
 		case MODEL_GRAY:
-			// a transparent palette keeps its transparency table
-			if (px.depth == 8) return ((px.layout == LAYOUT_INDEXED) && px.alpha) ? LAYOUT_INDEXED : LAYOUT_GRAY8;
+			// no grey type has alpha: RGBA stays RGBA, red, green and blue the grey; a palette keeps its transparency table
+			if (px.alpha) return px.layout;
+			if (px.depth == 8) return LAYOUT_GRAY8;
 			if (px.depth == 16) return LAYOUT_GRAY16;
 			return LAYOUT_GRAYF;
 		case MODEL_CMYK:
@@ -253,12 +254,13 @@ InPlaceLayout(const Pixels &px, Model model) {
 			if (model == MODEL_GRAY) return LAYOUT_GRAY8;
 			return (model == MODEL_RGB) ? LAYOUT_INDEXED : LAYOUT_NONE;
 		case LAYOUT_RGB8:
-		case LAYOUT_RGBA8:
 		case LAYOUT_RGB16:
-		case LAYOUT_RGBA16:
 		case LAYOUT_RGBF:
-		case LAYOUT_RGBAF:
 			return (model == MODEL_RGB) ? px.layout : LAYOUT_NONE;
+		case LAYOUT_RGBA8:
+		case LAYOUT_RGBA16:
+		case LAYOUT_RGBAF:
+			return ((model == MODEL_RGB) || (model == MODEL_GRAY)) ? px.layout : LAYOUT_NONE;
 		case LAYOUT_GRAY16:
 		case LAYOUT_GRAYF:
 			return (model == MODEL_GRAY) ? px.layout : LAYOUT_NONE;
@@ -383,6 +385,18 @@ PackOpaque16(const WORD *rgb, WORD *rgba, unsigned width) {
 		rgba[2] = rgb[2];
 		rgba[3] = 0xFFFF;
 		rgb += 3;
+		rgba += 4;
+	}
+}
+
+// the stage's grey as red, green and blue; the alpha, last in every RGBA layout, from src (rgba itself in place)
+template <class T> static void
+PackGreyAlpha(const T *grey, const T *src, T *rgba, unsigned width) {
+	for (unsigned x = 0; x < width; x++) {
+		const T alpha = src[3];
+		rgba[0] = rgba[1] = rgba[2] = grey[x];
+		rgba[3] = alpha;
+		src += 4;
 		rgba += 4;
 	}
 }
@@ -1282,6 +1296,8 @@ RunRows(FIBITMAP *target, Layout out, bool in_place) {
 	const bool d8 = (m_px.depth == 8);
 	// CMYK to RGBA in place: through a row buffer, alpha set opaque
 	const bool opaque = in_place && (out != m_px.layout);
+	// RGBA to grey: through a row buffer, alpha kept
+	const bool grey_alpha = (m_destination.model == MODEL_GRAY) && m_px.alpha;
 
 	if (m_device_in) {
 		m_in_format = d8 ? ICC_TYPE_RGB_8 : TYPE_RGB_16;
@@ -1298,10 +1314,12 @@ RunRows(FIBITMAP *target, Layout out, bool in_place) {
 		}
 	} else if (opaque) {
 		m_out_format = d8 ? ICC_TYPE_RGB_8 : TYPE_RGB_16;
+	} else if (grey_alpha) {
+		m_out_format = d8 ? TYPE_GRAY_8 : (m_px.depth == 16) ? TYPE_GRAY_16 : TYPE_GRAY_FLT;
 	} else {
 		m_out_format = LayoutFormat(out, (out == m_px.layout) && m_px.reversed);
 	}
-	const bool same_buffer = in_place && !opaque && !m_device_in;
+	const bool same_buffer = in_place && !opaque && !grey_alpha && !m_device_in;
 	if (!CreateTransform(same_buffer)) {
 		return false;
 	}
@@ -1317,7 +1335,7 @@ RunRows(FIBITMAP *target, Layout out, bool in_place) {
 	const bool expand = m_device_in || (m_px.layout == LAYOUT_555) || (m_px.layout == LAYOUT_565);
 	const size_t size_a = expand ? width * PixelBytes(m_in_format) : 0;
 	const size_t size_b = (m_device_out && m_transform) ? width * PixelBytes(m_out_format) : 0;
-	const size_t size_c = opaque ? width * PixelBytes(m_out_format) : 0;
+	const size_t size_c = (opaque || grey_alpha) ? width * PixelBytes(m_out_format) : 0;
 
 	const bool threaded = (m_height > 1) && ((UINT64)m_width * (UINT64)m_height >= ICC_PARALLEL_PIXELS);
 	bool failed = false;
@@ -1341,6 +1359,16 @@ RunRows(FIBITMAP *target, Layout out, bool in_place) {
 						PackOpaque8(buffers.c, dst, (unsigned)width);
 					} else {
 						PackOpaque16((const WORD*)buffers.c, (WORD*)dst, (unsigned)width);
+					}
+				} else if (grey_alpha) {
+					const BYTE *src = in_place ? dst : FreeImage_GetScanLine(m_dib, y);
+					Row(src, buffers.c, buffers.a, buffers.b);
+					if (d8) {
+						PackGreyAlpha<BYTE>(buffers.c, src, dst, (unsigned)width);
+					} else if (m_px.depth == 16) {
+						PackGreyAlpha<WORD>((const WORD*)buffers.c, (const WORD*)src, (WORD*)dst, (unsigned)width);
+					} else {
+						PackGreyAlpha<float>((const float*)buffers.c, (const float*)src, (float*)dst, (unsigned)width);
 					}
 				} else {
 					Row(in_place ? dst : FreeImage_GetScanLine(m_dib, y), dst, buffers.a, buffers.b);

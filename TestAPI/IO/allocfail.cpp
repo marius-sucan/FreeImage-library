@@ -1495,6 +1495,81 @@ static int lost_tag_case(void) {
     return (ok && (live == before)) ? CASE_OK : CASE_BROKEN;
 }
 
+/* src's layout, red, green and blue equal, src's alpha */
+static int grey_rgba_ok(FIBITMAP *dib, FIBITMAP *src) {
+    unsigned x, y, w = FreeImage_GetWidth(src);
+    FREE_IMAGE_TYPE t = FreeImage_GetImageType(src);
+    if (!dib || FreeImage_GetImageType(dib) != t || FreeImage_GetBPP(dib) != FreeImage_GetBPP(src)) return 0;
+    for (y = 0; y < FreeImage_GetHeight(src); y++) {
+        const BYTE *d = FreeImage_GetScanLine(dib, y), *s = FreeImage_GetScanLine(src, y);
+        for (x = 0; x < w; x++) {
+            if (t == FIT_BITMAP) {
+                const BYTE *p = d + 4 * x, *q = s + 4 * x;
+                if (p[0] != p[1] || p[0] != p[2] || p[FI_RGBA_ALPHA] != q[FI_RGBA_ALPHA]) return 0;
+            } else if (t == FIT_RGBA16) {
+                const FIRGBA16 *p = (const FIRGBA16 *)d + x, *q = (const FIRGBA16 *)s + x;
+                if (p->red != p->green || p->red != p->blue || p->alpha != q->alpha) return 0;
+            } else {
+                const FIRGBAF *p = (const FIRGBAF *)d + x, *q = (const FIRGBAF *)s + x;
+                if (p->red != p->green || p->red != p->blue || p->alpha != q->alpha) return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* RGBA and RGBA16 in Adobe RGB, untagged RGBAF */
+static FIBITMAP *grey_alpha_source(int i) {
+    FIBITMAP *dib;
+    unsigned x, y;
+    if (i == 0) return tagged(FIT_BITMAP, 32, s_adobe, s_adobe_size);
+    if (i == 1) return tagged(FIT_RGBA16, 64, s_adobe, s_adobe_size);
+    dib = FreeImage_AllocateT(FIT_RGBAF, 40, 24, 128, 0, 0, 0);
+    for (y = 0; dib && y < 24; y++) {
+        float *f = (float *)FreeImage_GetScanLine(dib, y);
+        for (x = 0; x < 40 * 4; x++) f[x] = (float)((x * 7 + y * 13) % 97) / 80.0f;
+    }
+    return dib;
+}
+
+/* RGBA, RGBA16 and RGBAF to a grey profile, copied and in place: RGBA with the profile, NULL, or FALSE and the image as it
+   was; nothing left allocated. Not compared with each other: out of memory, an embedded profile is ignored as invalid */
+static int icc_grey_alpha_case(void) {
+    DWORD gsize = 0;
+    const void *grey = FreeImage_GetBuiltInICCProfile(FICMS_PROFILE_GRAY, &gsize);
+    long before = 0;
+    int whole = 1, pass, i;
+    /* the first pass, without failures, fills what stays allocated */
+    for (pass = 0; pass < 2; pass++) {
+        FIBITMAP *src[3], *copy[3], *res[3];
+        BOOL applied[3];
+        if (pass) before = live;
+        for (i = 0; i < 3; i++) {
+            src[i] = grey_alpha_source(i);
+            copy[i] = src[i] ? FreeImage_Clone(src[i]) : NULL;
+            if (!src[i] || !copy[i]) return CASE_BROKEN;
+        }
+        armed = pass; fail_new = pass;
+        for (i = 0; i < 3; i++) {
+            res[i] = FreeImage_ConvertToICCProfile(src[i], grey, gsize, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+            applied[i] = FreeImage_ApplyICCProfile(copy[i], grey, gsize, FICMS_INTENT_RELATIVE_COLORIMETRIC);
+        }
+        armed = 0; fail_new = 0;
+        for (i = 0; i < 3; i++) {
+            const FIICCPROFILE *was = FreeImage_GetICCProfile(src[i]);
+            if (res[i]) whole = whole && converted_ok(res[i], grey, gsize) && grey_rgba_ok(res[i], src[i]);
+            else whole = whole && pass;
+            if (applied[i]) whole = whole && has_profile(copy[i], grey, gsize) && grey_rgba_ok(copy[i], src[i]);
+            else whole = whole && pass && same_pixels(src[i], copy[i]) && (was->data ? has_profile(copy[i], was->data, (DWORD)was->size) : !FreeImage_GetICCProfile(copy[i])->data);
+            FreeImage_Unload(res[i]);
+            FreeImage_Unload(copy[i]);
+            FreeImage_Unload(src[i]);
+        }
+    }
+    if (seen < fail_at) return NOT_REACHED;
+    return (whole && (live == before)) ? CASE_OK : CASE_BROKEN;
+}
+
 #endif /* !_WIN32 */
 
 int main(void) {
@@ -1541,6 +1616,7 @@ int main(void) {
         report("color management: the test profiles", 0);
     } else {
         sweep("ICC conversions, 8-bit, 16-bit, in place: NULL or tagged", icc_convert_case);
+        sweep("ICC RGBA, RGBA16, RGBAF to grey, in place too: RGBA or as before, no leak", icc_grey_alpha_case);
         sweep("ICC CMYK and back, black point compensation: NULL or tagged", icc_cmyk_case);
         sweep("ICC soft proof with a gamut check: NULL or tagged", icc_proof_case);
         if (s_lut) sweep("ICC LUT profile, Lab connection space: NULL or sRGB", icc_lut_case);

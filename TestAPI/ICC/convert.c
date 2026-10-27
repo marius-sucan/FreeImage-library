@@ -274,7 +274,13 @@ static Out output_layout(int kind, int dst_model) {
         else if (k->depth == 16) { o.type = k->alpha ? FIT_RGBA16 : FIT_RGB16; o.bpp = k->alpha ? 64 : 48; }
         else { o.type = k->alpha ? FIT_RGBAF : FIT_RGBF; o.bpp = k->alpha ? 128 : 96; }
     } else if (dst_model == M_GRAY) {
-        if (k->depth == 8) {
+        if (k->alpha && !k->family) {
+            /* no grey type has alpha: RGBA stays RGBA, red, green and blue the grey */
+            o.alpha = 1;
+            if (k->depth == 8) { o.type = FIT_BITMAP; o.bpp = 32; }
+            else if (k->depth == 16) { o.type = FIT_RGBA16; o.bpp = 64; }
+            else { o.type = FIT_RGBAF; o.bpp = 128; }
+        } else if (k->depth == 8) {
             o.type = FIT_BITMAP;
             if (k->family == 1 && k->alpha) { o.palette = 1; o.alpha = 1; }
             else o.bpp = 8;
@@ -454,12 +460,23 @@ static int same_pix(const Pix *a, const Pix *b, int model) {
     return a->a < 0 || a->a == b->a;
 }
 
+/* a grey result held as RGBA */
+static int grey_rgba(FIBITMAP *dib, int model) {
+    FREE_IMAGE_TYPE t = FreeImage_GetImageType(dib);
+    return model == M_GRAY && ((t == FIT_BITMAP && FreeImage_GetBPP(dib) == 32) || t == FIT_RGBA16 || t == FIT_RGBAF);
+}
+
 /* every pixel of a result against the reference; the first mismatch is reported */
 static int check_pixels(const char *what, FIBITMAP *src, int kind, FIBITMAP *res, const Reference *r, int read_model, int opaque) {
     int w = FreeImage_GetWidth(src), h = FreeImage_GetHeight(src), x, y;
+    const int rgba = grey_rgba(res, r->out.model);
     for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
         Pix exp = reference_pixel(r, read_pixel(src, x, y, r->src.model == M_CMYK ? M_CMYK : read_model));
         Pix got = read_result(res, x, y, r->out.model);
+        if (rgba && (got.v[1] != got.v[0] || got.v[2] != got.v[0])) {
+            fail("%s: grey pixel %d,%d is (%g %g %g)", what, x, y, got.v[0], got.v[1], got.v[2]);
+            return 0;
+        }
         if (opaque) {
             if (got.a != (KINDS[kind].depth == 8 ? 255 : 65535)) { fail("%s: alpha %g at %d,%d, not opaque", what, got.a, x, y); return 0; }
             got.a = -1;
@@ -488,6 +505,8 @@ static int apply_allowed(int kind, int dst_model) {
     if (k->family == 2) return dst_model != M_CMYK;
     if (k->family == 3) return 0;
     if (k->model == M_CMYK) return dst_model != M_GRAY;
+    /* RGBA converted to grey stays RGBA */
+    if (k->alpha && dst_model == M_GRAY) return 1;
     return dst_model == k->model;
 }
 
@@ -846,8 +865,8 @@ static void special_cases(const Bytes *adobe, const Bytes *press) {
 static double srgb_to_light(double v) { return (v <= 0.04045) ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4); }
 static double light_to_srgb(double l) { return (l <= 0.0031308) ? 12.92 * l : 1.055 * pow(l, 1 / 2.4) - 0.055; }
 
-/* every 8-bit grey value, as a grey ramp, a grey palette and RGB greys, through curve-only conversions: within one
-   step of the curves next to black too, where Little CMS's 33-point tables were up to 31 steps off */
+/* every 8-bit grey value, as a grey ramp, a grey palette and RGB greys (with an alpha too), through curve-only conversions:
+   within one step of the curves next to black too, where Little CMS's 33-point tables were up to 31 steps off */
 static void grey_precision(void) {
     const Bytes srgb = builtin(FICMS_PROFILE_SRGB), lsrgb = builtin(FICMS_PROFILE_LINEAR_SRGB);
     const Bytes grey = builtin(FICMS_PROFILE_GRAY), lgrey = builtin(FICMS_PROFILE_LINEAR_GRAY);
@@ -862,13 +881,14 @@ static void grey_precision(void) {
         { "grey palette, linear grey -> gamma 3.0", 1, &lgrey, &g30, 1.0, 3.0 },
         { "RGB palette of greys, linear sRGB -> grey", 2, &lsrgb, &grey, 1.0, 0 },
         { "24-bit greys, linear sRGB -> gamma 3.0", 3, &lsrgb, &g30, 1.0, 3.0 },
-        { "24-bit greys, linear sRGB -> grey", 3, &lsrgb, &grey, 1.0, 0 }
+        { "24-bit greys, linear sRGB -> grey", 3, &lsrgb, &grey, 1.0, 0 },
+        { "32-bit greys with alpha, linear sRGB -> gamma 3.0", 4, &lsrgb, &g30, 1.0, 3.0 }
     };
     unsigned i, v;
     for (i = 0; i < sizeof(C) / sizeof(C[0]); i++) {
-        const int rgb = (C[i].as == 3);
-        FIBITMAP *img = FreeImage_Allocate(256, 1, rgb ? 24 : 8, 0, 0, 0), *res;
-        int worst = 0, at = 0;
+        const int rgb = (C[i].as >= 3), alpha = (C[i].as == 4);
+        FIBITMAP *img = FreeImage_Allocate(256, 1, alpha ? 32 : rgb ? 24 : 8, 0, 0, 0), *res;
+        int worst = 0, at = 0, not_kept = 0;
         if (!rgb) {
             RGBQUAD *pal = FreeImage_GetPalette(img);
             for (v = 0; v < 256; v++) {
@@ -879,7 +899,11 @@ static void grey_precision(void) {
             }
             if (C[i].as == 2) pal[0].rgbRed = 1;
         } else {
-            for (v = 0; v < 256; v++) memset(FreeImage_GetScanLine(img, 0) + 3 * v, (int)v, 3);
+            for (v = 0; v < 256; v++) {
+                BYTE *p = FreeImage_GetScanLine(img, 0) + (alpha ? 4 : 3) * v;
+                memset(p, (int)v, 3);
+                if (alpha) p[FI_RGBA_ALPHA] = (BYTE)(255 - v);
+            }
         }
         FreeImage_CreateICCProfile(img, C[i].src->data, C[i].src->size);
         res = FreeImage_ConvertToICCProfile(img, C[i].dst->data, C[i].dst->size, FICMS_INTENT_RELATIVE_COLORIMETRIC);
@@ -896,8 +920,13 @@ static void grey_precision(void) {
             if (bpp == 8) got = FreeImage_GetPalette(res) ? FreeImage_GetPalette(res)[line[v]].rgbGreen : line[v];
             else got = line[(bpp / 8) * v + FI_RGBA_GREEN];
             if (abs(got - want) > worst) { worst = abs(got - want); at = (int)e; }
+            if (alpha) {
+                const BYTE *p = (bpp == 32) ? line + 4 * v : NULL;
+                not_kept += !p || p[FI_RGBA_RED] != p[FI_RGBA_GREEN] || p[FI_RGBA_BLUE] != p[FI_RGBA_GREEN] || p[FI_RGBA_ALPHA] != 255 - v;
+            }
         }
         CHECK(worst <= 1, "%s: %d steps off at %d", C[i].name, worst, at);
+        CHECK(!not_kept, "%s: %d pixels not grey or without their alpha", C[i].name, not_kept);
         FreeImage_Unload(res);
         FreeImage_Unload(img);
     }

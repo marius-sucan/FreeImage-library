@@ -227,7 +227,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - the conversion starts from the image's embedded profile when its colour space matches the pixels, else from the default of the image's type;
 - a CMYK image without a profile is taken as the device CMYK of FreeImage's loaders;
 - FreeImage_ConvertToCMYK() without a profile returns an image that is already CMYK as a copy, its profile kept;
-- results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none;
+- results keep the precision of the source (8-bit, 16-bit or float) and its alpha channel, except in CMYK, which has none; an image with an alpha channel converted to a grey profile stays RGBA, red, green and blue its grey;
 - palettes and 16-bit 555/565 images become 24- or 32-bit, or 8-bit grey;
 - FreeImage_ApplyICCProfile() keeps the pixel format: a palette changes its colours, and a CMYK image becomes RGBA with an opaque alpha; it returns FALSE for conversions that change the pixel size;
 
@@ -246,5 +246,6 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 ## Bugs or limitations identified
 
 - AVIF, HEIF, PNG and JPEG XR files without an ICC profile whose code points say PQ, HLG, SMPTE 428 or a logarithmic curve get no profile: color management takes them as sRGB; the code points are in the CICP tag;
+- color management takes RGBA images with a grey profile as sRGB, such as grey PNGs with an alpha channel and RGBA images converted to a grey profile;
 - saving WebP files is extremely slow at 16000 x 16000 px;
 - images over 5000 mgpx saved as JXR might be malformed; only FreeImage opens them correctly; Windows Photo opens them [on Win10], but without an alpha channel; Affinity Photo 2.0 and paint.net v5.0 crash on open;
