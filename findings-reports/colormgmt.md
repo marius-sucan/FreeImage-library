@@ -188,6 +188,25 @@ Workspace: /home/marius/.claude/jobs/d912fdd7/tmp/agents/colormgmt (src/ test so
 - Confidence: high
 - Fix sketch: for sources with alpha, write the grey into an RGBA result (R=G=B, alpha copied) or refuse with a
   message; at least document it.
+- **Fixed** in ff4ddfd, by the sketch's first way: the result keeps the source's layout (32-bit RGBA, RGBA16 or
+  RGBAF), red, green and blue the grey, the alpha the source's, as FreeImage's PNG, PSD and TIFF loaders store grey
+  with alpha.
+  - Little CMS writes the grey into a row buffer, which red, green and blue then take. FreeImage_ApplyICCProfile, which
+    refused the conversion for changing the pixel format, now does it in place.
+  - The greys are those of the old grey results, byte for byte: 8-bit, 16-bit and float, to sRGB-curve, gamma 1.8 and
+    linear grey, on 1 and 8 threads.
+  - TestAPI/ICC convert expects the RGBA layout, red, green and blue equal and the alpha kept, in place too, and an RGBA
+    ramp within a step of the tone curves: 352 failures on the old library, none now. Four planted mutants (alpha
+    dropped, red only, in place refused, the grey written over the row) each fail it. TestAPI/IO allocfail fails each of
+    the 701 allocations of those conversions in turn: the RGBA result, NULL, or FALSE and the image as it was, and
+    nothing left allocated.
+  - Left, and listed in the README: the result carries the grey profile, as every explicit destination does, and
+    FreeImage's own conversions take an RGBA image with a grey profile as sRGB, as they take a grey+alpha PNG's
+    (differential.md D2, open). Writers treat it as they treat that PNG's: PNG, JP2 and BMP leave the profile out with a
+    warning, JXL without one, TIFF, PSD, JXR and still WebP write it into an RGB file.
+  - Seen on the way, not changed, on every conversion path at HEAD: an embedded profile Little CMS cannot open for want
+    of memory is reported as invalid ("ICC: the embedded profile is invalid and is ignored") and the conversion runs
+    from the type's default, returning a result tagged with the destination.
 
 ### CM-5 Header-only loads with FIF_LOAD_DISPLAY_ICC describe another image than the full load with the same flags
 - Class: new-bug (FIF_LOAD_NOPIXELS disagrees with the full load)
