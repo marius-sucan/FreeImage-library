@@ -88,9 +88,9 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed JNG saves of 4 GB or more writing no image data yet returning TRUE, and JNG alpha layers of 4 GB or more being dropped on load;
 - fixed multi-page bitmaps refusing a page of more than 2 GiB once encoded;
 
-### Loading and saving
+### Loading and saving files
 
-- a cut or damaged APNG, PNG, BMP, CUT, DDS, EXR, GIF, HDR, ICO, IFF, J2K, JP2, JPEG, JNG, JXR, Koala, MNG, PCD, PCX, PFM, PNM, PSD, RAS, SGI, TGA, TIFF, WBMP, WebP, XBM or XPM file loads the rows, blocks or frames decoded before the damage, the rest remains blank;
+- FreeImage now attempts to preserve what was decoded from cut or damaged image files: rows, blocks or frames decoded before the damaged file section;
 - the TGA, XPM, PNG, ICO, J2K, JP2, BMP, PSD and TIFF writers return FALSE for image types and bit depths they do not support, instead of writing garbage; a FIT_INT16 image must now be converted before it is saved as PNG;
 - fixed file saves returning TRUE when writing failed in some cases;
 - fixed PNG, APNG, BMP, PSD and XPM saves failing when a FreeImageIO write_proc returns the bytes it wrote instead of the items;
@@ -184,11 +184,11 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;
 - fixed Makefile.mingw not building with MinGW-w64 on Windows;
 
-...and many other fixes.
+... and many other fixes.
 
 ## Color management API
 
-### Image display and CMYK
+### Image loading and CMYK
 
 - added color management by bundling Little CMS, with several new exported functions;
 - added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
