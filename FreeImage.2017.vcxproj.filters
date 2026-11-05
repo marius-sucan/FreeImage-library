@@ -314,6 +314,9 @@
     <ClCompile Include="Source\FreeImage\LFPQuantizer.cpp">
       <Filter>Source Files\Quantizers</Filter>
     </ClCompile>
+    <ClCompile Include="Source\FreeImage\MedianCutQuantizer.cpp">
+      <Filter>Source Files\Quantizers</Filter>
+    </ClCompile>
     <ClCompile Include="Source\FreeImage\ConversionRGBAF.cpp">
       <Filter>Source Files\Conversion</Filter>
     </ClCompile>

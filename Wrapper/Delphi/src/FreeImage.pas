@@ -340,6 +340,7 @@ const
   FIQ_WUQUANT = FREE_IMAGE_QUANTIZE(0); // Xiaolin Wu color quantization algorithm
   FIQ_NNQUANT = FREE_IMAGE_QUANTIZE(1); // NeuQuant neural-net quantization algorithm by Anthony Dekker
   FIQ_LFPQUANT = FREE_IMAGE_QUANTIZE(2); // Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+  FIQ_MCQUANT = FREE_IMAGE_QUANTIZE(3); // Median cut quantization with Floyd-Steinberg dithering
 
   // Dithering algorithms. Constants used FreeImage_Dither.
   FID_FS            = FREE_IMAGE_DITHER(0); // Floyd & Steinberg error diffusion

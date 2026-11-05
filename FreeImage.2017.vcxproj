@@ -312,6 +312,7 @@ copy Source\FreeImage.h Dist\x64
     <ClCompile Include="Source\FreeImage\FreeImageIO.cpp" />
     <ClCompile Include="Source\FreeImage\GetType.cpp" />
     <ClCompile Include="Source\FreeImage\LFPQuantizer.cpp" />
+    <ClCompile Include="Source\FreeImage\MedianCutQuantizer.cpp" />
     <ClCompile Include="Source\FreeImage\MemoryIO.cpp" />
     <ClCompile Include="Source\FreeImage\PixelAccess.cpp" />
     <ClCompile Include="Source\FreeImage\J2KHelper.cpp" />

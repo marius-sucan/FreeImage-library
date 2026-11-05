@@ -673,6 +673,7 @@ Public Enum FREE_IMAGE_QUANTIZE
    FIQ_WUQUANT = 0           ' Xiaolin Wu color quantization algorithm
    FIQ_NNQUANT = 1           ' NeuQuant neural-net quantization algorithm by Anthony Dekker
    FIQ_LFPQUANT = 2          ' Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+   FIQ_MCQUANT = 3           ' Median cut quantization with Floyd-Steinberg dithering
 End Enum
 
 ' Dithering algorithm constants
@@ -12207,6 +12208,8 @@ Const FIC_CMYK = 1
 Const FREE_IMAGE_QUANTIZE = 1
 Const FIQ_WUQUANT = 1
 Const FIQ_NNQUANT = 1
+Const FIQ_LFPQUANT = 1
+Const FIQ_MCQUANT = 1
 
 ' Enum FREE_IMAGE_DITHER
 Const FREE_IMAGE_DITHER = 1

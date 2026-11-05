@@ -179,6 +179,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 ### Miscellaneous
 
+- added FIQ_MCQUANT (3) to FreeImage_ColorQuantize(): median cut quantization with Floyd-Steinberg dithering;
 - FreeImage_FillBackground(), FreeImage_AllocateEx() and FreeImage_EnlargeCanvas() accept the option FI_COLOR_SET_ALPHA (0x08): nothing is blended and a 32-bit image gets the color's alpha;
 - FreeImage_OutputMessageProc() mirrors every message to the debugger output (Sysinternals DebugView, the Visual Studio output window) as "qpv: fim: [FORMAT] message";
 - almost all of the FreeImage files are now UTF-8 encoded, no longer Latin-1 or CP1252;

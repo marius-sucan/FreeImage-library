@@ -356,4 +356,24 @@ protected:
 
 };
 
+/**
+ * MCQUANT - Median cut quantization with Floyd-Steinberg dithering
+ */
+class MedianCutQuantizer {
+public:
+	/** Constructor */
+	MedianCutQuantizer(int PaletteSize);
+
+	/**
+	 * Quantizer
+	 * @param dib input 24-bit or 32-bit bitmap to be quantized; alpha is ignored
+	 * @return returns the dithered 8-bit bitmap, or NULL when memory runs out
+	 */
+	FIBITMAP* Quantize(FIBITMAP *dib, int ReserveSize, RGBQUAD *ReservePalette);
+
+protected:
+	/** The number of palette entries to fill. */
+	int m_size;
+};
+
 #endif // FREEIMAGE_QUANTIZER_H

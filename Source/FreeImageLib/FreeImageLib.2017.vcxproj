@@ -248,6 +248,7 @@ copy ..\FreeImage.h ..\..\Dist\x64
     <ClCompile Include="..\FreeImage\FreeImageIO.cpp" />
     <ClCompile Include="..\FreeImage\GetType.cpp" />
     <ClCompile Include="..\FreeImage\LFPQuantizer.cpp" />
+    <ClCompile Include="..\FreeImage\MedianCutQuantizer.cpp" />
     <ClCompile Include="..\FreeImage\MemoryIO.cpp" />
     <ClCompile Include="..\FreeImage\PixelAccess.cpp" />
     <ClCompile Include="..\FreeImage\NNQuantizer.cpp" />

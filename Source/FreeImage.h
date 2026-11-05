@@ -461,7 +461,8 @@ Constants used in FreeImage_ColorQuantize.
 FI_ENUM(FREE_IMAGE_QUANTIZE) {
     FIQ_WUQUANT = 0,		//! Xiaolin Wu color quantization algorithm
     FIQ_NNQUANT = 1,		//! NeuQuant neural-net quantization algorithm by Anthony Dekker
-	FIQ_LFPQUANT = 2		//! Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+	FIQ_LFPQUANT = 2,		//! Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+	FIQ_MCQUANT = 3		//! Median cut quantization with Floyd-Steinberg dithering
 };
 
 /** Dithering algorithms.

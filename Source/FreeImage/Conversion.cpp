@@ -455,6 +455,15 @@ FreeImage_ColorQuantizeEx(FIBITMAP *dib, FREE_IMAGE_QUANTIZE quantize, int Palet
 					}
 					return dst;
 				}
+				case FIQ_MCQUANT :
+				{
+					MedianCutQuantizer Q(PaletteSize);
+					FIBITMAP *dst = Q.Quantize(dib, ReserveSize, ReservePalette);
+					if(dst) {
+						FreeImage_CloneMetadata(dst, dib);
+					}
+					return dst;
+				}
 			}
 		}
 	}

@@ -3451,7 +3451,15 @@ namespace FreeImageAPI
 		/// <summary>
 		/// NeuQuant neural-net quantization algorithm by Anthony Dekker
 		/// </summary>
-		FIQ_NNQUANT = 1
+		FIQ_NNQUANT = 1,
+		/// <summary>
+		/// Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
+		/// </summary>
+		FIQ_LFPQUANT = 2,
+		/// <summary>
+		/// Median cut quantization with Floyd-Steinberg dithering
+		/// </summary>
+		FIQ_MCQUANT = 3
 	}
 }
 
