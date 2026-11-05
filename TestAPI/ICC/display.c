@@ -1,5 +1,4 @@
-/* FIF_LOAD_DISPLAY_ICC: every loader returns the image converted to the display's profile */
-/* ./display -x11 tests the X11 detection against xcbstub.c (make x11) */
+/* FIF_LOAD_DISPLAY_ICC: every loader returns the image converted to the display's profile, sRGB unless one is set */
 #include "common.h"
 #include "../../Source/LibLCMS2/include/lcms2_plugin.h"
 #include "../../Source/LibTIFF4/tiffio.h"
@@ -8,9 +7,6 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <unistd.h>
-#ifndef _WIN32
-#include <dlfcn.h>
-#endif
 
 #define FLAGS_0x101 (FICMS_INTENT_RELATIVE_COLORIMETRIC | FICMS_BLACKPOINT_COMPENSATION)
 #define W 160
@@ -1148,10 +1144,13 @@ static void setter_getter(void) {
     junk.size = 1000; junk.data = (BYTE *)malloc(junk.size);
     for (i = 0; i < junk.size; i++) junk.data[i] = (BYTE)rnd();
 
-    /* no display to ask: sRGB */
-    CHECK(FreeImage_SetDisplayICCProfile(NULL, 0, FLAGS_0x101), "back to detection");
+    /* sRGB until a profile is set, and after NULL */
     now = current_display();
-    CHECK(same_bytes(&now, srgb.data, srgb.size), "without a display the profile is sRGB");
+    CHECK(same_bytes(&now, srgb.data, srgb.size), "the default profile is not sRGB");
+    free(now.data);
+    CHECK(FreeImage_SetDisplayICCProfile(NULL, 0, FLAGS_0x101), "back to sRGB");
+    now = current_display();
+    CHECK(same_bytes(&now, srgb.data, srgb.size), "NULL did not give sRGB");
     free(now.data);
 
     CHECK(FreeImage_SetDisplayICCProfile(adobe.data, adobe.size, FLAGS_0x101), "Adobe RGB accepted");
@@ -1326,105 +1325,9 @@ static void threads(void) {
     printf("threads                %d loads on 8 threads, 60 display changes\n", loads);
 }
 
-/* ------------------------------------------------------------------ X11, through xcbstub */
-#ifndef _WIN32
-
-static int *stub_connects;
-
-static void stub(const char *mode, const char *file, const char *file1, const char *screen) {
-    setenv("XCB_STUB_MODE", mode, 1);
-    if (file) setenv("XCB_STUB_FILE", file, 1); else unsetenv("XCB_STUB_FILE");
-    if (file1) setenv("XCB_STUB_FILE1", file1, 1); else unsetenv("XCB_STUB_FILE1");
-    setenv("XCB_STUB_SCREEN", screen ? screen : "0", 1);
-}
-
-/* detection starts again, and gives this profile */
-static void detects(const char *what, const Bytes *want) {
-    Bytes now;
-    FreeImage_SetDisplayICCProfile(NULL, 0, FLAGS_0x101);
-    now = current_display();
-    CHECK(same_bytes(&now, want->data, want->size), "X11, %s: a %u-byte profile instead of %u bytes", what, now.size, want->size);
-    free(now.data);
-}
-
-static int x11(void) {
-    Bytes srgb = builtin(FICMS_PROFILE_SRGB), adobe = builtin(FICMS_PROFILE_ADOBE_RGB), p3 = builtin(FICMS_PROFILE_DISPLAY_P3);
-    Bytes t5 = read_file("data/test5.icc"), now;
-    const char *fa = scratch("dsp_x_adobe.icc"), *fp = scratch("dsp_x_p3.icc"), *fc = scratch("dsp_x_press.icc"), *fj = scratch("dsp_x_junk.icc");
-    void *xcb = dlopen("libxcb.so.1", RTLD_LAZY | RTLD_LOCAL);
-    BYTE junk[700];
-    int before, i;
-
-    stub_connects = xcb ? (int *)dlsym(xcb, "xcb_stub_connects") : NULL;
-    if (!stub_connects) {
-        printf("  libxcb.so.1 is not the stub: run through make x11\n");
-        return 1;
-    }
-    for (i = 0; i < 700; i++) junk[i] = (BYTE)rnd();
-    write_file(fa, adobe.data, adobe.size); write_file(fp, p3.data, p3.size);
-    write_file(fc, press.data, press.size); write_file(fj, junk, sizeof(junk));
-
-    setenv("DISPLAY", ":0", 1);
-    stub("ok", fa, NULL, NULL);          detects("Adobe RGB", &adobe);
-    stub("ok", fc, NULL, NULL);          detects("a CMYK profile", &srgb);
-    stub("ok", fj, NULL, NULL);          detects("junk", &srgb);
-    stub("ok", NULL, NULL, NULL);        detects("no property", &srgb);
-    stub("format32", fa, NULL, NULL);    detects("32-bit items", &srgb);
-    stub("partial", fa, NULL, NULL);     detects("a property bigger than read", &srgb);
-    stub("noatom", fa, NULL, NULL);      detects("no _ICC_PROFILE atom", &srgb);
-    stub("error", fa, NULL, NULL);       detects("no connection", &srgb);
-    stub("ok", fa, fp, "1");             detects("screen 1", &p3);
-    if (t5.size) {
-        const char *f5 = scratch("dsp_x_t5.icc");
-        write_file(f5, t5.data, t5.size);
-        stub("ok", f5, NULL, NULL);      detects("an sRGB twin", &srgb);
-        remove(f5);
-    }
-
-    /* asked again after a second, not before */
-    stub("ok", fa, NULL, NULL);          detects("Adobe RGB again", &adobe);
-    before = *stub_connects;
-    stub("ok", fp, NULL, NULL);
-    now = current_display();
-    CHECK(same_bytes(&now, adobe.data, adobe.size) && *stub_connects == before, "X11: asked again within a second");
-    free(now.data);
-    usleep(1100000);
-    now = current_display();
-    CHECK(same_bytes(&now, p3.data, p3.size) && *stub_connects == before + 1, "X11: the new profile after a second");
-    free(now.data);
-
-    /* the loads take it */
-    {
-        const Fixture *f = find("RGB JPEG + thumbnail");
-        FIBITMAP *dib = f ? FreeImage_Load(f->fif, f->path, FIF_LOAD_DISPLAY_ICC) : NULL;
-        CHECK(dib && FreeImage_GetICCProfile(dib)->size == p3.size && !memcmp(FreeImage_GetICCProfile(dib)->data, p3.data, p3.size), "X11: a load in the display's colors");
-        if (dib) FreeImage_Unload(dib);
-    }
-
-    /* a pinned profile is not asked for */
-    FreeImage_SetDisplayICCProfile(adobe.data, adobe.size, FLAGS_0x101);
-    before = *stub_connects;
-    usleep(1100000);
-    now = current_display();
-    CHECK(same_bytes(&now, adobe.data, adobe.size) && *stub_connects == before, "X11: a pinned profile was replaced");
-    free(now.data);
-
-    /* no DISPLAY: libxcb is not called */
-    unsetenv("DISPLAY");
-    before = *stub_connects;
-    detects("no DISPLAY", &srgb);
-    CHECK(*stub_connects == before, "X11: connected without DISPLAY");
-
-    remove(fa); remove(fp); remove(fc); remove(fj);
-    free(t5.data);
-    printf("%d checks, %d failures\n", checks, failures);
-    return failures ? 1 : 0;
-}
-#endif
-
 /* ------------------------------------------------------------------ */
 
-int main(int argc, char **argv) {
+int main(void) {
     Bytes srgb = builtin(FICMS_PROFILE_SRGB), adobe = builtin(FICMS_PROFILE_ADOBE_RGB), p3 = builtin(FICMS_PROFILE_DISPLAY_P3);
     Bytes t3 = read_file("data/test3.icc");
     Display d;
@@ -1438,13 +1341,6 @@ int main(int argc, char **argv) {
     grey18 = make_gray_profile(1.8);
     unlinkable = make_unlinkable_rgb();
     make_fixtures();
-
-#ifndef _WIN32
-    if (argc > 1 && !strcmp(argv[1], "-x11")) return x11();
-
-    /* the tests must not see this machine's display */
-    unsetenv("DISPLAY");
-#endif
 
     setter_getter();
 
@@ -1467,17 +1363,16 @@ int main(int argc, char **argv) {
             free_display(&d);
         }
     }
-    /* detection, with nothing to detect, is sRGB */
-    FreeImage_SetDisplayICCProfile(NULL, 0, FLAGS_0x101);
+    /* NULL after another profile: sRGB */
     {
-        Display auto_d;
-        if (use_display(&auto_d, "sRGB, detected", NULL, 0, FLAGS_0x101)) {
-            CHECK(same_bytes(&auto_d.rgb, srgb.data, srgb.size), "detected: not sRGB");
-            twins_untouched(&auto_d);
-            check_display(&auto_d);
-            apply_later(&auto_d);
-            pq_untouched(&auto_d);
-            free_display(&auto_d);
+        Display none;
+        if (use_display(&none, "sRGB, by default", NULL, 0, FLAGS_0x101)) {
+            CHECK(same_bytes(&none.rgb, srgb.data, srgb.size), "by default: not sRGB");
+            twins_untouched(&none);
+            check_display(&none);
+            apply_later(&none);
+            pq_untouched(&none);
+            free_display(&none);
         }
     }
     header_only();

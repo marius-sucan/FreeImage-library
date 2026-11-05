@@ -191,7 +191,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 ### Image loading and CMYK
 
 - added color management by bundling Little CMS, with several new exported functions;
-- added the FIF_LOAD_DISPLAY_ICC load flag: images load in the screen's colors, CMYK images included;
+- added the FIF_LOAD_DISPLAY_ICC load flag: images load in sRGB, or in the colors of a display profile the application sets, CMYK images included;
 - AVIF, HEIF, PNG and JPEG XR files that state their colors with code points (nclx, cICP, PTM_COLOR_INFO) instead of an ICC profile load with a profile of those colors;
   - 8-bit JPEG XR YCC 4:4:4 files load as RGB through PTM_COLOR_INFO's matrix;
   - a PNG's cICP chunk outranks its iCCP chunk, as PNG 3 orders them;
@@ -211,7 +211,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - FreeImage_SoftProof() shows how a printer would reproduce an image;
 - FreeImage_GetBuiltInICCProfile() gives sRGB, linear sRGB, grey, linear grey, Adobe RGB (1998) compatible, Display P3 and ProPhoto RGB profiles;
 - FreeImage_GetICCProfileDescription() and FreeImage_GetICCProfileColorSpace() read profile details;
-- FreeImage_SetDisplayICCProfile() sets the profile and rendering intent to use when an image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
+- FreeImage_SetDisplayICCProfile() sets the profile, sRGB by default, and the rendering intent to use when an image is loaded with the FIF_LOAD_DISPLAY_ICC flag; use FreeImage_GetDisplayICCProfile() to retrieve it;
 - FreeImage_ApplyDisplayICCProfile() does what FIF_LOAD_DISPLAY_ICC does, to an image loaded without it;
 
 ### Flags
@@ -232,13 +232,14 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 
 - load the image with FIF_LOAD_DISPLAY_ICC, or load CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files with JPEG_CMYK, TIFF_CMYK, PSD_CMYK, JXL_CMYK or JXR_CMYK, then call FreeImage_ApplyICCProfile() with the monitor's profile, or with NULL for sRGB;
 - this must be done before FreeImage_ConvertTo*() and any call that changes the bit depth, which drop the profile;
-- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to the screen's ICC profile (the primary monitor's on Windows, the X11 screen's on Linux), or to sRGB when there is none or Windows' HDR or Auto Color Management is on;
+- the FIF_LOAD_DISPLAY_ICC flag converts every loaded image to sRGB, or to the profile given to FreeImage_SetDisplayICCProfile(); the monitor's profile is not looked up;
   - CMYK JPEG, TIFF, PSD, JPEG XL and JPEG XR files come back as 24- or 48-bit RGB, or 32- or 64-bit RGBA with their alpha channel;
   - grey images stay grey;
   - float images are not changed, and neither are PQ images (a CICP tag, or an ICC profile's cicp tag, saying PQ), which keep their light for the tone mappers and the CICP tag FreeImage_MustTonemap() reads;
-  - a profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: on an sRGB screen those images are not converted;
+  - a profile that is sRGB, or grey with the sRGB curve, in all but name counts as sRGB: converted to sRGB, those images keep their pixels;
   - the image then carries the profile it was converted to;
   - the flag is ignored with FIF_LOAD_NOPIXELS;
+- an image converted to a monitor's profile is saved with that profile: convert a copy for the screen, and save the sRGB image;
 
 ## Bugs or limitations identified
 

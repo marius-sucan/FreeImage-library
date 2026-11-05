@@ -20,7 +20,7 @@ INSTALLDIR ?= $(DESTDIR)/usr/lib
 # Converts cr/lf to just lf
 DOS2UNIX = dos2unix
 
-LIBRARIES = -lstdc++ -lpthread -lm -ldl
+LIBRARIES = -lstdc++ -lpthread -lm
 
 MODULES = $(SRCS:.c=.o)
 MODULES := $(MODULES:.cpp=.o)
