@@ -1043,6 +1043,8 @@ AttachMetadata(FIBITMAP *dib, const JXLReader *reader) {
 			FreeImage_DeleteTag(tag);
 		}
 	}
+	// libjxl applies the codestream's orientation, which outranks the Exif one
+	ResetExifOrientation(dib);
 }
 
 static LONG

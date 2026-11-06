@@ -299,6 +299,9 @@ AttachMetadata(FIBITMAP *dib, const avifImage *image) {
 			FreeImage_DeleteTag(tag);
 		}
 	}
+
+	// the pixels follow clap, irot and imir, which outrank the Exif orientation
+	ResetExifOrientation(dib);
 }
 
 static LONG

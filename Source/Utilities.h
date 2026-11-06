@@ -463,6 +463,12 @@ Rotate a dib according to Exif info
 void RotateExif(FIBITMAP **dib);
 
 /**
+Set the orientation of an upright dib to 1 in its Exif tags, its raw Exif block and its XMP packet
+@see See definition in Exif.cpp
+*/
+void ResetExifOrientation(FIBITMAP *dib);
+
+/**
 FIF_LOAD_DISPLAY_ICC: the flags the plugin gets
 @see See definition in ColorManagement.cpp
 */

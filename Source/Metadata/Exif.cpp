@@ -1056,6 +1056,98 @@ ReplaceWithRotated(FIBITMAP **dib, FIBITMAP *rotated) {
 	*dib = rotated;
 }
 
+static void
+WriteUint(BOOL msb_order, BYTE *buffer, DWORD value, unsigned size) {
+	for(unsigned i = 0; i < size; i++) {
+		buffer[msb_order ? (size - 1 - i) : i] = (BYTE)(value >> (8 * i));
+	}
+}
+
+static bool
+IsXMPSpace(char c) {
+	return (c == ' ') || (c == '\t') || (c == '\r') || (c == '\n');
+}
+
+/**
+Set the orientation of an upright dib to 1, "top, left side", in its Exif tags, its raw Exif block and its XMP packet,
+which the JPEG, WebP and JPEG XL writers copy
+@param dib Upright dib
+*/
+void
+ResetExifOrientation(FIBITMAP *dib) {
+	FITAG *tag = NULL;
+
+	// the decoded tag, read as RotateExif reads it
+	if(FreeImage_GetMetadata(FIMD_EXIF_MAIN, dib, "Orientation", &tag) && tag && FreeImage_GetTagValue(tag) && (FreeImage_GetTagLength(tag) >= sizeof(WORD))) {
+		const BYTE *value = (const BYTE*)FreeImage_GetTagValue(tag);
+		std::vector<BYTE> upright(value, value + FreeImage_GetTagLength(tag));
+		const WORD one = 1;
+		memcpy(&upright[0], &one, sizeof(one));
+		FreeImage_SetTagValue(tag, &upright[0]);
+	}
+
+	// the raw block: "Exif\0\0", a TIFF header, then IFD0's 12-byte entries
+	tag = NULL;
+	if(FreeImage_GetMetadata(FIMD_EXIF_RAW, dib, g_TagLib_ExifRawFieldName, &tag) && tag && FreeImage_GetTagValue(tag) && (FreeImage_GetTagLength(tag) >= 6 + 8)) {
+		const BYTE *value = (const BYTE*)FreeImage_GetTagValue(tag);
+		std::vector<BYTE> raw(value, value + FreeImage_GetTagLength(tag));
+		BYTE *tiff = &raw[6];
+		const size_t size = raw.size() - 6;
+		const BOOL msb_order = (tiff[0] == 'M') ? TRUE : FALSE;
+		if((memcmp(&raw[0], "Exif\0\0", 6) == 0) && (tiff[0] == tiff[1]) && ((tiff[0] == 'I') || (tiff[0] == 'M')) && (ReadUint16(msb_order, tiff + 2) == 42)) {
+			const size_t ifd = ReadUint32(msb_order, tiff + 4);
+			const WORD count = (ifd + 2 <= size) ? ReadUint16(msb_order, tiff + ifd) : 0;
+			for(size_t k = 0; (k < count) && (ifd + 2 + 12 * (k + 1) <= size); k++) {
+				BYTE *entry = tiff + ifd + 2 + 12 * k;
+				if(ReadUint16(msb_order, entry) != TAG_ORIENTATION) {
+					continue;
+				}
+				// one SHORT or LONG, held in the value field
+				const WORD type = ReadUint16(msb_order, entry + 2);
+				if(((type == FIDT_SHORT) || (type == FIDT_LONG)) && (ReadUint32(msb_order, entry + 4) == 1)) {
+					WriteUint(msb_order, entry + 8, 1, (type == FIDT_SHORT) ? 2 : 4);
+					FreeImage_SetTagValue(tag, &raw[0]);
+				}
+				break;
+			}
+		}
+	}
+
+	// the XMP packet: tiff:Orientation="6" or <tiff:Orientation>6</tiff:Orientation>
+	tag = NULL;
+	if(FreeImage_GetMetadata(FIMD_XMP, dib, g_TagLib_XMPFieldName, &tag) && tag && FreeImage_GetTagValue(tag) && (FreeImage_GetTagType(tag) == FIDT_ASCII)) {
+		std::string xmp((const char*)FreeImage_GetTagValue(tag), FreeImage_GetTagLength(tag));
+		static const char name[] = "tiff:Orientation";
+		bool changed = false;
+		for(size_t at = xmp.find(name); at != std::string::npos; at = xmp.find(name, at + 1)) {
+			size_t v = at + sizeof(name) - 1;
+			while((v < xmp.size()) && IsXMPSpace(xmp[v])) {
+				v++;
+			}
+			if((v < xmp.size()) && (xmp[v] == '=')) {
+				do {
+					v++;
+				} while((v < xmp.size()) && IsXMPSpace(xmp[v]));
+				if((v >= xmp.size()) || ((xmp[v] != '"') && (xmp[v] != '\''))) {
+					continue;
+				}
+			} else if((v >= xmp.size()) || (xmp[v] != '>')) {
+				continue;
+			}
+			do {
+				v++;
+			} while((v < xmp.size()) && IsXMPSpace(xmp[v]));
+			if((v + 1 < xmp.size()) && (xmp[v] >= '2') && (xmp[v] <= '8') && !isdigit((unsigned char)xmp[v + 1])) {
+				xmp[v] = '1';
+				changed = true;
+			}
+		}
+		if(changed) {
+			FreeImage_SetTagValue(tag, xmp.data());
+		}
+	}
+}
+
 /**
 Rotate a dib according to Exif info
 @param dib Input / Output dib to rotate
@@ -1070,6 +1162,7 @@ RotateExif(FIBITMAP **dib) {
 		FreeImage_GetMetadata(FIMD_EXIF_MAIN, *dib, "Orientation", &tag);
 		if((tag != NULL) && (FreeImage_GetTagID(tag) == TAG_ORIENTATION) && FreeImage_GetTagValue(tag) && (FreeImage_GetTagLength(tag) >= sizeof(WORD))) {
 			const WORD orientation = *((WORD *)FreeImage_GetTagValue(tag));
+			const bool turns = (orientation >= 2) && (orientation <= 8);
 			if(!FreeImage_HasPixels(*dib)) {
 				// a header takes the size of the rotated pixels
 				if((orientation >= 5) && (orientation <= 8)) {
@@ -1077,6 +1170,9 @@ RotateExif(FIBITMAP **dib) {
 					const LONG width = bih->biWidth;
 					bih->biWidth = bih->biHeight;
 					bih->biHeight = width;
+				}
+				if(turns) {
+					ResetExifOrientation(*dib);
 				}
 				return;
 			}
@@ -1108,6 +1204,9 @@ RotateExif(FIBITMAP **dib) {
 					break;
 				default:
 					break;
+			}
+			if(turns && *dib) {
+				ResetExifOrientation(*dib);
 			}
 		}
 	}

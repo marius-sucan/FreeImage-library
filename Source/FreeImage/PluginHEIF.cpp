@@ -702,6 +702,8 @@ AttachMetadata(FIBITMAP *dib, const heif_image_handle *handle) {
 	AttachCICP(dib, handle);
 	AttachExif(dib, handle);
 	AttachXMP(dib, handle);
+	// libheif applies clap, irot and imir, which outrank the Exif orientation
+	ResetExifOrientation(dib);
 }
 
 static BOOL

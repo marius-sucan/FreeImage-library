@@ -97,6 +97,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed loading from a stream that does not start at byte zero in the RAW, SGI, TGA, PICT, TIFF, EXR, JXR, MNG, JNG and GIF plugins, and in multi-page documents opened from a handle or memory;
 - fixed TIFF files saved to memory carrying a byte of uninitialized heap memory: a write past the end of a memory stream leaves zeros, as in a file;
 - fixed FreeImage_SaveMultiBitmapToMemory() writing into, and crashing on, a memory stream that wraps the caller's buffer; it returns FALSE, as FreeImage_SaveToMemory() does;
+- fixed images loaded upright keeping the Exif or XMP orientation that turns them: JPEG, WebP and JPEG XL saves copied it, and other programs turned the image a second time; JPEG files loaded with JPEG_EXIFROTATE, camera RAW files and every AVIF, HEIF and JPEG XL file now load with orientation 1;
 
 ### Multi-page files
 
