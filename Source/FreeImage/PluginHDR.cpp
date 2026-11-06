@@ -172,9 +172,10 @@ rgbe_FloatToRGBE(BYTE rgbe[4], FIRGBF *rgbf) {
 	else {
 		int e;
 		v = (float)(frexp(v, &e) * 256.0 / v);
-		rgbe[0] = (BYTE) (rgbf->red * v);
-		rgbe[1] = (BYTE) (rgbf->green * v);
-		rgbe[2] = (BYTE) (rgbf->blue * v);
+		// RGBE holds no negative samples: 0, as Radiance's setcolr() writes them
+		rgbe[0] = (rgbf->red > 0) ? (BYTE) (rgbf->red * v) : 0;
+		rgbe[1] = (rgbf->green > 0) ? (BYTE) (rgbf->green * v) : 0;
+		rgbe[2] = (rgbf->blue > 0) ? (BYTE) (rgbf->blue * v) : 0;
 		rgbe[3] = (BYTE) (e + 128);
 	}
 }

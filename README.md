@@ -176,6 +176,7 @@ This branch of the repository is used to compile the FreeImage.DLL used in Quick
 - fixed DXT-compressed DDS images whose width or height is not a multiple of 4 loading cropped and garbled, or not at all;
 - fixed raw PBM, PGM and PPM files being read and written one sample per callback; reading and writing them is now much faster;
 - fixed PFM images being saved and loaded upside down; PFM files saved by older FreeImage versions now load flipped;
+- fixed Radiance HDR saves writing negative samples, such as colors outside the sRGB gamut, as bright noise: they are saved as 0, as Radiance does;
 - fixed the G3 plugin hanging on a damaged fax file;
 
 ### Miscellaneous
