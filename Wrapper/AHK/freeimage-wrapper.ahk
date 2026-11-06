@@ -17,7 +17,8 @@
 ;   FreeImage_GetICCProfileDescription(), FreeImage_GetICCProfileColorSpace() and FreeImage_GetICCProfileData()
 ;
 ; - added the FIF_LOAD_DISPLAY_ICC load flag, FreeImage_SetDisplayICCProfile() and FreeImage_GetDisplayICCProfile():
-;   images loaded in sRGB, or in the colors of a display profile the script sets
+;   images loaded in sRGB, or in the colors of a display profile set via FreeImage_SetDisplayICCProfile()
+;
 ; - added FreeImage_ApplyDisplayICCProfile(): what FIF_LOAD_DISPLAY_ICC does, done to an image loaded without it
 ; - APNG_LINEAR_BLEND flag for FreeImage_OpenMultiBitmap(): animated PNG frames blended in linear light
 ; - added FreeImage_MustTonemap(): whether an image needs tone mapping to be displayed
@@ -294,7 +295,7 @@ FreeImage_AllocateHeaderForBits(pBits, pitch, imageType, width, height, bpp, red
 FreeImage_Load(ImgPath, GFT:=-1, flag:=0, ByRef dGFT:=0) {
 ; flag - 0, or the flags of the file's format below, combined with |:
 ; FIF_LOAD_NOPIXELS = 0x8000; retrieve only the image properties: size, type, metadata, ICC profile, thumbnail; see FreeImage_FIFSupportsNoPixels()
-; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to sRGB, or to the profile set with FreeImage_SetDisplayICCProfile(); ignored with FIF_LOAD_NOPIXELS
+; FIF_LOAD_DISPLAY_ICC = 0x4000; convert to sRGB, or to the profile set with FreeImage_SetDisplayICCProfile(); flag ignored with FIF_LOAD_NOPIXELS
 ;
 ; GIF_LOAD256 = 1; a GIF with a palette of 16 colours or fewer loads as 8-bit, not as 1-bit or 4-bit
 ; ICO_MAKEALPHA = 1; load an icon of under 32 bits as 32-bit, with an alpha channel made from its AND mask
@@ -1075,7 +1076,8 @@ FreeImage_ColorQuantize(hImage, quantizeAlgo:=0) {
    ; 0 = FIQ_WUQUANT  - Xiaolin Wu color quantization algorithm
    ; 1 = FIQ_NNQUANT  - NeuQuant neural-net quantization algorithm by Anthony Dekker (24-bit only)
    ; 2 = FIQ_LFPQUANT - Lossless Fast Pseudo-Quantization Algorithm by Carsten Klein
-   ; 3 = FIQ_MCQUANT  - Median cut quantization with Floyd-Steinberg dithering
+   ; 3 = FIQ_MCQUANT  - Median cut quantization with Floyd-Steinberg dithering [best, recommended]
+
 ; the function returns an 8 bit image
    Return DllCall(getFIMfunc("ColorQuantize"), "UPtr", hImage, "Int", quantizeAlgo, "UPtr")
 }
@@ -1272,9 +1274,11 @@ FreeImage_GetICCProfileColorSpace(pProfile, profileSize) {
 }
 
 FreeImage_SetDisplayICCProfile(pProfile:=0, profileSize:=0, flags:=0x101) {
-; the profile the FIF_LOAD_DISPLAY_ICC load flag converts images to, sRGB by default; images carry it afterwards
+; The function sets the profile the FIF_LOAD_DISPLAY_ICC load flag converts images to, sRGB by default; images carry it afterwards.
+;
 ; pProfile - an RGB profile, e.g. of the monitor showing the images; 0 - sRGB
 ; a monitor's profile goes into the files saved from such images; for display alone, convert a copy with FreeImage_ConvertToICCProfile()
+;
 ; CMYK JPEG, TIFF and PSD files are read as CMYK first and come back as RGB, or RGBA with their alpha channel; grey images stay grey; float images are not changed
 ; flags - a rendering intent, with FICMS_BLACKPOINT_COMPENSATION or not; see FreeImage_ConvertToICCProfile()
 ; Return value: 1 -- success; 0 -- not an RGB profile Little CMS can convert to, the last one stays
@@ -1894,6 +1898,23 @@ FreeImage_GetFrameTime(hImage) {
    Return NumGet(pValue+0, 0, "UInt")
 }
 
+FreeImage_GetLoopCount(hImage) {
+; How many times the animation plays, 0 for ever, from the "Loop" value its first frame carries.
+; It returns blank when the frame declares none.
+
+   Static FIMD_ANIMATION := 9
+        , FIDT_LONG := 4
+
+   If (!FreeImage_GetMetadata(hImage, FIMD_ANIMATION, "Loop", fiTag) || !fiTag)
+      Return
+
+   pValue := FreeImage_GetTagValue(fiTag)
+   If (!pValue || FreeImage_GetTagType(fiTag)!=FIDT_LONG)
+      Return
+
+   Return NumGet(pValue+0, 0, "UInt")
+}
+
 FreeImage_GetFrameDelays(ImgPath, ByRef delaysArray, ByRef totalTime:=0) {
 ; Every frame's duration, to tell the animation's length and
 ; which frame belongs to a moment.
@@ -2357,3 +2378,49 @@ ConvertPBITMAPtoFIM(pBitmap, doLowerbits:=0) {
   }
   Return hFIFimgA
 }
+
+ConvertIndexedPBITMAPtoFIM(pBitmap) {
+; Converts an 8 bits indexed GDI+ bitmap to an 8 bits FreeImage bitmap with the same palette.
+; Palette entries that are not opaque go into the FreeImage transparency table.
+  If DllCall("gdiplus\GdipGetImagePaletteSize", "UPtr", pBitmap, "int*", palSize)
+     Return
+
+  VarSetCapacity(palette, palSize, 0)
+  If DllCall("gdiplus\GdipGetImagePalette", "UPtr", pBitmap, "UPtr", &palette, "int", palSize)
+     Return
+
+  Gdip_GetImageDimensions(pBitmap, imgW, imgH)
+  If Gdip_LockBits(pBitmap, 0, 0, imgW, imgH, Stride, Scan0, BitmapData, 1, 0x30803)   ; PixelFormat8bppIndexed
+     Return
+
+  hFIFimgA := FreeImage_ConvertFromRawBits(Scan0, imgW, imgH, Stride, 8, 0, 0, 0, 1)
+  Gdip_UnlockBits(pBitmap, BitmapData)
+  pPalette := FreeImage_GetPalette(hFIFimgA)
+  If !pPalette
+  {
+     FreeImage_UnLoad(hFIFimgA)
+     Return
+  }
+
+  ; an ARGB value has the byte order of an RGBQUAD: blue, green, red, then alpha in its reserved byte
+  colorsCount := Min(NumGet(palette, 4, "uint"), 256)
+  VarSetCapacity(alphas, 256, 255)
+  isTransparent := 0
+  Loop, % colorsCount
+  {
+     argb := NumGet(palette, 4 + A_Index*4, "uint")
+     NumPut(argb & 0xFFFFFF, pPalette + 0, (A_Index - 1)*4, "uint")
+     alpha := argb >> 24
+     NumPut(alpha, alphas, A_Index - 1, "uchar")
+     If (alpha<255)
+        isTransparent := 1
+  }
+
+  If isTransparent
+     FreeImage_SetTransparencyTable(hFIFimgA, &alphas, colorsCount)
+
+  Gdip_BitmapGetDPIresolution(pBitmap, dpiX, dpiY)
+  FreeImage_SetDPIresolution(hFIFimgA, dpiX, dpiY)
+  Return hFIFimgA
+}
+
