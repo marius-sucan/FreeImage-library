@@ -50,8 +50,14 @@ static const int SIDE = LEVELS + 1;
 static const int CELLS = SIDE * SIDE * SIDE;
 static const int HIST_SIZE = LEVELS * LEVELS * LEVELS;
 
-// the dithering looks colors up by their top 4 bits per channel
-static const int LUT_SIZE = 4096;
+// a histogram cell holds the sums of B, G and R, then the pixel count
+static const int SUMS = 4;
+
+// pixels added to the 32-bit sums before they move to 64 bits, which keeps them below 2^32
+static const unsigned SUM_SPAN = 1u << 24;
+
+// the dithering looks colors up by their 5-bit cell, indexed as the histogram, R << 10 | G << 5 | B
+static const int LUT_SIZE = HIST_SIZE;
 
 // the dithering floors negative error sums with arithmetic shifts
 typedef char MCQ_ARITHMETIC_SHIFT[((-17) >> 4) == -2 ? 1 : -1];
@@ -101,7 +107,7 @@ HasAVX2() {
 #endif
 
 // ----------------------------------------------------------
-//   Palette: median cut
+//   Palette: median cut of the occupied 5-bit cells
 // ----------------------------------------------------------
 
 // 3-D prefix sums of the 5-bit histogram: counts, and counts times each channel's level
@@ -141,10 +147,14 @@ CellOf(const BYTE *p) {
 }
 
 #if !defined(FREEIMAGE_BIGENDIAN) && (FREEIMAGE_COLORORDER == FREEIMAGE_COLORORDER_BGR)
+// pixels read as the 32-bit word B, G, R, x
 #define MCQ_WORD_PIXELS
-// the same, from a pixel read as the 32-bit word B, G, R, x
+#endif
+
+#if defined(MCQ_WORD_PIXELS) || defined(MCQ_SSE2)
+// the same, from the bytes B, G, R of a 32-bit word
 static inline unsigned
-CellOfWord(DWORD v) {
+CellOfBGR(DWORD v) {
 	return ((v >> 3) & 0x001F) | ((v >> 6) & 0x03E0) | ((v >> 9) & 0x7C00);
 }
 #endif
@@ -152,120 +162,150 @@ CellOfWord(DWORD v) {
 #if defined(MCQ_AVX2) && defined(MCQ_WORD_PIXELS)
 // eight cells at a time, and one update when the eight are equal
 MCQ_AVX2_FUNC static void
-CountRowsAVX2(FIBITMAP *dib, unsigned first, unsigned end, DWORD *count) {
-	const unsigned width = FreeImage_GetWidth(dib);
-	const unsigned bytespp = FreeImage_GetBPP(dib) / 8;
+SumSpanAVX2(const BYTE *row, unsigned x, unsigned end, unsigned width, unsigned bytespp, DWORD *tab) {
+	const __m256i zero = _mm256_setzero_si256();
 	const __m256i m1 = _mm256_set1_epi32(0x001F), m2 = _mm256_set1_epi32(0x03E0), m3 = _mm256_set1_epi32(0x7C00);
+	const __m256i low24 = _mm256_set1_epi32(0x00FFFFFF), one = _mm256_set1_epi32(0x01000000);
 	// bytes 0..11 of each 128-bit lane as four 3-byte pixels
 	const __m256i spread = _mm256_setr_epi8(0, 1, 2, -1, 3, 4, 5, -1, 6, 7, 8, -1, 9, 10, 11, -1,
 		0, 1, 2, -1, 3, 4, 5, -1, 6, 7, 8, -1, 9, 10, 11, -1);
 	// a 24-bit group reads 28 bytes: it stops two pixels short of the row's end
-	const unsigned simd_end = (bytespp == 4) ? width : ((width >= 2) ? width - 2 : 0);
+	const unsigned simd_end = (bytespp == 4) ? end : MIN(end, (width >= 2) ? width - 2 : 0);
+	const BYTE *bits = row + (size_t)x * bytespp;
 	DWORD cells[8];
-	for (unsigned y = first; y < end; y++) {
-		const BYTE *bits = FreeImage_GetScanLine(dib, y);
-		unsigned x = 0;
-		for (; x + 8 <= simd_end; x += 8, bits += 8 * bytespp) {
-			__m256i p;
-			if (bytespp == 4) {
-				p = _mm256_loadu_si256((const __m256i *)bits);
-			} else {
-				const __m128i lo = _mm_loadu_si128((const __m128i *)bits);
-				const __m128i hi = _mm_loadu_si128((const __m128i *)(bits + 12));
-				p = _mm256_shuffle_epi8(_mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1), spread);
-			}
-			const __m256i k = _mm256_or_si256(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(p, 3), m1),
-				_mm256_and_si256(_mm256_srli_epi32(p, 6), m2)), _mm256_and_si256(_mm256_srli_epi32(p, 9), m3));
-			const __m256i k0 = _mm256_permutevar8x32_epi32(k, _mm256_setzero_si256());
-			if (_mm256_movemask_epi8(_mm256_cmpeq_epi32(k, k0)) == -1) {
-				count[_mm_cvtsi128_si32(_mm256_castsi256_si128(k))] += 8;
-			} else {
-				_mm256_storeu_si256((__m256i *)cells, k);
-				for (int i = 0; i < 8; i++) {
-					count[cells[i]]++;
-				}
+	for (; x + 8 <= simd_end; x += 8, bits += 8 * bytespp) {
+		__m256i p;
+		if (bytespp == 4) {
+			p = _mm256_loadu_si256((const __m256i *)bits);
+		} else {
+			const __m128i lo = _mm_loadu_si128((const __m128i *)bits);
+			const __m128i hi = _mm_loadu_si128((const __m128i *)(bits + 12));
+			p = _mm256_shuffle_epi8(_mm256_inserti128_si256(_mm256_castsi128_si256(lo), hi, 1), spread);
+		}
+		const __m256i k = _mm256_or_si256(_mm256_or_si256(_mm256_and_si256(_mm256_srli_epi32(p, 3), m1),
+			_mm256_and_si256(_mm256_srli_epi32(p, 6), m2)), _mm256_and_si256(_mm256_srli_epi32(p, 9), m3));
+		// B, G, R, 1 per pixel
+		const __m256i px = _mm256_or_si256(_mm256_and_si256(p, low24), one);
+		const __m256i k0 = _mm256_permutevar8x32_epi32(k, zero);
+		if (_mm256_movemask_epi8(_mm256_cmpeq_epi32(k, k0)) == -1) {
+			// the eight pixels summed in 16-bit lanes, then widened
+			const __m256i s = _mm256_add_epi16(_mm256_unpacklo_epi8(px, zero), _mm256_unpackhi_epi8(px, zero));
+			__m128i t = _mm_add_epi16(_mm256_castsi256_si128(s), _mm256_extracti128_si256(s, 1));
+			t = _mm_add_epi16(t, _mm_srli_si128(t, 8));
+			DWORD *e = tab + SUMS * _mm_cvtsi128_si32(_mm256_castsi256_si128(k));
+			_mm_storeu_si128((__m128i *)e, _mm_add_epi32(_mm_loadu_si128((const __m128i *)e), _mm_unpacklo_epi16(t, _mm_setzero_si128())));
+		} else {
+			_mm256_storeu_si256((__m256i *)cells, k);
+			// two pixels' B, G, R, 1 as 32-bit lanes per register
+			const __m128i lo = _mm256_castsi256_si128(px), hi = _mm256_extracti128_si256(px, 1);
+			const __m256i w[4] = { _mm256_cvtepu8_epi32(lo), _mm256_cvtepu8_epi32(_mm_srli_si128(lo, 8)),
+				_mm256_cvtepu8_epi32(hi), _mm256_cvtepu8_epi32(_mm_srli_si128(hi, 8)) };
+			for (int i = 0; i < 8; i++) {
+				DWORD *e = tab + SUMS * cells[i];
+				const __m128i v = (i & 1) ? _mm256_extracti128_si256(w[i >> 1], 1) : _mm256_castsi256_si128(w[i >> 1]);
+				_mm_storeu_si128((__m128i *)e, _mm_add_epi32(_mm_loadu_si128((const __m128i *)e), v));
 			}
 		}
-		for (; x < width; x++, bits += bytespp) {
-			count[CellOf(bits)]++;
-		}
+	}
+	for (; x < end; x++, bits += bytespp) {
+		DWORD *e = tab + SUMS * CellOf(bits);
+		e[0] += bits[FI_RGBA_BLUE];
+		e[1] += bits[FI_RGBA_GREEN];
+		e[2] += bits[FI_RGBA_RED];
+		e[3]++;
 	}
 	_mm256_zeroupper();
 }
 #endif
 
-// adds the 5-bit colors of rows [first, end) to hist, through a 32-bit table
+// adds the pixels [x, end) of one row to the 32-bit sums
 static void
-CountRows(FIBITMAP *dib, unsigned first, unsigned end, DWORD *count, UINT64 *hist) {
-	const unsigned width = FreeImage_GetWidth(dib);
-	const unsigned bytespp = FreeImage_GetBPP(dib) / 8;
-	memset(count, 0, HIST_SIZE * sizeof(DWORD));
+SumSpan(const BYTE *row, unsigned x, unsigned end, unsigned width, unsigned bytespp, DWORD *tab) {
+	(void)width;
 #if defined(MCQ_AVX2) && defined(MCQ_WORD_PIXELS)
 	if (HasAVX2()) {
-		CountRowsAVX2(dib, first, end, count);
-		for (int i = 0; i < HIST_SIZE; i++) {
-			hist[i] += count[i];
-		}
+		SumSpanAVX2(row, x, end, width, bytespp, tab);
 		return;
 	}
 #endif
-	for (unsigned y = first; y < end; y++) {
-		const BYTE *bits = FreeImage_GetScanLine(dib, y);
-		unsigned x = 0;
+	const BYTE *bits = row + (size_t)x * bytespp;
 #ifdef MCQ_WORD_PIXELS
-		// 32-bit reads, but for the last pixel of a row, whose fourth byte may lie past a 24-bit row
-		for (; x + 1 < width; x++, bits += bytespp) {
-			DWORD v;
-			memcpy(&v, bits, sizeof(v));
-			count[CellOfWord(v)]++;
-		}
-#endif
-		for (; x < width; x++, bits += bytespp) {
-			count[CellOf(bits)]++;
-		}
+	// 32-bit reads, but for the last pixel of a row, whose fourth byte may lie past a 24-bit row
+	const unsigned word_end = MIN(end, width - 1);
+	for (; x < word_end; x++, bits += bytespp) {
+		DWORD v;
+		memcpy(&v, bits, sizeof(v));
+		DWORD *e = tab + SUMS * CellOfBGR(v);
+		e[0] += v & 0xFF;
+		e[1] += (v >> 8) & 0xFF;
+		e[2] += (v >> 16) & 0xFF;
+		e[3]++;
 	}
-	for (int i = 0; i < HIST_SIZE; i++) {
-		hist[i] += count[i];
+#endif
+	for (; x < end; x++, bits += bytespp) {
+		DWORD *e = tab + SUMS * CellOf(bits);
+		e[0] += bits[FI_RGBA_BLUE];
+		e[1] += bits[FI_RGBA_GREEN];
+		e[2] += bits[FI_RGBA_RED];
+		e[3]++;
 	}
 }
 
-// the 5-bit histogram, every cell starting at one
+static void
+FlushSums(DWORD *tab, UINT64 *cells) {
+	for (int i = 0; i < SUMS * HIST_SIZE; i++) {
+		cells[i] += tab[i];
+		tab[i] = 0;
+	}
+}
+
+// per 5-bit cell, the sums of B, G and R and the pixel count
 static bool
-CountColors(FIBITMAP *dib, UINT64 *hist) {
+CountColors(FIBITMAP *dib, UINT64 *cells) {
 	const unsigned width = FreeImage_GetWidth(dib);
 	const unsigned height = FreeImage_GetHeight(dib);
-	DWORD *const count = (DWORD *)malloc(HIST_SIZE * sizeof(DWORD));
-	if (!count) {
+	const unsigned bytespp = FreeImage_GetBPP(dib) / 8;
+	DWORD *const tab = (DWORD *)calloc(SUMS * HIST_SIZE, sizeof(DWORD));
+	if (!tab) {
 		return false;
 	}
-	for (int i = 0; i < HIST_SIZE; i++) {
-		hist[i] = 1;
+	memset(cells, 0, SUMS * HIST_SIZE * sizeof(UINT64));
+	unsigned pending = 0;
+	for (unsigned y = 0; y < height; y++) {
+		const BYTE *row = FreeImage_GetScanLine(dib, y);
+		for (unsigned x = 0; x < width; ) {
+			if (pending == SUM_SPAN) {
+				FlushSums(tab, cells);
+				pending = 0;
+			}
+			const unsigned end = x + MIN(width - x, SUM_SPAN - pending);
+			SumSpan(row, x, end, width, bytespp, tab);
+			pending += end - x;
+			x = end;
+		}
 	}
-	// rows at a time that keep each 32-bit count at most 2^31
-	const unsigned band = (unsigned)MAX((UINT64)1, ((UINT64)1 << 31) / width);
-	for (unsigned y = 0; y < height; y += band) {
-		CountRows(dib, y, (unsigned)MIN((UINT64)height, (UINT64)y + band), count, hist);
-	}
-	free(count);
+	FlushSums(tab, cells);
+	free(tab);
 	return true;
 }
 
 // the prefix sums, one axis at a time
 static void
-BuildMoments(const UINT64 *hist, MCMoments &m) {
+BuildMoments(const UINT64 *cells, MCMoments &m) {
 	for (int k = 0; k < 4; k++) {
 		memset(m.table[k], 0, CELLS * sizeof(INT64));
 	}
 	for (int r = 0; r < LEVELS; r++) {
 		for (int g = 0; g < LEVELS; g++) {
-			const UINT64 *const h = hist + (r << 10) + (g << 5);
+			const UINT64 *const h = cells + SUMS * ((r << 10) + (g << 5));
 			const int row = (r + 1) * SIDE * SIDE + (g + 1) * SIDE + 1;
 			INT64 n = 0, sr = 0, sg = 0, sb = 0;
 			for (int b = 0; b < LEVELS; b++) {
-				n += (INT64)h[b];
-				sr += (INT64)h[b] * r;
-				sg += (INT64)h[b] * g;
-				sb += (INT64)h[b] * b;
+				const INT64 c = (INT64)h[SUMS * b + 3];
+				n += c;
+				sr += c * r;
+				sg += c * g;
+				sb += c * b;
 				m.table[0][row + b] = n;
 				m.table[1][row + b] = sr;
 				m.table[2][row + b] = sg;
@@ -294,15 +334,44 @@ BuildMoments(const UINT64 *hist, MCMoments &m) {
 	}
 }
 
+// the box shrunk to the cells that hold pixels
+static void
+Shrink(const MCMoments &m, MCBox &b) {
+	for (int a = 0; a < 3; a++) {
+		while (b.lo[a] < b.hi[a]) {
+			MCBox s = b;
+			s.hi[a] = s.lo[a];
+			if (m.Sum(0, s.lo, s.hi) > 0) {
+				break;
+			}
+			b.lo[a]++;
+		}
+		while (b.hi[a] > b.lo[a]) {
+			MCBox s = b;
+			s.lo[a] = s.hi[a];
+			if (m.Sum(0, s.lo, s.hi) > 0) {
+				break;
+			}
+			b.hi[a]--;
+		}
+	}
+}
+
 // level * 255 / 31, rounded
 static inline BYTE
 ExpandLevel(INT64 level) {
 	return (BYTE)((level * 510 + 31) / 62);
 }
 
+// a cell's mean value of one channel, rounded
+static inline BYTE
+CellMean(UINT64 sum, UINT64 count) {
+	return (BYTE)((2 * sum + count) / (2 * count));
+}
+
 // the median cut; returns the number of colors written to palette
 static int
-MedianCut(const MCMoments &m, int count, RGBQUAD *palette) {
+MedianCut(const MCMoments &m, const UINT64 *cells, int count, RGBQUAD *palette) {
 	MCBox box[256];
 	int n = 1;
 	for (int a = 0; a < 3; a++) {
@@ -310,9 +379,10 @@ MedianCut(const MCMoments &m, int count, RGBQUAD *palette) {
 		box[0].hi[a] = LEVELS - 1;
 	}
 	box[0].pop = m.Sum(0, box[0].lo, box[0].hi);
+	Shrink(m, box[0]);
 
 	while (n < count) {
-		// the box with the largest population times longest side; the first one on ties
+		// the box with the largest population times longest side; the first one on ties; one cell has side 0
 		int best = -1;
 		INT64 best_score = 0;
 		for (int i = 0; i < n; i++) {
@@ -343,6 +413,8 @@ MedianCut(const MCMoments &m, int count, RGBQUAD *palette) {
 		upper.lo[axis] = cut + 1;
 		lower.pop = m.Sum(0, lower.lo, lower.hi);
 		upper.pop -= lower.pop;
+		Shrink(m, lower);
+		Shrink(m, upper);
 		box[best] = upper;
 		box[n++] = lower;
 	}
@@ -359,17 +431,27 @@ MedianCut(const MCMoments &m, int count, RGBQUAD *palette) {
 	}
 
 	for (int i = 0; i < n; i++) {
-		// the truncated mean level of the box
-		palette[i].rgbRed = ExpandLevel(m.Sum(1, box[i].lo, box[i].hi) / box[i].pop);
-		palette[i].rgbGreen = ExpandLevel(m.Sum(2, box[i].lo, box[i].hi) / box[i].pop);
-		palette[i].rgbBlue = ExpandLevel(m.Sum(3, box[i].lo, box[i].hi) / box[i].pop);
+		const MCBox &b = box[i];
+		if ((b.lo[0] == b.hi[0]) && (b.lo[1] == b.hi[1]) && (b.lo[2] == b.hi[2])) {
+			// one cell: the mean color of its pixels
+			const UINT64 *const c = cells + SUMS * ((b.lo[0] << 10) | (b.lo[1] << 5) | b.lo[2]);
+			palette[i].rgbRed = CellMean(c[2], c[3]);
+			palette[i].rgbGreen = CellMean(c[1], c[3]);
+			palette[i].rgbBlue = CellMean(c[0], c[3]);
+		} else {
+			// the truncated mean level of the box
+			palette[i].rgbRed = ExpandLevel(m.Sum(1, b.lo, b.hi) / b.pop);
+			palette[i].rgbGreen = ExpandLevel(m.Sum(2, b.lo, b.hi) / b.pop);
+			palette[i].rgbBlue = ExpandLevel(m.Sum(3, b.lo, b.hi) / b.pop);
+		}
 		palette[i].rgbReserved = 0;
 	}
 	return n;
 }
 
 // ----------------------------------------------------------
-//   Lookup: per 4-bit cell, the palette entry nearest to the cell's color c * 17
+//   Lookup: per 5-bit cell, a palette color inside it, else the one nearest its center;
+//   in half units, so a color c is 2 * c and the center of level l is 16 * l + 7
 // ----------------------------------------------------------
 
 // an entry packs the palette index in the top byte and the color as R, G, B below it
@@ -378,108 +460,226 @@ LookupEntry(const RGBQUAD *palette, int index) {
 	return ((DWORD)index << 24) | ((DWORD)palette[index].rgbRed << 16) | ((DWORD)palette[index].rgbGreen << 8) | palette[index].rgbBlue;
 }
 
-#ifndef MCQ_SSE2
-static void
-BuildLookupScalar(const RGBQUAD *palette, int count, DWORD *lut) {
-	for (int c = 0; c < LUT_SIZE; c++) {
-		const int r = (c >> 8) * 17, g = ((c >> 4) & 15) * 17, b = (c & 15) * 17;
-		int best = INT_MAX, index = 0;
-		for (int i = 0; i < count; i++) {
-			const int dr = r - palette[i].rgbRed, dg = g - palette[i].rgbGreen, db = b - palette[i].rgbBlue;
-			const int d = dr * dr + dg * dg + db * db;
-			if (d < best) {
-				best = d;
-				index = i;
-			}
-		}
-		lut[c] = LookupEntry(palette, index);
-	}
-}
-#endif
-
-#ifdef MCQ_SSE2
-// 16 * color in 16-bit pairs (R, G) and (B, 0), so that madd gives 256 * squared distances;
-// 256 * distance + index then keeps the lowest index on ties; copies of entry 0 fill the last group
+// colors in half units as 16-bit pairs (2R, 2G) and (2B, 0) with their indexes; copies of the first fill the last group
 static int
-PackPalette(const RGBQUAD *palette, int count, int lanes, int *rg, int *b0, int *idx) {
+PackHalf(const RGBQUAD *palette, const int *which, int count, int lanes, int *rg, int *b0, int *idx) {
 	const int padded = (count + lanes - 1) / lanes * lanes;
 	for (int i = 0; i < padded; i++) {
-		const int k = (i < count) ? i : 0;
-		rg[i] = (16 * palette[k].rgbRed) | ((16 * palette[k].rgbGreen) << 16);
-		b0[i] = 16 * palette[k].rgbBlue;
+		const int k = which[(i < count) ? i : 0];
+		rg[i] = (2 * palette[k].rgbRed) | ((2 * palette[k].rgbGreen) << 16);
+		b0[i] = 2 * palette[k].rgbBlue;
 		idx[i] = k;
 	}
 	return padded;
 }
 
+// a block's eight cell centers lie within 8 * sqrt(3) of its center, so a color farther than the nearest one
+// plus twice that is nearest to none of them
 static inline int
-CellPair(int c, int *cb) {
-	*cb = (c & 15) * 272;
-	return ((c >> 8) * 272) | ((((c >> 4) & 15) * 272) << 16);
+BlockBound(int nearest) {
+	const double limit = sqrt((double)nearest) + 16.0 * 1.7320508075688772;
+	return (int)(limit * limit) + 1;
 }
 
-static void
-BuildLookupSSE2(const RGBQUAD *palette, int count, DWORD *lut) {
-	int rg[256], b0[256], idx[256];
-	const int padded = PackPalette(palette, count, 4, rg, b0, idx);
-	for (int c = 0; c < LUT_SIZE; c++) {
-		int cb;
-		const __m128i crg = _mm_set1_epi32(CellPair(c, &cb));
-		const __m128i cb0 = _mm_set1_epi32(cb);
-		__m128i best = _mm_set1_epi32(INT_MAX);
-		for (int i = 0; i < padded; i += 4) {
-			const __m128i d1 = _mm_sub_epi16(crg, _mm_loadu_si128((const __m128i *)(rg + i)));
-			const __m128i d2 = _mm_sub_epi16(cb0, _mm_loadu_si128((const __m128i *)(b0 + i)));
-			const __m128i key = _mm_or_si128(_mm_add_epi32(_mm_madd_epi16(d1, d1), _mm_madd_epi16(d2, d2)), _mm_loadu_si128((const __m128i *)(idx + i)));
-			const __m128i less = _mm_cmplt_epi32(key, best);
-			best = _mm_or_si128(_mm_and_si128(less, key), _mm_andnot_si128(less, best));
+// the indexes of the packed colors (the first count) that can be nearest to a center of the block centered at (r, g, b)
+typedef int (*CandidatesFn)(const int *rg, const int *b0, int count, int padded, int r, int g, int b, int *dist, int *cand);
+// the index of the nearest packed color, the lowest on ties
+typedef int (*NearestFn)(const int *rg, const int *b0, const int *idx, int padded, int r, int g, int b);
+
+#ifdef MCQ_SSE2
+// the set bits of mask, offset by first, below count
+static inline int
+AddCandidates(int mask, int first, int count, int m, int *cand) {
+	for (int j = 0; mask; j++, mask >>= 1) {
+		if ((mask & 1) && (first + j < count)) {
+			cand[m++] = first + j;
 		}
-		int keys[4];
-		_mm_storeu_si128((__m128i *)keys, best);
-		const int lowest = MIN(MIN(keys[0], keys[1]), MIN(keys[2], keys[3]));
-		lut[c] = LookupEntry(palette, lowest & 0xFF);
 	}
+	return m;
+}
+#endif
+
+#ifndef MCQ_SSE2
+static int
+CandidatesScalar(const int *rg, const int *b0, int count, int padded, int r, int g, int b, int *dist, int *cand) {
+	(void)padded;
+	int dmin = INT_MAX;
+	for (int i = 0; i < count; i++) {
+		const int dr = r - (rg[i] & 0xFFFF), dg = g - (rg[i] >> 16), db = b - b0[i];
+		dist[i] = dr * dr + dg * dg + db * db;
+		dmin = MIN(dmin, dist[i]);
+	}
+	const int bound = BlockBound(dmin);
+	int m = 0;
+	for (int i = 0; i < count; i++) {
+		if (dist[i] <= bound) {
+			cand[m++] = i;
+		}
+	}
+	return m;
+}
+
+static int
+NearestScalar(const int *rg, const int *b0, const int *idx, int padded, int r, int g, int b) {
+	int best = INT_MAX, index = 0;
+	for (int i = 0; i < padded; i++) {
+		const int dr = r - (rg[i] & 0xFFFF), dg = g - (rg[i] >> 16), db = b - b0[i];
+		const int key = ((dr * dr + dg * dg + db * db) << 8) | idx[i];
+		if (key < best) {
+			best = key;
+			index = idx[i];
+		}
+	}
+	return index;
+}
+#endif
+
+#ifdef MCQ_SSE2
+static inline __m128i
+Min32SSE2(__m128i a, __m128i b) {
+	const __m128i less = _mm_cmplt_epi32(a, b);
+	return _mm_or_si128(_mm_and_si128(less, a), _mm_andnot_si128(less, b));
+}
+
+static int
+CandidatesSSE2(const int *rg, const int *b0, int count, int padded, int r, int g, int b, int *dist, int *cand) {
+	const __m128i crg = _mm_set1_epi32(r | (g << 16)), cb0 = _mm_set1_epi32(b);
+	// the copies that pad the last group repeat a real color, so they leave the minimum alone
+	__m128i lowest = _mm_set1_epi32(INT_MAX);
+	for (int i = 0; i < padded; i += 4) {
+		const __m128i d1 = _mm_sub_epi16(crg, _mm_loadu_si128((const __m128i *)(rg + i)));
+		const __m128i d2 = _mm_sub_epi16(cb0, _mm_loadu_si128((const __m128i *)(b0 + i)));
+		const __m128i d = _mm_add_epi32(_mm_madd_epi16(d1, d1), _mm_madd_epi16(d2, d2));
+		_mm_storeu_si128((__m128i *)(dist + i), d);
+		lowest = Min32SSE2(lowest, d);
+	}
+	lowest = Min32SSE2(lowest, _mm_shuffle_epi32(lowest, _MM_SHUFFLE(1, 0, 3, 2)));
+	lowest = Min32SSE2(lowest, _mm_shuffle_epi32(lowest, _MM_SHUFFLE(2, 3, 0, 1)));
+	const __m128i above = _mm_set1_epi32(BlockBound(_mm_cvtsi128_si32(lowest)) + 1);
+	int m = 0;
+	for (int i = 0; i < padded; i += 4) {
+		const int mask = _mm_movemask_ps(_mm_castsi128_ps(_mm_cmpgt_epi32(above, _mm_loadu_si128((const __m128i *)(dist + i)))));
+		m = AddCandidates(mask, i, count, m, cand);
+	}
+	return m;
+}
+
+// 256 * distance + index keeps the lowest index on ties
+static int
+NearestSSE2(const int *rg, const int *b0, const int *idx, int padded, int r, int g, int b) {
+	const __m128i crg = _mm_set1_epi32(r | (g << 16)), cb0 = _mm_set1_epi32(b);
+	__m128i best = _mm_set1_epi32(INT_MAX);
+	for (int i = 0; i < padded; i += 4) {
+		const __m128i d1 = _mm_sub_epi16(crg, _mm_loadu_si128((const __m128i *)(rg + i)));
+		const __m128i d2 = _mm_sub_epi16(cb0, _mm_loadu_si128((const __m128i *)(b0 + i)));
+		const __m128i d = _mm_add_epi32(_mm_madd_epi16(d1, d1), _mm_madd_epi16(d2, d2));
+		best = Min32SSE2(best, _mm_or_si128(_mm_slli_epi32(d, 8), _mm_loadu_si128((const __m128i *)(idx + i))));
+	}
+	best = Min32SSE2(best, _mm_shuffle_epi32(best, _MM_SHUFFLE(1, 0, 3, 2)));
+	best = Min32SSE2(best, _mm_shuffle_epi32(best, _MM_SHUFFLE(2, 3, 0, 1)));
+	return _mm_cvtsi128_si32(best) & 0xFF;
 }
 #endif
 
 #ifdef MCQ_AVX2
-MCQ_AVX2_FUNC static void
-BuildLookupAVX2(const RGBQUAD *palette, int count, DWORD *lut) {
-	int rg[256], b0[256], idx[256];
-	const int padded = PackPalette(palette, count, 8, rg, b0, idx);
-	for (int c = 0; c < LUT_SIZE; c++) {
-		int cb;
-		const __m256i crg = _mm256_set1_epi32(CellPair(c, &cb));
-		const __m256i cb0 = _mm256_set1_epi32(cb);
-		__m256i best = _mm256_set1_epi32(INT_MAX);
-		for (int i = 0; i < padded; i += 8) {
-			const __m256i d1 = _mm256_sub_epi16(crg, _mm256_loadu_si256((const __m256i *)(rg + i)));
-			const __m256i d2 = _mm256_sub_epi16(cb0, _mm256_loadu_si256((const __m256i *)(b0 + i)));
-			const __m256i key = _mm256_or_si256(_mm256_add_epi32(_mm256_madd_epi16(d1, d1), _mm256_madd_epi16(d2, d2)), _mm256_loadu_si256((const __m256i *)(idx + i)));
-			best = _mm256_min_epi32(best, key);
-		}
-		__m128i m = _mm_min_epi32(_mm256_castsi256_si128(best), _mm256_extracti128_si256(best, 1));
-		m = _mm_min_epi32(m, _mm_shuffle_epi32(m, _MM_SHUFFLE(1, 0, 3, 2)));
-		m = _mm_min_epi32(m, _mm_shuffle_epi32(m, _MM_SHUFFLE(2, 3, 0, 1)));
-		lut[c] = LookupEntry(palette, _mm_cvtsi128_si32(m) & 0xFF);
+MCQ_AVX2_FUNC static int
+CandidatesAVX2(const int *rg, const int *b0, int count, int padded, int r, int g, int b, int *dist, int *cand) {
+	const __m256i crg = _mm256_set1_epi32(r | (g << 16)), cb0 = _mm256_set1_epi32(b);
+	__m256i lowest = _mm256_set1_epi32(INT_MAX);
+	for (int i = 0; i < padded; i += 8) {
+		const __m256i d1 = _mm256_sub_epi16(crg, _mm256_loadu_si256((const __m256i *)(rg + i)));
+		const __m256i d2 = _mm256_sub_epi16(cb0, _mm256_loadu_si256((const __m256i *)(b0 + i)));
+		const __m256i d = _mm256_add_epi32(_mm256_madd_epi16(d1, d1), _mm256_madd_epi16(d2, d2));
+		_mm256_storeu_si256((__m256i *)(dist + i), d);
+		lowest = _mm256_min_epi32(lowest, d);
+	}
+	__m128i l = _mm_min_epi32(_mm256_castsi256_si128(lowest), _mm256_extracti128_si256(lowest, 1));
+	l = _mm_min_epi32(l, _mm_shuffle_epi32(l, _MM_SHUFFLE(1, 0, 3, 2)));
+	l = _mm_min_epi32(l, _mm_shuffle_epi32(l, _MM_SHUFFLE(2, 3, 0, 1)));
+	const __m256i above = _mm256_set1_epi32(BlockBound(_mm_cvtsi128_si32(l)) + 1);
+	int m = 0;
+	for (int i = 0; i < padded; i += 8) {
+		const int mask = _mm256_movemask_ps(_mm256_castsi256_ps(_mm256_cmpgt_epi32(above, _mm256_loadu_si256((const __m256i *)(dist + i)))));
+		m = AddCandidates(mask, i, count, m, cand);
 	}
 	_mm256_zeroupper();
+	return m;
+}
+
+MCQ_AVX2_FUNC static int
+NearestAVX2(const int *rg, const int *b0, const int *idx, int padded, int r, int g, int b) {
+	const __m256i crg = _mm256_set1_epi32(r | (g << 16)), cb0 = _mm256_set1_epi32(b);
+	__m256i best = _mm256_set1_epi32(INT_MAX);
+	for (int i = 0; i < padded; i += 8) {
+		const __m256i d1 = _mm256_sub_epi16(crg, _mm256_loadu_si256((const __m256i *)(rg + i)));
+		const __m256i d2 = _mm256_sub_epi16(cb0, _mm256_loadu_si256((const __m256i *)(b0 + i)));
+		const __m256i d = _mm256_add_epi32(_mm256_madd_epi16(d1, d1), _mm256_madd_epi16(d2, d2));
+		best = _mm256_min_epi32(best, _mm256_or_si256(_mm256_slli_epi32(d, 8), _mm256_loadu_si256((const __m256i *)(idx + i))));
+	}
+	__m128i m = _mm_min_epi32(_mm256_castsi256_si128(best), _mm256_extracti128_si256(best, 1));
+	m = _mm_min_epi32(m, _mm_shuffle_epi32(m, _MM_SHUFFLE(1, 0, 3, 2)));
+	m = _mm_min_epi32(m, _mm_shuffle_epi32(m, _MM_SHUFFLE(2, 3, 0, 1)));
+	const int lowest = _mm_cvtsi128_si32(m);
+	_mm256_zeroupper();
+	return lowest & 0xFF;
 }
 #endif
+
+// per 4-bit block of 2 x 2 x 2 cells: the colors that can be nearest to one of the eight centers, then those centers
+static void
+BuildLookupBlocks(const RGBQUAD *palette, int count, int lanes, CandidatesFn candidates, NearestFn nearest, DWORD *lut) {
+	int all[256], rg[256 + 8], b0[256 + 8], idx[256 + 8], dist[256 + 8];
+	int cand[256], crg[256 + 8], cb0[256 + 8], cidx[256 + 8];
+	for (int i = 0; i < count; i++) {
+		all[i] = i;
+	}
+	const int padded = PackHalf(palette, all, count, lanes, rg, b0, idx);
+	for (int s = 0; s < 4096; s++) {
+		const int R = s >> 8, G = (s >> 4) & 15, B = s & 15;
+		const int m = candidates(rg, b0, count, padded, 32 * R + 15, 32 * G + 15, 32 * B + 15, dist, cand);
+		if (m == 1) {
+			const DWORD entry = LookupEntry(palette, cand[0]);
+			for (int i = 0; i < 8; i++) {
+				lut[((2 * R + (i >> 2)) << 10) | ((2 * G + ((i >> 1) & 1)) << 5) | (2 * B + (i & 1))] = entry;
+			}
+			continue;
+		}
+		const int cpadded = PackHalf(palette, cand, m, lanes, crg, cb0, cidx);
+		for (int i = 0; i < 8; i++) {
+			const int r = 2 * R + (i >> 2), g = 2 * G + ((i >> 1) & 1), b = 2 * B + (i & 1);
+			lut[(r << 10) | (g << 5) | b] = LookupEntry(palette, nearest(crg, cb0, cidx, cpadded, 16 * r + 7, 16 * g + 7, 16 * b + 7));
+		}
+	}
+}
 
 static void
 BuildLookup(const RGBQUAD *palette, int count, DWORD *lut) {
-#ifdef MCQ_AVX2
+#if defined(MCQ_AVX2)
 	if (HasAVX2()) {
-		BuildLookupAVX2(palette, count, lut);
-		return;
+		BuildLookupBlocks(palette, count, 8, CandidatesAVX2, NearestAVX2, lut);
+	} else {
+		BuildLookupBlocks(palette, count, 4, CandidatesSSE2, NearestSSE2, lut);
 	}
-#endif
-#ifdef MCQ_SSE2
-	BuildLookupSSE2(palette, count, lut);
+#elif defined(MCQ_SSE2)
+	BuildLookupBlocks(palette, count, 4, CandidatesSSE2, NearestSSE2, lut);
 #else
-	BuildLookupScalar(palette, count, lut);
+	BuildLookupBlocks(palette, count, 1, CandidatesScalar, NearestScalar, lut);
 #endif
+	// a color inside a cell wins it: the one nearest the center, the lowest index on ties
+	int cell[256], dist[256];
+	for (int k = 0; k < count; k++) {
+		const int r = palette[k].rgbRed >> 3, g = palette[k].rgbGreen >> 3, b = palette[k].rgbBlue >> 3;
+		const int dr = 16 * r + 7 - 2 * palette[k].rgbRed, dg = 16 * g + 7 - 2 * palette[k].rgbGreen, db = 16 * b + 7 - 2 * palette[k].rgbBlue;
+		cell[k] = (r << 10) | (g << 5) | b;
+		dist[k] = dr * dr + dg * dg + db * db;
+		bool wins = true;
+		for (int j = 0; j < k && wins; j++) {
+			wins = (cell[j] != cell[k]) || (dist[j] > dist[k]);
+		}
+		if (wins) {
+			lut[cell[k]] = LookupEntry(palette, k);
+		}
+	}
 }
 
 // ----------------------------------------------------------
@@ -524,7 +724,7 @@ DiffuseScalar(FIBITMAP *src, FIBITMAP *dst, const DWORD *lut) {
 			const int r = Clamp255(p[FI_RGBA_RED] + ((e[0] + carry_r) >> 4));
 			const int g = Clamp255(p[FI_RGBA_GREEN] + ((e[1] + carry_g) >> 4));
 			const int b = Clamp255(p[FI_RGBA_BLUE] + ((e[2] + carry_b) >> 4));
-			const DWORD entry = lut[((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4)];
+			const DWORD entry = lut[((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)];
 			out[x] = (BYTE)(entry >> 24);
 			const int er = r - (int)((entry >> 16) & 0xFF);
 			const int eg = g - (int)((entry >> 8) & 0xFF);
@@ -580,17 +780,17 @@ LoadBGR<4>(const BYTE *p) {
 #endif
 }
 
-// 16 * pixel + the sums from the row above, as 16-bit lanes B, G, R, 0
+// 16 * pixel + the sums from the row above, as 16-bit lanes B, G, R and a fourth no result reads
 template <int BYTESPP> static inline __m128i
 LoadBase(const BYTE *in, const UINT64 *cur, int x) {
 	const __m128i pixel = _mm_unpacklo_epi8(_mm_cvtsi32_si128(LoadBGR<BYTESPP>(in + (size_t)x * BYTESPP)), _mm_setzero_si128());
 	return _mm_add_epi16(_mm_slli_epi16(pixel, 4), _mm_loadl_epi64((const __m128i *)(cur + x)));
 }
 
-// one row of DiffuseScalar in 16-bit lanes B, G, R; the fourth lane holds a bounded value nobody reads;
-// lut7 holds 7 * color, so the next pixel's share is one subtraction away
+// one row of DiffuseScalar in 16-bit lanes B, G, R; lut7 holds 7 * color, so the next pixel's share is one
+// subtraction away, and the palette index in its fourth lane, whose results no other lane sees
 template <int BYTESPP> static void
-DiffuseRowSSE2(const BYTE *in, BYTE *out, const UINT64 *cur, UINT64 *next, int x, const int last, const int step, const UINT64 *lut7, const BYTE *index) {
+DiffuseRowSSE2(const BYTE *in, BYTE *out, const UINT64 *cur, UINT64 *next, int x, const int last, const int step, const UINT64 *lut7) {
 	const __m128i zero = _mm_setzero_si128();
 	// the inverse of 7 modulo 2^16 turns 7 * e back into e
 	const __m128i inv7 = _mm_set1_epi16(0x6DB7);
@@ -600,12 +800,10 @@ DiffuseRowSSE2(const BYTE *in, BYTE *out, const UINT64 *cur, UINT64 *next, int x
 	for (;;) {
 		// packus clamps to 0..255
 		const __m128i v8 = _mm_packus_epi16(_mm_srai_epi16(_mm_add_epi16(base, carry), 4), zero);
-		const unsigned v = (unsigned)_mm_cvtsi128_si32(v8);
-		// the top nibbles of B, G, R gathered by one multiply, as R | G << 4 | B << 8
-		const unsigned key = ((v & 0x00F0F0F0u) * 0x01001001u) >> 20;
+		const unsigned key = CellOfBGR((DWORD)_mm_cvtsi128_si32(v8));
 		const __m128i v16 = _mm_unpacklo_epi8(v8, zero);
 		carry = _mm_sub_epi16(_mm_sub_epi16(_mm_slli_epi16(v16, 3), v16), _mm_loadl_epi64((const __m128i *)(lut7 + key)));
-		out[x] = index[key];
+		out[x] = ((const BYTE *)(lut7 + key))[6];
 		const __m128i e = _mm_mullo_epi16(carry, inv7);
 		_mm_storel_epi64((__m128i *)(next + x - step), _mm_add_epi16(below, _mm_add_epi16(_mm_slli_epi16(e, 1), e)));
 		below = _mm_add_epi16(ahead, _mm_add_epi16(_mm_slli_epi16(e, 2), e));
@@ -626,21 +824,17 @@ DiffuseSSE2(FIBITMAP *src, FIBITMAP *dst, const DWORD *lut) {
 	const int bytespp = (int)(FreeImage_GetBPP(src) / 8);
 
 	UINT64 *lut7 = (UINT64 *)malloc(LUT_SIZE * sizeof(UINT64));
-	BYTE *index = (BYTE *)malloc(LUT_SIZE);
 	// two rows of four 16-bit sums per pixel, with one padding pixel at each end
 	UINT64 *rows = (UINT64 *)calloc((size_t)width + 2, 2 * sizeof(UINT64));
-	if (!lut7 || !index || !rows) {
+	if (!lut7 || !rows) {
 		free(lut7);
-		free(index);
 		free(rows);
 		return false;
 	}
-	// in the order of the row's key, R | G << 4 | B << 8
 	for (int k = 0; k < LUT_SIZE; k++) {
-		const DWORD entry = lut[((k & 0x00F) << 8) | (k & 0x0F0) | (k >> 8)];
+		const DWORD entry = lut[k];
 		const UINT64 b = 7 * (entry & 0xFF), g = 7 * ((entry >> 8) & 0xFF), r = 7 * ((entry >> 16) & 0xFF);
-		lut7[k] = b | (g << 16) | (r << 32);
-		index[k] = (BYTE)(entry >> 24);
+		lut7[k] = b | (g << 16) | (r << 32) | ((UINT64)(entry >> 24) << 48);
 	}
 	for (int t = 0; t < height; t++) {
 		const int y = height - 1 - t;
@@ -649,13 +843,12 @@ DiffuseSSE2(FIBITMAP *src, FIBITMAP *dst, const DWORD *lut) {
 		const int first = (t & 1) ? 0 : width - 1;
 		const int step = (t & 1) ? 1 : -1;
 		if (bytespp == 4) {
-			DiffuseRowSSE2<4>(FreeImage_GetScanLine(src, y), FreeImage_GetScanLine(dst, y), cur, next, first, width - 1 - first, step, lut7, index);
+			DiffuseRowSSE2<4>(FreeImage_GetScanLine(src, y), FreeImage_GetScanLine(dst, y), cur, next, first, width - 1 - first, step, lut7);
 		} else {
-			DiffuseRowSSE2<3>(FreeImage_GetScanLine(src, y), FreeImage_GetScanLine(dst, y), cur, next, first, width - 1 - first, step, lut7, index);
+			DiffuseRowSSE2<3>(FreeImage_GetScanLine(src, y), FreeImage_GetScanLine(dst, y), cur, next, first, width - 1 - first, step, lut7);
 		}
 	}
 	free(rows);
-	free(index);
 	free(lut7);
 	return true;
 }
@@ -691,35 +884,40 @@ MedianCutQuantizer::Quantize(FIBITMAP *dib, int ReserveSize, RGBQUAD *ReservePal
 	RGBQUAD palette[256];
 	int filled = 0;
 	if (count > 0) {
-		UINT64 *hist = (UINT64 *)malloc(HIST_SIZE * sizeof(UINT64));
+		UINT64 *cells = (UINT64 *)malloc(SUMS * HIST_SIZE * sizeof(UINT64));
 		MCMoments moments;
-		if (!hist || !moments.table[0] || !CountColors(dib, hist)) {
-			free(hist);
+		if (!cells || !moments.table[0] || !CountColors(dib, cells)) {
+			free(cells);
 			return NULL;
 		}
-		BuildMoments(hist, moments);
-		free(hist);
-		filled = MedianCut(moments, count, palette);
+		BuildMoments(cells, moments);
+		filled = MedianCut(moments, cells, count, palette);
+		free(cells);
 	}
-	// the reserved colors follow the computed ones
+	// the reserved colors take the last entries, after copies of the first color that the lookup never prefers to it
+	for (int i = filled; i < count; i++) {
+		palette[i] = palette[0];
+	}
 	for (int i = 0; i < ReserveSize; i++) {
-		palette[filled + i] = ReservePalette[i];
-		palette[filled + i].rgbReserved = 0;
+		palette[count + i] = ReservePalette[i];
+		palette[count + i].rgbReserved = 0;
 	}
-	filled += ReserveSize;
+	filled = count + ReserveSize;
 
-	DWORD lut[LUT_SIZE];
-	BuildLookup(palette, filled, lut);
-
-	FIBITMAP *dst = FreeImage_Allocate(width, height, 8);
+	DWORD *lut = (DWORD *)malloc(LUT_SIZE * sizeof(DWORD));
+	FIBITMAP *dst = lut ? FreeImage_Allocate(width, height, 8) : NULL;
 	if (!dst) {
+		free(lut);
 		return NULL;
 	}
+	BuildLookup(palette, filled, lut);
 	RGBQUAD *dst_pal = FreeImage_GetPalette(dst);
 	for (int i = 0; i < filled; i++) {
 		dst_pal[i] = palette[i];
 	}
-	if (!Diffuse(dib, dst, lut)) {
+	const bool done = Diffuse(dib, dst, lut);
+	free(lut);
+	if (!done) {
 		FreeImage_Unload(dst);
 		return NULL;
 	}

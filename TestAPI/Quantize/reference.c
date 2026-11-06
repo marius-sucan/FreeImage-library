@@ -19,6 +19,8 @@ rnd(void) {
 
 typedef struct { int lo[3], hi[3]; ll pop; } Box;
 static ll H[32][32][32];
+static ll S[32][32][32][3];
+static int T[32768];
 
 static ll
 box_sum(const Box *b, int k) {
@@ -32,17 +34,48 @@ box_sum(const Box *b, int k) {
 	return s;
 }
 
+// the box shrunk to the cells that hold pixels
+static void
+shrink(Box *b) {
+	for (int a = 0; a < 3; a++) {
+		while (b->lo[a] < b->hi[a]) { Box t = *b; t.hi[a] = t.lo[a]; if (box_sum(&t, 0)) break; b->lo[a]++; }
+		while (b->hi[a] > b->lo[a]) { Box t = *b; t.lo[a] = t.hi[a]; if (box_sum(&t, 0)) break; b->hi[a]--; }
+	}
+}
+
+// the palette entry of a 5-bit cell: a color inside it, else the nearest to its center; in half units
+static int
+lookup(int pal[256][3], int n, int cell) {
+	if (T[cell] >= 0) return T[cell];
+	const int l[3] = { cell >> 10, (cell >> 5) & 31, cell & 31 };
+	int best = -1, bd = 1 << 30;
+	for (int pass = 0; pass < 2 && best < 0; pass++)
+		for (int j = 0; j < n; j++) {
+			if (pass == 0 && ((pal[j][0] >> 3) != l[0] || (pal[j][1] >> 3) != l[1] || (pal[j][2] >> 3) != l[2])) continue;
+			int d = 0;
+			for (int k = 0; k < 3; k++) d += (16 * l[k] + 7 - 2 * pal[j][k]) * (16 * l[k] + 7 - 2 * pal[j][k]);
+			if (d < bd) { bd = d; best = j; }
+		}
+	return T[cell] = best;
+}
+
 static int
 plain_quantize(const BYTE *rgb, int w, int h, int colors, int reserve, const RGBQUAD *reserved, BYTE *out, int pal[256][3]) {
 	const int count = colors - reserve;
 	int n = 0;
 	if (count > 0) {
-		for (int r = 0; r < 32; r++) for (int g = 0; g < 32; g++) for (int b = 0; b < 32; b++) H[r][g][b] = 1;
-		for (int i = 0; i < w * h; i++) H[rgb[3 * i] >> 3][rgb[3 * i + 1] >> 3][rgb[3 * i + 2] >> 3]++;
+		memset(H, 0, sizeof(H));
+		memset(S, 0, sizeof(S));
+		for (int i = 0; i < w * h; i++) {
+			const BYTE *p = rgb + 3 * i;
+			H[p[0] >> 3][p[1] >> 3][p[2] >> 3]++;
+			for (int k = 0; k < 3; k++) S[p[0] >> 3][p[1] >> 3][p[2] >> 3][k] += p[k];
+		}
 		Box bx[256];
 		n = 1;
 		for (int a = 0; a < 3; a++) { bx[0].lo[a] = 0; bx[0].hi[a] = 31; }
 		bx[0].pop = box_sum(&bx[0], 0);
+		shrink(&bx[0]);
 		while (n < count) {
 			int best = -1;
 			ll bs = 0;
@@ -62,6 +95,8 @@ plain_quantize(const BYTE *rgb, int w, int h, int colors, int reserve, const RGB
 			up.lo[ax] = m + 1;
 			lo.pop = box_sum(&lo, 0);
 			up.pop = box_sum(&up, 0);
+			shrink(&lo);
+			shrink(&up);
 			bx[best] = up;
 			bx[n++] = lo;
 		}
@@ -71,29 +106,31 @@ plain_quantize(const BYTE *rgb, int w, int h, int colors, int reserve, const RGB
 			while (j >= 0 && bx[j].pop < k.pop) { bx[j + 1] = bx[j]; j--; }
 			bx[j + 1] = k;
 		}
-		for (int i = 0; i < n; i++)
+		for (int i = 0; i < n; i++) {
+			const Box *b = &bx[i];
+			const int one = b->lo[0] == b->hi[0] && b->lo[1] == b->hi[1] && b->lo[2] == b->hi[2];
 			for (int a = 0; a < 3; a++) {
-				const int l = (int)(box_sum(&bx[i], a + 1) / bx[i].pop);
-				pal[i][a] = (l * 510 + 31) / 62;
+				if (one) {
+					// a one-cell box: the rounded mean color of its pixels
+					const ll c = H[b->lo[0]][b->lo[1]][b->lo[2]], sum = S[b->lo[0]][b->lo[1]][b->lo[2]][a];
+					pal[i][a] = (int)((2 * sum + c) / (2 * c));
+				} else {
+					const int l = (int)(box_sum(b, a + 1) / b->pop);
+					pal[i][a] = (l * 510 + 31) / 62;
+				}
 			}
-	}
-	for (int i = 0; i < reserve; i++) {
-		pal[n + i][0] = reserved[i].rgbRed;
-		pal[n + i][1] = reserved[i].rgbGreen;
-		pal[n + i][2] = reserved[i].rgbBlue;
-	}
-	n += reserve;
-	int T[4096];
-	for (int c = 0; c < 4096; c++) {
-		const int v[3] = { (c >> 8) * 17, ((c >> 4) & 15) * 17, (c & 15) * 17 };
-		int best = 1 << 30, bi = 0;
-		for (int j = 0; j < n; j++) {
-			const int d0 = v[0] - pal[j][0], d1 = v[1] - pal[j][1], d2 = v[2] - pal[j][2];
-			const int d = d0 * d0 + d1 * d1 + d2 * d2;
-			if (d < best) { best = d; bi = j; }
 		}
-		T[c] = bi;
 	}
+	// the reserved colors take the last entries; copies of the first color fill the gap before them
+	for (int i = n; i < count; i++)
+		for (int a = 0; a < 3; a++) pal[i][a] = pal[0][a];
+	for (int i = 0; i < reserve; i++) {
+		pal[count + i][0] = reserved[i].rgbRed;
+		pal[count + i][1] = reserved[i].rgbGreen;
+		pal[count + i][2] = reserved[i].rgbBlue;
+	}
+	n = count + reserve;
+	memset(T, -1, sizeof(T));
 	int *cur = calloc((size_t)(w + 2) * 3, sizeof(int)), *nxt = calloc((size_t)(w + 2) * 3, sizeof(int));
 	for (int y = 0; y < h; y++) {
 		const int ltr = y & 1, step = ltr ? 1 : -1;
@@ -106,7 +143,7 @@ plain_quantize(const BYTE *rgb, int w, int h, int colors, int reserve, const RGB
 				int s = rgb[3 * (y * w + x) + k] + q;
 				v[k] = s < 0 ? 0 : (s > 255 ? 255 : s);
 			}
-			const int c = T[((v[0] >> 4) << 8) | ((v[1] >> 4) << 4) | (v[2] >> 4)];
+			const int c = lookup(pal, n, ((v[0] >> 3) << 10) | ((v[1] >> 3) << 5) | (v[2] >> 3));
 			out[y * w + x] = (BYTE)c;
 			for (int k = 0; k < 3; k++) {
 				const int e = v[k] - pal[c][k];
@@ -137,7 +174,9 @@ fill(BYTE *rgb, int w, int h, int kind) {
 				case 2: { static const BYTE c[3][3] = { {250, 10, 10}, {12, 200, 40}, {30, 30, 220} }; memcpy(p, c[(x / 3 + y) % 3], 3); break; }
 				case 3: p[0] = 128; p[1] = 128; p[2] = 128; break;
 				case 4: { const BYTE v = ((x + y) & 1) ? 255 : 0; p[0] = v; p[1] = (BYTE)(255 - v); p[2] = v; break; }
-				default: { const int g = (x * 7 + y * 3) & 255; p[0] = p[1] = p[2] = (BYTE)g; break; }
+				case 5: { const int g = (x * 7 + y * 3) & 255; p[0] = p[1] = p[2] = (BYTE)g; break; }
+				case 6: { static const BYTE c[3][3] = { {87, 87, 87}, {88, 83, 84}, {90, 90, 90} }; memcpy(p, c[(x / 4 + y / 3) % 3], 3); break; }
+				default: p[0] = 253; p[1] = 254; p[2] = 255; break;
 			}
 		}
 }
@@ -160,6 +199,14 @@ run_case(int w, int h, int bpp, int kind, int colors, int reserve) {
 	RGBQUAD reserved[256];
 	for (int i = 0; i < reserve; i++) {
 		reserved[i].rgbRed = (BYTE)rnd(); reserved[i].rgbGreen = (BYTE)rnd(); reserved[i].rgbBlue = (BYTE)rnd(); reserved[i].rgbReserved = 0;
+	}
+	if (kind == 6) {
+		// colors inside one cell at different and at equal distances from its center, and one nearer to a center
+		// than the computed color inside that cell
+		static const BYTE fixed[5][3] = { {80, 80, 80}, {84, 83, 84}, {83, 83, 83}, {84, 84, 84}, {91, 91, 91} };
+		for (int i = 0; i < reserve && i < 5; i++) {
+			reserved[i].rgbRed = fixed[i][0]; reserved[i].rgbGreen = fixed[i][1]; reserved[i].rgbBlue = fixed[i][2];
+		}
 	}
 	int pal[256][3];
 	const int n = plain_quantize(rgb, w, h, colors, reserve, reserved, ref, pal);
@@ -207,6 +254,15 @@ main(void) {
 		failed += run_case(1031, 517, kind & 1 ? 32 : 24, kind, 256, 0);
 		cases++;
 	}
+	// a palette color inside a cell wins it, reserved colors too
+	static const int inside[][2] = { {256, 0}, {256, 5}, {16, 5}, {8, 5} };
+	for (unsigned p = 0; p < sizeof(inside) / sizeof(inside[0]); p++) {
+		failed += run_case(37, 23, 24, 6, inside[p][0], inside[p][1]);
+		cases++;
+	}
+	// one color over more than 2^24 pixels, whose 32-bit sums must move to 64 bits in between
+	failed += run_case(5000, 3400, 24, 7, 256, 0);
+	cases++;
 	printf("%d cases, %d failed\n", cases, failed);
 	return failed != 0;
 }
